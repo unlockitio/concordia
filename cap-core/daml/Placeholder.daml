@@ -1,0 +1,7 @@
+-- Copyright (c) 2026 Unlockit. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+-- Placeholder module to satisfy `dpm build` during M1 scaffolding.
+-- Replaced in Loop 1 when the cap-core interfaces are written
+-- (Submittable, Resolvable, ExecutableOutcome, factories).
+module Placeholder where

@@ -1,0 +1,90 @@
+# Copyright (c) 2026 Unlockit. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Workflow name shown in the GitHub Actions UI and in branch-protection rules.
+name: ci
+
+# Events that trigger this workflow.
+#   - push          fires on every commit pushed to main or dev
+#   - pull_request  fires when a PR is opened/updated against main or dev
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+
+# Concurrency control: if a new commit lands on the same PR / branch while a
+# previous run is still going, cancel the older run. 
+# makes the latest commit's status the only one that matters.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# A workflow has one or more jobs. We have one — build + test all packages.
+# Adding more jobs (lint, docs, security-scan) goes here later.
+jobs:
+  build-and-test:
+    # Runs on GitHub's hosted Ubuntu runner. Free for public repos.
+    runs-on: ubuntu-latest
+
+    # Environment variables available to every step below.
+    env:
+      DAML_SDK_VERSION: "3.4.11"
+
+    steps:
+      # Pulls the repository code into the runner so subsequent steps can
+      # see the daml.yaml files, source modules, etc.
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Installs the dpm (Daml Project Manager) CLI on the runner.
+      # The script drops the binary at ~/.dpm/bin/dpm and we add that
+      # directory to PATH so later steps can call `dpm` directly.
+      - name: Install dpm
+        run: |
+          curl -fsSL https://get.digitalasset.com/install/install.sh | sh
+          echo "$HOME/.dpm/bin" >> "$GITHUB_PATH"
+
+      # Fetches and installs the Daml SDK version pinned in $DAML_SDK_VERSION.
+      # Without this, dpm has no compiler to build the packages with.
+      - name: Install Daml SDK
+        run: dpm install "$DAML_SDK_VERSION"
+
+      # Prints versions to the build log. Trivially cheap, makes future
+      # debugging easier when something changes upstream.
+      - name: Show toolchain versions
+        run: |
+          dpm version
+          dpm --version
+
+      # Build template packages first; cap-test depends on (eventually) all
+      # three.
+      # cap-core must build before any package that consumes its DAR.
+      #
+      # Each package is built in its own step so a failure points at the
+      # exact package in the GitHub UI timeline.
+      - name: Build cap-core
+        working-directory: cap-core
+        run: dpm build
+
+      - name: Build cap-governance
+        working-directory: cap-governance
+        run: dpm build
+
+      - name: Build cap-auctions
+        working-directory: cap-auctions
+        run: dpm build
+
+      # cap-test is built last because it will eventually data-depend on the
+      # three template packages above (added in Loop 1 / Loop 2).
+      - name: Build cap-test
+        working-directory: cap-test
+        run: dpm build
+
+      # Runs every top-level `Script ()` binding in cap-test. Only cap-test
+      # depends on daml-script, so this is the only package where `dpm test`
+      # has anything to do — running it on the others would either no-op or
+      # fail to find the script runtime.
+      - name: Run Daml Scripts (cap-test)
+        working-directory: cap-test
+        run: dpm test

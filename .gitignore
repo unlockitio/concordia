@@ -1,0 +1,22 @@
+# Daml / dpm build artifacts
+.daml/
+*.dar
+.daml-script-cache/
+
+# Editor / IDE
+.vscode/settings.json
+.idea/
+*.swp
+*.swo
+*~
+
+# OS metadata
+.DS_Store
+Thumbs.db
+
+# Logs / temp
+*.log
+*.tmp
+
+# Local Claude state (if Claude is invoked from inside concordia/)
+.claude/

@@ -1,0 +1,9 @@
+-- Copyright (c) 2026 Unlockit. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+-- Placeholder module to satisfy `dpm build` during M1 scaffolding.
+-- Replaced as conformance tests and example scripts are written across
+-- Loops 1, 2 and beyond. This package owns daml-script so that the
+-- template packages (cap-core, cap-governance, cap-auctions) stay free
+-- of daml-script in their published DARs.
+module Placeholder where
