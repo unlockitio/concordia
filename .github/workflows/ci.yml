@@ -9,7 +9,7 @@ name: ci
 #   - pull_request  fires when a PR is opened/updated against main or dev
 on:
   push:
-    branches: [main, dev]
+    #branches: [main, dev]
   pull_request:
     branches: [main, dev]
 
