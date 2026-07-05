@@ -1,0 +1,17 @@
+# Copyright (c) 2026 Unlockit. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Tier 2 (Governance) — pure shared data: Metadata, AnyValue, ChoiceContext,
+# ExtraArgs. Mirrors the Token Standard's metadata shapes 1:1 (no import: no
+# version coupling) so bridging registry contexts in implementations is
+# mechanical. Leaf package; cap-auctions carries the same shapes — folding
+# both into a cap-core types package is the planned tier-1 extraction.
+sdk-version: 3.4.11
+name: cap-governance-types
+version: 0.1.0
+source: daml
+dependencies:
+- daml-prim
+- daml-stdlib
+build-options:
+  - --target=2.1

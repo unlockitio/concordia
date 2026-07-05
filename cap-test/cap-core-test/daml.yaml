@@ -1,0 +1,21 @@
+# Copyright (c) 2026 Unlockit. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Tier-1 conformance tests: guards, idempotency, authority bounds, deadlines.
+# Tests live in their own package so the interface DAR carries no test deps.
+sdk-version: 3.4.11
+name: cap-core-test
+version: 0.1.0
+source: daml
+dependencies:
+- daml-prim
+- daml-stdlib
+- daml-script
+data-dependencies:
+- ../../cap-core/cap-core-metadata-v1/.daml/dist/cap-core-metadata-0.1.0.dar
+- ../../cap-core/cap-core-submittable-v1/.daml/dist/cap-core-submittable-0.1.0.dar
+- ../../cap-core/cap-core-executable-outcome-v1/.daml/dist/cap-core-executable-outcome-0.1.0.dar
+- ../../cap-core/cap-core-resolvable-v1/.daml/dist/cap-core-resolvable-0.1.0.dar
+- ../../cap-core/cap-core-submission-factory-v1/.daml/dist/cap-core-submission-factory-0.1.0.dar
+build-options:
+  - --target=2.1

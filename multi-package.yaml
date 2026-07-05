@@ -1,0 +1,27 @@
+# Copyright (c) 2026 Unlockit. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Concordia workspace. `dpm build --all` builds these in dependency order;
+# inter-package `data-dependencies` (the .daml/dist/*.dar paths) resolve from
+# this list. Only packages that currently exist on disk are listed.
+packages:
+# --- tier 1: cap-core ---
+- ./cap-core/cap-core-executable-outcome-v1
+# --- tier 2: cap-governance ---
+- ./cap-governance/cap-governance-types-v1
+- ./cap-governance/cap-governance-executable-v1
+- ./cap-governance/cap-governance-proposal-v1
+- ./cap-governance/cap-governance-voting-right-v1
+- ./cap-governance/cap-governance-util-v1
+# --- tier 2: cap-auctions ---
+- ./cap-auctions/cap-auctions-types-v1
+- ./cap-auctions/cap-auctions-bid-v1
+- ./cap-auctions/cap-auctions-outcome-v1
+- ./cap-auctions/cap-auctions-auction-v1
+# --- reference implementations ---
+- ./examples/cap-governance-example
+- ./examples/cap-auctions-example
+# --- tests ---
+- ./cap-test/cap-core-test
+- ./cap-test/cap-governance-test
+- ./cap-test/cap-auctions-test

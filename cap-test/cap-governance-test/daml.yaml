@@ -1,0 +1,26 @@
+# Copyright (c) 2026 Unlockit. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Conformance + behaviour tests for the Governance standard, driven against
+# the reference implementation.
+sdk-version: 3.4.11
+name: cap-governance-test
+version: 0.1.0
+source: daml
+dependencies:
+- daml-prim
+- daml-stdlib
+- daml-script
+data-dependencies:
+- ../../cap-core/cap-core-metadata-v1/.daml/dist/cap-core-metadata-0.1.0.dar
+- ../../cap-core/cap-core-submittable-v1/.daml/dist/cap-core-submittable-0.1.0.dar
+- ../../cap-core/cap-core-executable-outcome-v1/.daml/dist/cap-core-executable-outcome-0.1.0.dar
+- ../../cap-core/cap-core-resolvable-v1/.daml/dist/cap-core-resolvable-0.1.0.dar
+- ../../cap-core/cap-core-submission-factory-v1/.daml/dist/cap-core-submission-factory-0.1.0.dar
+- ../../cap-governance/cap-governance-ballot-v1/.daml/dist/cap-governance-ballot-0.1.0.dar
+- ../../cap-governance/cap-governance-outcome-v1/.daml/dist/cap-governance-outcome-0.1.0.dar
+- ../../cap-governance/cap-governance-proposal-v1/.daml/dist/cap-governance-proposal-0.1.0.dar
+- ../../cap-governance/cap-governance-ballot-factory-v1/.daml/dist/cap-governance-ballot-factory-0.1.0.dar
+- ../../examples/cap-governance-example/.daml/dist/cap-governance-example-0.1.0.dar
+build-options:
+  - --target=2.1

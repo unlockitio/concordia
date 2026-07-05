@@ -1,0 +1,32 @@
+# Copyright (c) 2026 Unlockit. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Tier 2 (Governance, optional) — reusable helpers and DEFAULT bodies for
+# implementing the governance interfaces. Three modules, deliberately NOT
+# bundled (cf. Splice, which mixes its one trivial default in with generic
+# helpers):
+#   Cap.Governance.Util      pure helpers: checked fetches (ForAuthority
+#                            group ids) and Patchable three-way config merge
+#   Cap.Governance.Policies  named timing policies for the Proposal hooks
+#                            (castAllowed / resolutionAllowed /
+#                            withdrawAllowed) — windowed and confirmation
+#                            profiles
+#   Cap.Governance.Defaults  opt-in `...DefaultImpl` bodies a tier-3 template
+#                            wires into its `interface instance`
+# Sits BELOW nothing it implements: it depends on the governance interface
+# packages (to see their views/methods) and is imported only by tier-3 impls,
+# so the interfaces never reference it (no cycle).
+sdk-version: 3.4.11
+name: cap-governance-util
+version: 0.1.0
+source: daml
+dependencies:
+- daml-prim
+- daml-stdlib
+data-dependencies:
+- ../cap-governance-types-v1/.daml/dist/cap-governance-types-0.1.0.dar
+- ../cap-governance-executable-v1/.daml/dist/cap-governance-executable-0.1.0.dar
+- ../cap-governance-proposal-v1/.daml/dist/cap-governance-proposal-0.1.0.dar
+- ../cap-governance-voting-right-v1/.daml/dist/cap-governance-voting-right-0.1.0.dar
+build-options:
+  - --target=2.1
