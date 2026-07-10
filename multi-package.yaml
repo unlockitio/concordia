@@ -28,5 +28,5 @@ packages:
 # Baby-DSO: plain-Daml Splice reproduction (the governance oracle). No cap
 # dependency yet, so it builds standalone. Its golden-vector scripts live in a
 # separate -test package so the template package carries no daml-script dep.
-- ./examples/cap-governance-example
-- ./examples/cap-governance-example-test
+- ./cap-governance/examples/BabyDso
+- ./cap-governance/examples/BabyDsoTest

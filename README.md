@@ -50,8 +50,9 @@ concordia/
 │   ├── Interfaces/      #   metadata, submittable, resolvable, checks, target, outcome
 │   └── util/            #   implementation helpers (checked fetches, policies)
 ├── cap-governance/      # Tier 2: governance (Interfaces/proposal, util)
+│   └── examples/        #   baby-DSO reproduction + its test package
 ├── cap-auctions/        # Tier 2: auctions   (Interfaces/{types,bid,outcome,auction})
-├── examples/            # baby-DSO governance reproduction + its test package
+│   └── examples/        #   reference auction implementation
 ├── docs/                # architecture docs (threat models inline) and glossary
 ├── multi-package.yaml   # dpm workspace (build order + data-dependencies)
 ├── CHANGELOG.md

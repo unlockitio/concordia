@@ -7,11 +7,11 @@
 # dependency yet — it reproduces Splice's decisions in plain Daml so its golden
 # vectors can later be replayed against interface-based implementations.
 #
-# Templates only: the golden-vector scripts live in the sibling
-# cap-governance-example-test package so this package carries no daml-script
-# dependency (which would otherwise be uploaded to the ledger alongside it).
+# Templates only: the golden-vector scripts live in the sibling baby-dso-test
+# package so this package carries no daml-script dependency (which would
+# otherwise be uploaded to the ledger alongside it).
 sdk-version: 3.4.11
-name: cap-governance-example
+name: baby-dso
 version: 0.1.0
 source: daml
 dependencies:

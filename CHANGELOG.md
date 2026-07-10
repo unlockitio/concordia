@@ -37,7 +37,8 @@ Initial open-source release of CAP (Canton Allocation Primitives).
 - **`cap-auctions`** — the auctions standard: `Auction`, `Bid`,
   `AuctionOutcome`, and shared `types`, composing with the Canton Token
   Standard V2 (CIP-0112).
-- **`examples/cap-governance-example`** — a plain-Daml Splice governance
-  reproduction, with golden-vector scripts in a separate `-test` package.
+- **`cap-governance/examples/BabyDso`** — a plain-Daml Splice governance
+  reproduction (the `baby-dso` package), with golden-vector scripts in a
+  separate `baby-dso-test` package.
 - **`docs/`** — architecture docs for each tier (each domain doc ending in a
   Threat model section), a walkthrough, and a glossary.

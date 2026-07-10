@@ -43,6 +43,7 @@ data OutcomeView = OutcomeView
 
 -- | An outcome's group is its authority — what the issuer checks every issued
 -- outcome against, so a look-alike with a different authority aborts issuance.
+-- (might be overforcing)
 instance HasCheckedFetch OutcomeView ForAuthority where
   contractGroupId v = ForAuthority v.authorities
 
