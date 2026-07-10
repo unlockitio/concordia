@@ -1,0 +1,33 @@
+# Daml / dpm build artifacts
+.daml/
+*.dar
+.daml-script-cache/
+
+# Editor / IDE
+.vscode/settings.json
+.idea/
+*.swp
+*.swo
+*~
+
+# OS metadata
+.DS_Store
+Thumbs.db
+
+# Logs / temp
+*.log
+*.tmp
+tmp.md
+
+# Local Claude state (if Claude is invoked from inside concordia/)
+.claude/
+WRITING.md
+SPEC.md
+SPEC-*.md
+CLAUDE.md
+
+# Internal design-decision record — not published
+docs/design-decisions/
+docs/governance-vs-auctions.md
+
+cap-test

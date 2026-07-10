@@ -1,0 +1,36 @@
+-- Copyright (c) 2026 Unlockit. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | Named drift policies for the outcome interfaces' `onTargetDrift` hooks. The
+-- fixed execute bodies invoke the hook for every committed target whose pinned
+-- state no longer matches the fresh one — a policy can be permissive, never
+-- absent. Wire one profile per interface instance, or dispatch on the
+-- template's own fields for per-proposal policies.
+--
+-- Each profile has a price:
+--
+--   * Strict (`driftAborts`) — any drift demands a fresh approval. SHOULD pair
+--     with an execution deadline, or a permanently drifted target leaves a
+--     forever-unexecutable outcome in the ACS. The right default for treasuries.
+--   * Reconciling (`driftReconciles`) — execution proceeds, and the format's
+--     `executeImpl` owes a three-way merge against the fresh state
+--     (`Cap.Core.Patchable`). Conflicts resolve proposal-wins; soundness rests
+--     on the format's `Patchable` instances.
+module Cap.Core.TargetPolicies where
+
+import Cap.Core.ChecksV1 (require)
+import Cap.Core.TargetV1
+
+-- | The strict profile: any drift refuses execution.
+driftAborts : CheckedTarget -> Update ()
+driftAborts c =
+  require
+    ("target " <> show c.commitment.key
+       <> " still carries the approved state token " <> show c.commitment.stateToken)
+    False
+
+-- | The reconciling profile: execution proceeds against the fresh state. Wiring
+-- it is a contract with your own `executeImpl` — it MUST reconcile the drifted
+-- target via `Cap.Core.Patchable`, never overwrite (silent last-write-wins).
+driftReconciles : CheckedTarget -> Update ()
+driftReconciles _ = pure ()

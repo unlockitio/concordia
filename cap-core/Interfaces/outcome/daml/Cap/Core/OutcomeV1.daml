@@ -1,0 +1,97 @@
+-- Copyright (c) 2026 Unlockit. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | The `Outcome` interface: an outcome carrying pre-committed
+-- authority, enactable at most once inside its window and bound to the targets
+-- its approvers saw. Governance's approved actions and auctions' settlement
+-- obligations are both instantiations — they `requires` this face.
+module Cap.Core.OutcomeV1 where
+
+import DA.Action (when)
+import DA.Foldable (forA_)
+import DA.Optional (whenSome)
+import DA.Set (Set)
+
+import Cap.Core.MetadataV1
+import Cap.Core.ChecksV1 (HasCheckedFetch (..), ForAuthority (..))
+import Cap.Core.TargetV1 (Target, TargetCommitment, CheckedTarget (..), checkTargetBinding)
+
+-- | View of an executable outcome.
+data OutcomeView = OutcomeView
+  with
+    authorities : Set Party
+      -- ^ The authority whose joint ledger authority this outcome carries.
+      -- MUST be non-empty at mint — an empty anchor can never execute.
+    timelock : Time
+      -- ^ Execution is blocked strictly before this time. Part of what was
+      -- approved — the issuer MUST set it to the value the approvers saw. Set it
+      -- to the creation time (or any past instant) for immediate execution — the
+      -- native auction shape.
+    expiresAt : Optional Time
+      -- ^ Execution deadline; None = no deadline. WARNING: an undated outcome
+      -- stays executable forever, against context its approvers never saw — date
+      -- every outcome you issue, doubly so under a state-pinning drift policy.
+    committedTargets : [TargetCommitment]
+      -- ^ The targets this outcome was approved to act upon, in the order the
+      -- executor must present them; empty for a targetless outcome (a mint, or a
+      -- settlement acting only on legs handed in through `extraArgs`). MUST be set
+      -- by the issuer to the approved targets (identity, and state where pinned);
+      -- the authority's signature on the outcome is what vouches for it.
+    meta : Metadata
+      -- ^ Display and extension data; never security-relevant.
+  deriving (Eq, Show)
+
+-- | An outcome's group is its authority — what the issuer checks every issued
+-- outcome against, so a look-alike with a different authority aborts issuance.
+-- (might be overforcing)
+instance HasCheckedFetch OutcomeView ForAuthority where
+  contractGroupId v = ForAuthority v.authorities
+
+data Outcome_ExecuteResult = Outcome_ExecuteResult
+  with
+    meta : Metadata
+  deriving (Eq, Show)
+
+interface Outcome where
+  viewtype OutcomeView
+
+  isExecutor : [Party] -> Bool
+    -- ^ Whether this actor set may trigger execution; varies per authority
+    -- model. Plural because settlement (Token Standard V2) can need several
+    -- executors jointly.
+  onTargetDrift : CheckedTarget -> Update ()
+    -- ^ The drift policy, invoked per committed target whose pinned state no
+    -- longer matches the fresh one.
+    -- MUST abort to refuse execution; on return, `executeImpl` MUST reconcile
+    -- against the fresh state it is handed.
+  executeImpl : [CheckedTarget] -> Outcome_Execute -> Update Outcome_ExecuteResult
+    -- ^ The enacted effect, run with the outcome signatories' authority in
+    -- scope. The checked targets arrive as the fixed body verified them, in
+    -- commitment order.
+    -- MUST act on those values, never re-resolve; a drifted entry (let through
+    -- by `onTargetDrift`) MUST be reconciled via `Cap.Core.Patchable`, not
+    -- overwritten. `extraArgs.context` delivers the rest at execution time —
+    -- fresh allocation cids, registry contexts.
+
+  -- | Enact the outcome. Consuming: at most one execution, only inside the
+  -- committed window, only against the committed targets.
+  choice Outcome_Execute : Outcome_ExecuteResult
+    with
+      actors : [Party]
+      targets : [ContractId Target]
+        -- ^ The fresh targets to act upon, in `committedTargets` order, resolved
+        -- at execution time — standing state is archive-and-recreated, so the
+        -- outcome pins identity and state, never a cid. Empty for a targetless
+        -- outcome.
+      extraArgs : ExtraArgs
+    controller actors
+    do
+      let v = view this
+      now <- getTime
+      assertMsg "outcome still timelocked" (now >= v.timelock)
+      whenSome v.expiresAt $ \deadline ->
+        assertMsg "outcome expired" (now < deadline)
+      assertMsg "actors are not an executor set" (isExecutor this actors)
+      checked <- checkTargetBinding v.committedTargets targets
+      forA_ checked $ \c -> when c.drifted (onTargetDrift this c)
+      executeImpl this checked (Outcome_Execute with actors; targets; extraArgs)

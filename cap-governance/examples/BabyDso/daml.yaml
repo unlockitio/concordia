@@ -1,0 +1,21 @@
+# Copyright (c) 2026 Unlockit. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Baby-DSO: an idiomatic plain-Daml reproduction of Splice's DSO governance
+# voting + confirmation paths, used as the oracle the cap-governance standard
+# is proven against. It deliberately carries NO cap-core / cap-governance
+# dependency yet — it reproduces Splice's decisions in plain Daml so its golden
+# vectors can later be replayed against interface-based implementations.
+#
+# Templates only: the golden-vector scripts live in the sibling baby-dso-test
+# package so this package carries no daml-script dependency (which would
+# otherwise be uploaded to the ledger alongside it).
+sdk-version: 3.4.11
+name: baby-dso
+version: 0.1.0
+source: daml
+dependencies:
+- daml-prim
+- daml-stdlib
+build-options:
+  - --target=2.1

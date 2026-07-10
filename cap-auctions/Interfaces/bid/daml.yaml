@@ -1,0 +1,20 @@
+# Copyright (c) 2026 Unlockit. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Tier 2 (Auctions) — the `Bid` interface: a live bid, bound to one auction,
+# owned by one bidder, consumable by that auction's resolution. Carries no
+# bid-value field anywhere (view, method result, or choice result), which is
+# what makes sealed formats implementable: there is nothing to leak.
+sdk-version: 3.4.11
+name: cap-auctions-bid-v1
+version: 0.1.0
+source: daml
+dependencies:
+- daml-prim
+- daml-stdlib
+data-dependencies:
+- ../../../cap-core/Interfaces/metadata/.daml/dist/cap-core-metadata-v1-0.1.0.dar
+- ../../../cap-core/Interfaces/submittable/.daml/dist/cap-core-submittable-v1-0.1.0.dar
+- ../types/.daml/dist/cap-auctions-types-v1-0.1.0.dar
+build-options:
+  - --target=2.1

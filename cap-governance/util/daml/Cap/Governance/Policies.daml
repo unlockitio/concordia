@@ -1,0 +1,59 @@
+-- Copyright (c) 2026 Unlockit. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | Named timing policies for the `Proposal` hooks (`castAllowed`,
+-- `resolutionAllowed`, `withdrawAllowed`). The interface bodies always invoke
+-- the hooks — a policy cannot be absent. `Ballot_Cast`'s fixed body already
+-- enforces the full submission window, so there is no cast profile here — a
+-- format writes `castAllowed _ = pure ()` unless it tightens further.
+--
+-- Wire a profile into an `interface instance` (one line per hook):
+--
+-- @
+--   castAllowed _         = pure ()
+--   resolutionAllowed now = windowedResolution this' now
+--   withdrawAllowed now   = withdrawBeforeOpen this' now
+--     where this' = toInterface @Proposal this
+-- @
+module Cap.Governance.Policies where
+
+import Cap.Core.ResolvableV1
+import Cap.Governance.ProposalV1
+
+-- | The proposal's Resolvable face, which carries the window.
+windowOf : Proposal -> ResolvableView
+windowOf p = view (toInterface @Resolvable p)
+
+
+-- Windowed profile
+-------------------
+
+-- | Resolve only after the close, and never with a timelock that lifts
+-- before it.
+windowedResolution : Proposal -> Time -> Update ()
+windowedResolution p now = do
+  let close = (windowOf p).submissionClosesAt
+  assertMsg "voting window still open" (now >= close)
+  assertMsg "timelock lifts before the close of voting" ((view p).timelock >= close)
+
+-- | Withdraw only before voting opens — a proposer can never cancel a losing
+-- vote.
+withdrawBeforeOpen : Proposal -> Time -> Update ()
+withdrawBeforeOpen p now =
+  assertMsg "cannot withdraw once voting has opened" (now < (windowOf p).submissionOpensAt)
+
+
+
+-- Confirmation profile
+-----------------------
+
+-- | Resolve at any time after open. Sound only when a verdict once reached is
+-- final — a quorate tally with quorums above half the electorate.
+confirmationResolution : Proposal -> Time -> Update ()
+confirmationResolution p _now = do
+  let close = (windowOf p).submissionClosesAt
+  assertMsg "timelock lifts before the close of voting" ((view p).timelock >= close)
+
+-- | No withdrawal, ever.
+noWithdraw : Proposal -> Time -> Update ()
+noWithdraw _ _ = abort "withdrawal is not allowed"

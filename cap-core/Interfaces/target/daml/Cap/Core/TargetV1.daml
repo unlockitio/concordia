@@ -1,0 +1,83 @@
+-- Copyright (c) 2026 Unlockit. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | The `Target` interface: a standing contract an approved outcome acts upon
+-- (e.g. config, rules, treasury). Identity-only.
+-- turning "which contract, in which state" into stable, authority-vouched claims.
+module Cap.Core.TargetV1 where
+
+import DA.Optional (isSome)
+import DA.Set (Set)
+
+import Cap.Core.MetadataV1
+import Cap.Core.ChecksV1 (HasCheckedFetch (..), ForTarget (..), fetchCheckedInterface, require, authoritySigned)
+
+-- | View of a contract that can be acted upon: the binding identity, the state
+-- token, and nothing security-relevant beyond them.
+data TargetView = TargetView
+  with
+    authorities : Set Party
+      -- ^ The authority whose ledger authority the action runs under, and the
+      -- signature anchor.
+      -- MUST be non-empty at mint — the fixed checks reject an empty anchor.
+    id : Text
+      -- ^ Distinguishes targets of one authority; with `authorities` it is the
+      -- identifying key.
+      -- MUST: at most one live target per key, and key discipline across formats
+      -- (contract keys are gone in Daml 3, so nothing on-ledger forces them).
+    stateToken : Optional Text
+      -- ^ An opaque token that changes whenever action-relevant state changes.
+      -- `None` offers no state pinning; a commitment pinning state against such a
+      -- target aborts at execution.
+      -- MUST be bumped on every action-relevant change — that is what makes
+      -- pinning mean anything.
+    meta : Metadata
+      -- ^ Display and extension data; never security-relevant.
+  deriving (Eq, Show)
+
+-- | A target's group is its identifying key `(authorities, id)` — the group
+-- `checkTargetBinding` checks a presented target against, so a look-alike under
+-- the same authority but a different `id` aborts.
+instance HasCheckedFetch TargetView ForTarget where
+  contractGroupId v = ForTarget v.authorities v.id
+
+interface Target where
+  viewtype TargetView
+
+-- | What an approval commits an outcome to act upon: the target's identifying
+-- key, plus optionally the state the approvers saw. `stateToken = None` is an
+-- identity-only pin — itself part of what was approved, never an omission.
+data TargetCommitment = TargetCommitment
+  with
+    key : ForTarget
+    stateToken : Optional Text
+  deriving (Eq, Show)
+
+-- | One commitment's outcome from `checkTargetBinding`: the target as the fixed
+-- body fetched and verified it (act on this, never re-resolve), plus whether a
+-- pinned state has drifted.
+data CheckedTarget = CheckedTarget
+  with
+    target : Target
+    commitment : TargetCommitment
+    drifted : Bool
+      -- ^ True iff the commitment pinned a state and the target no longer carries
+      -- it. Always False for an identity-only pin.
+
+-- | Verify the fresh targets presented at execution are the ones committed at
+-- approval — positional pairing, wrong key or forged signature aborts, a pinned
+-- state is compared and routed to the caller's drift policy (not enforced here).
+checkTargetBinding : [TargetCommitment] -> [ContractId Target] -> Update [CheckedTarget]
+checkTargetBinding committed presented = do
+  require "the presented targets pair with the committed targets"
+    (length committed == length presented)
+  forA (zip committed presented) $ \(c, cid) -> do
+    t <- fetchCheckedInterface c.key cid
+    require "target is signed by its authority" (authoritySigned c.key.authorities (signatory t))
+    drifted <- case c.stateToken of
+      None -> pure False
+      Some pinned -> do
+        let found = (view t).stateToken
+        require "a state-pinned target exposes a state token" (isSome found)
+        pure (Some pinned /= found)
+    pure CheckedTarget with target = t; commitment = c; drifted

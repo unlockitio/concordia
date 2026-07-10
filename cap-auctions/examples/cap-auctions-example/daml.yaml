@@ -1,0 +1,29 @@
+# Copyright (c) 2026 Unlockit. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Reference example for the Auctions standard: concrete end-user templates that
+# `implements` the cap-auctions + cap-core interfaces and compose the winning
+# outcome with a Token Standard allocation. This is *a* reference
+# implementation for proving and testing the standard — not *the* canonical one.
+sdk-version: 3.4.11
+name: cap-auctions-example
+version: 0.1.0
+source: daml
+dependencies:
+- daml-prim
+- daml-stdlib
+# Implements the auctions interfaces; depend only on the ones actually
+# implemented, plus the core primitives they require. The token-standard DARs
+# are needed only by the settlement in Cap.Auctions.Outcome.
+data-dependencies:
+- ../../../cap-core/Interfaces/metadata/.daml/dist/cap-core-metadata-v1-0.1.0.dar
+- ../../../cap-core/Interfaces/submittable/.daml/dist/cap-core-submittable-v1-0.1.0.dar
+- ../../../cap-core/Interfaces/outcome/.daml/dist/cap-core-outcome-v1-0.1.0.dar
+- ../../../cap-core/Interfaces/resolvable/.daml/dist/cap-core-resolvable-v1-0.1.0.dar
+- ../../Interfaces/bid/.daml/dist/cap-auctions-bid-v1-0.1.0.dar
+- ../../Interfaces/outcome/.daml/dist/cap-auctions-outcome-v1-0.1.0.dar
+- ../../Interfaces/auction/.daml/dist/cap-auctions-auction-v1-0.1.0.dar
+# - lib/splice-api-token-allocation-v1.dar
+# - lib/splice-api-token-transfer-instruction-v1.dar
+build-options:
+  - --target=2.1
