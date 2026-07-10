@@ -1,0 +1,336 @@
+-- Copyright (c) 2026 Unlockit. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | The `Proposal` and `Ballot` voting interfaces. `Proposal` requires
+-- `Resolvable`, `Ballot` requires `Submittable`; `Proposal_Resolve` is the one
+-- resolve door, running the shared cap-core checks then governance's own.
+module Cap.Governance.ProposalV1 where
+
+import DA.Optional (catOptionals)
+
+import Cap.Core.MetadataV1
+import Cap.Core.SubmittableV1
+import Cap.Core.ResolvableV1
+import Cap.Core.ChecksV1
+import Cap.Core.OutcomeV1
+
+-- Shared data
+--------------
+
+-- | Justification.
+data Reason = Reason
+  with
+    url : Text
+    body : Text
+  deriving (Eq, Show)
+
+-- Ballot
+---------
+
+-- | View of a ballot across its whole life — uncast → cast → withdrawn. Exposes
+-- the fact and provenance of a cast (voter, binding, state) but hides
+-- the vote's value, so secret ballots are implementable.
+-- MUST: a cast (full) ballot carries a real, decodable vote — the interface
+-- cannot check what it cannot see.
+data BallotView = BallotView
+  with
+    proposal : ContractId Proposal
+      -- ^ Binds exactly one proposal by cid. The Submittable face carries the
+      -- same binding untyped; the two faces MUST agree — admission proves the
+      -- Submittable face only.
+    voter : Party
+    expiresAt : Time
+      -- ^ When the ballot becomes archivable by anyone with visibility.
+      -- MUST NOT precede the close of voting on a cast ballot; set it
+      -- generously past the close for resolution grace.
+    meta : Metadata
+      -- ^ Display and extension data; never security-relevant.
+  deriving (Eq, Show)
+
+-- | A ballot's fine group is the one proposal it binds, coerced to the same
+-- `AnyContractId` anchor the `Submittable` face uses, so both faces agree on
+-- "this mechanism".
+instance HasCheckedFetch BallotView ForResolvable where
+  contractGroupId v = ForResolvable (resolvableAnchor (toInterfaceContractId @Resolvable v.proposal))
+
+data Ballot_ConsumeResult = Ballot_ConsumeResult
+  with
+    meta : Metadata
+  deriving (Eq, Show)
+
+data Ballot_ExpireResult = Ballot_ExpireResult
+  with
+    meta : Metadata
+  deriving (Eq, Show)
+
+interface Ballot requires Submittable where
+  viewtype BallotView
+
+  castImpl : Ballot_Cast -> Update (ContractId Ballot)
+    -- ^ Builds the cast (full) state, storing the opaque vote. Runs with both
+    -- the authority's and voter's signatures in scope. The successor MUST
+    -- preserve proposal, voter, authority, and slot; MUST be `S_Full`,
+    -- authority- and voter-signed (resolution re-proves these adversarially);
+    -- MUST set an `expiresAt` no earlier than the close of voting.
+  ballotWithdrawImpl : Ballot_Withdraw -> Update (ContractId Ballot)
+    -- ^ Builds the withdrawn successor, releasing escrowed weight named in
+    -- `extraArgs.context`. The successor MUST preserve proposal, voter,
+    -- authority, and slot (so completeness stays provable), MUST be
+    -- `S_Withdrawn`, and MUST stay authority-signed.
+  consumeImpl : Ballot_Consume -> Update Ballot_ConsumeResult
+    -- ^ The authority's teardown effect: release escrowed weight named in
+    -- `extraArgs.context`, mirroring `ballotWithdrawImpl` on the terminal path.
+    -- SHOULD be `\_ -> pure (Ballot_ConsumeResult with meta = emptyMetadata)`
+    -- when the format escrows nothing.
+
+  -- | Cast (or re-cast) a vote — empty→full, withdrawn→full, or full→full.
+  -- Voter-controlled and consuming: consuming the predecessor is the
+  -- no-double-vote guarantee. The vote is opaque (`tally` decodes it).
+  choice Ballot_Cast : ContractId Ballot
+    with
+      vote : AnyValue
+        -- ^ Each format documents its encoding, and the interface never reads it.
+      extraArgs : ExtraArgs
+    controller (view this).voter
+    do
+      let bv = view this
+      let sv = view (toInterface @Submittable this)
+      -- a ballot is only a right if the full authority actually signed it
+      checkAuthoritySigned (toInterface @Submittable this)
+      now <- getTime
+      assertMsg "ballot expired" (now < bv.expiresAt)
+      -- fetch aborts if the proposal was resolved or withdrawn: casting against
+      -- a dead proposal is impossible, not just checked
+      p <- fetch bv.proposal
+      let prv = view (toInterface @Resolvable p)
+      -- Not a `fetchCheckedInterface`: the authority key sits on the Resolvable
+      -- face while `castAllowed` needs the `Proposal` value, so we fetch once as
+      -- `Proposal` and group-check its projection — same guard, no second fetch.
+      assertMsg "authority mismatch between ballot and proposal"
+        (contractGroupId prv == ForAuthority sv.authorities)
+      checkSubmissionWindow prv now
+      castAllowed p now
+      castImpl this (Ballot_Cast with vote; extraArgs)
+
+  -- | Withdraw — empty→withdrawn (decline) or full→withdrawn (retract).
+  -- Voter-controlled, so no one else can retract your ballot; consuming, and
+  -- the withdrawn successor keeps the slot covered.
+  choice Ballot_Withdraw : ContractId Ballot
+    with
+      extraArgs : ExtraArgs
+    controller (view this).voter
+    do ballotWithdrawImpl this (Ballot_Withdraw with extraArgs)
+
+  -- | The authority's teardown of a ballot, and the escrow-release path for
+  -- weighted formats: resolution reads ballots but never consumes them, so a
+  -- format that locks a holding at cast releases it here (via `consumeImpl`) or
+  -- through the voter's own `Ballot_Withdraw`. Not time-guarded, so the authority
+  -- can reclaim a spent ballot whenever it likes.
+  choice Ballot_Consume : Ballot_ConsumeResult
+    with
+      extraArgs : ExtraArgs
+    controller (view (toInterface @Submittable this)).authorities
+    do consumeImpl this (Ballot_Consume with extraArgs)
+
+  -- | Lets any party with visibility archive an expired ballot. Effect-free,
+  -- because the caller is arbitrary.
+  choice Ballot_Expire : Ballot_ExpireResult
+    with
+      actor : Party
+    controller actor
+    do
+      now <- getTime
+      assertMsg "ballot not yet expired" (now >= (view this).expiresAt)
+      pure Ballot_ExpireResult with meta = emptyMetadata
+
+-- Proposal
+-----------
+
+-- | View of a proposal under vote. The authority, voting window, expiry, and
+-- completeness switch live on the proposal's `ResolvableView`; this view carries
+-- only what is governance's alone.
+data ProposalView = ProposalView
+  with
+    proposer : Party
+    reason : Reason
+    timelock : Time
+      -- ^ Timelock of the outcome, part of what voters approve.
+      -- `issueExecutables` MUST pin each issued executable to exactly this value.
+    meta : Metadata
+      -- ^ Display and extension data; never security-relevant.
+  deriving (Eq, Show)
+
+-- | The tally's verdict (method-level, not serialized). `VApproved` may carry a
+-- selected option, opaque to the interface. A winning "enact nothing" is
+-- `VRejected`.
+data Verdict
+  = VApproved (Optional Text)
+  | VRejected
+  | VLapsed
+    -- ^ The vote never became definitive (e.g. quorum not reached).
+  deriving (Eq, Show)
+
+-- | Serialized outcome of a resolution. The extension constructor works around
+-- the current lack of variant upgrading in Daml 3.x.
+data ResolutionOutcome
+  = RO_Approved
+      with
+        executables : [ContractId Outcome]
+          -- ^ One per obligation of the approved action; independent lifecycles
+          -- get independent contracts. Never empty.
+        option : Optional Text
+          -- ^ The winning option for multi-option proposals, exactly as `tally`
+          -- selected it; None for plain approve/reject.
+  | RO_Rejected
+  | RO_Lapsed
+  | ExtResolutionOutcome with dummyUnitField : ()
+  deriving (Eq, Show)
+
+data Proposal_ResolveResult = Proposal_ResolveResult
+  with
+    outcome : ResolutionOutcome
+    resolvedAt : Time
+    meta : Metadata
+  deriving (Eq, Show)
+
+data Proposal_WithdrawResult = Proposal_WithdrawResult
+  with
+    meta : Metadata
+  deriving (Eq, Show)
+
+data Proposal_ExpireResult = Proposal_ExpireResult
+  with
+    meta : Metadata
+  deriving (Eq, Show)
+
+interface Proposal requires Resolvable where
+  viewtype ProposalView
+
+  isResolver : Party -> Bool
+    -- ^ Who may trigger resolution. Resolution is safe-by-construction except
+    -- ballot selection (gated under completeness), so broad resolver sets are fine.
+  tally : [Ballot] -> Verdict
+    -- ^ THE social choice function — pure. Side effects belong in `onResolved`.
+  issueExecutables : Optional Text -> ExtraArgs -> Update [ContractId Outcome]
+    -- ^ Builds the approved outcomes. Gets the winning option as `tally` selected
+    -- it (None for approve/reject) and the resolver's `extraArgs`.
+    -- MUST return at least one executable, each signed by this proposal's
+    -- authority, with `timelock` exactly the proposal's and any `expiresAt`
+    -- past both issuance and the timelock; MUST set each `committedTargets`
+    -- to the targets the approved option authorized — the authority signature
+    -- vouches for it all.
+  onResolved : ResolutionOutcome -> ExtraArgs -> Update Metadata
+    -- ^ Side effects atomic with resolution (rejection record, successor on a
+    -- lapse, notifications), run with the authority's signature in scope; the
+    -- returned metadata lands in the result.
+  withdrawImpl : Proposal_Withdraw -> Update Proposal_WithdrawResult
+    -- ^ Cleanup on withdrawal (release pre-minted rights or escrow named in
+    -- `extraArgs.context`). Runs after `withdrawAllowed` passed.
+
+  -- Timing-policy hooks. The bodies always invoke them — a policy can be
+  -- permissive, never absent. `Cap.Governance.Policies` ships standard profiles;
+  -- wire one per hook in the interface instance.
+  castAllowed : Time -> Update ()
+    -- ^ Extra restriction on casting, beyond the fixed window `Ballot_Cast`
+    -- already enforces. Abort to refuse.
+    -- CAN only tighten the window; write `castAllowed _ = pure ()` to add nothing.
+  resolutionAllowed : Time -> Update ()
+    -- ^ From when resolution is allowed. Abort to refuse. (why not just a fixes date attribute?)
+  withdrawAllowed : Time -> Update ()
+    -- ^ When the proposer may withdraw. `Policies.withdrawBeforeOpen` forbids
+    -- cancelling a losing vote.
+
+  -- | Resolve the proposal with its ballots. Consuming: a proposal resolves
+  -- exactly once. Ballots are read, never consumed here (the gate proves the set
+  -- distinct); they go inert once the proposal dies, and any escrow is released
+  -- by the voter's `Ballot_Withdraw` or the authority's `Ballot_Consume`.
+  choice Proposal_Resolve : Proposal_ResolveResult
+    with
+      resolver : Party
+      ballots : [ContractId Ballot]
+        -- ^ Every live ballot on the proposal's slots: cast ballots (tallied and
+        -- consumed) and, under completeness, uncast/withdrawn ballots filling the
+        -- rest (counted, never tallied). One list spanning the whole lifecycle.
+      extraArgs : ExtraArgs
+    controller resolver
+    do
+      let res = toInterface @Resolvable this
+      let rv = view res
+      assertMsg "not authorised to resolve" (isResolver this resolver)
+      checkAuthoritySigned res
+      now <- getTime
+      checkResolutionFloor rv now
+      resolutionAllowed this now
+
+      -- Admit the ballots, then score each:
+      -- a cast ballot is tallied and consumed, an uncast/withdrawn one only fills
+      -- its slot. No per-voter dedup — one ballot per slot is structural.
+      admitted <- admitBallots self res ballots
+      tallied <- forA admitted $ \(_, b) -> tallyBallot (rv.size /= None) b
+
+      outcome <- case tally this (catOptionals tallied) of
+        VRejected -> pure RO_Rejected
+        VLapsed -> pure RO_Lapsed
+        VApproved option -> do
+          ecids <- issueExecutables this option extraArgs
+          pure RO_Approved with executables = ecids; option
+      resultMeta <- onResolved this outcome extraArgs
+      pure Proposal_ResolveResult with outcome; resolvedAt = now; meta = resultMeta
+
+  -- | Consuming. Timing is the `withdrawAllowed` policy; the standard profile
+  -- allows withdrawal only before voting opens, so a proposer can never cancel a
+  -- losing vote.
+  choice Proposal_Withdraw : Proposal_WithdrawResult
+    with
+      extraArgs : ExtraArgs
+    controller (view this).proposer
+    do
+      now <- getTime
+      withdrawAllowed this now
+      withdrawImpl this (Proposal_Withdraw with extraArgs)
+
+  -- | Lets any party with visibility archive a proposal that can no longer
+  -- resolve. Effect-free, because the caller is arbitrary; never before the
+  -- close, because `expiresAt` MUST sit past it (`ResolvableView`).
+  choice Proposal_Expire : Proposal_ExpireResult
+    with
+      actor : Party
+    controller actor
+    do
+      case (view (toInterface @Resolvable this)).expiresAt of
+        None -> abort "proposal has no expiry"
+        Some e -> do
+          now <- getTime
+          assertMsg "proposal not yet expired" (now >= e)
+          pure Proposal_ExpireResult with meta = emptyMetadata
+
+-- | Admit the ballots presented at resolution as `(cid, ballot)` pairs to tally.
+-- Under completeness the cap-core gate proves binding, authority signature, and
+-- exact cover (which subsumes distinctness); without it, there is no cover, so
+-- the gate asserts distinctness directly. Either way no ballot is counted twice.
+admitBallots : ContractId Proposal -> Resolvable -> [ContractId Ballot] -> Update [(ContractId Ballot, Ballot)]
+admitBallots self res ballots = do
+  let anchor = resolvableAnchor (toInterfaceContractId @Resolvable self)
+  let scids = map (toInterfaceContractId @Submittable) ballots
+  pairs <- case (view res).size of
+    Some n -> admitSubmittablesWithCompleteness n (toInterfaceContractId @Resolvable self) res scids
+    None -> admitSubmittables (view res).authorities anchor scids
+
+  forA pairs $ \(scid, s) -> case fromInterface @Ballot s of
+    None -> abort "admitted submittable is not a ballot"
+    Some b -> pure (fromInterfaceContractId @Ballot scid, b)
+
+-- | Score one presented ballot. A full ballot is checked for the voter's
+-- signature and returned to tally; the gate already proved the set distinct, so
+-- it needs no consuming here. An uncast or withdrawn one only fills a slot,
+-- illegal unless the proposal declares completeness.
+tallyBallot : Bool -> Ballot -> Update (Optional Ballot)
+tallyBallot covered b =
+  case (view (toInterface @Submittable b)).state of
+    S_Full -> do
+      assertMsg "cast ballot not signed by its voter"
+        ((view b).voter `elem` signatory b)
+      pure (Some b)
+    _ -> do
+      assertMsg "an uncovered resolution takes only cast ballots" covered
+      pure None

@@ -1,0 +1,21 @@
+-- Copyright (c) 2026 Unlockit. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | Auction-specific shared data. The generic shapes — `Metadata`,
+-- `AnyValue`, `ChoiceContext`, `ExtraArgs` — live in `Cap.Core.MetadataV1`
+-- (cap-core-metadata); every auction module imports them from there.
+--
+
+-- Implementations MUST NOT put security-relevant data in metadata: the fixed
+-- checks never read it.
+module Cap.Auctions.TypesV1 where
+
+-- | Stable auction identity. `operator` is the party whose authority anchors
+-- the auction — a single seller, an auction house, or a decentralized
+-- (multi-hosted) party are all one `Party` here.
+data AuctionId = AuctionId
+  with
+    operator : Party
+    id : Text
+      -- ^ Operator-scoped; unique per operator by that operator's discipline.
+  deriving (Eq, Ord, Show)

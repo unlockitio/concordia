@@ -3,25 +3,30 @@
 
 # Concordia workspace. `dpm build --all` builds these in dependency order;
 # inter-package `data-dependencies` (the .daml/dist/*.dar paths) resolve from
-# this list. Only packages that currently exist on disk are listed.
+# this list. Only packages that currently build are listed: the auctions
+# example and the tier-2 tests reference packages that do not exist yet and
+# return with the tier-2 rework.
 packages:
 # --- tier 1: cap-core ---
-- ./cap-core/cap-core-executable-outcome-v1
+- ./cap-core/Interfaces/metadata
+- ./cap-core/Interfaces/submittable
+- ./cap-core/Interfaces/resolvable
+- ./cap-core/Interfaces/checks
+- ./cap-core/Interfaces/target
+# outcome data-depends on checks and target, so it follows them.
+- ./cap-core/Interfaces/outcome
+- ./cap-core/util
 # --- tier 2: cap-governance ---
-- ./cap-governance/cap-governance-types-v1
-- ./cap-governance/cap-governance-executable-v1
-- ./cap-governance/cap-governance-proposal-v1
-- ./cap-governance/cap-governance-voting-right-v1
-- ./cap-governance/cap-governance-util-v1
+- ./cap-governance/Interfaces/proposal
+- ./cap-governance/util
 # --- tier 2: cap-auctions ---
-- ./cap-auctions/cap-auctions-types-v1
-- ./cap-auctions/cap-auctions-bid-v1
-- ./cap-auctions/cap-auctions-outcome-v1
-- ./cap-auctions/cap-auctions-auction-v1
-# --- reference implementations ---
+- ./cap-auctions/Interfaces/types
+- ./cap-auctions/Interfaces/bid
+- ./cap-auctions/Interfaces/outcome
+- ./cap-auctions/Interfaces/auction
+# --- examples ---
+# Baby-DSO: plain-Daml Splice reproduction (the governance oracle). No cap
+# dependency yet, so it builds standalone. Its golden-vector scripts live in a
+# separate -test package so the template package carries no daml-script dep.
 - ./examples/cap-governance-example
-- ./examples/cap-auctions-example
-# --- tests ---
-- ./cap-test/cap-core-test
-- ./cap-test/cap-governance-test
-- ./cap-test/cap-auctions-test
+- ./examples/cap-governance-example-test

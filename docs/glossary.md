@@ -6,13 +6,41 @@
 Terms are grouped by area and alphabetical within each. Definitions describe the
 concept no code and not related to daml. Cross-links jump between entries. Currently being updated.
 
+## Properties
+
+Cross-cutting properties a [mechanism](#mechanism) may or may not have.
+
+### Completeness
+The property that a [mechanism](#mechanism) resolves against a fixed, known set of
+eligible participants such that every [submission](#submission) that was made is
+provably included in the [outcome](#outcome), and every eligible participant that
+did not submit is provably accounted for — leaving no room to silently drop a
+submission or hide who did not participate.
+
+<sub>Source: CAP design (no external source).</sub>
+
+### Contention
+The condition where participants attempt to act on the same shared state at the
+same time, forcing their actions to be ordered one after another so that some must
+wait or retry — a cost that grows as more participants act concurrently.
+
+<sub>Source: CAP design; standard concurrency-control term.</sub>
+
+
 ## cap-core
 
 Domain-agnostic primitives for [mechanisms](#mechanism).
 
+### Authority
+The set of parties whose joint signature anchors a [mechanism](#mechanism):
+every member signs the mechanism and every [submittable](#submittable) in it,
+and nothing carrying fewer than all members' signatures counts as part of the
+mechanism. A single party is the singleton case.
+
+<sub>Source: CAP `cap-core` design (no external source).</sub>
+
 ### Mechanism
-An interaction between participants that gathers [submissions](#submittable) and resolves
-them into an [outcome](#outcome).
+An interaction between participants that collects information and generates an [outcome](#outcome).
 
 <sub>Source: CAP `cap-core` design (no external source).</sub>
 
@@ -23,16 +51,42 @@ A pre-approved action to be enacted — the product of resolving a
 <sub>Source: CAP `cap-core` design (no external source).</sub>
 
 ### Resolvable
-The [mechanism](#mechanism) contract itself: it collects a set of
-[Submittables](#submittable) and produces a set of [outcomes](#outcome).
+A contract that collects a set of [submittables](#submittable)
+and produces a set of [outcomes](#outcome).
+
+<sub>Source: CAP `cap-core` design (no external source).</sub>
+
+### Slot
+A position in the fixed set a [mechanism](#mechanism) resolves against when it
+claims [completeness](#completeness), numbered from zero. Each slot carries
+exactly one live [submittable](#submittable) from registration to resolution,
+which is what lets the set be proved complete — one submittable per slot, no gaps.
+
+<sub>Source: CAP `cap-core` design (no external source).</sub>
+
+### Submission
+The content a [submittable](#submittable) carries — what a party actually put
+forward: a [vote](#vote) on a [ballot](#ballot), an offered price on a
+[bid](#auctionbid). A submittable carries a submission only in its full state; an
+empty or withdrawn one carries none. The submission is what a
+[mechanism](#mechanism) reads to resolve — what a [tally](#tally) or pricing rule
+scores.
 
 <sub>Source: CAP `cap-core` design (no external source).</sub>
 
 ### Submittable
-An input a party submits to a [mechanism](#mechanism) for resolution (e.g. a
-[bid](#auctionbid), a [ballot](#ballot)).
+The single live artifact a [slot](#slot) holds while a [mechanism](#mechanism)
+runs — one per participant, standing for that participant's place in the
+resolution rather than for any content in particular. A submittable is in one of
+three states: empty (the slot is registered but nothing has been submitted), full
+(it holds the participant's [submission](#submission)), or withdrawn (a submission
+that was retracted). Exactly one submittable is live per slot from registration to
+resolution, which is what lets the set be proved [complete](#completeness). A
+submittable records which mechanism and which slot, never who filled it, so slots
+stay pseudonymous; only the full ones carry content for resolution.
 
 <sub>Source: CAP `cap-core` design (no external source).</sub>
+
 
 ## Governance
 
@@ -103,9 +157,11 @@ The act of submitting a [ballot](#ballot) to an open [proposal](#proposal), spen
 <sub>Source: CAP `cap-governance` design (no external source).</sub>
 
 ### Proposal
-TODO:
+An action put before the [electorate](#electorate) for a
+collective decision, stating what would be enacted if it is approved.
 
-<sub>Source: CAP `cap-governance` design (no external source).</sub>
+<sub>Source: CAP `cap-governance` design; standard governance sense of a motion
+put to a vote.</sub>
 
 
 ### Quorate tally
@@ -199,10 +255,6 @@ What does cap-auction model ? TODO: fill it here but then move it for the correc
 [a16z — How Auction Theory Informs On-Chain Implementations](https://a16zcrypto.com/posts/article/how-auction-theory-informs-implementations/);
 [UCC § 2-328 Sale by Auction (LII)](https://www.law.cornell.edu/ucc/2/2-328).</sub>
 
-### Assignment rule
-TODO:
-
-<sub>Source: CAP `cap-auctions` design (no external source).</sub>
 
 ### AuctionBid
 The offer a buyer submits in an [auction](#auction): the price they are willing to

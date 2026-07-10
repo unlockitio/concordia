@@ -1,0 +1,85 @@
+-- Copyright (c) 2026 Unlockit. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | The `AuctionOutcome` interface: a contract that is one settlement
+-- obligation produced by a resolution — it awards something to one party and
+-- can be settled or failed, exactly once.
+--
+-- Resolution emits one outcome per *obligation*, not one per auction. Losers
+-- get no outcome — a losing bid is not an obligation — but resolution settles
+-- each loser's escrow so a consumed bid never leaves funds locked without a
+-- path back.
+--
+-- Conforming implementations MUST mint outcomes signed by exactly the parties
+-- settlement needs (e.g. the operator-controlled award
+-- choice on the winning bid runs with operator, seller, and winner.)
+
+module Cap.Auctions.OutcomeV1 where
+
+import Cap.Core.MetadataV1
+import Cap.Auctions.TypesV1
+
+-- | View of a settlement obligation.
+data AuctionOutcomeView = AuctionOutcomeView
+  with
+    auctionId : AuctionId
+    beneficiary : Party
+      -- ^ The winner / matched party this obligation awards to.
+    settleBefore : Optional Time
+      -- ^ Settlement deadline; None = no deadline. The view *displays* it; the
+      -- settle/fail impls *enforce* it, alongside the token layer's own
+      -- wallet-side `settleBefore` on the escrow allocations.
+    meta : Metadata
+
+  deriving (Eq, Show)
+
+data AuctionOutcome_SettleResult = AuctionOutcome_SettleResult
+  with
+    meta : Metadata
+  deriving (Eq, Show)
+
+data AuctionOutcome_FailResult = AuctionOutcome_FailResult
+  with
+    meta : Metadata
+  deriving (Eq, Show)
+
+interface AuctionOutcome where
+  viewtype AuctionOutcomeView
+
+  isExecutor : [Party] -> Bool
+    -- ^ Whether this actor set may settle or fail the outcome. Plural because
+    -- Token Standard V2 settlement can need several executors jointly.
+
+  auctionOutcome_settleImpl : ContractId AuctionOutcome -> AuctionOutcome_Settle -> Update AuctionOutcome_SettleResult
+    -- ^ MUST validate every settlement leg named in `extraArgs.context` exactly
+    -- — amount, sender, receiver, instrument, and settlement reference pinned to
+    -- `self` — and execute all legs in this one transaction (DvP atomicity).
+  auctionOutcome_failImpl : ContractId AuctionOutcome -> AuctionOutcome_Fail -> Update AuctionOutcome_FailResult
+    -- ^ Makes parties whole per the implementation's declared policy
+    -- (return the lot, refund or seize deposits). MUST NOT run while the
+    -- settlement window is still open.
+
+  -- | Perform the exchange this obligation describes, atomically, in this
+  -- one transaction. `extraArgs.context` carries the settlement legs
+  -- (allocation cids under the reserved keys) plus any registry-supplied
+  -- contexts. Consuming: settling twice is impossible by construction.
+  choice AuctionOutcome_Settle : AuctionOutcome_SettleResult
+    with
+      actors : [Party]
+      extraArgs : ExtraArgs
+    controller actors
+    do
+      assertMsg "actors are not an executor set" (isExecutor this actors)
+      auctionOutcome_settleImpl this self arg
+
+  -- | The unhappy path: the settlement window elapsed unfulfilled. Consuming,
+  -- for the same once-only reason. Executor-only (unlike governance's
+  -- anyone-callable expiry) because failing an outcome moves money.
+  choice AuctionOutcome_Fail : AuctionOutcome_FailResult
+    with
+      actors : [Party]
+      extraArgs : ExtraArgs
+    controller actors
+    do
+      assertMsg "actors are not an executor set" (isExecutor this actors)
+      auctionOutcome_failImpl this self arg

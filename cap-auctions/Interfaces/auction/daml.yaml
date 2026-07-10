@@ -1,0 +1,27 @@
+# Copyright (c) 2026 Unlockit. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Tier 2 (Auctions) — the `Auction` interface: one auction contract, immutable
+# from creation to resolution, consumed exactly once by `Auction_Resolve` or
+# `Auction_Cancel`. `Auction_SubmitBid` (nonconsuming) is the sole admission
+# path: it mints bids co-signed by the auction's signatories — the root of the
+# signature spine every downstream integrity property hangs on. No factory:
+# the auction contract is the admission point, and exercising it doubles as
+# the wrong-auction defense.
+sdk-version: 3.4.11
+name: cap-auctions-auction-v1
+version: 0.1.0
+source: daml
+dependencies:
+- daml-prim
+- daml-stdlib
+data-dependencies:
+- ../../../cap-core/Interfaces/metadata/.daml/dist/cap-core-metadata-v1-0.1.0.dar
+- ../../../cap-core/Interfaces/submittable/.daml/dist/cap-core-submittable-v1-0.1.0.dar
+- ../../../cap-core/Interfaces/resolvable/.daml/dist/cap-core-resolvable-v1-0.1.0.dar
+- ../../../cap-core/Interfaces/checks/.daml/dist/cap-core-checks-v1-0.1.0.dar
+- ../types/.daml/dist/cap-auctions-types-v1-0.1.0.dar
+- ../bid/.daml/dist/cap-auctions-bid-v1-0.1.0.dar
+- ../outcome/.daml/dist/cap-auctions-outcome-v1-0.1.0.dar
+build-options:
+  - --target=2.1

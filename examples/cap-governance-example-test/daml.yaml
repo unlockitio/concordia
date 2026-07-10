@@ -1,0 +1,19 @@
+# Copyright (c) 2026 Unlockit. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Golden-vector tests for the Baby-DSO oracle. Kept in a separate package from
+# the templates (cap-governance-example) so the template package carries no
+# daml-script dependency. Depends on the example DAR for the templates + types
+# under test.
+sdk-version: 3.4.11
+name: cap-governance-example-test
+version: 0.1.0
+source: daml
+dependencies:
+- daml-prim
+- daml-stdlib
+- daml-script
+data-dependencies:
+- ../cap-governance-example/.daml/dist/cap-governance-example-0.1.0.dar
+build-options:
+  - --target=2.1

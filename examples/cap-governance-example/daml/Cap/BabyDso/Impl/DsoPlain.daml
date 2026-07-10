@@ -1,0 +1,492 @@
+-- Copyright (c) 2026 Unlockit. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+-- =============================================================================
+-- Baby-DSO : idiomatic plain-Daml reproduction of Splice's DSO governance
+-- (the external oracle's behaviour), with NO cap-core dependency. It covers
+-- both the VOTING path and the CONFIRMATION / SV-onboarding path.
+--
+-- Every check the Splice DsoRules voting choices perform is reproduced here
+-- verbatim:
+--   * requester/voter "is an SV" lookups (with Splice's exact fail messages);
+--   * requireWellformedReason / requireWellformedVote (text-length limits);
+--   * checked fetch-and-archive (the ForDso contract-group-id check);
+--   * enforceCooldown (per-SV recast rate-limit, default 1 min);
+--   * getAndValidateSvParty for the closer;
+--   * trackingCid threading across recreations;
+--   * the close decision table (both targetEffectiveAt regimes), incl. the two
+--     mid-period "no definitive outcome" fails.
+-- The confirmation path adds the threshold-gated ConfirmAction/ExecuteConfirmed
+-- flow and the StartSvOnboarding -> ConfirmSvOnboarding -> AddConfirmedSv chain.
+--
+-- =============================================================================
+module Cap.BabyDso.Impl.DsoPlain where
+
+import DA.Time (RelTime, addRelTime, minutes)
+import qualified DA.Map as Map
+import qualified DA.Set as Set
+import qualified DA.Text as T
+import DA.Action (void)
+import DA.Optional (fromOptional)
+import DA.Exception (AnyException, message)
+
+-- --- Splice-equivalent utility helpers (mirrors splice-util / DsoRules) -------
+
+-- | Splice's Util.require: wraps the message identically.
+require : Text -> Bool -> Update ()
+require msg cond = assertMsg ("The requirement '" <> msg <> "' was not met.") cond
+
+-- | Assert that a deadline has been reached (now >= deadline). Used by cooldown.
+assertDeadlineExceeded : Text -> Time -> Update ()
+assertDeadlineExceeded name deadline = do
+  now <- getTime
+  require (name <> " has been reached") (now >= deadline)
+
+-- | Assert that a deadline has NOT yet passed (now < deadline). Used by TTLs.
+assertWithinDeadline : Text -> Time -> Update ()
+assertWithinDeadline name deadline = do
+  now <- getTime
+  require (name <> " has not passed") (now < deadline)
+
+-- --- Domain types (mirror DsoRules.daml) -------------------------------------
+
+data Reason = Reason with
+    url  : Text
+    body : Text
+  deriving (Eq, Show)
+
+-- Mirrors Splice.Types.Round (the mining round an SV joined in).
+data Round = Round with
+    number : Int
+  deriving (Eq, Ord, Show)
+
+-- Mirrors DsoRules.SvInfo : per-SV metadata held in the svs map.
+data SvInfo = SvInfo with
+    name            : Text  -- human-readable; unique
+    joinedAsOfRound : Round
+    svRewardWeight  : Int   -- reward-distribution weight; NOT used by the vote tally
+    participantId   : Text
+  deriving (Eq, Show)
+
+-- Mirrors DsoRules.OffboardedSvInfo : kept for offboarded SVs.
+data OffboardedSvInfo = OffboardedSvInfo with
+    name          : Text
+    participantId : Text
+  deriving (Eq, Show)
+
+-- A vote cast by an SV. accept is BINARY — abstain = absence from the votes map.
+data Vote = Vote with
+    sv        : Party
+    accept    : Bool
+    reason    : Reason
+    optCastAt : Optional Time
+  deriving (Eq, Show)
+
+-- Mirrors VoteRequestOutcome (the value the golden vectors assert).
+data VoteRequestOutcome
+  = VRO_Accepted with effectiveAt : Time
+  | VRO_Rejected
+  | VRO_Expired
+  | VRO_AcceptedButActionFailed with description : Text
+  deriving (Eq, Show)
+
+-- The action a passed vote executes. Downstream asset effects are out of scope;
+-- we model only the governance self-amendment the vectors exercise plus a no-op
+-- standing in for grant/revoke (always succeeds, no state change).
+-- Beyond the voting path, ConfirmSvOnboarding is the action the CONFIRMATION path
+-- runs to approve a new SV (mirrors SRARC_ConfirmSvOnboarding).
+data GovAction
+  = NoOp
+  | OffboardSv with offboard : Party
+  | ConfirmSvOnboarding with
+      newSvParty       : Party
+      newSvName        : Text
+      newParticipantId : Text
+      newSvRewardWeight : Int
+      reason           : Text
+  deriving (Eq, Show)
+
+-- Result of closing, mirroring DsoRules_CloseVoteRequestResult's asserted fields.
+data CloseResult = CloseResult with
+    outcome          : VoteRequestOutcome
+    offboardedVoters : [Text]
+    abstainingSvs    : [Text]
+    completedAt      : Time
+  deriving (Eq, Show)
+
+-- Subset of DsoRulesConfig the voting + confirmation choices read.
+data DsoRulesConfig = DsoRulesConfig with
+    voteRequestTimeout           : RelTime
+    voteCooldownTime             : Optional RelTime  -- None = default (1 min)
+    maxTextLength                : Int
+    actionConfirmationTimeout    : RelTime           -- TTL of a Confirmation
+    svOnboardingRequestTimeout   : RelTime           -- TTL of an SvOnboardingRequest
+    svOnboardingConfirmedTimeout : RelTime           -- TTL of an SvOnboardingConfirmed
+  deriving (Eq, Show)
+
+getVoteCooldownTime : DsoRulesConfig -> RelTime
+getVoteCooldownTime config = fromOptional (minutes 1) config.voteCooldownTime
+
+requireWellformedReason : DsoRulesConfig -> Reason -> Update ()
+requireWellformedReason config reason = do
+  require "Reason URL is not too long" (T.length reason.url <= config.maxTextLength)
+  require "Reason body is not too long" (T.length reason.body <= config.maxTextLength)
+
+requireWellformedVote : DsoRulesConfig -> Vote -> Update ()
+requireWellformedVote config vote = requireWellformedReason config vote.reason
+
+-- | Splice's enforceCooldown: if there was a previous action time, the next
+-- action is only allowed once `cooldown` has elapsed.
+enforceCooldown : Text -> RelTime -> Optional Time -> Update ()
+enforceCooldown name cooldown lastActionTime = case lastActionTime of
+  Some lastTime -> assertDeadlineExceeded name (lastTime `addRelTime` cooldown)
+  None          -> pure ()
+
+-- --- Threshold (SPEC §5.3) ---------------------------------------------------
+
+requiredNumVotes : Int -> Int
+requiredNumVotes numSvs = ceiling (intToDecimal (numSvs + f + 1) / 2.0)
+  where f = floor (intToDecimal (numSvs - 1) / 3.0)
+
+-- --- Checked fetch (mirrors Splice fetchAndArchive (ForDso dso)) --------------
+-- The contract group id of a VoteRequest is ForDso{dso}; we assert it matches
+-- the acting DsoRules' dso before archiving — the 1-r7 checked-fetch pattern.
+
+data ForDso = ForDso with dso : Party
+  deriving (Eq, Show)
+
+fetchAndArchiveForDso : Party -> ContractId VoteRequest -> Update VoteRequest
+fetchAndArchiveForDso dso cid = do
+  vr <- fetch cid
+  require "Contract group id matches the acting DSO" (ForDso dso == ForDso vr.dso)
+  archive cid
+  pure vr
+
+-- --- Per-decision contract ---------------------------------------------------
+
+template VoteRequest with
+    dso               : Party
+    requester         : Text                -- SV NAME
+    action            : GovAction
+    reason            : Reason
+    voteBefore        : Time
+    votes             : Map.Map Text Vote   -- keyed by SV NAME
+    trackingCid       : Optional (ContractId VoteRequest)  -- stable id across recreations
+    targetEffectiveAt : Optional Time
+  where
+    ensure optional True (voteBefore <=) targetEffectiveAt
+    signatory dso
+
+-- --- Onboarding + confirmation-path contracts --------------------------------
+
+-- Created by a sponsoring SV to start onboarding a candidate (mirrors
+-- SvOnboardingRequest). Observer candidateParty so the not-yet-SV can see it.
+template SvOnboardingRequest with
+    candidateName          : Text
+    candidateParty         : Party
+    candidateParticipantId : Text
+    token                  : Text
+    sponsor                : Party
+    dso                    : Party
+    expiresAt              : Time
+  where
+    signatory dso
+    observer candidateParty
+
+-- Approval marker produced by the confirmation path; the candidate self-adds off it.
+template SvOnboardingConfirmed with
+    svParty         : Party
+    svName          : Text
+    svRewardWeight  : Int
+    svParticipantId : Text
+    reason          : Text
+    dso             : Party
+    expiresAt       : Time
+  where
+    signatory dso
+    observer svParty
+
+-- One SV's confirmation of an action (mirrors Confirmation). The confirmation path
+-- collects >= requiredNumVotes of these for the same action, then executes it.
+template Confirmation with
+    dso       : Party
+    confirmer : Party
+    action    : GovAction
+    expiresAt : Time
+  where
+    signatory dso
+
+-- --- Standing body -----------------------------------------------------------
+
+template DsoRules with
+    dso           : Party
+    epoch         : Int
+    svs           : Map.Map Party SvInfo
+    offboardedSvs : Map.Map Party OffboardedSvInfo
+    dsoDelegate   : Party
+    config        : DsoRulesConfig
+  where
+    signatory dso
+
+    -- Self-amendment used by close to execute an accepted OffboardSv.
+    -- Mirrors DsoRules_OffboardSv (size>1 guard, "Not a sv", delegate reassign).
+    choice DOffboardSv : ContractId DsoRules
+      with
+        offboard : Party
+      controller dso
+      do
+        require "There is more than one sv" (Map.size svs > 1)
+        case Map.lookup offboard svs of
+          None -> fail "Not a sv"
+          Some info -> do
+            let newSvs = Map.delete offboard svs
+            let isDelegate = offboard == dsoDelegate
+            let newDelegate = case Map.keys newSvs of
+                  (k :: _) | isDelegate -> k
+                  _                     -> dsoDelegate
+            let newEpoch = if isDelegate then epoch + 1 else epoch
+            let offboardedSvInfo = OffboardedSvInfo with
+                  name = info.name
+                  participantId = info.participantId
+            create this with
+              svs = newSvs
+              offboardedSvs = Map.insert offboard offboardedSvInfo offboardedSvs
+              dsoDelegate = newDelegate
+              epoch = newEpoch
+
+    -- Add an SV, recreating DsoRules with the expanded set (mirrors DsoRules_AddSv
+    -- via dsoRules_addSv, non-devnet path). Consuming. Driven directly by dso
+    -- (bootstrap) or by the candidate's DAddConfirmedSv / the confirmation path.
+    choice DAddSv : ContractId DsoRules
+      with
+        newSvParty         : Party
+        newSvName          : Text
+        newSvRewardWeight  : Int
+        newSvParticipantId : Text
+        joinedAsOfRound    : Round
+      controller dso
+      do
+        ensureNeverOperatedNode newSvParty this
+        require "SV is not currently onboarded"
+          (newSvName `notElem` map (.name) (Map.values svs))
+        let info = SvInfo with
+              name = newSvName
+              joinedAsOfRound
+              svRewardWeight = newSvRewardWeight
+              participantId = newSvParticipantId
+        create this with svs = Map.insert newSvParty info svs
+
+    -- A sponsoring SV starts onboarding a candidate (mirrors DsoRules_StartSvOnboarding).
+    nonconsuming choice DStartSvOnboarding : ContractId SvOnboardingRequest
+      with
+        candidateName          : Text
+        candidateParty         : Party
+        candidateParticipantId : Text
+        token                  : Text
+        sponsor                : Party
+      controller sponsor
+      do
+        require "Sponsor is an SV" (sponsor `Map.member` svs)
+        now <- getTime
+        let expiresAt = now `addRelTime` config.svOnboardingRequestTimeout
+        create SvOnboardingRequest with
+          candidateName; candidateParty; candidateParticipantId; token; sponsor; dso; expiresAt
+
+    -- The confirmation-path action that approves a candidate: creates the
+    -- SvOnboardingConfirmed marker (mirrors DsoRules_ConfirmSvOnboarding). Run by
+    -- DExecuteConfirmedAction, so it carries dso authority. Nonconsuming.
+    nonconsuming choice DConfirmSvOnboarding : ContractId SvOnboardingConfirmed
+      with
+        newSvParty        : Party
+        newSvName         : Text
+        newParticipantId  : Text
+        newSvRewardWeight : Int
+        reason            : Text
+      controller dso
+      do
+        ensureNeverOperatedNode newSvParty this
+        require "SV name is expected to be new"
+          (newSvName `notElem` map (.name) (Map.values svs))
+        now <- getTime
+        let expiresAt = now `addRelTime` config.svOnboardingConfirmedTimeout
+        create SvOnboardingConfirmed with
+          svParty = newSvParty; svName = newSvName; svRewardWeight = newSvRewardWeight
+          svParticipantId = newParticipantId; reason; dso; expiresAt
+
+    -- The candidate completes onboarding by self-adding off its confirmation
+    -- (mirrors DsoRules_AddConfirmedSv). The OpenMiningRound handshake Splice uses
+    -- to derive a cheat-resistant joinedAsOfRound is AmuletRules/mining machinery
+    -- (out of scope), so we default the round.
+    nonconsuming choice DAddConfirmedSv : ContractId DsoRules
+      with
+        sv                       : Party
+        svOnboardingConfirmedCid : ContractId SvOnboardingConfirmed
+      controller sv
+      do
+        -- checked fetch (ForOwner{dso, owner=sv}): belongs to this DSO and candidate
+        soc <- fetch svOnboardingConfirmedCid
+        require "SvOnboardingConfirmed belongs to this DSO" (soc.dso == dso)
+        require "SvOnboardingConfirmed is for this candidate" (soc.svParty == sv)
+        assertWithinDeadline "svOnboardingConfirmed.expiresAt" soc.expiresAt
+        archive svOnboardingConfirmedCid
+        exercise self DAddSv with
+          newSvParty = sv
+          newSvName = soc.svName
+          newSvRewardWeight = soc.svRewardWeight
+          newSvParticipantId = soc.svParticipantId
+          joinedAsOfRound = Round 0
+
+    -- Confirmation path: one SV records its confirmation of an action
+    -- (mirrors DsoRules_ConfirmAction). Nonconsuming.
+    nonconsuming choice DConfirmAction : ContractId Confirmation
+      with
+        confirmer : Party
+        action    : GovAction
+      controller confirmer
+      do
+        require "Confirmer is an SV" (confirmer `Map.member` svs)
+        now <- getTime
+        let expiresAt = now `addRelTime` config.actionConfirmationTimeout
+        create Confirmation with dso; confirmer; action; expiresAt
+
+    -- Confirmation path: execute an action once enough distinct, unexpired,
+    -- matching confirmations exist (mirrors DsoRules_ExecuteConfirmedAction).
+    nonconsuming choice DExecuteConfirmedAction : ()
+      with
+        action           : GovAction
+        confirmationCids : [ContractId Confirmation]
+        sv               : Optional Party
+      controller sv
+      do
+        _ <- getAndValidateSvParty this sv
+        let r = requiredNumVotes (Map.size svs)
+        require "Enough confirmations" (length confirmationCids >= r)
+        confirmers <- mapA
+          (\cid -> do
+              c <- fetch cid
+              require "Confirmation belongs to this DSO" (c.dso == dso)
+              archive cid
+              require "Confirmer is an SV" (c.confirmer `Map.member` svs)
+              require "Confirmed action matches" (c.action == action)
+              assertWithinDeadline "confirmation.expiresAt" c.expiresAt
+              pure c.confirmer)
+          confirmationCids
+        require "No duplicate confirmers"
+          (Set.size (Set.fromList confirmers) == length confirmers)
+        executeAction self action
+
+    -- Open a vote request; the requester's YES is auto-inserted (DsoRules.daml:726).
+    nonconsuming choice DRequestVote : ContractId VoteRequest
+      with
+        requester          : Party
+        action             : GovAction
+        reason             : Reason
+        voteRequestTimeout : Optional RelTime
+        targetEffectiveAt  : Optional Time
+      controller requester
+      do
+        requesterName <- case Map.lookup requester svs of
+          None      -> fail "Requester is not an SV"
+          Some info -> pure info.name
+        requireWellformedReason config reason
+        now <- getTime
+        let voteBefore = case voteRequestTimeout of
+              Some value -> now `addRelTime` value
+              None       -> now `addRelTime` config.voteRequestTimeout
+        require "There is some time to vote" (now < voteBefore)
+        let requesterVote = Vote with
+              sv = requester
+              accept = True
+              reason = Reason with url = ""; body = "I accept, as I requested the vote."
+              optCastAt = Some now
+        create VoteRequest with
+          dso; requester = requesterName; action; reason; voteBefore
+          votes = Map.fromList [(requesterName, requesterVote)]
+          trackingCid = None
+          targetEffectiveAt
+
+    -- Cast or update a vote (checked fetch + archive + recreate). DsoRules.daml:764.
+    nonconsuming choice DCastVote : ContractId VoteRequest
+      with
+        requestCid : ContractId VoteRequest
+        vote       : Vote
+      controller vote.sv
+      do
+        requireWellformedVote config vote
+        voterName <- case Map.lookup vote.sv svs of
+          None      -> fail "Voter is not an SV"
+          Some info -> pure info.name
+        request <- fetchAndArchiveForDso dso requestCid
+        -- rate-limit recasting by the same SV (skipped on first vote for the request)
+        enforceCooldown ("voteCooldownTime for " <> show vote.sv) (getVoteCooldownTime config) $ do
+          pastVote <- Map.lookup voterName request.votes
+          pastVote.optCastAt
+        now <- getTime
+        create request with
+          votes = Map.insert voterName (vote with optCastAt = Some now) request.votes
+          trackingCid = Some (fromOptional requestCid request.trackingCid)
+
+    -- Close: tally, threshold, decision table (DsoRules.daml:813), self-amend on accept.
+    nonconsuming choice DCloseVoteRequest : CloseResult
+      with
+        requestCid : ContractId VoteRequest
+        sv         : Optional Party
+      controller sv
+      do
+        _ <- getAndValidateSvParty this sv
+        now <- getTime
+        request <- fetchAndArchiveForDso dso requestCid
+
+        let activeNames   = map (.name) (Map.values svs)
+        let activeNameSet = Set.fromList activeNames
+        let voteList      = Map.toList request.votes
+        let validVotes        = [ vote | (name, vote) <- voteList, name `Set.member` activeNameSet ]
+        let offboardedVoters  = [ name | (name, _)    <- voteList, not (name `Set.member` activeNameSet) ]
+        let abstainingSvs = [ name | name <- activeNames, not (name `Map.member` request.votes) ]
+        let numYays  = length (filter (.accept) validVotes)
+        let numNays  = length (filter (not . (.accept)) validVotes)
+        let numVotes = numYays + numNays
+        let r = requiredNumVotes (Map.size svs)
+
+        let exec effAt =
+              try do
+                executeAction self request.action
+                pure (VRO_Accepted with effectiveAt = effAt)
+              catch
+                (e : AnyException) -> pure (VRO_AcceptedButActionFailed with description = message e)
+
+        outcome <- case request.targetEffectiveAt of
+          Some _        | numNays >= r                              -> pure VRO_Rejected
+          Some _        | now >= request.voteBefore && numVotes < r -> pure VRO_Expired
+          Some effTime  | now >= effTime && numYays >= r            -> exec effTime
+          Some effTime  | now >= effTime                            -> pure VRO_Rejected
+          Some _                                                    -> fail "no definitive outcome for voting request with effectivity"
+          None          | numNays >= r                              -> pure VRO_Rejected
+          None          | numYays >= r                              -> exec now
+          None          | now >= request.voteBefore                 -> pure VRO_Expired
+          None                                                      -> fail "no definite outcome for voting request without effectivity"
+
+        pure CloseResult with outcome; offboardedVoters; abstainingSvs; completedAt = now
+
+-- --- helpers -----------------------------------------------------------------
+
+-- | Mirrors DsoRules getAndValidateSvParty: the acting SV must be a current SV.
+getAndValidateSvParty : DsoRules -> Optional Party -> Update Party
+getAndValidateSvParty _ None = fail "no SV party provided"
+getAndValidateSvParty rules (Some sv) = do
+  require "SV party is an actual SV" (sv `Map.member` rules.svs)
+  pure sv
+
+-- | Mirrors DsoRules ensureNeverOperatedNode: the new party must never have been
+-- an SV (neither active nor offboarded).
+ensureNeverOperatedNode : Party -> DsoRules -> Update ()
+ensureNeverOperatedNode p this =
+  require "SV party has not yet operated a node"
+    (not (p `Map.member` this.svs || p `Map.member` this.offboardedSvs))
+
+executeAction : ContractId DsoRules -> GovAction -> Update ()
+executeAction self action = case action of
+  NoOp                  -> pure ()
+  OffboardSv offboard   -> void (exercise self DOffboardSv with offboard)
+  ConfirmSvOnboarding{..} ->
+    void (exercise self DConfirmSvOnboarding with newSvParty; newSvName; newParticipantId; newSvRewardWeight; reason)
