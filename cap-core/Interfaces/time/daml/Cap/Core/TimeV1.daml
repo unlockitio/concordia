@@ -1,0 +1,14 @@
+-- Copyright (c) 2026 Unlockit. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | The library's one temporal predicate. `isOpen` is the single home for the
+-- floor-inclusive/ceiling-exclusive convention, so every temporal check (the
+-- outcome execution window, the resolvable submission and resolution checks)
+-- reads the same comparison and no site re-hand-rolls it.
+module Cap.Core.TimeV1 where
+
+-- | Whether `now` falls in the half-open window `[from, until)`: at or after
+-- `from`, and — when bounded — strictly before `until`. `until = None` = no
+-- ceiling.
+isOpen : Time -> Time -> Optional Time -> Bool
+isOpen now from until = now >= from && optional True (now <) until

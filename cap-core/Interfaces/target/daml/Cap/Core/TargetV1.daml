@@ -10,7 +10,7 @@ import DA.Optional (isSome)
 import DA.Set (Set)
 
 import Cap.Core.MetadataV1
-import Cap.Core.ChecksV1 (HasCheckedFetch (..), ForTarget (..), fetchCheckedInterface, require, authoritySigned)
+import Cap.Core.CheckedFetchV1 (HasCheckedFetch (..), ForTarget (..), fetchCheckedInterface, require, authoritySigned)
 
 -- | View of a contract that can be acted upon: the binding identity, the state
 -- token, and nothing security-relevant beyond them.
@@ -65,7 +65,7 @@ data CheckedTarget = CheckedTarget
       -- it. Always False for an identity-only pin.
 
 -- | Verify the fresh targets presented at execution are the ones committed at
--- approval — positional pairing, wrong key or forged signature aborts, a pinned
+-- approval, aborts on wrong key or forged signature aborts, a pinned (use other term)
 -- state is compared and routed to the caller's drift policy (not enforced here).
 checkTargetBinding : [TargetCommitment] -> [ContractId Target] -> Update [CheckedTarget]
 checkTargetBinding committed presented = do

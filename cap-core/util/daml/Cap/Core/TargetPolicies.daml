@@ -7,8 +7,6 @@
 -- absent. Wire one profile per interface instance, or dispatch on the
 -- template's own fields for per-proposal policies.
 --
--- Each profile has a price:
---
 --   * Strict (`driftAborts`) — any drift demands a fresh approval. SHOULD pair
 --     with an execution deadline, or a permanently drifted target leaves a
 --     forever-unexecutable outcome in the ACS. The right default for treasuries.
@@ -18,7 +16,7 @@
 --     on the format's `Patchable` instances.
 module Cap.Core.TargetPolicies where
 
-import Cap.Core.ChecksV1 (require)
+import Cap.Core.CheckedFetchV1 (require)
 import Cap.Core.TargetV1
 
 -- | The strict profile: any drift refuses execution.

@@ -1,0 +1,21 @@
+# Copyright (c) 2026 Unlockit. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Tier 1 — `Cap.Core.CheckedFetchV1`: the checked-fetch vocabulary the whole
+# interface tier is grouped by (`HasCheckedFetch`, `ForAuthority`,
+# `ForResolvable`, `ForTarget`, `fetchChecked`/`fetchCheckedInterface`), plus
+# the `require` idiom and `authoritySigned`. It imports only the value types, so
+# it sits below every view: each view declares its own `HasCheckedFetch`
+# instance, and `cap-core-checks-v1` builds the fixed checks on top. See
+# docs/cap-core-architecture.md.
+sdk-version: 3.4.11
+name: cap-core-checked-fetch-v1
+version: 0.1.0
+source: daml
+dependencies:
+- daml-prim
+- daml-stdlib
+data-dependencies:
+- ../metadata/.daml/dist/cap-core-metadata-v1-0.1.0.dar
+build-options:
+  - --target=2.1

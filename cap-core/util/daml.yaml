@@ -23,9 +23,7 @@ dependencies:
 - daml-stdlib
 data-dependencies:
 - ../Interfaces/metadata/.daml/dist/cap-core-metadata-v1-0.1.0.dar
-- ../Interfaces/submittable/.daml/dist/cap-core-submittable-v1-0.1.0.dar
-- ../Interfaces/resolvable/.daml/dist/cap-core-resolvable-v1-0.1.0.dar
-- ../Interfaces/checks/.daml/dist/cap-core-checks-v1-0.1.0.dar
+- ../Interfaces/checked-fetch/.daml/dist/cap-core-checked-fetch-v1-0.1.0.dar
 - ../Interfaces/target/.daml/dist/cap-core-target-v1-0.1.0.dar
 build-options:
   - --target=2.1

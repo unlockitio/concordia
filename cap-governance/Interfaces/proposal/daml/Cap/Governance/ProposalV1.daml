@@ -11,6 +11,7 @@ import DA.Optional (catOptionals)
 import Cap.Core.MetadataV1
 import Cap.Core.SubmittableV1
 import Cap.Core.ResolvableV1
+import Cap.Core.CheckedFetchV1
 import Cap.Core.ChecksV1
 import Cap.Core.OutcomeV1
 
@@ -215,10 +216,10 @@ interface Proposal requires Resolvable where
     -- ^ Builds the approved outcomes. Gets the winning option as `tally` selected
     -- it (None for approve/reject) and the resolver's `extraArgs`.
     -- MUST return at least one executable, each signed by this proposal's
-    -- authority, with `timelock` exactly the proposal's and any `expiresAt`
-    -- past both issuance and the timelock; MUST set each `committedTargets`
-    -- to the targets the approved option authorized — the authority signature
-    -- vouches for it all.
+    -- authority, with `executeAfter` exactly the proposal's `timelock` and any
+    -- `executeUntil` past both issuance and that instant; MUST set each
+    -- `committedTargets` to the targets the approved option authorized — the
+    -- authority signature vouches for it all.
   onResolved : ResolutionOutcome -> ExtraArgs -> Update Metadata
     -- ^ Side effects atomic with resolution (rejection record, successor on a
     -- lapse, notifications), run with the authority's signature in scope; the
