@@ -8,8 +8,9 @@
 Domain-agnostic primitives for [mechanisms](glossary.md#mechanism) (Daml 3.x,
 LF 2.1). Cap-core forces only what is universal, and the
 core check set is maximally permissive minus the unsafe class.
-Six interface packages: shared value types (`cap-core-metadata-v1`),
-the [submittable](glossary.md#submittable) face (`cap-core-submittable-v1`), the
+Seven interface packages: shared value types (`cap-core-metadata-v1`), the
+checked-fetch vocabulary (`cap-core-checked-fetch-v1`), the
+[submittable](glossary.md#submittable) face (`cap-core-submittable-v1`), the
 mechanism face (`cap-core-resolvable-v1`), the shared checks
 (`cap-core-checks-v1`), the target face (`cap-core-target-v1`), and the
 outcome face (`cap-core-outcome-v1`) — plus `cap-core-util`, optional helpers for
@@ -89,9 +90,18 @@ classDiagram
         checkAuthoritySigned()
     }
 
+    class CheckedFetchV1 {
+        <<vocabulary, below every view>>
+        HasCheckedFetch [class; each view has its own instance]
+        ForAuthority / ForResolvable / ForTarget
+        fetchChecked() / fetchCheckedInterface()
+        require() / authoritySigned()
+    }
+
     Submittable --> Resolvable : resolvable (AnyContractId), bound by cid
     Resolvable "1" ..> "*" Outcome : resolution issues (domain implementation, not a frozen relation)
-    Outcome ..> ChecksV1 : issuance checks each outcome vs ForAuthority (checked fetch)
+    Outcome ..> CheckedFetchV1 : issuance checks each outcome vs ForAuthority (checked fetch)
+    ChecksV1 ..> CheckedFetchV1 : builds on
     ChecksV1 ..> Submittable : gate checks one per slot,\naborts on any gap (never consumes)
 ```
 
@@ -467,18 +477,23 @@ the span:
 | Package | Contents |
 |---|---|
 | `cap-core-metadata-v1` | `Metadata`, `AnyValue`, `ChoiceContext`, `ExtraArgs`, `AnyContract` — the shared value types every cap package uses; mirrors the Token Standard's `Splice.Api.Token.MetadataV1` shapes without importing it |
-| `cap-core-submittable-v1` | the `Submittable` interface and `SubmittableState` |
-| `cap-core-resolvable-v1` | the `Resolvable` interface (view only) |
-| `cap-core-checks-v1` | `Cap.Core.ChecksV1`: the fixed checks domain interface bodies call, `require` (the assertion idiom they are phrased in), and the checked-fetch machinery — `HasCheckedFetch` with the `ForAuthority`/`ForResolvable`/`ForTarget` group ids and instances for the core views |
+| `cap-core-checked-fetch-v1` | `Cap.Core.CheckedFetchV1`: the checked-fetch vocabulary — `HasCheckedFetch` with the `ForAuthority`/`ForResolvable`/`ForTarget` group ids, the `fetchChecked*` helpers, `require` (the assertion idiom), and `authoritySigned`. Imports only the value types, so it sits below every view |
+| `cap-core-submittable-v1` | the `Submittable` interface and `SubmittableState`, with its own `HasCheckedFetch` instances |
+| `cap-core-resolvable-v1` | the `Resolvable` interface (view only), with its own `HasCheckedFetch` instance |
+| `cap-core-checks-v1` | `Cap.Core.ChecksV1`: the fixed checks domain interface bodies call over the concrete views — the completeness gate, the window floors, and the authority-signature check — built on `cap-core-checked-fetch-v1` |
 | `cap-core-target-v1` | the `Target` interface, `TargetCommitment`, and `checkTargetBinding` — [the target binding](#the-target-binding) |
 | `cap-core-outcome-v1` | the `Outcome` interface |
 | `cap-core-util` | optional implementation helpers no fixed body ever calls: `Cap.Core.Patchable` (three-way merge, ported from Splice's `Splice.Util`) and `Cap.Core.TargetPolicies` (the named drift profiles) |
 
-The checks and the checked fetches live in one tier-1 package because the
-tier-2 interface fixed bodies consume both, so both must sit upstream of the
-interfaces; implementations import the same module directly. `cap-core-util`
-is the opposite tier: helpers only implementations import, so the interfaces
-never reference it.
+The checked-fetch vocabulary and the checks split across two tier-1 packages so
+the class can sit below the views. `cap-core-checked-fetch-v1` defines the
+`HasCheckedFetch` class and group ids and imports no view; every view
+(`Resolvable`, `Submittable`, `Target`, `Outcome`, and cap-governance's
+`Ballot`) then declares its own instance next to its `viewtype`. `cap-core-checks-v1`
+sits above the views it reads (`Resolvable`, `Submittable`) and holds only the
+view-specific check functions the tier-2 fixed bodies call. `cap-core-util` is
+the opposite tier: helpers only implementations import, so the interfaces never
+reference it.
 
 ## Implementation considerations
 
@@ -555,7 +570,7 @@ Owed, for the claim to hold:
 - **Group-check every cid taken from `extraArgs.context`.** Resolution and
   execution methods must check each `extraArgs`-supplied contract id against
   the expected authority: a `ContractId` argument guarantees the template type,
-  not the instance (`Cap.Core.ChecksV1`'s checked fetches).
+  not the instance (`Cap.Core.CheckedFetchV1`'s checked fetches).
 - **Bound text sizes** in submission content and metadata values; the interfaces
   accept unbounded `Text`.
 - **No ungated resolve path.** The domain's resolve door runs the gate; a

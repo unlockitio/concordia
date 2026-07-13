@@ -1,128 +1,33 @@
 -- Copyright (c) 2026 Unlockit. All rights reserved.
 -- SPDX-License-Identifier: Apache-2.0
 
--- | The fixed checks a domain's submit and resolve choices run over a
--- mechanism's `ResolvableView`. They are functions, not interface methods or
--- choices: the enforcement locus is the domain interface's fixed choice body,
--- which calls them and which implementations cannot override. A domain that
--- skips a call here is non-conforming at the interface-author level, never at
--- the template level.
+-- | The fixed checks for the DOMAIN submit and resolve choices run over a
+-- mechanism's `ResolvableView` and its submittables. They are functions, not
+-- interface methods or choices: the enforcement locus is the domain interface's
+-- fixed choice body, which calls them and which implementations cannot override.
+-- A domain that skips a call here is non-conforming at the interface-author
+-- level, never at the template level.
+--
+-- The checked-fetch vocabulary these build on (`HasCheckedFetch`, the group
+-- types, `fetchChecked*`, `require`, `authoritySigned`) lives one layer down in
+-- `Cap.Core.CheckedFetchV1`.
 --
 -- The gate proves; it never consumes: when and how the cover is spent is the
 -- implementation's, inside its resolution or afterwards through expiry.
 module Cap.Core.ChecksV1 where
 
-import DA.Action (unless)
 import DA.List (sort, unique)
 import DA.Set (Set)
-import qualified DA.Set as Set
 
 import Cap.Core.MetadataV1
+import Cap.Core.TimeV1 (isOpen)
+import Cap.Core.CheckedFetchV1
 import Cap.Core.SubmittableV1
 import Cap.Core.ResolvableV1
-
--- | Abort with a uniform message when a requirement is not met — the assertion
--- idiom every check here is phrased in (Splice's `Util.require`), reused by
--- implementations so all failure text reads the same. State it positively.
-require : CanAssert m => Text -> Bool -> m ()
-require msg invariant =
-  assertMsg ("The requirement '" <> msg <> "' was not met.") invariant
 
 -- | The binding target a submittable's `resolvable` field must equal.
 resolvableAnchor : ContractId Resolvable -> AnyContractId
 resolvableAnchor = coerceInterfaceContractId @AnyContract
-
--- Checked fetches
-------------------
---
--- A `ContractId` argument guarantees the template type, not the instance — a
--- submitter can pass a look-alike from a different group. Fetch through
--- `fetchChecked`/`fetchCheckedInterface` with the expected contract group
--- identifier and the mismatch aborts. They check the view's *claimed* group,
--- never a signature — signature checks stay in the fixed bodies that call these.
--- Idiom from Splice's `Splice.Util`.
-
--- | The coarse group every cap artifact belongs to: its authority — the set of
--- parties whose joint signature anchors it. Kept distinct from `ForResolvable`
--- at the type level so the two groupings can never be compared by mistake.
-data ForAuthority = ForAuthority
-  with
-    authorities : Set Party
-  deriving (Eq, Show)
-
--- | The fine group a submittable belongs to: the one mechanism it binds.
--- `ForAuthority` proves "under this authority"; this proves "*this* mechanism",
--- stopping a submittable being replayed at another mechanism's resolution.
-data ForResolvable = ForResolvable
-  with
-    resolvable : AnyContractId
-  deriving (Eq, Show)
-
--- | A target's *identifying key*: its authority plus an `id` distinguishing
--- several targets of one authority, so an approved outcome cannot be redirected
--- to a different target of the same authority. `""` names a
--- singleton-per-authority target; the `id` is compared, never interpreted.
-data ForTarget = ForTarget
-  with
-    authorities : Set Party
-    id : Text
-  deriving (Eq, Show)
-
--- | Types that can state which contract group they belong to. No `HasFetch`
--- constraint, so interface views qualify. Other views add their own instances
--- (`OutcomeView` here, cap-governance's `BallotView` do).
-class (Show t, Eq cgid, Show cgid) => HasCheckedFetch t cgid where
-  contractGroupId : t -> cgid
-
-instance HasCheckedFetch ResolvableView ForAuthority where
-  contractGroupId v = ForAuthority v.authorities
-
-instance HasCheckedFetch SubmittableView ForAuthority where
-  contractGroupId v = ForAuthority v.authorities
-
-instance HasCheckedFetch SubmittableView ForResolvable where
-  contractGroupId v = ForResolvable v.resolvable
-
--- | Fetch an interface cid and abort unless its view belongs to the expected
--- group. The primary variant: cap consumers hold interface cids.
-fetchCheckedInterface : (HasFetch i, HasInterfaceView i v, HasCheckedFetch v cgid) => cgid -> ContractId i -> Update i
-fetchCheckedInterface expected cid = do
-  co <- fetch cid
-  let v = view co
-  let got = contractGroupId v
-  unless (expected == got) $ fail $
-    "Contract group identifier mismatch: expected " <> show expected <>
-    ", got " <> show got <> " for " <> show (cid, v)
-  pure co
-
--- | Fetch a template cid and abort unless it belongs to the expected group.
-fetchChecked : (HasFetch t, HasCheckedFetch t cgid) => cgid -> ContractId t -> Update t
-fetchChecked expected cid = do
-  co <- fetch cid
-  let got = contractGroupId co
-  unless (expected == got) $ fail $
-    "Contract group identifier mismatch: expected " <> show expected <>
-    ", got " <> show got <> " for " <> show (cid, co)
-  pure co
-
--- | Checked fetch + archive, for choices that mutate another contract by
--- fetching, archiving, and creating the updated one. Archiving here so a
--- call site cannot forget it.
-fetchAndArchive : (HasFetch t, HasCheckedFetch t cgid, HasArchive t) => cgid -> ContractId t -> Update t
-fetchAndArchive expected cid = do
-  co <- fetchChecked expected cid
-  archive cid
-  pure co
-
--- | `fetchChecked`, named so the call site says the contract is read-only.
-fetchReferenceData : (HasFetch t, HasCheckedFetch t cgid) => cgid -> ContractId t -> Update t
-fetchReferenceData = fetchChecked
-
--- | The authority has signed: the set is non-empty and every member's
--- signature is present. Empty fails — a vacuous anchor guarantees nothing.
-authoritySigned : Set Party -> [Party] -> Bool
-authoritySigned authorities sigs =
-  not (Set.null authorities) && all (`elem` sigs) (Set.toList authorities)
 
 -- | The full authority's signature must be in scope, for any cap artifact whose
 -- view groups by authority. Reads the authority set from the artifact's own
@@ -134,18 +39,19 @@ checkAuthoritySigned c =
   in require "contract is signed by its authority"
        (authoritySigned authorities (signatory c))
 
--- | The submission window
+-- | The submission window `[submissionOpensAt, submissionClosesAt)`.
 checkSubmissionWindow : ResolvableView -> Time -> Update ()
-checkSubmissionWindow v now = do
-  require "submissions are open" (now >= v.submissionOpensAt)
-  require "submissions have not closed" (now < v.submissionClosesAt)
+checkSubmissionWindow v now =
+  require "submissions are not open"
+    (isOpen now v.submissionOpensAt (Some v.submissionClosesAt))
 
 -- | The resolution floor: no resolution before `submissionOpensAt`.
 -- Deliberately not "after the close" — resolving early is a domain timing
 -- policy (quorum-triggered resolution is legitimate), never a core rule.
 checkResolutionFloor : ResolvableView -> Time -> Update ()
 checkResolutionFloor v now =
-  require "resolution does not precede the submission open" (now >= v.submissionOpensAt)
+  require "resolution does not precede the submission open"
+    (isOpen now v.submissionOpensAt None)
 
 -- | Admit one presented submittable: fetch it through its `Submittable` face
 -- bound to this mechanism (a submittable whose `resolvable` is not this anchor
@@ -185,7 +91,6 @@ admitSubmittablesWithCompleteness n self r scids = do
 -- each once. `n` MUST be sealed on the view at genesis.
 checkSlotCover : Int -> [Int] -> Update ()
 checkSlotCover n slots = do
-  -- a negative n would make `[0 .. n - 1]` empty and the cover claim vacuous
   require "size is non-negative" (n >= 0)
   require "the submittables cover the slots exactly"
     (sort slots == [0 .. n - 1])

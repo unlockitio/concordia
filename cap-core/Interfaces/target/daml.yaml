@@ -5,7 +5,7 @@
 # acts upon, carrying a stable authority-anchored identity so an outcome binds
 # to the target the voters approved and a look-alike aborts the checked fetch.
 # Identity-only (no choices); the `ForTarget` group and checked-fetch machinery
-# it reuses live in cap-core-checks-v1. See docs/cap-core-architecture.md.
+# it reuses live in cap-core-checked-fetch-v1. See docs/cap-core-architecture.md.
 sdk-version: 3.4.11
 name: cap-core-target-v1
 version: 0.1.0
@@ -15,8 +15,6 @@ dependencies:
 - daml-stdlib
 data-dependencies:
 - ../metadata/.daml/dist/cap-core-metadata-v1-0.1.0.dar
-- ../submittable/.daml/dist/cap-core-submittable-v1-0.1.0.dar
-- ../resolvable/.daml/dist/cap-core-resolvable-v1-0.1.0.dar
-- ../checks/.daml/dist/cap-core-checks-v1-0.1.0.dar
+- ../checked-fetch/.daml/dist/cap-core-checked-fetch-v1-0.1.0.dar
 build-options:
   - --target=2.1

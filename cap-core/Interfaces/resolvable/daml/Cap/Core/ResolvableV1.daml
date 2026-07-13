@@ -9,6 +9,7 @@ module Cap.Core.ResolvableV1 where
 import DA.Set (Set)
 
 import Cap.Core.MetadataV1
+import Cap.Core.CheckedFetchV1 (HasCheckedFetch (..), ForAuthority (..))
 
 -- | View of a mechanism awaiting resolution: the binding target for every
 -- submittable, and the single source for the fields the shared checks read.
@@ -33,12 +34,15 @@ data ResolvableView = ResolvableView
       -- ^ The ceiling: no submissions after this. 
     expiresAt : Optional Time
       -- ^ When an unresolvable mechanism becomes archivable through the
-      -- domain's expiry choice; `None` = it never expires.
+      -- domain's expiry choice;
       -- MUST be past the close: `expiresAt > submissionClosesAt`. MUST be
       -- `Some _` whenever `size = Some _` (see `size`).
     meta : Metadata
       -- ^ Display and extension data; never security-relevant.
   deriving (Eq, Show)
+
+instance HasCheckedFetch ResolvableView ForAuthority where
+  contractGroupId v = ForAuthority v.authorities
 
 interface Resolvable where
   viewtype ResolvableView

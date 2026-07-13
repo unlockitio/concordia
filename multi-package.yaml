@@ -9,6 +9,8 @@
 packages:
 # --- tier 1: cap-core ---
 - ./cap-core/Interfaces/metadata
+- ./cap-core/Interfaces/time
+- ./cap-core/Interfaces/checked-fetch
 - ./cap-core/Interfaces/submittable
 - ./cap-core/Interfaces/resolvable
 - ./cap-core/Interfaces/checks

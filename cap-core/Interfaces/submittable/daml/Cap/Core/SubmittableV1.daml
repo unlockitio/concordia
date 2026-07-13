@@ -13,6 +13,7 @@ import DA.Optional (isSome)
 import DA.Set (Set)
 
 import Cap.Core.MetadataV1
+import Cap.Core.CheckedFetchV1 (HasCheckedFetch (..), ForAuthority (..), ForResolvable (..))
 
 -- | The lifecycle state. 
 data SubmittableState
@@ -51,6 +52,12 @@ data Submittable_ConsumeResult = Submittable_ConsumeResult
   with
     meta : Metadata
   deriving (Eq, Show)
+
+instance HasCheckedFetch SubmittableView ForAuthority where
+  contractGroupId v = ForAuthority v.authorities
+
+instance HasCheckedFetch SubmittableView ForResolvable where
+  contractGroupId v = ForResolvable v.resolvable
 
 interface Submittable where
   viewtype SubmittableView

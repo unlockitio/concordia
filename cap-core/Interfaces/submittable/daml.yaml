@@ -13,5 +13,6 @@ dependencies:
 - daml-stdlib
 data-dependencies:
 - ../metadata/.daml/dist/cap-core-metadata-v1-0.1.0.dar
+- ../checked-fetch/.daml/dist/cap-core-checked-fetch-v1-0.1.0.dar
 build-options:
   - --target=2.1
