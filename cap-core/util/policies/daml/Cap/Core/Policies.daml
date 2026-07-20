@@ -1,0 +1,39 @@
+-- Copyright (c) 2026 Unlockit. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | Named timing profiles for the `Mechanism` hooks (`submittableAllowed`,
+-- `resolutionAllowed`, `withdrawAllowed`). The domain's submit/resolve/withdraw
+-- bodies always invoke the hooks — a policy can be permissive, never absent. The
+-- fixed bodies already enforce the submission window and the resolution floor,
+-- so a profile only tightens further.
+--
+-- Wire a profile into `interface instance Mechanism for T` (one line per hook):
+--
+-- @
+--   submittableAllowed _  = pure ()
+--   resolutionAllowed now = resolveAfterClose this' now
+--   withdrawAllowed now   = withdrawBeforeOpen this' now
+--     where this' = toInterface @Mechanism this
+-- @
+module Cap.Core.Policies where
+
+import Cap.Core.MechanismV1
+
+-- | Resolve only once the submission window has closed. Aborts on a mechanism
+-- with no declared close — waiting for a close that does not exist is a
+-- contradiction, not a permission.
+resolveAfterClose : Mechanism -> Time -> Update ()
+resolveAfterClose r now = case (view r).submissionClosesAt of
+  None -> abort "windowed resolution requires a declared submission close"
+  Some c -> assertMsg "submission window still open" (now >= c)
+
+-- | Withdraw only before submissions open — the initiator can never cancel a
+-- contest already under way.
+withdrawBeforeOpen : Mechanism -> Time -> Update ()
+withdrawBeforeOpen r now =
+  assertMsg "cannot withdraw once submissions have opened"
+    (now < (view r).submissionOpensAt)
+
+-- | No withdrawal, ever.
+noWithdraw : Mechanism -> Time -> Update ()
+noWithdraw _ _ = abort "withdrawal is not allowed"

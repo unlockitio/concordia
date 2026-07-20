@@ -1,0 +1,69 @@
+-- Copyright (c) 2026 Unlockit. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | The `GovernanceOutcome` interface: an approved action bound to the targets
+-- its approvers saw. It requires cap-core's `Outcome` (identity, window,
+-- expiry) and owns governance's one execute door: `GovernanceOutcome_Execute`
+-- enacts at most once inside the window, only against the committed targets.
+module Cap.Governance.OutcomeV1 where
+
+import DA.Action (when)
+import DA.Foldable (forA_)
+
+import Splice.Api.Token.MetadataV1
+import Cap.Core.TimeV1 (isOpen)
+import Cap.Core.OutcomeV1 (Outcome, isExecutor)
+import Cap.Governance.TargetV1 (Target, TargetCommitment, CheckedTarget (..), checkTargetBinding)
+
+-- | View of an approved action. The authority, source, and execution window
+-- live on the required `Outcome` face; this view carries only what is
+-- governance's alone.
+data GovernanceOutcomeView = GovernanceOutcomeView
+  with
+    committedTargets : [TargetCommitment]
+      -- ^ The targets this outcome was approved to act upon, in the order the
+      -- executor must present them; empty for a targetless outcome (e.g. a mint).
+      -- MUST be set by the implementation to the approved targets
+    meta : Metadata
+      -- ^ Display and extension data; never security-relevant.
+  deriving (Eq, Show)
+
+data GovernanceOutcome_ExecuteResult = GovernanceOutcome_ExecuteResult
+  with
+    meta : Metadata
+  deriving (Eq, Show)
+
+interface GovernanceOutcome requires Outcome where
+  viewtype GovernanceOutcomeView
+
+  onTargetDrift : CheckedTarget -> Update ()
+    -- ^ The drift policy, invoked per committed target whose pinned state no
+    -- longer matches the fresh one.
+    -- MUST abort to refuse execution; on return, `governanceOutcome_executeImpl`
+    -- MUST reconcile against the fresh state it is handed.
+  governanceOutcome_executeImpl : [CheckedTarget] -> GovernanceOutcome_Execute -> Update GovernanceOutcome_ExecuteResult
+    -- ^ The enacted effect, run with the outcome signatories' authority in
+    -- scope. The checked targets arrive as the fixed body verified them, in
+    -- commitment order.
+
+  -- | Enact the outcome. Consuming: at most one execution, only inside the
+  -- committed window, only against the committed targets.
+  choice GovernanceOutcome_Execute : GovernanceOutcome_ExecuteResult
+    with
+      actors : [Party]
+      targets : [ContractId Target]
+        -- ^ The fresh targets to act upon, checked against `committedTargets`
+        -- standing state is archive-and-recreated, so the
+        -- outcome pins identity and state.
+      extraArgs : ExtraArgs
+    controller actors
+    do
+      let core = toInterface @Outcome this
+      let cv = view core
+      now <- getTime
+      assertMsg "outcome is outside its execution window"
+        (isOpen now cv.executeAfter cv.executeUntil)
+      assertMsg "actors are not an executor set" (isExecutor core actors)
+      checked <- checkTargetBinding (view this).committedTargets targets
+      forA_ checked $ \c -> when c.drifted (onTargetDrift this c)
+      governanceOutcome_executeImpl this checked (GovernanceOutcome_Execute with actors; targets; extraArgs)

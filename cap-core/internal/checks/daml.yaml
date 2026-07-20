@@ -1,0 +1,24 @@
+# Copyright (c) 2026 Unlockit. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Tier 1 — `Cap.Core.ChecksV1`: the fixed checks tier-2 *interface* fixed
+# bodies call — the completeness gate and the authority-signature check. Builds
+# on the checked-fetch vocabulary (`cap-core-checked-fetch-v1`) and depends on
+# the interface faces the checks read (metadata, submittable, mechanism). The
+# temporal window/floor checks live in `cap-core-time-v1`. See
+# docs/cap-core-architecture.md.
+sdk-version: 3.4.11
+name: cap-core-checks-v1
+version: 0.1.0
+source: daml
+dependencies:
+- daml-prim
+- daml-stdlib
+data-dependencies:
+- ../../../lib/splice-api-token-metadata-v1-1.0.0.dar
+- ../../../lib/splice-util-0.1.7.dar
+- ../../util/checked-fetch/.daml/dist/cap-core-checked-fetch-v1-0.1.0.dar
+- ../../Interfaces/submittable/.daml/dist/cap-core-submittable-v1-0.1.0.dar
+- ../../Interfaces/mechanism/.daml/dist/cap-core-mechanism-v1-0.1.0.dar
+build-options:
+  - --target=2.1

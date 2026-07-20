@@ -2,9 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # Tier 1 — the `Outcome` primitive: an outcome carrying pre-committed
-# authority and its approved target bindings, whose guarded `Execute` enacts it
-# once inside its window. Governance's approved actions and auctions' settlement
-# obligations both `requires` this.
+# authority, its execution window, and the anyone-callable expiry. Domain-
+# neutral: each domain layers its own execute door on this via `requires`
+# (governance's target-bound door, auctions' settle/fail pair).
 sdk-version: 3.4.11
 name: cap-core-outcome-v1
 version: 0.1.0
@@ -13,9 +13,9 @@ dependencies:
 - daml-prim
 - daml-stdlib
 data-dependencies:
-- ../metadata/.daml/dist/cap-core-metadata-v1-0.1.0.dar
-- ../time/.daml/dist/cap-core-time-v1-0.1.0.dar
-- ../checked-fetch/.daml/dist/cap-core-checked-fetch-v1-0.1.0.dar
-- ../target/.daml/dist/cap-core-target-v1-0.1.0.dar
+- ../../../lib/splice-api-token-metadata-v1-1.0.0.dar
+- ../../../lib/splice-util-0.1.7.dar
+- ../../util/checked-fetch/.daml/dist/cap-core-checked-fetch-v1-0.1.0.dar
+- ../mechanism/.daml/dist/cap-core-mechanism-v1-0.1.0.dar
 build-options:
   - --target=2.1

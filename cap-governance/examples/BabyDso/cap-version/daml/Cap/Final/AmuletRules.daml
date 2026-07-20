@@ -1,0 +1,63 @@
+-- Copyright (c) 2026 Unlockit. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+-- =============================================================================
+-- AmuletRules — a minimal stand-in for Splice's network-config contract, and a
+-- `Target` with a state token scoped to the price.
+-- =============================================================================
+
+module Cap.Final.AmuletRules where
+
+import qualified DA.Set as Set
+import DA.Text (parseDecimal)
+
+import Splice.Api.Token.MetadataV1 (emptyMetadata)
+import Cap.Core.CheckedFetchV1 (require)
+import Cap.Governance.TargetV1
+
+template AmuletRules
+  with
+    dso         : Party
+    amuletPrice : Decimal
+    transferFee : Decimal
+    reserve     : Decimal   -- treasury stand-in the payout action draws from
+  where
+    ensure amuletPrice > 0.0 && reserve >= 0.0
+    signatory dso
+
+    -- Token covers the price only: a fee change recreates the contract (new cid)
+    -- without rolling the token.
+    interface instance Target for AmuletRules where
+      view = TargetView with
+        authorities = Set.singleton dso
+        id = "amulet-rules"
+        stateToken = Some (show amuletPrice)
+        meta = emptyMetadata
+
+    choice ASetAmuletPrice : ContractId AmuletRules
+      with
+        newAmuletPrice : Decimal
+      controller dso
+      do create this with amuletPrice = newAmuletPrice
+
+    choice ASetTransferFee : ContractId AmuletRules
+      with
+        newTransferFee : Decimal
+      controller dso
+      do create this with transferFee = newTransferFee
+
+-- | The identifying key of a dso's `AmuletRules` target.
+amuletRulesKey : Party -> ForTarget
+amuletRulesKey dso = ForTarget with authorities = Set.singleton dso; id = "amulet-rules"
+
+-- | Bounded drift policy: accept a drifted price pin while the live price is
+-- within `tolerance` of the pinned one; abort beyond.
+priceDriftWithin : Decimal -> CheckedTarget -> Update ()
+priceDriftWithin tolerance c = do
+  pinned <- case c.commitment.stateToken >>= parseDecimal of
+    Some p -> pure p
+    None -> fail "pinned token does not carry a price"
+  current <- case fromInterface @AmuletRules c.target of
+    Some r -> pure r.amuletPrice
+    None -> fail "drifted target is not AmuletRules"
+  require "price drift is within tolerance" (abs (current - pinned) <= tolerance)

@@ -1,0 +1,19 @@
+# Copyright (c) 2026 Unlockit. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Tier 1 — `Mechanism` (view-only: no methods, no choices). The fixed checks
+# domain choice bodies call live in their own package, `cap-core-checks`
+# (`Cap.Core.ChecksV1`), which the interface tier depends on. See
+# docs/cap-core-architecture.md.
+sdk-version: 3.4.11
+name: cap-core-mechanism-v1
+version: 0.1.0
+source: daml
+dependencies:
+- daml-prim
+- daml-stdlib
+data-dependencies:
+- ../../../lib/splice-api-token-metadata-v1-1.0.0.dar
+- ../../../lib/splice-util-0.1.7.dar
+build-options:
+  - --target=2.1

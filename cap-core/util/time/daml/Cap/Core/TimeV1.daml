@@ -1,0 +1,23 @@
+-- Copyright (c) 2026 Unlockit. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | The library's temporal vocabulary: the `isOpen` predicate — the single home
+-- for the floor-inclusive/ceiling-exclusive convention — and the two window
+-- checks (`checkWindow`, `checkFloor`) every temporal door is phrased in, so no
+-- site re-hand-rolls the comparison or the abort.
+module Cap.Core.TimeV1 where
+
+import Splice.Util (require)
+
+-- | Whether `now` falls in the half-open window `[from, …)`: floor included,
+-- ceiling excluded, ceiling optional (`None` = open-ended).
+isOpen : Time -> Time -> Optional Time -> Bool
+isOpen now from until = now >= from && optional True (now <) until
+
+-- | Abort unless `now` is inside `[from, …)`. `until = None` = open-ended.
+checkWindow : CanAssert m => Text -> Time -> Time -> Optional Time -> m ()
+checkWindow msg now from until = require msg (isOpen now from until)
+
+-- | Abort unless `now` is at or after `from` — a window with no ceiling.
+checkFloor : CanAssert m => Text -> Time -> Time -> m ()
+checkFloor msg now from = require msg (isOpen now from None)

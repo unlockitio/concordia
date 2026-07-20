@@ -2,13 +2,24 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # Tier 2 (Governance, optional) — reusable helpers for implementing the
-# governance interfaces. One module:
-#   Cap.Governance.Policies  named timing policies for the Proposal hooks
-#                            (resolutionAllowed / withdrawAllowed) — windowed
-#                            and confirmation profiles
+# governance interfaces. Four modules:
+#   Cap.Governance.Policies        Governor-specific timing profiles — the ones
+#                                  that also pin the timelock (windowed and
+#                                  confirmation resolution). The generic window
+#                                  profiles live in cap-core-util's
+#                                  Cap.Core.Policies.
+#   Cap.Governance.Tallies         Reference decision rules (quorate majority,
+#                                  weighted quorate, turnout threshold) an
+#                                  implementation wires as its `tally`.
+#   Cap.Governance.TargetPolicies  Named drift policies for GovernanceOutcome's
+#                                  onTargetDrift hook — strict and reconciling
+#                                  profiles.
+#   Cap.Governance.TargetUtil      mutateTarget — the archive-and-recreate step
+#                                  for governanceOutcome_executeImpl branches
+#                                  acting on a committed Target.
 # Domain-agnostic helpers live in cap-core-util (Cap.Core.Patchable,
-# Cap.Core.TargetPolicies); the HasCheckedFetch instances live with their views
-# (ProposalV1, and cap-core's OutcomeV1), and the machinery in
+# Cap.Core.Policies); the HasCheckedFetch instances live with their views
+# (GovernorV1, TargetV1, and cap-core's OutcomeV1), and the machinery in
 # Cap.Core.ChecksV1.
 # Sits BELOW nothing it implements: it depends on the governance interface
 # packages (to see their views/methods) and is imported only by tier-3 impls,
@@ -21,11 +32,15 @@ dependencies:
 - daml-prim
 - daml-stdlib
 data-dependencies:
-- ../../cap-core/Interfaces/metadata/.daml/dist/cap-core-metadata-v1-0.1.0.dar
-- ../../cap-core/Interfaces/checked-fetch/.daml/dist/cap-core-checked-fetch-v1-0.1.0.dar
+- ../../lib/splice-api-token-metadata-v1-1.0.0.dar
+- ../../lib/splice-util-0.1.7.dar
+- ../../cap-core/util/checked-fetch/.daml/dist/cap-core-checked-fetch-v1-0.1.0.dar
 - ../../cap-core/Interfaces/submittable/.daml/dist/cap-core-submittable-v1-0.1.0.dar
-- ../../cap-core/Interfaces/resolvable/.daml/dist/cap-core-resolvable-v1-0.1.0.dar
-- ../../cap-core/Interfaces/checks/.daml/dist/cap-core-checks-v1-0.1.0.dar
-- ../Interfaces/proposal/.daml/dist/cap-governance-proposal-v1-0.1.0.dar
+- ../../cap-core/Interfaces/mechanism/.daml/dist/cap-core-mechanism-v1-0.1.0.dar
+- ../../cap-core/internal/checks/.daml/dist/cap-core-checks-v1-0.1.0.dar
+- ../../cap-core/util/policies/.daml/dist/cap-core-policies-0.1.0.dar
+- ../Interfaces/target/.daml/dist/cap-governance-target-v1-0.1.0.dar
+- ../Interfaces/ballot/.daml/dist/cap-governance-ballot-v1-0.1.0.dar
+- ../Interfaces/governor/.daml/dist/cap-governance-governor-v1-0.1.0.dar
 build-options:
   - --target=2.1

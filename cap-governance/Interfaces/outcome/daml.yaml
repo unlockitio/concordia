@@ -1,0 +1,23 @@
+# Copyright (c) 2026 Unlockit. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Tier 2 (Governance) — the `GovernanceOutcome` interface: an approved action
+# bound to the targets its approvers saw. Requires cap-core's `Outcome` (the
+# domain-neutral identity/window/expiry face) and owns governance's execute
+# door, whose fixed body runs the window, executor, and target-binding checks.
+sdk-version: 3.4.11
+name: cap-governance-outcome-v1
+version: 0.1.0
+source: daml
+dependencies:
+- daml-prim
+- daml-stdlib
+data-dependencies:
+- ../../../lib/splice-api-token-metadata-v1-1.0.0.dar
+- ../../../lib/splice-util-0.1.7.dar
+- ../../../cap-core/util/time/.daml/dist/cap-core-time-v1-0.1.0.dar
+- ../../../cap-core/util/checked-fetch/.daml/dist/cap-core-checked-fetch-v1-0.1.0.dar
+- ../../../cap-core/Interfaces/outcome/.daml/dist/cap-core-outcome-v1-0.1.0.dar
+- ../target/.daml/dist/cap-governance-target-v1-0.1.0.dar
+build-options:
+  - --target=2.1

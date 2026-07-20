@@ -16,7 +16,7 @@
 
 module Cap.Auctions.OutcomeV1 where
 
-import Cap.Core.MetadataV1
+import Splice.Api.Token.MetadataV1
 import Cap.Auctions.TypesV1
 
 -- | View of a settlement obligation.
