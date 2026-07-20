@@ -9,7 +9,7 @@
 -- into resolution (atomic, Splice-style), so the outcome is created and
 -- consumed in one transaction.
 -- =============================================================================
-module Cap.Final.GovOutcome where
+module Cap.BabyDso.CapVersion.GovOutcome where
 
 import qualified DA.Set as Set
 
@@ -19,7 +19,7 @@ import Cap.Core.OutcomeV1
 import Cap.Governance.OutcomeV1
 import Cap.Governance.TargetV1 (TargetCommitment)
 
-import Cap.Final.DsoRules
+import Cap.BabyDso.CapVersion.DsoRules
 
 template GovOutcome
   with

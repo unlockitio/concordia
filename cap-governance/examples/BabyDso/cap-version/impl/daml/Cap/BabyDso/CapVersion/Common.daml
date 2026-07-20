@@ -9,7 +9,7 @@
 -- The governed state, its config, and each family's action language live with
 -- their own target module.
 -- =============================================================================
-module Cap.Final.Common where
+module Cap.BabyDso.CapVersion.Common where
 
 import qualified DA.TextMap as TextMap
 

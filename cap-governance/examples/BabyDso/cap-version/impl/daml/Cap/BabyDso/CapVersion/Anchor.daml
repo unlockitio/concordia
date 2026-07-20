@@ -9,7 +9,7 @@
 -- The anchor's cid never changes over the life of the institution.
 -- Standing submittables can therefore reference the anchor by cid
 -- =============================================================================
-module Cap.Final.Anchor where
+module Cap.BabyDso.CapVersion.Anchor where
 
 import DA.Foldable (forA_)
 import DA.List (sort)
@@ -30,14 +30,14 @@ import Cap.Governance.BallotV1 (Ballot, Ballot_Consume (..))
 import Cap.Governance.GovernorV1 (Governor, Governor_Resolve (..), Governor_ResolveResult, Proposal)
 import Cap.Governance.Tallies (median)
 
-import Cap.Final.Common
-import Cap.Final.DsoRules (DsoRules, ActionSpec (..), actionSpec, GovAction (..))
-import Cap.Final.GovOutcome (GovOutcome (..))
-import Cap.Final.Confirmation
-import Cap.Final.AmuletPriceVote
-import Cap.Final.AmuletRules (AmuletRules, amuletRulesKey)
-import Cap.Final.Vote (Vote (..))
-import Cap.Final.VoteRequest (VoteRequest (..))
+import Cap.BabyDso.CapVersion.Common
+import Cap.BabyDso.CapVersion.DsoRules (DsoRules, ActionSpec (..), actionSpec, GovAction (..))
+import Cap.BabyDso.CapVersion.GovOutcome (GovOutcome (..))
+import Cap.BabyDso.CapVersion.Confirmation
+import Cap.BabyDso.CapVersion.AmuletPriceVote
+import Cap.BabyDso.CapVersion.AmuletRules (AmuletRules, amuletRulesKey)
+import Cap.BabyDso.CapVersion.Vote (Vote (..))
+import Cap.BabyDso.CapVersion.VoteRequest (VoteRequest (..))
 
 -- | The round whose price the standing vote sets — a minimal stand-in for
 -- Splice's `OpenMiningRound`.

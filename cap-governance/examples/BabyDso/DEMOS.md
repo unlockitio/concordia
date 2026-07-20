@@ -121,8 +121,10 @@ by key, and the action executes.
 A simplified prototype of a typical `cap-core` workflow on
 a Canton sandbox. These demos are that prototype: they run either in-memory for
 a quick check, or against a live **Canton sandbox** over gRPC. Both packages'
-demos live in `original/Test/daml/Cap/BabyDso/Test/Demos.daml` and
-`cap-version/Test/daml/Cap/Final/Test/Demos.daml`.
+demos live in
+`cap-governance/examples/BabyDso/original/Test/daml/Cap/BabyDso/Test/Demos.daml`
+and
+`cap-governance/examples/BabyDso/cap-version/Test/daml/Cap/BabyDso/CapVersion/Test/Demos.daml`.
 
 Prerequisite: **Daml SDK 3.4.11** via `dpm`
 
@@ -133,28 +135,35 @@ workspace, including both example `Test/` packages, in dependency order:
 dpm build --all        # from the repo root (uses multi-package.yaml)
 ```
 
-**Quick check** (in-memory script runner, no sandbox) — from either
-`Test/` directory:
+**Quick check** (in-memory script runner, no sandbox) — run each Test package
+from the repo root with `--package-root`, so the whole path names which one you
+are testing:
 
 ```bash
-dpm test               # from original/Test/ or cap-version/Test/
+# cap version
+dpm test --package-root cap-governance/examples/BabyDso/cap-version/Test
+
+# original oracle
+dpm test --package-root cap-governance/examples/BabyDso/original/Test
 ```
 
 **On a Canton sandbox** (the Milestone 1 deliverable) — two terminals. The
 scripts drive time, so `--static-time` is required on both the sandbox and the
-runner:
+runner. DAR paths are given in full from the repo root:
 
 ```bash
 # terminal 1 — a FRESH sandbox
 dpm sandbox --static-time
 
-# terminal 2 — from cap-version/Test/: uploads the DAR and runs every demo over gRPC
-dpm script --dar .daml/dist/cap-final-test-0.1.0.dar --all \
-  --ledger-host localhost --ledger-port 6865 --static-time --upload-dar true
+# terminal 2 — uploads the DAR and runs every demo over gRPC (cap version)
+dpm script --all --ledger-host localhost --ledger-port 6865 \
+  --static-time --upload-dar true \
+  --dar cap-governance/examples/BabyDso/cap-version/Test/.daml/dist/cap-version-test-0.1.0.dar
 
-# the original oracle, same shape — from original/Test/:
-dpm script --dar .daml/dist/baby-dso-test-0.1.0.dar --all \
-  --ledger-host localhost --ledger-port 6865 --static-time --upload-dar true
+# the original oracle, same shape
+dpm script --all --ledger-host localhost --ledger-port 6865 \
+  --static-time --upload-dar true \
+  --dar cap-governance/examples/BabyDso/original/Test/.daml/dist/baby-dso-test-0.1.0.dar
 ```
 
 Expected: every demo reports `SUCCESS` (per script on the sandbox; `ok` under

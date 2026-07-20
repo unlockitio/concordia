@@ -23,41 +23,46 @@ Concordia is a **two-tier interface library**. Interface choice bodies are
 fixed, so the library forces only what is universal and leaves everything a
 legitimate format might vary to the implementing templates.
 
-- **Tier 1 — `cap-core`.** Domain-agnostic interfaces: `Submittable` and
+- **`cap-core`.** Domain-agnostic interfaces: `Submittable` and
   `Mechanism` (the submission and mechanism faces), `Outcome`, the
   shared `ChecksV1` functions the domain fixed bodies call, and a `util`
   helper package. This tier captures the shared structure: privacy-preserving
   submission, one-door resolution, an optional completeness proof, and
   outcomes that execute with pre-committed authority.
-- **Tier 2 — domain standards.** Each `requires` the tier-1 faces and adds its
-  own methods:
+- **domain standards.** Each `requires` cap-core and adds its
+  own methods and interfaces:
   - **`cap-governance`** — governors, ballots, tally-driven resolution, and
     timelocked executables.
   - **`cap-auctions`** — sealed/open, single- and multi-unit auction formats,
-    settling through the **Canton Token Standard V2 (CIP-0112)**, which it
-    imports and versions in lockstep with.
+    settling through the **Canton Token Standard V2**, which it
+    will import.
 
-A workflow author writes templates that implement a tier-2 interface; tier 1
-stays stable while tier 2 absorbs domain divergence. Concordia sits **above**
-Canton's asset and settlement layer — outcomes compose with the Token Standard
-a team already uses.
+A workflow author writes templates that implement a domain interface; CAP sits **above**
+Canton's asset and settlement layer — outcomes compose with the Token Standard.
 
 ## Repository layout
 
 ```
 concordia/
-├── cap-core/            # Tier 1: domain-agnostic interfaces
-│   ├── Interfaces/      #   metadata, submittable, mechanism, checks, target, outcome
-│   └── util/            #   implementation helpers (checked fetches, policies)
-├── cap-governance/      # Tier 2: governance (Interfaces/governor, util)
-│   └── examples/        #   baby-DSO reproduction + its test package
-├── cap-auctions/        # Tier 2: auctions   (Interfaces/{types,bid,outcome,auction})
-│   └── examples/        #   reference auction implementation
-├── docs/                # architecture docs (threat models inline) and glossary
-├── multi-package.yaml   # dpm workspace (build order + data-dependencies)
+├── cap-core/                       # Tier 1: domain-agnostic interfaces
+│   ├── Interfaces/                 #   mechanism, submittable, outcome
+│   ├── internal/checks/            #   library-only fixed-body checks the interfaces call
+│   └── util/                       #   public toolkit: checked-fetch, patchable, policies, time
+├── cap-governance/                 # Tier 2: governance
+│   ├── Interfaces/                 #   target, outcome, ballot, governor
+│   ├── util/
+│   └── examples/BabyDso/           #   Splice DSO reproduced twice — see below
+│       ├── original/{Impl,Test}    #     plain-Daml oracle + its demo scripts
+│       └── cap-version/{impl,Test} #     same mechanisms on cap + its demo scripts
+├── cap-auctions/                   # Tier 2: auctions (Token Standard V2, CIP-0112)
+│   ├── Interfaces/                 #   types, bid, outcome, auction
+│   └── examples/                   #   reference auction implementation
+├── lib/                            # vendored Token Standard DARs (prebuilt binaries)
+├── docs/                           # architecture docs (threat models inline) and glossary
+├── multi-package.yaml              # dpm workspace (build order + data-dependencies)
 ├── CHANGELOG.md
-├── LICENSE              # Apache-2.0
-└── README.md            # this file
+├── LICENSE                         # Apache-2.0
+└── README.md                       # this file
 ```
 
 ## Documentation
@@ -85,6 +90,52 @@ dpm test             # run the Daml Script tests
 `multi-package.yaml` lists the packages that currently build and their order;
 some tier-2 tests and the auctions example are held back pending the tier-2
 rework noted there.
+
+## Running the demos
+
+The **BabyDso** example reproduces Splice's DSO governance twice — once in
+plain Daml (`original/`) and once on the cap interfaces (`cap-version/`) — and
+runs the same demo scripts in both, so the diff is exactly what the cap
+standard adds. The full catalogue (six demos, what each proves) is in
+[`cap-governance/examples/BabyDso/DEMOS.md`](cap-governance/examples/BabyDso/DEMOS.md).
+
+Prerequisite: **Daml SDK 3.4.11** via `dpm`. Build the DARs first:
+
+```bash
+dpm build --all        # from the repo root (uses multi-package.yaml)
+```
+
+**Quick check** — the in-memory script runner, no sandbox. Run each Test
+package from the repo root with `--package-root`:
+
+```bash
+# cap version
+dpm test --package-root cap-governance/examples/BabyDso/cap-version/Test
+
+# plain-Daml oracle
+dpm test --package-root cap-governance/examples/BabyDso/original/Test
+```
+
+**On a Canton sandbox** (the Milestone 1 deliverable) — two terminals. The
+scripts drive time, so `--static-time` is required on both sides. DAR paths are
+given in full from the repo root:
+
+```bash
+# terminal 1 — a FRESH sandbox (restart between runs; party allocations persist)
+dpm sandbox --static-time
+
+# terminal 2 — the cap version
+dpm script --all --ledger-host localhost --ledger-port 6865 \
+  --static-time --upload-dar true \
+  --dar cap-governance/examples/BabyDso/cap-version/Test/.daml/dist/cap-version-test-0.1.0.dar
+
+# the plain-Daml oracle, same shape
+dpm script --all --ledger-host localhost --ledger-port 6865 \
+  --static-time --upload-dar true \
+  --dar cap-governance/examples/BabyDso/original/Test/.daml/dist/baby-dso-test-0.1.0.dar
+```
+
+Every demo reports `SUCCESS` on the sandbox (`ok` under `dpm test`).
 
 ## Contributing
 
