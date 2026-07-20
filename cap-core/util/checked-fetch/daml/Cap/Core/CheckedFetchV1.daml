@@ -1,0 +1,40 @@
+-- Copyright (c) 2026 Unlockit. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | Cap's contract-group vocabulary over Splice's checked-fetch machinery. The
+-- `HasCheckedFetch` class, the `fetchChecked*` family and `require` come from
+-- `Splice.Util` and are re-exported here so callers keep one import surface;
+-- only `authoritySigned` is ours. Each view declares its own `HasCheckedFetch`
+-- instance next to its `viewtype`, and each group id lives with the interface it
+-- groups — `ForMechanism` with `Mechanism`, `ForTarget` with `Target`.
+--
+-- Admission discipline: a `ContractId` argument guarantees the template type,
+-- not the instance. A cid supplied by the exercising actor MUST be admitted
+-- under an instance-level group (`ForMechanism`, `ForTarget`) or compared
+-- against a stored cid.
+module Cap.Core.CheckedFetchV1
+  ( require
+  , HasCheckedFetch (..)
+  , fetchChecked
+  , fetchCheckedInterface
+  , fetchAndArchive
+  , fetchReferenceData
+  , authoritySigned
+  ) where
+
+import DA.Set (Set)
+import qualified DA.Set as Set
+
+import Splice.Util
+  ( require
+  , HasCheckedFetch (..)
+  , fetchChecked
+  , fetchCheckedInterface
+  , fetchAndArchive
+  , fetchReferenceData
+  )
+
+-- | All parties in the authority signed the contract.
+authoritySigned : Set Party -> [Party] -> Bool
+authoritySigned authorities sigs =
+  not (Set.null authorities) && all (`elem` sigs) (Set.toList authorities)

@@ -1,0 +1,25 @@
+-- Copyright (c) 2026 Unlockit. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | Named drift policies for `GovernanceOutcome`'s `onTargetDrift` hook. The
+-- fixed execute body invokes the hook for every committed target whose pinned
+-- state no longer matches the fresh one.
+
+module Cap.Governance.TargetPolicies where
+
+import Cap.Core.CheckedFetchV1 (require)
+import Cap.Governance.TargetV1
+
+-- Policies receive the target the voters saw and the current target and can decide based on it. 
+
+-- | Strict policy: any drift refuses execution.
+driftAborts : CheckedTarget -> Update ()
+driftAborts c =
+  require
+    ("target " <> show c.commitment.targetKey
+       <> " still carries the approved state token " <> show c.commitment.stateToken)
+    False
+
+-- | Reconciling policy: all drifts allowed
+driftReconciles : CheckedTarget -> Update ()
+driftReconciles _ = pure ()

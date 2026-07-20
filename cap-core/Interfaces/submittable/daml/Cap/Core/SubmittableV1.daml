@@ -12,8 +12,9 @@ module Cap.Core.SubmittableV1 where
 import DA.Optional (isSome)
 import DA.Set (Set)
 
-import Cap.Core.MetadataV1
-import Cap.Core.CheckedFetchV1 (HasCheckedFetch (..), ForAuthority (..), ForResolvable (..))
+import Splice.Api.Token.MetadataV1
+import Cap.Core.CheckedFetchV1 (HasCheckedFetch (..))
+import Cap.Core.MechanismV1 (Mechanism, ForMechanism (..))
 
 -- | The lifecycle state. 
 data SubmittableState
@@ -31,15 +32,16 @@ data SubmittableState
 -- responsibility.
 data SubmittableView = SubmittableView
   with
-    resolvable : AnyContractId
-      -- ^ The mechanism this submittable belongs to.
+    mechanism : ContractId Mechanism
+      -- ^ The mechanism this submittable belongs to. Only ever compared, never
+      -- fetched through, so the mechanism may already be archived.
     authorities : Set Party
       -- ^ The authority anchor; every member signs. MUST be non-empty at mint —
       -- the fixed checks reject an empty (vacuous) anchor.
     slot : Optional Int
       -- ^ The slot this submittable covers. `Some` on every artifact of a
       -- completeness mechanism — the gate demands it; `None` when the mechanism
-      -- declares no completeness (no slot set exists).
+      -- declares no completeness (no slot set exists). 
     state : SubmittableState
       -- ^ WARNING: an implementation-written claim the interface cannot verify.
       -- The implementation MUST mint `S_Full` exactly when the contract carries
@@ -53,16 +55,13 @@ data Submittable_ConsumeResult = Submittable_ConsumeResult
     meta : Metadata
   deriving (Eq, Show)
 
-instance HasCheckedFetch SubmittableView ForAuthority where
-  contractGroupId v = ForAuthority v.authorities
-
-instance HasCheckedFetch SubmittableView ForResolvable where
-  contractGroupId v = ForResolvable v.resolvable
+instance HasCheckedFetch SubmittableView ForMechanism where
+  contractGroupId v = ForMechanism v.mechanism
 
 interface Submittable where
   viewtype SubmittableView
 
-  -- Under review: may be removed before the first tagged release.
+  -- Under review: may be removed 
   choice Submittable_Consume : Submittable_ConsumeResult
     controller (view this).authorities
     do

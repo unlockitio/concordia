@@ -1,0 +1,22 @@
+# Copyright (c) 2026 Unlockit. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Tier 2 (Governance) — the `Target` interface: a standing contract an
+# approved outcome acts upon, carrying a stable authority-anchored identity so
+# an outcome binds to the target the voters approved and a look-alike aborts
+# the checked fetch. Identity-only (no choices); defines its own `ForTarget`
+# group next to the view and reuses the checked-fetch machinery from
+# cap-core-checked-fetch-v1. See docs/cap-governance-architecture.md.
+sdk-version: 3.4.11
+name: cap-governance-target-v1
+version: 0.1.0
+source: daml
+dependencies:
+- daml-prim
+- daml-stdlib
+data-dependencies:
+- ../../../lib/splice-api-token-metadata-v1-1.0.0.dar
+- ../../../lib/splice-util-0.1.7.dar
+- ../../../cap-core/util/checked-fetch/.daml/dist/cap-core-checked-fetch-v1-0.1.0.dar
+build-options:
+  - --target=2.1

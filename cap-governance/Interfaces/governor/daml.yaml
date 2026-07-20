@@ -1,0 +1,29 @@
+# Copyright (c) 2026 Unlockit. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Tier 2 (Governance) — `Governor`. Resolved with `Ballot`s, which live in
+# their own package: `Ballot` names the mechanism only as a `Mechanism`, so the
+# dependency runs one way (`Governor -> Ballot`) with no cycle. The binding was
+# never the typed field anyway — admission proves the (untyped) Submittable
+# face, so the split forges nothing.
+sdk-version: 3.4.11
+name: cap-governance-governor-v1
+version: 0.1.0
+source: daml
+dependencies:
+- daml-prim
+- daml-stdlib
+data-dependencies:
+- ../../../lib/splice-api-token-metadata-v1-1.0.0.dar
+- ../../../lib/splice-util-0.1.7.dar
+- ../../../cap-core/util/time/.daml/dist/cap-core-time-v1-0.1.0.dar
+- ../../../cap-core/util/checked-fetch/.daml/dist/cap-core-checked-fetch-v1-0.1.0.dar
+- ../../../cap-core/Interfaces/submittable/.daml/dist/cap-core-submittable-v1-0.1.0.dar
+- ../../../cap-core/Interfaces/mechanism/.daml/dist/cap-core-mechanism-v1-0.1.0.dar
+- ../../../cap-core/internal/checks/.daml/dist/cap-core-checks-v1-0.1.0.dar
+- ../../../cap-core/Interfaces/outcome/.daml/dist/cap-core-outcome-v1-0.1.0.dar
+- ../target/.daml/dist/cap-governance-target-v1-0.1.0.dar
+- ../outcome/.daml/dist/cap-governance-outcome-v1-0.1.0.dar
+- ../ballot/.daml/dist/cap-governance-ballot-v1-0.1.0.dar
+build-options:
+  - --target=2.1

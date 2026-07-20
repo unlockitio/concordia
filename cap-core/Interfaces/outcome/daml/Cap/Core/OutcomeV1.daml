@@ -1,20 +1,18 @@
 -- Copyright (c) 2026 Unlockit. All rights reserved.
 -- SPDX-License-Identifier: Apache-2.0
 
--- | The `Outcome` interface: an outcome carrying pre-committed
--- authority, enactable at most once inside its window and bound to the targets
--- its approvers saw. Governance's approved actions and auctions' settlement
--- obligations are both instantiations — they `requires` this face.
+-- | The `Outcome` interface: an outcome carrying pre-committed authority,
+-- enactable at most once inside its window. The face is domain-neutral —
+-- identity, window, executor set, and expiry; the execute door is the
+-- domain's own (governance's target-bound `GovernanceOutcome_Execute`,
+-- auctions' settle/fail pair), each layered on this via `requires`.
 module Cap.Core.OutcomeV1 where
 
-import DA.Action (when)
-import DA.Foldable (forA_)
 import DA.Set (Set)
 
-import Cap.Core.MetadataV1
-import Cap.Core.TimeV1 (isOpen)
-import Cap.Core.CheckedFetchV1 (HasCheckedFetch (..), ForAuthority (..))
-import Cap.Core.TargetV1 (Target, TargetCommitment, CheckedTarget (..), checkTargetBinding)
+import Splice.Api.Token.MetadataV1
+import Cap.Core.CheckedFetchV1 (HasCheckedFetch (..))
+import Cap.Core.MechanismV1 (Mechanism, ForMechanism (..))
 
 -- | View of an executable outcome.
 data OutcomeView = OutcomeView
@@ -22,6 +20,10 @@ data OutcomeView = OutcomeView
     authorities : Set Party
       -- ^ The authority whose joint ledger authority this outcome carries.
       -- MUST be non-empty at mint — an empty anchor can never execute.
+    source : ContractId Mechanism
+      -- ^ The mechanism whose resolution issued this outcome. Only ever compared,
+      -- never fetched through, so the mechanism may already be archived.
+      -- MUST be set by the implementation to the mechanism that actually issued it.
     executeAfter : Time
       -- ^ The instant the timelock lifts: execution is blocked strictly before
       -- it. Part of what was approved, the implementation MUST set it to the
@@ -31,21 +33,17 @@ data OutcomeView = OutcomeView
       -- ^ Execution deadline; None = no deadline. WARNING: an undated outcome
       -- stays executable forever, against context its approvers never saw — date
       -- every outcome you issue, doubly so under a state-pinning drift policy.
-    committedTargets : [TargetCommitment]
-      -- ^ The targets this outcome was approved to act upon, in the order the
-      -- executor must present them; empty for a targetless outcome (e.g. a mint). 
-      -- MUST be set by the implementation to the approved targets
     meta : Metadata
       -- ^ Display and extension data; never security-relevant.
   deriving (Eq, Show)
 
--- | An outcome's group is its authority — what the issuer checks every issued
--- outcome against, so a look-alike with a different authority aborts issuance.
--- (might be overforcing)
-instance HasCheckedFetch OutcomeView ForAuthority where
-  contractGroupId v = ForAuthority v.authorities
+-- | An outcome's fine group is the one contract that issued it, so a relying
+-- contract admits "the outcome of *this* mechanism" and a look-alike issued
+-- elsewhere under the same authority aborts.
+instance HasCheckedFetch OutcomeView ForMechanism where
+  contractGroupId v = ForMechanism v.source
 
-data Outcome_ExecuteResult = Outcome_ExecuteResult
+data Outcome_ExpireResult = Outcome_ExpireResult
   with
     meta : Metadata
   deriving (Eq, Show)
@@ -54,39 +52,21 @@ interface Outcome where
   viewtype OutcomeView
 
   isExecutor : [Party] -> Bool
-    -- ^ Whether this actor set may trigger execution; varies per authority
-    -- model. Plural because settlement (Token Standard V2) can need several
-    -- executors jointly.
-  onTargetDrift : CheckedTarget -> Update ()
-    -- ^ The drift policy, invoked per committed target whose pinned state no
-    -- longer matches the fresh one.
-    -- MUST abort to refuse execution; on return, `executeImpl` MUST reconcile
-    -- against the fresh state it is handed.
-  executeImpl : [CheckedTarget] -> Outcome_Execute -> Update Outcome_ExecuteResult
-    -- ^ The enacted effect, run with the outcome signatories' authority in
-    -- scope. The checked targets arrive as the fixed body verified them, in
-    -- commitment order.
-    -- MUST act on those values, never re-resolve; a drifted entry (let through
-    -- by `onTargetDrift`) MUST be reconciled via `Cap.Core.Patchable`, not
-    -- overwritten. `extraArgs.context` delivers the rest at execution time.
+    -- ^ Whether this actor set may trigger the domain's execute door; varies
+    -- per authority model. Plural because settlement (Token Standard V2) can
+    -- need several executors jointly.
 
-  -- | Enact the outcome. Consuming: at most one execution, only inside the
-  -- committed window, only against the committed targets.
-  choice Outcome_Execute : Outcome_ExecuteResult
+  -- | Lets any party with visibility archive an outcome past its execution
+  -- deadline. Effect-free, because the caller is arbitrary; an undated outcome
+  -- (`executeUntil = None`) is never expirable — the cost `executeUntil` warns of.
+  choice Outcome_Expire : Outcome_ExpireResult
     with
-      actors : [Party]
-      targets : [ContractId Target]
-        -- ^ The fresh targets to act upon, checked against `committedTargets` 
-        -- standing state is archive-and-recreated, so the
-        -- outcome pins identity and state. 
-      extraArgs : ExtraArgs
-    controller actors
+      actor : Party
+    controller actor
     do
-      let v = view this
-      now <- getTime
-      assertMsg "outcome is outside its execution window"
-        (isOpen now v.executeAfter v.executeUntil)
-      assertMsg "actors are not an executor set" (isExecutor this actors)
-      checked <- checkTargetBinding v.committedTargets targets
-      forA_ checked $ \c -> when c.drifted (onTargetDrift this c)
-      executeImpl this checked (Outcome_Execute with actors; targets; extraArgs)
+      case (view this).executeUntil of
+        None -> abort "outcome has no execution deadline"
+        Some e -> do
+          now <- getTime
+          assertMsg "outcome not yet past its execution deadline" (now >= e)
+          pure Outcome_ExpireResult with meta = emptyMetadata

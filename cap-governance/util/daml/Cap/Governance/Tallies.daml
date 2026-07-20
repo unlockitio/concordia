@@ -1,0 +1,95 @@
+-- Copyright (c) 2026 Unlockit. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | Reference decision rules — pure functions an implementation wires as its
+-- `tally`. No fixed body calls them. Each takes a decoder because the vote is
+-- opaque to the interface. A decoder MUST return `None` for a ballot it does not
+-- recognize — the rule discards it without aborting, so a foreign
+-- authority-signed ballot can neither skew the count nor block resolution.
+
+-- A decoder downcasts a cast ballot to the concrete template it recognizes and
+-- reads the vote off it; the vote is opaque here, so decoders live in the implementation.
+
+-- The rules do not deduplicate per voter: under completeness one live ballot
+-- per slot is structural; without it, dedup before wiring wherever multiple
+-- ballots per voter are not legitimate.
+module Cap.Governance.Tallies where
+
+import DA.List (sort, (!!))
+import DA.Optional (mapOptional)
+
+import Cap.Governance.BallotV1 (Ballot)
+import Cap.Governance.GovernorV1 (Verdict (..))
+
+
+
+-- | Yes/no decided by quorum: approved at `quorum` yes-votes, rejected at
+-- `quorum` no-votes, lapsed otherwise.
+-- `quorum` is an absolute count denominated in the electorate (number of voters, 
+-- not turnout number os votes cast)
+quorateMajority : Int -> (Ballot -> Optional Bool) -> [Ballot] -> Verdict
+quorateMajority quorum decode ballots
+  | countOf identity >= quorum = VApproved None
+  | countOf not >= quorum = VRejected
+  | otherwise = VLapsed
+  where
+    votes = mapOptional decode ballots
+    countOf side = length (filter side votes)
+
+-- | `quorateMajority` for decoders yielding many votes per ballot: a container
+-- ("ballot box") ballot carries its whole vote map, a per-voter ballot a
+-- singleton. An unrecognized ballot decodes to `[]`.
+quorateMajorityAll : Int -> (Ballot -> [Bool]) -> [Ballot] -> Verdict
+quorateMajorityAll quorum decode ballots
+  | countOf identity >= quorum = VApproved None
+  | countOf not >= quorum = VRejected
+  | otherwise = VLapsed
+  where
+    votes = concatMap decode ballots
+    countOf side = length (filter side votes)
+
+-- | Weighted yes/no decided by quorum: the decoder yields each ballot's
+-- weight and direction. Approved at `quorum` yes-weight, rejected at `quorum`
+-- no-weight, lapsed otherwise. `quorum` is denominated in the electorate's
+-- total weight, snapshotted at governor creation.
+weightedQuorate : Decimal -> (Ballot -> Optional (Decimal, Bool)) -> [Ballot] -> Verdict
+weightedQuorate quorum decode ballots
+  | weightOf identity >= quorum = VApproved None
+  | weightOf not >= quorum = VRejected
+  | otherwise = VLapsed
+  where
+    votes = mapOptional decode ballots
+    weightOf side = sum [w | (w, s) <- votes, side s]
+
+-- | Value selection by median (Splice's amulet-price rule): the median of the
+-- decoded values is the approved result, carried on the option channel as
+-- `show`n text — `DA.Text.parseDecimal` recovers it in `governor_issueOutcome`.
+-- Lapsed when nothing decodes. A median is not monotone under further casts, so
+-- callers MUST wire a close-gated resolution profile (`windowedResolution`),
+-- never a confirmation one.
+medianValue : (Ballot -> Optional Decimal) -> [Ballot] -> Verdict
+medianValue decode ballots = case mapOptional decode ballots of
+  [] -> VLapsed
+  votes -> VApproved (Some (show (median votes)))
+
+-- | Not defined for the empty list.
+median : [Decimal] -> Decimal
+median [] = error "median: not defined for the empty list"
+median xs0 = 0.5 * (xs !! ((n - 1) / 2) + xs !! (n / 2))
+  where
+    xs = sort xs0
+    n = length xs
+
+-- | Yes/no decided by a threshold over turnout: approved when the yes share
+-- of the decoded votes exceeds `threshold` (0.5 = majority), rejected
+-- otherwise; lapsed only when nothing decodes. Sound only under completeness,
+-- where the denominator is proven rather than resolver-chosen; without
+-- completeness a turnout share flips under omission — use a quorate rule.
+turnoutThreshold : Decimal -> (Ballot -> Optional Bool) -> [Ballot] -> Verdict
+turnoutThreshold threshold decode ballots =
+  case mapOptional decode ballots of
+    [] -> VLapsed
+    votes
+      | intToDecimal (length (filter identity votes))
+          > threshold * intToDecimal (length votes) -> VApproved None
+      | otherwise -> VRejected

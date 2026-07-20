@@ -1,0 +1,74 @@
+-- Copyright (c) 2026 Unlockit. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | The fixed checks for the DOMAIN submit and resolve choices run over a
+-- mechanism's `MechanismView` and its submittables. They are functions, not
+-- interface methods or choices: the enforcement locus is the domain interface's
+-- fixed choice body, which calls them and which implementations cannot override.
+-- A domain that skips a call here is non-conforming at the interface-author
+-- level, never at the template level.
+--
+-- The checked-fetch vocabulary these build on (`HasCheckedFetch`, the group
+-- types, `fetchChecked*`, `require`, `authoritySigned`) lives one layer down in
+-- `Cap.Core.CheckedFetchV1`.
+--
+-- The gate proves; it never consumes: when and how the cover is spent is the
+-- implementation's, inside its resolution or afterwards through expiry.
+module Cap.Core.ChecksV1 where
+
+import DA.List (sort, unique)
+import DA.Set (Set)
+
+import Cap.Core.CheckedFetchV1
+import Cap.Core.SubmittableV1
+import Cap.Core.MechanismV1
+
+-- | The full authority's signature must be in scope, for any cap artifact whose
+-- view carries an `authorities` set. Reads the set from the artifact's own view,
+-- so it can never be checked against a foreign set.
+checkAuthoritySigned : (HasInterfaceView i v, HasField "authorities" v (Set Party), HasSignatory i) => i -> Update ()
+checkAuthoritySigned c =
+  require "contract is signed by its authority"
+    (authoritySigned (view c).authorities (signatory c))
+
+-- | Admit one presented submittable: fetch it through its `Submittable` face
+-- bound to this mechanism (a submittable whose `mechanism` is not this anchor
+-- aborts) and require the authority signed it. Run per item by both
+-- `admitSubmittables` (distinct set) and `admitSubmittablesWithCompleteness` (exact cover).
+admitSubmittable : Set Party -> ContractId Mechanism -> ContractId Submittable -> Update (ContractId Submittable, Submittable)
+admitSubmittable authorities anchor scid = do
+  s <- fetchCheckedInterface (ForMechanism anchor) scid
+  require "submittable is signed by the authority" (authoritySigned authorities (signatory s)) -- this might be overforcing, we might want a mechanism hwere participants can withdraw at will 
+  pure (scid, s)
+
+-- | The completeness-free admission: each submittable bound and authority-signed,
+-- and the set itself distinct. Distinctness (no cid twice) is the no-double-count
+-- guard where there is no cover to give it — which is why resolution never has to
+-- consume to stop a recount. Completeness uses `admitSubmittablesWithCompleteness`
+-- instead, where exact-cover already subsumes this check.
+admitSubmittables : Set Party -> ContractId Mechanism -> [ContractId Submittable] -> Update [(ContractId Submittable, Submittable)]
+admitSubmittables authorities anchor scids = do
+  require "the presented submittables are distinct" (unique scids)
+  forA scids (admitSubmittable authorities anchor)
+
+-- | Proof at resolution of exact cover: admit each submittable (bound, signed)
+-- and prove its slots are exactly `0 .. n-1`. Cover subsumes distinctness — a
+-- repeated cid repeats a slot and fails — so no separate distinctness check is
+-- run here (that is `admitSubmittables`'s job, for the completeness-free path). The
+-- mechanism's own signature is the fixed body's separate step, run before the gate.
+admitSubmittablesWithCompleteness : Int -> ContractId Mechanism -> Mechanism -> [ContractId Submittable] -> Update [(ContractId Submittable, Submittable)]
+admitSubmittablesWithCompleteness n self r scids = do
+  pairs <- forA scids (admitSubmittable (view r).authorities self)
+  slots <- forA pairs $ \(_, s) -> case (view s).slot of
+    None -> abort "The requirement 'submittable carries a slot' was not met."
+    Some k -> pure k
+  checkSlotCover n slots
+  pure pairs
+
+-- | The exact-cover assertion: the gathered slots must be exactly `0 .. n-1`,
+-- each once. `n` MUST be sealed on the view at genesis.
+checkSlotCover : Int -> [Int] -> Update ()
+checkSlotCover n slots = do
+  require "size is non-negative" (n >= 0)
+  require "the submittables cover the slots exactly"
+    (sort slots == [0 .. n - 1])

@@ -1,0 +1,108 @@
+-- Copyright (c) 2026 Unlockit. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+-- =============================================================================
+-- VoteRequest — Splice's deliberate-governance machine: a per-decision governor
+-- under vote, implemented as a cap-governance `Governor` (which `requires`
+-- cap-core `Mechanism`). LINEAR shape: the contract IS the decision, resolution
+-- consumes it, `ForMechanism` cid-binding is the anti-replay guarantee.
+--
+-- Splice-faithful and ATOMIC: resolution funnels through
+-- `DsoRules_CloseVoteRequest` (a current sv triggers, the dso signature
+-- resolves), and `Governor_Resolve` DECIDES and ENACTS in one transaction — on
+-- approval `onResolved` immediately exercises `GovernanceOutcome_Execute` on
+-- the freshly issued outcome against the target the close door delivered in
+-- `extraArgs.context`, so the outcome never lingers.
+--
+-- Timing profile: `windowed` — forced, not stylistic: atomic execution needs
+-- `now >= executeAfter`, and `executeAfter >= submissionClosesAt` is a template
+-- invariant, so with a zero timelock the execution window opens exactly when
+-- resolution waits for the close.
+-- =============================================================================
+module Cap.Final.VoteRequest where
+
+import DA.Foldable (forA_)
+import DA.Set (Set)
+import qualified DA.Set as Set
+
+import Splice.Api.Token.MetadataV1 (emptyMetadata)
+import Cap.Governance.TargetV1 (TargetCommitment)
+import Cap.Core.MechanismV1
+import Cap.Governance.OutcomeV1 (GovernanceOutcome, GovernanceOutcome_Execute (..))
+import Cap.Core.Policies (noWithdraw)
+import Cap.Governance.GovernorV1
+import Cap.Governance.Policies (windowedResolution)
+import Cap.Governance.Tallies (quorateMajorityAll)
+
+import Cap.Final.Common (readTargets, requiredNumVotes)
+import Cap.Final.DsoRules (GovAction)
+import Cap.Final.Vote (decodeVotes)
+import Cap.Final.GovOutcome (GovOutcome (..))
+
+template VoteRequest
+  with
+    dso                : Party
+    proposer           : Party
+    proposal           : Proposal
+    action             : GovAction
+    commitment         : TargetCommitment   -- target key + optional state pin; voters approve it with the action
+    snapshot           : Set Party   -- the electorate at creation; quorum denominator
+    executeAfter       : Time        -- timelock; MUST be >= submissionClosesAt
+    executeUntil       : Time        -- deadline pinned onto the issued outcome
+    submissionOpensAt  : Time
+    submissionClosesAt : Time        -- Splice's voteBefore
+    expiresAt          : Time
+  where
+    signatory dso
+    ensure submissionClosesAt > submissionOpensAt
+        && executeAfter >= submissionClosesAt
+        && executeUntil > executeAfter
+        && expiresAt > submissionClosesAt
+
+    interface instance Mechanism for VoteRequest where
+      view = MechanismView with
+        authorities = Set.singleton dso
+        size = None                  -- quorate, not exact-cover: omission stalls, never flips
+        submissionOpensAt
+        submissionClosesAt = Some submissionClosesAt
+        expiresAt = Some expiresAt
+        meta = emptyMetadata
+
+      submittableAllowed _  = pure ()
+      resolutionAllowed now = windowedResolution (toInterface @Governor this) now
+      withdrawAllowed now   = noWithdraw (toInterface @Mechanism this) now
+
+    interface instance Governor for VoteRequest where
+      view = GovernorView with proposer; proposal; executeAfter; meta = emptyMetadata
+
+      -- Funnelled, Splice-style: only the dso resolves, and an sv reaches the
+      -- dso signature through `DsoRules_CloseVoteRequest`, which validates the
+      -- closer against the LIVE SV list.
+      isResolver p = p == dso
+
+      -- The quorate close decision, pure and time-free: a supermajority of yeas
+      -- approves, of nays rejects, anything short lapses. The dso MUST mint
+      -- exactly one voting right per snapshot member — the tally trusts that
+      -- discipline rather than re-checking it.
+      tally = quorateMajorityAll (requiredNumVotes (Set.size snapshot)) decodeVotes
+
+      -- Approval issues exactly one GovOutcome, its window, source, and target
+      -- commitment pinned to what the voters approved.
+      governor_issueOutcome anchor _option _extraArgs = do
+        cid <- create GovOutcome with
+          dso; source = anchor; action; commitment; executeAfter; executeUntil
+        pure [toInterfaceContractId @GovernanceOutcome cid]
+
+      -- Atomic enactment: an approval executes its outcome in this same tx,
+      -- against the target the resolver named. Runs under the dso authority
+      -- (a governor signatory), so `GovernanceOutcome_Execute`'s `[dso]` actor
+      -- set is authorised in scope. Rejection/lapse enact nothing.
+      onResolved outcome extraArgs = case outcome of
+        RO_Approved outcomeCids _ -> do
+          targets <- readTargets extraArgs.context
+          forA_ outcomeCids $ \oc ->
+            exercise oc GovernanceOutcome_Execute with actors = [dso]; targets; extraArgs
+          pure emptyMetadata
+        _ -> pure emptyMetadata
+
+      governor_withdrawImpl _ = pure (Governor_WithdrawResult with meta = emptyMetadata)

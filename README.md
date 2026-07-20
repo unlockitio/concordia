@@ -24,14 +24,14 @@ fixed, so the library forces only what is universal and leaves everything a
 legitimate format might vary to the implementing templates.
 
 - **Tier 1 — `cap-core`.** Domain-agnostic interfaces: `Submittable` and
-  `Resolvable` (the submission and mechanism faces), `Outcome`, the
+  `Mechanism` (the submission and mechanism faces), `Outcome`, the
   shared `ChecksV1` functions the domain fixed bodies call, and a `util`
   helper package. This tier captures the shared structure: privacy-preserving
   submission, one-door resolution, an optional completeness proof, and
   outcomes that execute with pre-committed authority.
 - **Tier 2 — domain standards.** Each `requires` the tier-1 faces and adds its
   own methods:
-  - **`cap-governance`** — proposals, ballots, tally-driven resolution, and
+  - **`cap-governance`** — governors, ballots, tally-driven resolution, and
     timelocked executables.
   - **`cap-auctions`** — sealed/open, single- and multi-unit auction formats,
     settling through the **Canton Token Standard V2 (CIP-0112)**, which it
@@ -47,9 +47,9 @@ a team already uses.
 ```
 concordia/
 ├── cap-core/            # Tier 1: domain-agnostic interfaces
-│   ├── Interfaces/      #   metadata, submittable, resolvable, checks, target, outcome
+│   ├── Interfaces/      #   metadata, submittable, mechanism, checks, target, outcome
 │   └── util/            #   implementation helpers (checked fetches, policies)
-├── cap-governance/      # Tier 2: governance (Interfaces/proposal, util)
+├── cap-governance/      # Tier 2: governance (Interfaces/governor, util)
 │   └── examples/        #   baby-DSO reproduction + its test package
 ├── cap-auctions/        # Tier 2: auctions   (Interfaces/{types,bid,outcome,auction})
 │   └── examples/        #   reference auction implementation

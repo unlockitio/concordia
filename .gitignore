@@ -1,6 +1,8 @@
 # Daml / dpm build artifacts
 .daml/
 *.dar
+# but vendored official Token Standard DARs are dependencies, not build output
+!lib/*.dar
 .daml-script-cache/
 
 # Editor / IDE
@@ -26,7 +28,21 @@ SPEC.md
 SPEC-*.md
 CLAUDE.md
 
-# Internal design-decision record — not published
-docs/design-decisions/
-docs/governance-vs-auctions.md
+# Architecture docs — not published to the repo
+docs/
 
+# Root design notes — private working draft
+DESIGN.md
+
+# Example walkthroughs / notes — private working drafts
+**/examples/**/*.md
+
+# Milestone 1 delivery staging — private working drafts, not published
+cap-core-architecture_final.md
+scope.md
+extension_points.md
+milestone-delivery-process.md
+m1-delivery-comment.md
+prototype-requirments.md
+
+structure.md

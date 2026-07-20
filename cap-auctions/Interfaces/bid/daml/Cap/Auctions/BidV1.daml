@@ -21,7 +21,7 @@
 -- over bids.
 module Cap.Auctions.BidV1 where
 
-import Cap.Core.MetadataV1
+import Splice.Api.Token.MetadataV1
 import Cap.Core.SubmittableV1
 import Cap.Auctions.TypesV1
 

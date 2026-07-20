@@ -1,0 +1,43 @@
+-- Copyright (c) 2026 Unlockit. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+-- =============================================================================
+-- Baby-Splice cross-cutting glue shared by the decision machines: the
+-- choice-context keys, the supermajority threshold, and `readTargets` (the
+-- resolution-side counterpart of the close door). Family-agnostic on purpose —
+-- every governor family (`VoteRequest`, `AmuletConfigVoteRequest`) shares it.
+-- The governed state, its config, and each family's action language live with
+-- their own target module.
+-- =============================================================================
+module Cap.Final.Common where
+
+import qualified DA.TextMap as TextMap
+
+import Splice.Api.Token.MetadataV1 (AnyValue (..), ChoiceContext (..))
+import Cap.Governance.TargetV1 (Target)
+
+-- | Context key under which the fresh target(s) to enact against reach the
+-- atomic resolution — Splice's `amuletRulesCid` analogue.
+targetsKey : Text
+targetsKey = "cap.final.targets"
+
+-- | Context key under which a caster delivers the live `DsoRules` for the
+-- SV list (and cooldown) check in `ballot_castImpl`.
+svListKey : Text
+svListKey = "cap.final.svList"
+
+-- | Splice's supermajority threshold
+requiredNumVotes : Int -> Int
+requiredNumVotes numSvs = ceiling (intToDecimal (numSvs + f + 1) / 2.0)
+  where f = floor (intToDecimal (numSvs - 1) / 3.0)
+
+-- | Read the targets the close door put in the choice context (under
+-- `targetsKey`). Aborts if absent or malformed; the close door is trusted to
+-- name the committed target(s).
+readTargets : ChoiceContext -> Update [ContractId Target]
+readTargets ctx = case TextMap.lookup targetsKey ctx.values of
+  Some (AV_List avs) -> forA avs decodeCid
+  _ -> abort "resolve: extraArgs.context lacks the target list"
+  where
+    decodeCid (AV_ContractId cid) = pure (coerceContractId cid)
+    decodeCid _ = abort "resolve: a target entry is not a contract id"

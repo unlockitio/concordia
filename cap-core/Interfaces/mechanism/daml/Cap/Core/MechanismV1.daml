@@ -1,0 +1,72 @@
+-- Copyright (c) 2026 Unlockit. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | The `Mechanism` interface: a mechanism awaiting resolution — an
+-- auction, a governance vote. Existence means "not yet resolved"
+-- Domain mechanisms `requires` this.
+module Cap.Core.MechanismV1 where
+
+import DA.Set (Set)
+
+import Splice.Api.Token.MetadataV1
+
+-- | View of a mechanism awaiting resolution: the binding target for every
+-- submittable, and the single source for the fields the shared checks read.
+data MechanismView = MechanismView
+  with
+    authorities : Set Party
+      -- ^ The signature anchor: every member signs the mechanism and every
+      -- submittable.
+      -- MUST be non-empty at mint — the fixed checks reject an empty (vacuous)
+      -- anchor, so an empty-authority mechanism is inert.
+    size : Optional Int
+      -- ^ The completeness switch and the number of participants in one field.
+      -- MUST: `size = Some _` implies `expiresAt = Some _`. A completeness
+      -- mechanism proves exact cover at resolution, but its submittables expire
+      -- and become anyone-archivable independently; once one is archived, cover
+      -- can never be reproven and the mechanism is unresolvable. Only `expiresAt`
+      -- can then clean it up, so a completeness mechanism MUST stay expirable —
+      -- else a stall leaves it unresolvable and uncleanable forever.
+    submissionOpensAt : Time
+      -- ^ The floor: no submission and no resolution precede this.
+    submissionClosesAt : Optional Time
+      -- ^ The hard ceiling: no submissions at or after it. `None` = no fixed
+      -- close — a standing mechanism, or a format whose close is dynamic and
+      -- lives in its `submittableAllowed` policy.
+    expiresAt : Optional Time
+      -- ^ When an unresolvable mechanism becomes archivable through the
+      -- domain's expiry choice;
+      -- MUST be past a declared close: `expiresAt > submissionClosesAt`
+      -- whenever the close is `Some _`. MUST be `Some _` whenever
+      -- `size = Some _` (see `size`).
+    meta : Metadata
+      -- ^ Display and extension data; never security-relevant.
+  deriving (Eq, Show)
+
+interface Mechanism where
+  viewtype MechanismView
+
+  -- Timing-policy hooks, each tightening the fixed check of one lifecycle
+  -- action. The domain's submit/resolve/withdraw choice bodies always invoke
+  -- them — a policy can be permissive, never absent. `Cap.Core.Policies` ships
+  -- standard profiles; wire one per hook in the `interface instance`.
+  
+  submittableAllowed : Time -> Update ()
+    -- ^ Extra restriction on submitting, beyond the submission-window `checkWindow`
+    -- the domain's submit choice already enforces. CAN only tighten; write
+    -- `submittableAllowed _ = pure ()` to add nothing.
+  resolutionAllowed : Time -> Update ()
+    -- ^ From when resolution is allowed, 
+    -- tightens the resolution timing above a floor the choice 
+    -- body already enforces.
+  withdrawAllowed : Time -> Update ()
+    -- ^ When the mechanism may be withdrawn. Abort to refuse.
+
+-- | The fine group a submittable or outcome belongs to: the one mechanism it
+-- binds, so it can't be replayed at another mechanism's resolution. Lives here,
+-- with `Mechanism`, as `ForTarget` lives with `Target`. Only ever compared, so
+-- the bound mechanism may already be archived.
+data ForMechanism = ForMechanism
+  with
+    mechanism : ContractId Mechanism
+  deriving (Eq, Show)
