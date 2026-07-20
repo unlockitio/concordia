@@ -23,24 +23,22 @@ Concordia is a **two-tier interface library**. Interface choice bodies are
 fixed, so the library forces only what is universal and leaves everything a
 legitimate format might vary to the implementing templates.
 
-- **Tier 1 — `cap-core`.** Domain-agnostic interfaces: `Submittable` and
+- **`cap-core`.** Domain-agnostic interfaces: `Submittable` and
   `Mechanism` (the submission and mechanism faces), `Outcome`, the
   shared `ChecksV1` functions the domain fixed bodies call, and a `util`
   helper package. This tier captures the shared structure: privacy-preserving
   submission, one-door resolution, an optional completeness proof, and
   outcomes that execute with pre-committed authority.
-- **Tier 2 — domain standards.** Each `requires` the tier-1 faces and adds its
-  own methods:
+- **domain standards.** Each `requires` cap-core and adds its
+  own methods and interfaces:
   - **`cap-governance`** — governors, ballots, tally-driven resolution, and
     timelocked executables.
   - **`cap-auctions`** — sealed/open, single- and multi-unit auction formats,
-    settling through the **Canton Token Standard V2 (CIP-0112)**, which it
-    imports and versions in lockstep with.
+    settling through the **Canton Token Standard V2**, which it
+    will import.
 
-A workflow author writes templates that implement a tier-2 interface; tier 1
-stays stable while tier 2 absorbs domain divergence. Concordia sits **above**
-Canton's asset and settlement layer — outcomes compose with the Token Standard
-a team already uses.
+A workflow author writes templates that implement a domain interface; CAP sits **above**
+Canton's asset and settlement layer — outcomes compose with the Token Standard.
 
 ## Repository layout
 
@@ -55,7 +53,7 @@ concordia/
 │   ├── util/
 │   └── examples/BabyDso/           #   Splice DSO reproduced twice — see below
 │       ├── original/{Impl,Test}    #     plain-Daml oracle + its demo scripts
-│       └── cap-version/{,Test}     #     same mechanisms on cap + its demo scripts
+│       └── cap-version/{impl,Test} #     same mechanisms on cap + its demo scripts
 ├── cap-auctions/                   # Tier 2: auctions (Token Standard V2, CIP-0112)
 │   ├── Interfaces/                 #   types, bid, outcome, auction
 │   └── examples/                   #   reference auction implementation
@@ -129,7 +127,7 @@ dpm sandbox --static-time
 # terminal 2 — the cap version
 dpm script --all --ledger-host localhost --ledger-port 6865 \
   --static-time --upload-dar true \
-  --dar cap-governance/examples/BabyDso/cap-version/Test/.daml/dist/cap-final-test-0.1.0.dar
+  --dar cap-governance/examples/BabyDso/cap-version/Test/.daml/dist/cap-version-test-0.1.0.dar
 
 # the plain-Daml oracle, same shape
 dpm script --all --ledger-host localhost --ledger-port 6865 \

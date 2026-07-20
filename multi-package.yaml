@@ -42,8 +42,8 @@ packages:
 #               no cap dependency; its golden vectors prove the others.
 #   cap-version the submission example: Splice's three decision machines
 #               (VoteRequest, Confirmation, AmuletPriceVote) on the cap
-#               standard — see its README.md.
+#               standard.
 - ./cap-governance/examples/BabyDso/original/Impl
 - ./cap-governance/examples/BabyDso/original/Test
-- ./cap-governance/examples/BabyDso/cap-version
+- ./cap-governance/examples/BabyDso/cap-version/impl
 - ./cap-governance/examples/BabyDso/cap-version/Test

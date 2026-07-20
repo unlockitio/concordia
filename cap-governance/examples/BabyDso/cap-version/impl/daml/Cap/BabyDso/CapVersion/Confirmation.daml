@@ -13,7 +13,7 @@
 -- State-pinned actions add the observed target token to that identity, so only
 -- same-state confirmations aggregate.
 -- =============================================================================
-module Cap.Final.Confirmation where
+module Cap.BabyDso.CapVersion.Confirmation where
 
 import qualified DA.Set as Set
 
@@ -22,7 +22,7 @@ import Cap.Core.CheckedFetchV1 (HasCheckedFetch (..), require)
 import Cap.Core.SubmittableV1
 import Cap.Core.MechanismV1 (Mechanism)
 
-import Cap.Final.DsoRules (GovAction)
+import Cap.BabyDso.CapVersion.DsoRules (GovAction)
 
 -- | Decision identity for the standing confirmation machine: the anchor, the
 -- action VALUE, and the state token the confirmer saw (None for identity-pinned

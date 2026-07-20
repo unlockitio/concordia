@@ -3,7 +3,7 @@
 
 -- Demos for the cap-version Baby-DSO. Every demo_* script is described in
 -- DEMOS.md and shares `setup`.
-module Cap.Final.Test.Demos where
+module Cap.BabyDso.CapVersion.Test.Demos where
 
 import DA.Assert ((===))
 import qualified DA.Map as Map
@@ -19,14 +19,14 @@ import Cap.Governance.BallotV1 (Ballot, Ballot_Cast (..))
 import Cap.Governance.GovernorV1 (Governor, Governor_ResolveResult, Proposal (..))
 import Cap.Governance.TargetV1 (Target)
 
-import Cap.Final.AmuletPriceVote (AmuletPriceVote)
-import Cap.Final.AmuletRules
-import Cap.Final.Anchor
-import Cap.Final.Common (svListKey)
-import Cap.Final.Confirmation
-import Cap.Final.DsoRules
-import Cap.Final.Vote (Vote (..), VoteBox (..))
-import Cap.Final.VoteRequest (VoteRequest (..))
+import Cap.BabyDso.CapVersion.AmuletPriceVote (AmuletPriceVote)
+import Cap.BabyDso.CapVersion.AmuletRules
+import Cap.BabyDso.CapVersion.Anchor
+import Cap.BabyDso.CapVersion.Common (svListKey)
+import Cap.BabyDso.CapVersion.Confirmation
+import Cap.BabyDso.CapVersion.DsoRules
+import Cap.BabyDso.CapVersion.Vote (Vote (..), VoteBox (..))
+import Cap.BabyDso.CapVersion.VoteRequest (VoteRequest (..))
 
 -- --- shared fixture: one dso, four SVs, DsoRules, AmuletRules, the anchor ----
 

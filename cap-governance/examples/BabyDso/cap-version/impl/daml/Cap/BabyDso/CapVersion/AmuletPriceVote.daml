@@ -11,7 +11,7 @@
 -- Re-pricing is `Ballot_Cast` (rate-limited, Splice's `lastUpdatedAt`
 -- cooldown); abstaining again is `Ballot_Withdraw`.
 -- =============================================================================
-module Cap.Final.AmuletPriceVote where
+module Cap.BabyDso.CapVersion.AmuletPriceVote where
 
 import qualified DA.Map as Map
 import qualified DA.Set as Set
@@ -25,8 +25,8 @@ import Cap.Core.MechanismV1 (Mechanism, ForMechanism (..))
 import Cap.Governance.BallotV1
 import Cap.Governance.TargetUtil (fetchTargetFromContext)
 
-import Cap.Final.Common (svListKey)
-import Cap.Final.DsoRules (DsoRules, dsoRulesKey)
+import Cap.BabyDso.CapVersion.Common (svListKey)
+import Cap.BabyDso.CapVersion.DsoRules (DsoRules, dsoRulesKey)
 
 -- | The standing machine never closes: its window ceiling is this sentinel.
 foreverTime : Time

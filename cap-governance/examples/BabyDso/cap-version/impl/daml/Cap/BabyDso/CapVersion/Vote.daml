@@ -8,7 +8,7 @@
 -- dual-signed) → S_Withdrawn. The vote value (`accept`) is a typed field the
 -- interface never reads — `tally` downcasts `Ballot` → `Vote` to read it.
 -- =============================================================================
-module Cap.Final.Vote where
+module Cap.BabyDso.CapVersion.Vote where
 
 import qualified DA.Map as Map
 import qualified DA.Set as Set
@@ -21,8 +21,8 @@ import Cap.Governance.BallotV1
 import Cap.Governance.GovernorV1 (Governor)
 import Cap.Governance.TargetUtil (fetchTargetFromContext)
 
-import Cap.Final.Common (svListKey)
-import Cap.Final.DsoRules (DsoRules, dsoRulesKey)
+import Cap.BabyDso.CapVersion.Common (svListKey)
+import Cap.BabyDso.CapVersion.DsoRules (DsoRules, dsoRulesKey)
 
 -- | Decode the opaque `Ballot_Cast.vote`: a binary vote rides `AV_Bool`.
 decodeVote : AnyValue -> Update Bool

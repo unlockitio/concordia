@@ -8,7 +8,7 @@
 -- lives on `DsoAnchor`, which reads this contract fresh by cid.
 -- =============================================================================
 
-module Cap.Final.DsoRules where
+module Cap.BabyDso.CapVersion.DsoRules where
 
 import DA.Action (void)
 import qualified DA.Map as Map
@@ -22,7 +22,7 @@ import Cap.Governance.TargetV1
 import Cap.Governance.TargetUtil (mutateTarget)
 import Cap.Governance.TargetPolicies (driftAborts)
 
-import Cap.Final.AmuletRules
+import Cap.BabyDso.CapVersion.AmuletRules
 
 
 

@@ -124,7 +124,7 @@ a quick check, or against a live **Canton sandbox** over gRPC. Both packages'
 demos live in
 `cap-governance/examples/BabyDso/original/Test/daml/Cap/BabyDso/Test/Demos.daml`
 and
-`cap-governance/examples/BabyDso/cap-version/Test/daml/Cap/Final/Test/Demos.daml`.
+`cap-governance/examples/BabyDso/cap-version/Test/daml/Cap/BabyDso/CapVersion/Test/Demos.daml`.
 
 Prerequisite: **Daml SDK 3.4.11** via `dpm`
 
@@ -158,7 +158,7 @@ dpm sandbox --static-time
 # terminal 2 — uploads the DAR and runs every demo over gRPC (cap version)
 dpm script --all --ledger-host localhost --ledger-port 6865 \
   --static-time --upload-dar true \
-  --dar cap-governance/examples/BabyDso/cap-version/Test/.daml/dist/cap-final-test-0.1.0.dar
+  --dar cap-governance/examples/BabyDso/cap-version/Test/.daml/dist/cap-version-test-0.1.0.dar
 
 # the original oracle, same shape
 dpm script --all --ledger-host localhost --ledger-port 6865 \

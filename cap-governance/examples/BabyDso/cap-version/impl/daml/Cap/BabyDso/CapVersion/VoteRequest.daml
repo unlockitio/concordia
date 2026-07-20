@@ -19,7 +19,7 @@
 -- invariant, so with a zero timelock the execution window opens exactly when
 -- resolution waits for the close.
 -- =============================================================================
-module Cap.Final.VoteRequest where
+module Cap.BabyDso.CapVersion.VoteRequest where
 
 import DA.Foldable (forA_)
 import DA.Set (Set)
@@ -34,10 +34,10 @@ import Cap.Governance.GovernorV1
 import Cap.Governance.Policies (windowedResolution)
 import Cap.Governance.Tallies (quorateMajorityAll)
 
-import Cap.Final.Common (readTargets, requiredNumVotes)
-import Cap.Final.DsoRules (GovAction)
-import Cap.Final.Vote (decodeVotes)
-import Cap.Final.GovOutcome (GovOutcome (..))
+import Cap.BabyDso.CapVersion.Common (readTargets, requiredNumVotes)
+import Cap.BabyDso.CapVersion.DsoRules (GovAction)
+import Cap.BabyDso.CapVersion.Vote (decodeVotes)
+import Cap.BabyDso.CapVersion.GovOutcome (GovOutcome (..))
 
 template VoteRequest
   with

@@ -6,7 +6,7 @@
 -- `Target` with a state token scoped to the price.
 -- =============================================================================
 
-module Cap.Final.AmuletRules where
+module Cap.BabyDso.CapVersion.AmuletRules where
 
 import qualified DA.Set as Set
 import DA.Text (parseDecimal)
