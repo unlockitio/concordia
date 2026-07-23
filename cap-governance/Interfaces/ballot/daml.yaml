@@ -4,9 +4,9 @@
 # Tier 2 (Governance) — the `Ballot` interface, split out from `Governor`.
 # `Ballot` names the mechanism it is cast against only as its `Mechanism`
 # face, so it does not reference `Governor`: the dependency runs one way,
-# `Governor -> Ballot`. Its own binding is anchored on the (untyped)
+# `Governor -> Ballot`. Its own binding rests on the (untyped)
 # `Submittable` face, which is the face admission proves — the typed field is a
-# convenience mirror, not the security anchor.
+# convenience mirror, not the security-bearing binding.
 sdk-version: 3.4.11
 name: cap-governance-ballot-v1
 version: 0.1.0

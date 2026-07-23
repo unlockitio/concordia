@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # Tier 2 (Governance) — the `Target` interface: a standing contract an
-# approved outcome acts upon, carrying a stable authority-anchored identity so
+# approved outcome acts upon, carrying a stable identity keyed by its authority so
 # an outcome binds to the target the voters approved and a look-alike aborts
 # the checked fetch. Identity-only (no choices); defines its own `ForTarget`
 # group next to the view and reuses the checked-fetch machinery from

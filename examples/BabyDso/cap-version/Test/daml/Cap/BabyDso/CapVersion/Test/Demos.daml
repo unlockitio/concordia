@@ -1,0 +1,501 @@
+-- Copyright (c) 2026 Unlockit. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+-- Demos for the cap-version Baby-DSO. Every demo_* script is described in
+-- DEMOS.md and shares `setup`.
+module Cap.BabyDso.CapVersion.Test.Demos where
+
+import DA.Assert ((===))
+import qualified DA.Map as Map
+import qualified DA.Set as Set
+import qualified DA.TextMap as TextMap
+import DA.Time (addRelTime, days, minutes)
+import Daml.Script
+
+import Splice.Api.Token.MetadataV1 (AnyValue (..), ChoiceContext (..), ExtraArgs (..), emptyMetadata)
+import Cap.Core.Patchable (SetState (..))
+import Cap.Core.SubmittableV1 (SubmittableState (..))
+import Cap.Governance.BallotV1 (Ballot, Ballot_Cast (..))
+import Cap.Governance.GovernorV1 (Governor, Governor_ResolveResult, Proposal (..))
+import Cap.Governance.TargetV1 (Target)
+
+import Cap.BabyDso.CapVersion.AmuletPriceVote (AmuletPriceVote)
+import Cap.BabyDso.CapVersion.AmuletRules
+import Cap.BabyDso.CapVersion.DsoMechanism
+import Cap.BabyDso.CapVersion.Common (svListKey)
+import Cap.BabyDso.CapVersion.Confirmation
+import Cap.BabyDso.CapVersion.DsoRules
+import Cap.BabyDso.CapVersion.Vote (Vote (..), VoteBox (..))
+import Cap.BabyDso.CapVersion.VoteRequest (VoteRequest (..))
+
+-- --- shared fixture: one dso, four SVs, DsoRules, AmuletRules, the mechanism ----
+
+data Setup = Setup with
+    dso : Party
+    sv1 : Party
+    sv2 : Party
+    sv3 : Party
+    sv4 : Party
+    mechanism : ContractId DsoMechanism
+    round : ContractId OpenMiningRound
+
+setup : Script Setup
+setup = do
+  sv1 <- allocateParty "sv1"
+  sv2 <- allocateParty "sv2"
+  sv3 <- allocateParty "sv3"
+  sv4 <- allocateParty "sv4"
+  dso <- allocateParty "dso"
+  now <- getTime
+  _ <- submit dso $ createCmd DsoRules with
+    dso
+    org = "org1"
+    svs = Map.fromList [(sv1, "sv1"), (sv2, "sv2"), (sv3, "sv3"), (sv4, "sv4")]
+    offboardedSvs = Map.empty
+    config = DsoRulesConfig with
+      actionConfirmationTimeout = minutes 5
+      voteCooldownTime = minutes 1
+      voteRequestTimeout = days 7
+  _ <- submit dso $ createCmd AmuletRules with dso; amuletPrice = 10.0; transferFee = 0.1; reserve = 100.0
+  mechanism <- submit dso $ createCmd DsoMechanism with dso; org = "org1"; opensAt = now
+  round <- submit dso $ createCmd OpenMiningRound with dso; round = 0; amuletPrice = 10.0; opensAt = now
+  pure Setup with dso; sv1; sv2; sv3; sv4; mechanism; round
+
+-- | The live DsoRules of the setup organization (its cid changes on every
+-- applied DsoRules action).
+getRules : Setup -> Script (ContractId DsoRules, DsoRules)
+getRules s = do
+  [(cid, r)] <- queryFilter @DsoRules s.dso (\r -> r.org == "org1")
+  pure (cid, r)
+
+-- | The live AmuletRules (its cid changes on every applied AmuletRules action).
+getAmuletRules : Setup -> Script (ContractId AmuletRules, AmuletRules)
+getAmuletRules s = do
+  [(cid, r)] <- query @AmuletRules s.dso
+  pure (cid, r)
+
+
+
+-- =============================================================================
+-- Demo 0 — the container ballot format (DEMOS.md)
+-- =============================================================================
+
+castBox : Setup -> Party -> ContractId VoteBox -> Bool -> Script (ContractId VoteBox)
+castBox s voter bcid accept =
+  fromInterfaceContractId @VoteBox <$>
+    castBallot s voter (toInterfaceContractId @Ballot bcid) (AV_Bool accept)
+
+demo_ballot_box : Script ()
+demo_ballot_box = do
+  s <- setup
+  (_, r0) <- getRules s
+  let cfg = r0.config with voteCooldownTime = minutes 2
+  req <- requestVote s s.sv1 (GA_SetConfig (SetState with new = cfg; base = r0.config))
+
+  -- the same request resolved from ONE container ballot: all votes in a
+  -- single Splice-style map, cast through the same choice
+  now <- getTime
+  box <- submit s.dso $ createCmd VoteBox with
+    dso = s.dso
+    governor = toInterfaceContractId @Governor req
+    voters = Set.fromList [s.sv1, s.sv2, s.sv3, s.sv4]
+    votes = Map.fromList [(s.sv1, True)]
+    expiresAt = addRelTime now (days 21)
+  box <- castBox s s.sv2 box True
+  box <- castBox s s.sv3 box True
+  passTime (days 7)
+  (rules, _) <- getRules s
+  targets <- targetsFor s req
+  _ <- submit (actAs [s.sv1] <> readAs [s.dso]) $ exerciseCmd s.mechanism DsoMechanism_CloseVoteRequest with
+    sv = s.sv1
+    requestCid = toInterfaceContractId @Governor req
+    ballots = [toInterfaceContractId @Ballot box]
+    dsoRulesCid = rules
+    targets
+  (_, r1) <- getRules s
+  r1.config.voteCooldownTime === minutes 2
+
+
+-- --- voting-mechanism helpers ------------------------------------------------
+
+-- | The live DsoRules delivered in the cast context (the SV-list check).
+ctxWithRules : ContractId DsoRules -> ExtraArgs
+ctxWithRules rules = ExtraArgs with
+  context = ChoiceContext with
+    values = TextMap.fromList
+      [(svListKey, AV_ContractId (coerceContractId (toInterfaceContractId @Target rules)))]
+  meta = emptyMetadata
+
+-- | Opens a vote: the request, the requester's yes, and every voting right
+-- mint in one transaction (the choice's Splice-style auto-accept).
+requestVote : Setup -> Party -> GovAction -> Script (ContractId VoteRequest)
+requestVote s sv action = do
+  (rules, _) <- getRules s
+  (ar, _) <- getAmuletRules s
+  submit (actAs [sv] <> readAs [s.dso]) $ exerciseCmd s.mechanism DsoMechanism_RequestVote with
+    sv
+    proposal = Proposal with url = ""; body = ""
+    action
+    dsoRulesCid = rules
+    amuletRulesCid = Some ar
+    voteRequestTimeout = None
+
+-- | Both workflows share the one `Ballot_Cast` choice: an `AV_Bool` casts a
+-- `Vote`, an `AV_Decimal` prices an `AmuletPriceVote`.
+castBallot : Setup -> Party -> ContractId Ballot -> AnyValue -> Script (ContractId Ballot)
+castBallot s voter bcid v = do
+  (rules, _) <- getRules s
+  submit (actAs [voter] <> readAs [s.dso]) $ exerciseCmd bcid Ballot_Cast with
+    voter; vote = v; extraArgs = ctxWithRules rules
+
+-- | A voter's right on a request (one per snapshot member, minted at request).
+ballotOf : Setup -> ContractId VoteRequest -> Party -> Script (ContractId Vote)
+ballotOf s req voter = do
+  let gov = toInterfaceContractId @Governor req
+  [(cid, _)] <- queryFilter @Vote s.dso (\v -> v.governor == gov && v.voter == voter)
+  pure cid
+
+castVote : Setup -> Party -> ContractId VoteRequest -> Bool -> Script (ContractId Vote)
+castVote s voter req accept = do
+  vcid <- ballotOf s req voter
+  fromInterfaceContractId @Vote <$>
+    castBallot s voter (toInterfaceContractId @Ballot vcid) (AV_Bool accept)
+
+castVoteFail : Setup -> Party -> ContractId VoteRequest -> Bool -> Script ()
+castVoteFail s voter req accept = do
+  (rules, _) <- getRules s
+  let gov = toInterfaceContractId @Governor req
+  ((vcid, _) :: _) <- queryFilter @Vote s.dso (\v -> v.governor == gov)
+  submitMustFail (actAs [voter] <> readAs [s.dso]) $
+    exerciseCmd (toInterfaceContractId @Ballot vcid) Ballot_Cast with
+      voter; vote = AV_Bool accept; extraArgs = ctxWithRules rules
+
+-- | The live target the request committed to, by its key.
+targetsFor : Setup -> ContractId VoteRequest -> Script [ContractId Target]
+targetsFor s req = do
+  Some vr <- queryContractId s.dso req
+  if vr.commitment.targetKey == amuletRulesKey s.dso
+    then do (ar, _) <- getAmuletRules s; pure [toInterfaceContractId @Target ar]
+    else do (rules, _) <- getRules s; pure [toInterfaceContractId @Target rules]
+
+-- | Close, presenting the request's cast ballots and its committed target.
+closeVote : Setup -> Party -> ContractId VoteRequest -> Script Governor_ResolveResult
+closeVote s sv req = do
+  (rules, _) <- getRules s
+  targets <- targetsFor s req
+  let gov = toInterfaceContractId @Governor req
+  ballots <- queryFilter @Vote s.dso (\v -> v.governor == gov && v.state == S_Full)
+  submit (actAs [sv] <> readAs [s.dso]) $ exerciseCmd s.mechanism DsoMechanism_CloseVoteRequest with
+    sv
+    requestCid = toInterfaceContractId @Governor req
+    ballots = map (toInterfaceContractId @Ballot . fst) ballots
+    dsoRulesCid = rules
+    targets
+
+closeVoteFail : Setup -> Party -> ContractId VoteRequest -> Script ()
+closeVoteFail s sv req = do
+  (rules, _) <- getRules s
+  targets <- targetsFor s req
+  let gov = toInterfaceContractId @Governor req
+  ballots <- queryFilter @Vote s.dso (\v -> v.governor == gov && v.state == S_Full)
+  submitMustFail (actAs [sv] <> readAs [s.dso]) $ exerciseCmd s.mechanism DsoMechanism_CloseVoteRequest with
+    sv
+    requestCid = toInterfaceContractId @Governor req
+    ballots = map (toInterfaceContractId @Ballot . fst) ballots
+    dsoRulesCid = rules
+    targets
+
+-- =============================================================================
+-- Demo 1 — the voting mechanism, on `GA_SetConfig` (DEMOS.md)
+-- =============================================================================
+
+demo_voting : Script ()
+demo_voting = do
+  s <- setup
+  outsider <- allocateParty "outsider"
+  (_, r0) <- getRules s
+
+  -- sv1 opens a SetConfig vote (the requester's yes is auto-inserted)
+  let cfgA = r0.config with voteCooldownTime = minutes 2
+  reqA <- requestVote s s.sv1 (GA_SetConfig (SetState with new = cfgA; base = r0.config))
+
+  -- a non-SV cannot cast
+  castVoteFail s outsider reqA True
+
+  -- two more yes reach the supermajority (3 of 4); the close resolves, issues
+  -- the outcome, and executes it on DsoRules in one transaction
+  _ <- castVote s s.sv2 reqA True
+  _ <- castVote s s.sv3 reqA True
+  passTime (days 7)
+  _ <- closeVote s s.sv1 reqA
+  (_, r1) <- getRules s
+  r1.config.voteCooldownTime === minutes 2
+
+  -- two concurrent config votes against the same base, touching different
+  -- fields: both closes land, the second patches onto the first
+  let cfgB = r1.config with actionConfirmationTimeout = minutes 10
+  let cfgC = r1.config with voteCooldownTime = minutes 3
+  reqB <- requestVote s s.sv1 (GA_SetConfig (SetState with new = cfgB; base = r1.config))
+  reqC <- requestVote s s.sv1 (GA_SetConfig (SetState with new = cfgC; base = r1.config))
+  _ <- castVote s s.sv2 reqB True
+  _ <- castVote s s.sv3 reqB True
+  _ <- castVote s s.sv2 reqC True
+  _ <- castVote s s.sv3 reqC True
+  passTime (days 7)
+  _ <- closeVote s s.sv1 reqB
+  _ <- closeVote s s.sv1 reqC
+  (_, r2) <- getRules s
+  r2.config.actionConfirmationTimeout === minutes 10
+  r2.config.voteCooldownTime === minutes 3
+
+  -- a state-pinned payout approved by vote at price 10.0
+  let payout = GA_PayFromReserve with amount = 25.0
+  reqP <- requestVote s s.sv1 payout
+  _ <- castVote s s.sv2 reqP True
+  _ <- castVote s s.sv3 reqP True
+
+  -- meanwhile the confirmation mechanism moves the price
+  let reprice = GA_SetAmuletPrice with newPrice = 10.5
+  [x1, x2, x3] <- forA [s.sv1, s.sv2, s.sv3] $ \sv -> confirm s sv reprice
+  pin <- pinOf s x1
+  execute s s.sv1 reprice pin [x1, x2, x3]
+
+  -- the stale approval cannot execute: the whole close aborts (driftAborts)
+  passTime (days 7)
+  closeVoteFail s s.sv1 reqP
+
+
+
+
+
+
+
+-- --- confirmation-mechanism helpers --------------------------------------------
+
+confirm : Setup -> Party -> GovAction -> Script (ContractId Confirmation)
+confirm s sv action = do
+  (rules, _) <- getRules s
+  (ar, _) <- getAmuletRules s
+  submit (actAs [sv] <> readAs [s.dso]) $ exerciseCmd s.mechanism DsoMechanism_ConfirmAction with
+    sv; action; dsoRulesCid = rules; amuletRulesCid = Some ar
+
+execute : Setup -> Party -> GovAction -> Optional Text -> [ContractId Confirmation] -> Script ()
+execute s sv action seenToken confirmationCids = do
+  (rules, _) <- getRules s
+  (ar, _) <- getAmuletRules s
+  submit (actAs [sv] <> readAs [s.dso]) $ exerciseCmd s.mechanism DsoMechanism_ExecuteConfirmedAction with
+    sv; action; seenToken; confirmationCids; dsoRulesCid = rules; amuletRulesCid = Some ar
+
+executeFail : Setup -> Party -> GovAction -> Optional Text -> [ContractId Confirmation] -> Script ()
+executeFail s sv action seenToken confirmationCids = do
+  (rules, _) <- getRules s
+  (ar, _) <- getAmuletRules s
+  submitMustFail (actAs [sv] <> readAs [s.dso]) $ exerciseCmd s.mechanism DsoMechanism_ExecuteConfirmedAction with
+    sv; action; seenToken; confirmationCids; dsoRulesCid = rules; amuletRulesCid = Some ar
+
+-- | The state token a confirmation pinned at confirm time.
+pinOf : Setup -> ContractId Confirmation -> Script (Optional Text)
+pinOf s cid = do
+  Some c <- queryContractId s.dso cid
+  pure c.seenToken
+
+-- =============================================================================
+-- Demo 2 — the confirmation mechanism (DEMOS.md)
+-- =============================================================================
+
+demo_confirmation : Script ()
+demo_confirmation = do
+  s <- setup
+
+  -- an identity-pinned action: replay-tolerant by declaration
+  let grant = GA_SetTransferFee with newFee = 0.2
+
+  -- two of four confirmations: below the threshold (3)
+  d1 <- confirm s s.sv1 grant
+  d2 <- confirm s s.sv2 grant
+  executeFail s s.sv1 grant None [d1, d2]
+
+  -- every SV confirms; three execute the action and are consumed
+  d3 <- confirm s s.sv3 grant
+  d4 <- confirm s s.sv4 grant
+  execute s s.sv1 grant None [d1, d2, d3]
+  (_, ar) <- getAmuletRules s
+  ar.transferFee === 0.2
+
+  -- spent confirmations cannot be presented again
+  executeFail s s.sv1 grant None [d1, d2, d3]
+
+  -- identity pin: the leftover confirmation plus two fresh ones execute the
+  -- same action a second time (just like splice)
+  d1' <- confirm s s.sv1 grant
+  d2' <- confirm s s.sv2 grant
+  execute s s.sv2 grant None [d4, d1', d2']
+
+
+
+  -- four state-pinned actions, every confirmation gathered at price 10.0 (see setup)
+  let priceA = GA_SetAmuletPrice with newPrice = 10.5
+  let priceB = GA_SetAmuletPrice with newPrice = 15.0
+  let priceC = GA_SetAmuletPrice with newPrice = 20.0
+  let payout = GA_PayFromReserve with amount = 25.0
+
+  -- get all confirmations for all actions
+  [a1, a2, a3] <- forA [s.sv1, s.sv2, s.sv3] $ \sv -> confirm s sv priceA
+  [b1, b2, b3, b4] <- forA [s.sv1, s.sv2, s.sv3, s.sv4] $ \sv -> confirm s sv priceB
+  [c1, c2, c3] <- forA [s.sv1, s.sv2, s.sv3] $ \sv -> confirm s sv priceC
+  [p1, p2, p3] <- forA [s.sv1, s.sv2, s.sv3] $ \sv -> confirm s sv payout
+
+  -- at which price did they see amulet ? A: 10
+  pin10 <- pinOf s b4
+
+  -- priceA executes on the state its confirmers saw
+  execute s s.sv1 priceA pin10 [a1, a2, a3]
+  (_, ar) <- getAmuletRules s
+  ar.amuletPrice === 10.5
+
+  -- the payout is under the strict policy: the same 0.5 drift that priceB
+  -- tolerates below aborts it
+  executeFail s s.sv1 payout pin10 [p1, p2, p3]
+
+  -- priceB was approved at 10.0; the live price is 10.5, within the declared
+  -- drifPolicy (DSORules.daml: 143) tolerance (1.0): it executes
+  execute s s.sv1 priceB pin10 [b1, b2, b3]
+  (_, ar) <- getAmuletRules s
+  ar.amuletPrice === 15.0
+
+  -- priceC was approved at 10.0; the live price is 15.0, beyond the tolerance:
+  -- the drift policy refuses it
+  executeFail s s.sv1 priceC pin10 [c1, c2, c3]
+
+  -- state pin: the leftover cannot aggregate with fresh confirmations, which
+  -- pin the new state
+  f1 <- confirm s s.sv1 priceB
+  f2 <- confirm s s.sv2 priceB
+  pin15 <- pinOf s f1
+  executeFail s s.sv2 priceB pin10 [b4, f1, f2]
+  executeFail s s.sv2 priceB pin15 [b4, f1, f2]
+
+  -- re-approved against the live state, the payout executes
+  [p1', p2', p3'] <- forA [s.sv1, s.sv2, s.sv3] $ \sv -> confirm s sv payout
+  execute s s.sv1 payout pin15 [p1', p2', p3']
+  (_, ar) <- getAmuletRules s
+  ar.reserve === 75.0
+
+
+
+
+-- --- median-mechanism helpers ------------------------------------------------
+
+registerPriceVote : Setup -> Party -> Script (ContractId AmuletPriceVote)
+registerPriceVote s sv = do
+  (rules, _) <- getRules s
+  submit (actAs [sv] <> readAs [s.dso]) $ exerciseCmd s.mechanism DsoMechanism_RegisterPriceVote with
+    sv; dsoRulesCid = rules
+
+priceVote : Setup -> Party -> ContractId AmuletPriceVote -> Decimal -> Script (ContractId AmuletPriceVote)
+priceVote s voter vcid p =
+  fromInterfaceContractId @AmuletPriceVote <$>
+    castBallot s voter (toInterfaceContractId @Ballot vcid) (AV_Decimal p)
+
+advanceRound : Setup -> Party -> [ContractId AmuletPriceVote] -> Script ()
+advanceRound s sv voteCids = do
+  (rules, _) <- getRules s
+  [(rnd, _)] <- query @OpenMiningRound s.dso
+  _ <- submit (actAs [sv] <> readAs [s.dso]) $ exerciseCmd s.mechanism DsoMechanism_AdvanceRound with
+    sv; roundCid = rnd; voteCids; dsoRulesCid = rules
+  pure ()
+
+advanceRoundFail : Setup -> Party -> [ContractId AmuletPriceVote] -> Script ()
+advanceRoundFail s sv voteCids = do
+  (rules, _) <- getRules s
+  [(rnd, _)] <- query @OpenMiningRound s.dso
+  submitMustFail (actAs [sv] <> readAs [s.dso]) $ exerciseCmd s.mechanism DsoMechanism_AdvanceRound with
+    sv; roundCid = rnd; voteCids; dsoRulesCid = rules
+
+-- =============================================================================
+-- Demo 3 — the median mechanism, on the standing price votes (DEMOS.md)
+-- =============================================================================
+
+demo_median : Script ()
+demo_median = do
+  s <- setup
+
+  -- every SV registers its standing, unpriced vote
+  [v1, v2, v3, v4] <- forA [s.sv1, s.sv2, s.sv3, s.sv4] $ registerPriceVote s
+
+  -- three SVs price their votes; sv4 stays unpriced (covers, does not count)
+  v1 <- priceVote s s.sv1 v1 1.0
+  v2 <- priceVote s s.sv2 v2 2.0
+  v3 <- priceVote s s.sv3 v3 3.0
+
+  -- a cherry-picked subset cannot advance the round
+  advanceRoundFail s s.sv1 [v1, v2, v3]
+  advanceRoundFail s s.sv1 [v1, v2, v3, v3]
+
+  -- the full set advances to the median
+  advanceRound s s.sv1 [v1, v2, v3, v4]
+  [(_, rnd)] <- query @OpenMiningRound s.dso
+  rnd.round === 1
+  rnd.amuletPrice === 2.0
+
+-- =============================================================================
+-- Demo 4 — two organizations, one authority party (DEMOS.md)
+-- =============================================================================
+
+demo_two_organizations : Script ()
+demo_two_organizations = do
+  s <- setup
+  now <- getTime
+  (_, r0) <- getRules s
+
+  -- org1 approves a SetConfig vote
+  let cfgX = r0.config with voteCooldownTime = minutes 2
+  reqX <- requestVote s s.sv1 (GA_SetConfig (SetState with new = cfgX; base = r0.config))
+  _ <- castVote s s.sv2 reqX True
+  _ <- castVote s s.sv3 reqX True
+  let govX = toInterfaceContractId @Governor reqX
+  ballotsX <- map (toInterfaceContractId @Ballot . fst) <$>
+    queryFilter @Vote s.dso (\v -> v.governor == govX && v.state == S_Full)
+
+  -- a second organization under the SAME dso authority party
+  rules2 <- submit s.dso $ createCmd DsoRules with
+    dso = s.dso
+    org = "org2"
+    svs = Map.fromList [(s.sv1, "sv1"), (s.sv2, "sv2"), (s.sv3, "sv3"), (s.sv4, "sv4")]
+    offboardedSvs = Map.empty
+    config = r0.config with voteCooldownTime = minutes 9
+  mechanism2 <- submit s.dso $ createCmd DsoMechanism with dso = s.dso; org = "org2"; opensAt = now
+  (ar, _) <- getAmuletRules s
+  reqY <- submit (actAs [s.sv1] <> readAs [s.dso]) $ exerciseCmd mechanism2 DsoMechanism_RequestVote with
+    sv = s.sv1
+    proposal = Proposal with url = ""; body = ""
+    action = GA_SetConfig (SetState with new = cfgX; base = r0.config)
+    dsoRulesCid = rules2
+    amuletRulesCid = Some ar
+    voteRequestTimeout = None
+  passTime (days 7)
+
+  -- replay 1: close org1's approved request through org2, presenting org2's
+  -- rules — refused: the outcome's target binding pins the organization
+  submitMustFail (actAs [s.sv1] <> readAs [s.dso]) $ exerciseCmd mechanism2 DsoMechanism_CloseVoteRequest with
+    sv = s.sv1
+    requestCid = govX
+    ballots = ballotsX
+    dsoRulesCid = rules2
+    targets = [toInterfaceContractId @Target rules2]
+
+  -- replay 2: resolve org2's own request with org1's ballots — refused: a
+  -- ballot binds its governor by contract identity
+  submitMustFail (actAs [s.sv1] <> readAs [s.dso]) $ exerciseCmd mechanism2 DsoMechanism_CloseVoteRequest with
+    sv = s.sv1
+    requestCid = toInterfaceContractId @Governor reqY
+    ballots = ballotsX
+    dsoRulesCid = rules2
+    targets = [toInterfaceContractId @Target rules2]
+
+  -- the honest close under org1 lands unchanged; org2 never moves
+  _ <- closeVote s s.sv1 reqX
+  (_, r1) <- getRules s
+  r1.config.voteCooldownTime === minutes 2
+  [(_, o2)] <- queryFilter @DsoRules s.dso (\r -> r.org == "org2")
+  o2.config.voteCooldownTime === minutes 9

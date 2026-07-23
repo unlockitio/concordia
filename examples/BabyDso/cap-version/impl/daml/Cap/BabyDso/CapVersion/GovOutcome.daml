@@ -1,0 +1,63 @@
+-- Copyright (c) 2026 Unlockit. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+-- =============================================================================
+-- GovOutcome — an approved `GovAction`, implemented as a cap-governance
+-- `GovernanceOutcome` (which `requires` cap-core `Outcome`).
+-- `governanceOutcome_executeImpl` delegates to `applyAction`, the shared effect
+-- both workflows run. The voting workflow's `VoteRequest` chains the execute choice
+-- into resolution (atomic, Splice-style), so the outcome is created and
+-- consumed in one transaction.
+-- =============================================================================
+module Cap.BabyDso.CapVersion.GovOutcome where
+
+import qualified DA.Set as Set
+
+import Splice.Api.Token.MetadataV1 (emptyMetadata)
+import Cap.Core.MechanismV1 (Mechanism)
+import Cap.Core.OutcomeV1
+import Cap.Governance.OutcomeV1
+import Cap.Governance.TargetV1 (TargetCommitment)
+
+import Cap.BabyDso.CapVersion.DsoRules
+
+template GovOutcome
+  with
+    dso          : Party
+    source       : ContractId Mechanism   -- the VoteRequest whose resolution issued this
+    action       : GovAction
+    commitment   : TargetCommitment  -- the target and optional state pin the approvers bound
+    executeAfter : Time            -- the timelock, pinned from the governor
+    executeUntil : Time            -- mandatory deadline: no undated outcome
+  where
+    signatory dso
+
+    interface instance Outcome for GovOutcome where
+      view = OutcomeView with
+        authorities = Set.singleton dso
+        source
+        executeAfter
+        executeUntil = Some executeUntil
+        meta = emptyMetadata
+
+      -- Broad executor set for liveness: execution acts with the dso signature
+      -- regardless of who triggers it, and every effect is fixed and
+      -- window-guarded, so who fires it cannot affect safety.
+      isExecutor _ = True
+
+    interface instance GovernanceOutcome for GovOutcome where
+      view = GovernanceOutcomeView with
+        -- The commitment formed at proposal: state-pinned or identity-only,
+        -- declared per action by `actionSpec`.
+        committedTargets = [commitment]
+        meta = emptyMetadata
+
+      -- The action's declared drift policy; identity-only commitments never
+      -- reach it. The commitment's key id carries the org for rules actions.
+      onTargetDrift = (actionSpec dso commitment.targetKey.id action).onDrift
+
+      governanceOutcome_executeImpl checked args = case (checked, args.targets) of
+        ([c], [tcid]) -> do
+          (actionSpec dso commitment.targetKey.id action).effect c tcid
+          pure GovernanceOutcome_ExecuteResult with meta = emptyMetadata
+        _ -> fail "a GovAction acts on exactly one committed target"

@@ -3,8 +3,8 @@
 
 -- | The `GovernanceOutcome` interface: an approved action bound to the targets
 -- its approvers saw. It requires cap-core's `Outcome` (identity, window,
--- expiry) and owns governance's one execute door: `GovernanceOutcome_Execute`
--- enacts at most once inside the window, only against the committed targets.
+-- expiry) and owns governance's one execute choice: `GovernanceOutcome_Execute`
+-- executes at most once inside the window, only against the committed targets.
 module Cap.Governance.OutcomeV1 where
 
 import DA.Action (when)
@@ -16,7 +16,7 @@ import Cap.Core.OutcomeV1 (Outcome, isExecutor)
 import Cap.Governance.TargetV1 (Target, TargetCommitment, CheckedTarget (..), checkTargetBinding)
 
 -- | View of an approved action. The authority, source, and execution window
--- live on the required `Outcome` face; this view carries only what is
+-- live on the required `Outcome` interface; this view carries only what is
 -- governance's alone.
 data GovernanceOutcomeView = GovernanceOutcomeView
   with
@@ -40,19 +40,19 @@ interface GovernanceOutcome requires Outcome where
     -- ^ The drift policy, invoked per committed target whose pinned state no
     -- longer matches the fresh one.
     -- MUST abort to refuse execution; on return, `governanceOutcome_executeImpl`
-    -- MUST reconcile against the fresh state it is handed.
+    -- MUST apply its change as a field-wise patch onto the fresh state it is handed.
   governanceOutcome_executeImpl : [CheckedTarget] -> GovernanceOutcome_Execute -> Update GovernanceOutcome_ExecuteResult
-    -- ^ The enacted effect, run with the outcome signatories' authority in
+    -- ^ The applied effect, run with the outcome signatories' authority in
     -- scope. The checked targets arrive as the fixed body verified them, in
     -- commitment order.
 
-  -- | Enact the outcome. Consuming: at most one execution, only inside the
+  -- | Execute the outcome. Consuming: fires at most once, only inside the
   -- committed window, only against the committed targets.
   choice GovernanceOutcome_Execute : GovernanceOutcome_ExecuteResult
     with
       actors : [Party]
       targets : [ContractId Target]
-        -- ^ The fresh targets to act upon, checked against `committedTargets`
+        -- ^ The live targets to act upon, checked against `committedTargets`
         -- standing state is archive-and-recreated, so the
         -- outcome pins identity and state.
       extraArgs : ExtraArgs

@@ -24,25 +24,16 @@ tmp.md
 # Local Claude state (if Claude is invoked from inside concordia/)
 .claude/
 WRITING.md
-SPEC.md
-SPEC-*.md
 CLAUDE.md
 
 # Architecture docs — not published to the repo
 docs/
 
-# Root design notes — private working draft
-DESIGN.md
-
 # Example walkthroughs / notes — private working drafts
-**/examples/**/*.md
 
 # Milestone 1 delivery staging — private working drafts, not published
-cap-core-architecture_final.md
-scope.md
-extension_points.md
 milestone-delivery-process.md
-m1-delivery-comment.md
-prototype-requirments.md
 
-structure.md
+GOLDEN-VECTORS.md
+MISSING.md
+tools

@@ -3,7 +3,7 @@
 
 -- | `Governor` requires `Mechanism` and is
 -- resolved with `Ballot`s (its own package); `Governor_Resolve` is the one
--- resolve door, running the shared cap-core checks then governance's own.
+-- resolve choice, running the shared cap-core checks then governance's own.
 module Cap.Governance.GovernorV1 where
 
 import DA.Optional (catOptionals)
@@ -31,7 +31,7 @@ data Proposal = Proposal
 -----------
 
 -- | View of a governor under vote. The authority, voting window, expiry, and
--- completeness switch live on the governor's `MechanismView`; this view carries
+-- completeness flag live on the governor's `MechanismView`; this view carries
 -- only what is governance's alone.
 data GovernorView = GovernorView
   with
@@ -46,7 +46,7 @@ data GovernorView = GovernorView
   deriving (Eq, Show)
 
 -- | The tally's verdict (method-level, not serialized). `VApproved` may carry a
--- selected option, opaque to the interface. A winning "enact nothing" is
+-- selected option, opaque to the interface. A winning "do nothing" is
 -- `VRejected`.
 data Verdict
   = VApproved (Optional Text)
@@ -98,11 +98,11 @@ interface Governor requires Mechanism where
     -- submittable selection (gated under completeness), so broad resolver sets
     -- are fine.
   governor_issueOutcome : ContractId Mechanism -> Optional Text -> ExtraArgs -> Update [ContractId GovernanceOutcome]
-    -- ^ Builds the approved outcomes. Gets this governor's own anchor (passed in
+    -- ^ Builds the approved outcomes. Gets this governor's own mechanism cid (passed in
     -- because an implementation cannot see its own cid), the winning option as
     -- `tally` selected it (None for approve/reject), and the resolver's `extraArgs`.
     -- MUST return at least one outcome, each signed by this governor's
-    -- authority, with `source` exactly the given anchor, `executeAfter` exactly
+    -- authority, with `source` exactly the given cid, `executeAfter` exactly
     -- the governor's `executeAfter` and any `executeUntil` past both issuance
     -- and that instant; MUST set each `committedTargets` to the targets the
     -- approved option authorized.
@@ -116,7 +116,7 @@ interface Governor requires Mechanism where
 
   -- | Resolve the governor with its ballots. Consuming: a governor resolves
   -- exactly once. Ballots are read, not consumed — teardown is a later
-  -- `Ballot_Consume`/`Ballot_Expire`; they only lose their anchor once the
+  -- `Ballot_Consume`/`Ballot_Expire`; they only lose their mechanism binding once the
   -- governor dies. Issuing the outcome can be made atomic with resolution,
   -- useful to prevent frontrunning.
   choice Governor_Resolve : Governor_ResolveResult
@@ -145,8 +145,8 @@ interface Governor requires Mechanism where
         VRejected -> pure RO_Rejected
         VLapsed -> pure RO_Lapsed
         VApproved option -> do
-          let anchor = toInterfaceContractId @Mechanism self
-          outcomeCids <- governor_issueOutcome this anchor option extraArgs
+          let mechanism = toInterfaceContractId @Mechanism self
+          outcomeCids <- governor_issueOutcome this mechanism option extraArgs
           pure RO_Approved with outcomeCids; option
       resultMeta <- onResolved this outcome extraArgs
       pure Governor_ResolveResult with outcome; resolvedAt = now; meta = resultMeta
@@ -163,8 +163,9 @@ interface Governor requires Mechanism where
       withdrawAllowed (toInterface @Mechanism this) now
       governor_withdrawImpl this (Governor_Withdraw with extraArgs)
 
-  -- | Lets any party with visibility archive a governor that can no longer
-  -- resolve. Effect-free, because the caller is arbitrary; never before the
+  -- | Archives a governor that can no longer resolve. The body checks the
+  -- deadline alone, adding no authority check, so it stays effect-free; who may
+  -- call it is whatever the implementation's visibility admits. Never before the
   -- close, because `expiresAt` MUST sit past it (`MechanismView`).
   choice Governor_Expire : Governor_ExpireResult
     with
@@ -179,22 +180,22 @@ interface Governor requires Mechanism where
           pure Governor_ExpireResult with meta = emptyMetadata
 
 -- | Admit the ballots presented at resolution as `(cid, ballot)` pairs to tally.
--- Under completeness the cap-core gate proves binding, authority signature, and
+-- Under completeness the cap-core check proves binding, authority signature, and
 -- exact cover (which subsumes distinctness); without it, there is no cover, so
--- the gate asserts distinctness directly. Either way no ballot is counted twice.
+-- the check asserts distinctness directly. Either way no ballot is counted twice.
 admitBallots : ContractId Governor -> Mechanism -> [ContractId Ballot] -> Update [(ContractId Ballot, Ballot)]
 admitBallots self res ballots = do
-  let anchor = toInterfaceContractId @Mechanism self
+  let mechanism = toInterfaceContractId @Mechanism self
   let scids = map (toInterfaceContractId @Submittable) ballots
   pairs <- case (view res).size of
     Some n -> admitSubmittablesWithCompleteness n (toInterfaceContractId @Mechanism self) res scids
-    None -> admitSubmittables (view res).authorities anchor scids
+    None -> admitSubmittables (view res).authorities mechanism scids
 
   forA pairs $ \(scid, s) -> case fromInterface @Ballot s of
     None -> abort "admitted submittable is not a ballot"
     Some b -> pure (fromInterfaceContractId @Ballot scid, b)
 
--- | Score one presented ballot. A full ballot is returned to tally; the gate
+-- | Score one presented ballot. A full ballot is returned to tally; the check
 -- already proved the set distinct, so it needs no consuming here. Vote
 -- provenance is the trusted template's own (its signatory and controller
 -- structure), not re-proved here — a container format records votes on an

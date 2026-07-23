@@ -5,9 +5,9 @@
 -- while live and is consumed by exactly one resolution (or cancellation).
 --
 -- `Auction` requires `Mechanism` (cap-core): an auction is a mechanism. The
--- Mechanism face carries the operator (singleton `authorities`), the bidding
--- window, and the completeness switch. `Mechanism` has no choices, so
--- `Auction_Resolve` stays the one resolve door.
+-- Mechanism interface carries the operator (singleton `authorities`), the bidding
+-- window, and the completeness flag. `Mechanism` has no choices, so
+-- `Auction_Resolve` stays the one resolve choice.
 --
 -- Design invariant carried by the standard (normative, documented, not
 -- compiler-enforced): the auction contract is immutable from creation to
@@ -38,7 +38,7 @@ import Cap.Auctions.BidV1
 import Cap.Auctions.OutcomeV1
 
 -- | View of a live (not yet resolved) auction. The bidding window lives on
--- the Mechanism face, not here.
+-- the Mechanism interface, not here.
 data AuctionView = AuctionView
   with
     auctionId : AuctionId
@@ -68,7 +68,7 @@ interface Auction requires Mechanism where
   viewtype AuctionView
 
   auction_submitBidImpl : ContractId Auction -> Auction_SubmitBid -> Update Auction_SubmitBidResult
-    -- ^ The admission policy: gates eligibility and any close earlier or more
+    -- ^ The admission policy: controls eligibility and any close earlier or more
     -- dynamic than a declared `submissionClosesAt` bound the fixed window
     -- enforces (`None` leaves the close entirely here), validates the
     -- escrow named in `extraArgs.context` completely (executor, settlement
@@ -112,14 +112,14 @@ interface Auction requires Mechanism where
   -- | The pricing rule. Consumes the auction contract: an auction resolves at
   -- most once, by construction. Without completeness an omitted bid stays live
   -- and bidder-withdrawable, so censorship stalls a resolution but cannot take
-  -- funds; under completeness the gate demands the exact slot cover, so an
+  -- funds; under completeness the check demands the exact slot cover, so an
   -- omitted bid aborts the resolution instead.
   choice Auction_Resolve : Auction_ResolveResult
     with
       bidCids : [ContractId Bid]
       evidence : [ContractId Submittable]
         -- ^ The non-bid slot artifacts under completeness — registration tickets
-        -- never bid on, withdrawal receipts — as their Submittable face.
+        -- never bid on, withdrawal receipts — as their Submittable interface.
         -- Must be empty when the auction declares no completeness.
       extraArgs : ExtraArgs
     controller (view this).auctionId.operator

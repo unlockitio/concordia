@@ -12,7 +12,7 @@
 #                                  weighted quorate, turnout threshold) an
 #                                  implementation wires as its `tally`.
 #   Cap.Governance.TargetPolicies  Named drift policies for GovernanceOutcome's
-#                                  onTargetDrift hook — strict and reconciling
+#                                  onTargetDrift hook — strict and merging
 #                                  profiles.
 #   Cap.Governance.TargetUtil      mutateTarget — the archive-and-recreate step
 #                                  for governanceOutcome_executeImpl branches

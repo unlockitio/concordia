@@ -1,0 +1,278 @@
+-- Copyright (c) 2026 Unlockit. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+-- Demos for the plain (no-cap) Baby-DSO. Every demo_* script is described in
+-- DEMOS.md and shares `setup`.
+module Cap.BabyDso.Test.Demos where
+
+import DA.Assert ((===))
+import qualified DA.Map as Map
+import DA.Time (addRelTime, days, hours, minutes)
+import Daml.Script
+
+import Cap.BabyDso.Impl.DsoPlain
+
+-- --- shared fixture: one dso, four SVs, DsoRules, AmuletRules ----------------
+
+data Setup = Setup with
+    dso : Party
+    sv1 : Party
+    sv2 : Party
+    sv3 : Party
+    sv4 : Party
+    rules : ContractId DsoRules
+    amuletRules : ContractId AmuletRules
+
+info : Text -> SvInfo
+info name = SvInfo with
+  name; joinedAsOfRound = Round 0; svRewardWeight = 10
+  participantId = name <> "-participant-id"
+
+demoConfig : DsoRulesConfig
+demoConfig = DsoRulesConfig with
+  voteRequestTimeout = days 7
+  voteCooldownTime = None
+  maxTextLength = 1024
+  actionConfirmationTimeout = minutes 5
+  svOnboardingRequestTimeout = hours 1
+  svOnboardingConfirmedTimeout = hours 1
+
+setup : Script Setup
+setup = do
+  sv1 <- allocateParty "sv1"
+  sv2 <- allocateParty "sv2"
+  sv3 <- allocateParty "sv3"
+  sv4 <- allocateParty "sv4"
+  dso <- allocateParty "dso"
+  rules <- submit dso $ createCmd DsoRules with
+    dso
+    epoch = 0
+    svs = Map.fromList [(sv1, info "sv1"), (sv2, info "sv2"), (sv3, info "sv3"), (sv4, info "sv4")]
+    offboardedSvs = Map.empty
+    dsoDelegate = sv1
+    config = demoConfig
+  amuletRules <- submit dso $ createCmd AmuletRules with dso; amuletPrice = 10.0
+  pure Setup with dso; sv1; sv2; sv3; sv4; rules; amuletRules
+
+-- | The live DsoRules (its cid changes on every applied config action).
+getRules : Setup -> Script (ContractId DsoRules)
+getRules s = do
+  [(cid, _)] <- query @DsoRules s.dso
+  pure cid
+
+currentConfig : Setup -> Script DsoRulesConfig
+currentConfig s = do
+  [(_, r)] <- query @DsoRules s.dso
+  pure r.config
+
+mkReason : Reason
+mkReason = Reason with url = ""; body = ""
+
+-- --- confirmation-mechanism helpers --------------------------------------------
+
+confirm : Setup -> Party -> GovAction -> Script (ContractId Confirmation)
+confirm s sv action =
+  submit (actAs [sv] <> readAs [s.dso]) $ exerciseCmd s.rules DsoRules_ConfirmAction with
+    confirmer = sv; action
+
+execute : Setup -> Party -> GovAction -> [ContractId Confirmation] -> Script ()
+execute s sv action confirmationCids =
+  submit (actAs [sv] <> readAs [s.dso]) $ exerciseCmd s.rules DsoRules_ExecuteConfirmedAction with
+    action; confirmationCids; sv = Some sv
+
+executeFail : Setup -> Party -> GovAction -> [ContractId Confirmation] -> Script ()
+executeFail s sv action confirmationCids =
+  submitMustFail (actAs [sv] <> readAs [s.dso]) $ exerciseCmd s.rules DsoRules_ExecuteConfirmedAction with
+    action; confirmationCids; sv = Some sv
+
+-- =============================================================================
+-- Demo 2 — the confirmation mechanism, on the grant stand-in `NoOp` (DEMOS.md)
+-- =============================================================================
+
+demo_confirmation : Script ()
+demo_confirmation = do
+  s <- setup
+  let grant = NoOp
+
+  -- two of four confirmations: below the threshold (3)
+  c1 <- confirm s s.sv1 grant
+  c2 <- confirm s s.sv2 grant
+  executeFail s s.sv1 grant [c1, c2]
+
+  -- every SV confirms; three execute the action and are consumed
+  c3 <- confirm s s.sv3 grant
+  c4 <- confirm s s.sv4 grant
+  execute s s.sv1 grant [c1, c2, c3]
+  live <- query @Confirmation s.dso
+  map fst live === [c4]
+
+  -- spent confirmations cannot be presented again
+  executeFail s s.sv1 grant [c1, c2, c3]
+
+  -- the leftover confirmation plus two fresh ones execute the same action a
+  -- second time
+  c1' <- confirm s s.sv1 grant
+  c2' <- confirm s s.sv2 grant
+  execute s s.sv2 grant [c4, c1', c2']
+  live' <- query @Confirmation s.dso
+  map fst live' === []
+
+-- --- voting-mechanism helpers ------------------------------------------------
+
+request : Setup -> Party -> GovAction -> Script (ContractId VoteRequest)
+request s sv action = do
+  rules <- getRules s
+  submit (actAs [sv] <> readAs [s.dso]) $ exerciseCmd rules DsoRules_RequestVote with
+    requester = sv; action; reason = mkReason
+    voteRequestTimeout = None; targetEffectiveAt = None
+
+cast : Setup -> Party -> ContractId VoteRequest -> Bool -> Script (ContractId VoteRequest)
+cast s sv req accept = do
+  rules <- getRules s
+  submit (actAs [sv] <> readAs [s.dso]) $ exerciseCmd rules DsoRules_CastVote with
+    requestCid = req
+    vote = Vote with sv; accept; reason = mkReason; optCastAt = None
+
+castFail : Setup -> Party -> ContractId VoteRequest -> Bool -> Script ()
+castFail s sv req accept = do
+  rules <- getRules s
+  submitMustFail (actAs [sv] <> readAs [s.dso]) $ exerciseCmd rules DsoRules_CastVote with
+    requestCid = req
+    vote = Vote with sv; accept; reason = mkReason; optCastAt = None
+
+close : Setup -> Party -> ContractId VoteRequest -> Script CloseResult
+close s sv req = do
+  rules <- getRules s
+  submit (actAs [sv] <> readAs [s.dso]) $ exerciseCmd rules DsoRules_CloseVoteRequest with
+    requestCid = req; sv = Some sv
+
+-- =============================================================================
+-- Demo 1 — the voting mechanism, on `SetConfig` (DEMOS.md)
+-- =============================================================================
+
+demo_voting : Script ()
+demo_voting = do
+  s <- setup
+  outsider <- allocateParty "outsider"
+
+  -- sv1 opens a SetConfig vote (the requester's yes is auto-inserted)
+  let cfgA = demoConfig with voteRequestTimeout = days 14
+  reqA <- request s s.sv1 (SetConfig cfgA None)
+
+  -- a non-SV cannot cast
+  castFail s outsider reqA True
+
+  -- two more yes reach the supermajority (3 of 4); the close applies the config
+  reqA <- cast s s.sv2 reqA True
+  reqA <- cast s s.sv3 reqA True
+  r <- close s s.sv1 reqA
+  r.outcome === VRO_Accepted with effectiveAt = r.completedAt
+  cfg <- currentConfig s
+  cfg.voteRequestTimeout === days 14
+
+  -- two concurrent config votes against the same base, touching different
+  -- fields: both closes land, the second patches onto the first
+  let cfgB = cfg with maxTextLength = 4096
+  let cfgC = cfg with actionConfirmationTimeout = minutes 10
+  reqB <- request s s.sv1 (SetConfig cfgB (Some cfg))
+  reqC <- request s s.sv1 (SetConfig cfgC (Some cfg))
+  reqB <- cast s s.sv2 reqB True
+  reqB <- cast s s.sv3 reqB True
+  reqC <- cast s s.sv2 reqC True
+  reqC <- cast s s.sv3 reqC True
+  r <- close s s.sv1 reqB
+  r.outcome === VRO_Accepted with effectiveAt = r.completedAt
+  r <- close s s.sv1 reqC
+  r.outcome === VRO_Accepted with effectiveAt = r.completedAt
+  cfg <- currentConfig s
+  cfg.maxTextLength === 4096
+  cfg.actionConfirmationTimeout === minutes 10
+
+-- --- median-mechanism helpers ------------------------------------------------
+
+-- One standing, unpriced vote per SV, backdated past the cooldown (as
+-- onboarding mints them).
+mintPriceVote : Setup -> Party -> Script (ContractId AmuletPriceVote)
+mintPriceVote s sv = do
+  now <- getTime
+  submit s.dso $ createCmd AmuletPriceVote with
+    dso = s.dso; sv
+    amuletPrice = None
+    lastUpdatedAt = now `addRelTime` negate (minutes 1)
+
+setPrice : Setup -> Party -> ContractId AmuletPriceVote -> Decimal -> Script (ContractId AmuletPriceVote)
+setPrice s sv voteCid amuletPrice = do
+  rules <- getRules s
+  submit (actAs [sv] <> readAs [s.dso]) $ exerciseCmd rules DsoRules_UpdateAmuletPriceVote with
+    sv; voteCid; amuletPrice
+
+advance : Setup -> Party -> [ContractId AmuletPriceVote] -> Script (ContractId AmuletRules)
+advance s sv voteCids = do
+  rules <- getRules s
+  submit (actAs [sv] <> readAs [s.dso]) $ exerciseCmd rules DsoRules_AdvanceOpenMiningRounds with
+    amuletRulesCid = s.amuletRules; amuletPriceVoteCids = voteCids; sv = Some sv
+
+advanceFail : Setup -> Party -> [ContractId AmuletPriceVote] -> Script ()
+advanceFail s sv voteCids = do
+  rules <- getRules s
+  submitMustFail (actAs [sv] <> readAs [s.dso]) $ exerciseCmd rules DsoRules_AdvanceOpenMiningRounds with
+    amuletRulesCid = s.amuletRules; amuletPriceVoteCids = voteCids; sv = Some sv
+
+-- =============================================================================
+-- Demo 3 — the median mechanism, on the standing price votes (DEMOS.md)
+-- =============================================================================
+
+demo_median : Script ()
+demo_median = do
+  s <- setup
+
+  -- one standing, unpriced vote per SV
+  [v1, v2, v3, v4] <- mapA (mintPriceVote s) [s.sv1, s.sv2, s.sv3, s.sv4]
+
+  -- three SVs price their votes; sv4 stays unpriced (None = abstention)
+  v1 <- setPrice s s.sv1 v1 1.0
+  v2 <- setPrice s s.sv2 v2 2.0
+  v3 <- setPrice s s.sv3 v3 3.0
+
+  -- a cherry-picked subset cannot advance the round
+  advanceFail s s.sv1 [v1, v2, v3]
+  advanceFail s s.sv1 [v1, v2, v3, v3]
+
+  -- the full set advances: sv4 covers without counting; the median lands
+  ar <- advance s s.sv1 [v1, v2, v3, v4]
+  Some r <- queryContractId s.dso ar
+  r.amuletPrice === 2.0
+
+-- =============================================================================
+-- Demo 4 — two organizations, one authority party (DEMOS.md)
+-- =============================================================================
+
+demo_two_organizations : Script ()
+demo_two_organizations = do
+  s <- setup
+
+  -- org1 approves a config change
+  let cfgX = demoConfig with maxTextLength = 2048
+  req <- request s s.sv1 (SetConfig cfgX None)
+  req <- cast s s.sv2 req True
+  req <- cast s s.sv3 req True
+
+  -- a second organization under the SAME dso party
+  rules2 <- submit s.dso $ createCmd DsoRules with
+    dso = s.dso
+    epoch = 0
+    svs = Map.fromList [(s.sv1, info "sv1"), (s.sv2, info "sv2"), (s.sv3, info "sv3"), (s.sv4, info "sv4")]
+    offboardedSvs = Map.empty
+    dsoDelegate = s.sv1
+    config = demoConfig with maxTextLength = 512
+
+  -- org1's action executes on org2's state
+  r <- submit (actAs [s.sv1] <> readAs [s.dso]) $ exerciseCmd rules2 DsoRules_CloseVoteRequest with
+    requestCid = req; sv = Some s.sv1
+  r.outcome === VRO_Accepted with effectiveAt = r.completedAt
+
+  -- org2 now carries org1's approved config; org1 never changed
+  [(_, o2)] <- queryFilter @DsoRules s.dso (\d -> d.config.maxTextLength == 2048)
+  o2.config === cfgX
+  Some r1 <- queryContractId s.dso s.rules
+  r1.config === demoConfig

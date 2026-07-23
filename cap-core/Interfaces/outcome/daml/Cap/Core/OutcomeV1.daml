@@ -2,8 +2,8 @@
 -- SPDX-License-Identifier: Apache-2.0
 
 -- | The `Outcome` interface: an outcome carrying pre-committed authority,
--- enactable at most once inside its window. The face is domain-neutral —
--- identity, window, executor set, and expiry; the execute door is the
+-- executable at most once inside its window. The interface is domain-neutral —
+-- identity, window, executor set, and expiry; the execute choice is the
 -- domain's own (governance's target-bound `GovernanceOutcome_Execute`,
 -- auctions' settle/fail pair), each layered on this via `requires`.
 module Cap.Core.OutcomeV1 where
@@ -19,7 +19,7 @@ data OutcomeView = OutcomeView
   with
     authorities : Set Party
       -- ^ The authority whose joint ledger authority this outcome carries.
-      -- MUST be non-empty at mint — an empty anchor can never execute.
+      -- MUST be non-empty at mint — an empty authority can never execute.
     source : ContractId Mechanism
       -- ^ The mechanism whose resolution issued this outcome. Only ever compared,
       -- never fetched through, so the mechanism may already be archived.
@@ -52,13 +52,14 @@ interface Outcome where
   viewtype OutcomeView
 
   isExecutor : [Party] -> Bool
-    -- ^ Whether this actor set may trigger the domain's execute door; varies
+    -- ^ Whether this actor set may trigger the domain's execute choice; varies
     -- per authority model. Plural because settlement (Token Standard V2) can
     -- need several executors jointly.
 
-  -- | Lets any party with visibility archive an outcome past its execution
-  -- deadline. Effect-free, because the caller is arbitrary; an undated outcome
-  -- (`executeUntil = None`) is never expirable — the cost `executeUntil` warns of.
+  -- | Archives an outcome past its execution deadline. The body checks the
+  -- deadline alone, adding no authority check, so it stays effect-free; who may
+  -- call it is whatever the implementation's visibility admits. An undated
+  -- outcome (`executeUntil = None`) is never expirable — the cost `executeUntil` warns of.
   choice Outcome_Expire : Outcome_ExpireResult
     with
       actor : Party

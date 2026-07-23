@@ -1,0 +1,294 @@
+-- Copyright (c) 2026 Unlockit. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+-- =============================================================================
+-- DsoMechanism — the standing mechanism, and the single contract that holds
+-- every choice the SVs exercise to make a decision . 
+-- Splice's DsoRules is split in two here: this mechanism holds no governed state
+--  (the SV list and config live on the `DsoRules` target, each choice reads its fresh by cid)
+-- The mechanism's cid never changes over the life of the institution.
+-- Standing submittables can therefore reference the mechanism by cid
+-- =============================================================================
+module Cap.BabyDso.CapVersion.DsoMechanism where
+
+import DA.Foldable (forA_)
+import DA.List (sort)
+import DA.Optional (fromOptional, mapOptional)
+import qualified DA.Map as Map
+import qualified DA.Set as Set
+import qualified DA.TextMap as TextMap
+import DA.Time (RelTime, addRelTime)
+
+import Splice.Api.Token.MetadataV1 (AnyValue (..), ChoiceContext (..), ExtraArgs (..), emptyMetadata)
+import Cap.Core.CheckedFetchV1 (require, fetchAndArchive, fetchReferenceData, fetchCheckedInterface, authoritySigned)
+import Cap.Core.MechanismV1
+import Cap.Core.SubmittableV1 (SubmittableState (..))
+import Cap.Core.Policies (noWithdraw)
+import Cap.Governance.TargetV1 (Target, TargetCommitment (..))
+import Cap.Governance.OutcomeV1 (GovernanceOutcome, GovernanceOutcome_Execute (..))
+import Cap.Governance.BallotV1 (Ballot, Ballot_Consume (..))
+import Cap.Governance.GovernorV1 (Governor, Governor_Resolve (..), Governor_ResolveResult, Proposal)
+import Cap.Governance.Tallies (median)
+
+import Cap.BabyDso.CapVersion.Common
+import Cap.BabyDso.CapVersion.DsoRules (DsoRules, ActionSpec (..), actionSpec, GovAction (..))
+import Cap.BabyDso.CapVersion.GovOutcome (GovOutcome (..))
+import Cap.BabyDso.CapVersion.Confirmation
+import Cap.BabyDso.CapVersion.AmuletPriceVote
+import Cap.BabyDso.CapVersion.AmuletRules (AmuletRules, amuletRulesKey)
+import Cap.BabyDso.CapVersion.Vote (Vote (..))
+import Cap.BabyDso.CapVersion.VoteRequest (VoteRequest (..))
+
+-- | The round whose price the standing vote sets — a minimal stand-in for
+-- Splice's `OpenMiningRound`.
+template OpenMiningRound
+  with
+    dso         : Party
+    round       : Int
+    amuletPrice : Decimal
+    opensAt     : Time
+  where
+    signatory dso
+
+-- | The presented contract matching the spec's target key.
+targetCidFor : Party -> ActionSpec -> ContractId DsoRules -> Optional (ContractId AmuletRules) -> Update (ContractId Target)
+targetCidFor dso spec dsoRulesCid amuletRulesCid
+  | spec.targetKey == amuletRulesKey dso = case amuletRulesCid of
+      Some cid -> pure (toInterfaceContractId @Target cid)
+      None -> fail "an AmuletRules action requires the AmuletRules target"
+  | otherwise = pure (toInterfaceContractId @Target dsoRulesCid)
+
+-- | Read the target's state token on-ledger for a state-pinning action; None
+-- for every other action, so the pin is never proposer-supplied.
+readSeenToken : ActionSpec -> ContractId Target -> Update (Optional Text)
+readSeenToken spec tcid
+  | not spec.pinsState = pure None
+  | otherwise = do
+      t <- fetchCheckedInterface spec.targetKey tcid
+      require "target is signed by its authority" (authoritySigned spec.targetKey.authorities (signatory t))
+      pure (view t).stateToken
+
+template DsoMechanism
+  with
+    dso     : Party
+    org     : Text    -- the one organization this mechanism's choices govern
+    opensAt : Time    -- genesis: the standing window opens here and it doesnt close
+  where
+    signatory dso
+
+    interface instance Mechanism for DsoMechanism where
+      view = MechanismView with
+        authorities = Set.singleton dso
+        size = None
+        submissionOpensAt = opensAt
+        submissionClosesAt = None   
+        expiresAt = None
+        meta = emptyMetadata
+
+      submittableAllowed _ = pure ()
+      resolutionAllowed _  = pure ()
+      withdrawAllowed now  = noWithdraw (toInterface @Mechanism this) now
+
+
+
+    -- === The voting workflow's mint choice (Splice: DsoRules_RequestVote) ========
+
+    -- | A current SV opens a vote: the request, the requester's YES (Splice's
+    -- auto-accept), and one empty right per other SV mint in one transaction.
+    -- The state pin is read on-ledger here, never proposer-supplied; the window
+    -- comes from config, with a zero timelock (Splice's execute-at-close).
+    nonconsuming choice DsoMechanism_RequestVote : ContractId VoteRequest
+      with
+        sv                 : Party
+        proposal           : Proposal
+        action             : GovAction
+        dsoRulesCid        : ContractId DsoRules
+        amuletRulesCid     : Optional (ContractId AmuletRules)  -- required iff the action targets AmuletRules
+        voteRequestTimeout : Optional RelTime                   -- None = config's default
+      controller sv
+      do
+        rules <- fetch dsoRulesCid
+        require "Rules belong to this organization" (rules.dso == dso && rules.org == org)
+        require "Proposer is a sv" (sv `Map.member` rules.svs)
+        let spec = actionSpec dso org action
+        seenToken <- readSeenToken spec =<< targetCidFor dso spec dsoRulesCid amuletRulesCid
+        now <- getTime
+        let timeout = fromOptional rules.config.voteRequestTimeout voteRequestTimeout
+        let closesAt = addRelTime now timeout
+        reqCid <- create VoteRequest with
+          dso; proposer = sv; proposal; action
+          commitment = TargetCommitment with targetKey = spec.targetKey; stateToken = seenToken
+          snapshot = Set.fromList (Map.keys rules.svs)
+          submissionOpensAt = now
+          submissionClosesAt = closesAt
+          executeAfter = closesAt
+          executeUntil = addRelTime closesAt timeout
+          expiresAt = addRelTime closesAt timeout
+        forA_ (Map.keys rules.svs) $ \voter ->
+          create Vote with
+            dso; org
+            governor = toInterfaceContractId @Governor reqCid
+            voter
+            state = if voter == sv then S_Full else S_Empty
+            accept = voter == sv
+            expiresAt = addRelTime closesAt timeout
+        pure reqCid
+
+    -- === The voting workflow's close choice (Splice: DsoRules_CloseVoteRequest) ==
+
+    -- | Dso signature resolves the governor (VoteRequest). 
+    nonconsuming choice DsoMechanism_CloseVoteRequest : Governor_ResolveResult
+      with
+        sv          : Party
+        requestCid  : ContractId Governor
+        ballots     : [ContractId Ballot]
+        dsoRulesCid : ContractId DsoRules
+        targets     : [ContractId Target]
+      controller sv
+      do
+        rules <- fetch dsoRulesCid
+        require "Rules belong to this organization" (rules.dso == dso && rules.org == org)
+        require "Closer is a sv" (sv `Map.member` rules.svs)
+        exercise requestCid Governor_Resolve with
+          resolver = dso
+          ballots
+          extraArgs = ExtraArgs with
+            context = ChoiceContext with
+              values = TextMap.fromList
+                [(targetsKey, AV_List (map (AV_ContractId . coerceContractId) targets))]
+            meta = emptyMetadata
+
+
+    -- === The confirmation workflow (Splice: DsoRules_ConfirmAction) ============
+
+    -- | A current SV mints its dso-signed confirmation — authority propagation
+    -- through this choice, no signing ceremony. One transaction per confirmer.
+    nonconsuming choice DsoMechanism_ConfirmAction : ContractId Confirmation
+      with
+        sv             : Party
+        action         : GovAction
+        dsoRulesCid    : ContractId DsoRules
+        amuletRulesCid : Optional (ContractId AmuletRules)  -- required iff the action targets AmuletRules
+      controller sv
+      do
+        rules <- fetch dsoRulesCid
+        require "Rules belong to this organization" (rules.dso == dso && rules.org == org)
+        require "Confirmer is a sv" (sv `Map.member` rules.svs)
+        let spec = actionSpec dso org action
+        seenToken <- readSeenToken spec =<< targetCidFor dso spec dsoRulesCid amuletRulesCid
+        now <- getTime
+        create Confirmation with
+          dso; mechanism = toInterfaceContractId @Mechanism self
+          confirmer = sv; action; seenToken
+          expiresAt = addRelTime now rules.config.actionConfirmationTimeout
+
+    -- | Threshold execution (Splice: DsoRules_ExecuteConfirmedAction).
+    -- The checked fetch under `ForDecision`
+    -- proves each confirmation is dso-signed, mechanism-bound, and for this action
+    -- archiving spends it. Effect-at-most-once rests on consuming the target.
+    nonconsuming choice DsoMechanism_ExecuteConfirmedAction : ()
+      with
+        sv               : Party
+        action           : GovAction
+        seenToken        : Optional Text  -- the group's pin; only same-token confirmations aggregate
+        confirmationCids : [ContractId Confirmation]
+        dsoRulesCid      : ContractId DsoRules
+        amuletRulesCid   : Optional (ContractId AmuletRules)  -- required iff the action targets AmuletRules
+      controller sv
+      do
+        rules <- fetch dsoRulesCid
+        require "Rules belong to this organization" (rules.dso == dso && rules.org == org)
+        require "Executor is a sv" (sv `Map.member` rules.svs)
+        now <- getTime
+        let group = ForDecision with mechanism = toInterfaceContractId @Mechanism self; action; seenToken
+        confs <- forA confirmationCids (fetchAndArchive group)
+        forA_ confs $ \c ->
+          require "Confirmation has not expired" (now < c.expiresAt)
+        let confirmers = Set.fromList [c.confirmer | c <- confs, c.confirmer `Map.member` rules.svs]
+        require "Enough current svs confirmed the action"
+          (Set.size confirmers >= requiredNumVotes (Map.size rules.svs))
+        let spec = actionSpec dso org action
+        tcid <- targetCidFor dso spec dsoRulesCid amuletRulesCid
+        let commitment = TargetCommitment with
+              targetKey = spec.targetKey
+              stateToken = if spec.pinsState then seenToken else None
+        outcome <- create GovOutcome with
+          dso
+          source = toInterfaceContractId @Mechanism self
+          action
+          commitment
+          executeAfter = now
+          executeUntil = addRelTime now rules.config.actionConfirmationTimeout
+        _ <- exercise (toInterfaceContractId @GovernanceOutcome outcome)
+          GovernanceOutcome_Execute with
+            actors = [sv]
+            targets = [tcid]
+            extraArgs = ExtraArgs with
+              context = ChoiceContext with values = TextMap.empty
+              meta = emptyMetadata
+        pure ()
+
+    -- === The price-vote workflow (Splice: amulet price + round advance) ========
+
+    -- | Mint an SV's standing price slot, unpriced. 
+    nonconsuming choice DsoMechanism_RegisterPriceVote : ContractId AmuletPriceVote
+      with
+        sv          : Party
+        dsoRulesCid : ContractId DsoRules
+      controller sv
+      do
+        rules <- fetch dsoRulesCid
+        require "Rules belong to this organization" (rules.dso == dso && rules.org == org)
+        require "Registrant is a sv" (sv `Map.member` rules.svs)
+        now <- getTime
+        create AmuletPriceVote with
+          dso; org; mechanism = toInterfaceContractId @Mechanism self
+          voter = sv; state = S_Empty; price = None; lastUpdatedAt = now
+
+    -- | The recurring, nonconsuming resolution (Splice:
+    -- DsoRules_AdvanceOpenMiningRounds + fetchMedianAmuletPrice): reads the
+    -- standing votes, proves exact cover against the LIVE SV list, without vote
+    -- suppression — filters abstentions, and rolls the round to the median.
+    nonconsuming choice DsoMechanism_AdvanceRound : ContractId OpenMiningRound
+      with
+        sv          : Party
+        roundCid    : ContractId OpenMiningRound
+        voteCids    : [ContractId AmuletPriceVote]
+        dsoRulesCid : ContractId DsoRules
+      controller sv
+      do
+        rules <- fetch dsoRulesCid
+        require "Rules belong to this organization" (rules.dso == dso && rules.org == org)
+        require "Advancer is a sv" (sv `Map.member` rules.svs)
+        let group = ForMechanism with mechanism = toInterfaceContractId @Mechanism self
+        votes <- forA voteCids (fetchReferenceData group)
+        require "Every sv voted exactly once"
+          (sort [v.voter | v <- votes] == sort (Map.keys rules.svs))
+        prev <- fetch roundCid
+        require "Round belongs to this dso" (prev.dso == dso)
+        archive roundCid
+        now <- getTime
+        -- No priced vote yet: carry the previous price (Splice's median would error).
+        let priced = mapOptional (.price) votes
+        let newPrice = if null priced then prev.amuletPrice else median priced
+        create OpenMiningRound with dso; round = prev.round + 1; amuletPrice = newPrice; opensAt = now
+
+    -- | Tear down the stale standing vote of an offboarded SV, through the
+    -- ballot's own authority choice (`Ballot_Consume`).
+    nonconsuming choice DsoMechanism_GcPriceVote : ()
+      with
+        actor       : Party
+        voteCid     : ContractId AmuletPriceVote
+        dsoRulesCid : ContractId DsoRules
+      controller actor
+      do
+        rules <- fetch dsoRulesCid
+        require "Rules belong to this organization" (rules.dso == dso && rules.org == org)
+        let group = ForMechanism with mechanism = toInterfaceContractId @Mechanism self
+        vote <- fetchReferenceData group voteCid
+        require "Voter is no longer a sv" (not (vote.voter `Map.member` rules.svs))
+        _ <- exercise (toInterfaceContractId @Ballot voteCid) Ballot_Consume with
+          extraArgs = ExtraArgs with
+            context = ChoiceContext with values = TextMap.empty
+            meta = emptyMetadata
+        pure ()

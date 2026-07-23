@@ -27,9 +27,8 @@ data ForTarget = ForTarget
 data TargetView = TargetView
   with
     authorities : Set Party
-      -- ^ The authority whose ledger authority the action runs under, and the
-      -- signature anchor.
-      -- MUST be non-empty at mint — the fixed checks reject an empty anchor.
+      -- ^ The authority whose ledger authority the action runs under.
+      -- MUST be non-empty at mint — the fixed checks reject an empty authority.
     id : Text
       -- ^ Distinguishes targets of one authority; with `authorities` it is the
       -- identifying key.
@@ -69,7 +68,7 @@ data CheckedTarget = CheckedTarget
       -- ^ True iff the commitment pinned a state and the target no longer carries
       -- it. Always False for an identity-only pin.
 
--- | Verify the fresh targets presented at execution are the ones committed at
+-- | Verify the live targets presented at execution are the ones committed at
 -- approval, aborts on wrong key or forged signature aborts, a pinned (use other term)
 -- state is compared and routed to the caller's drift policy (not enforced here).
 checkTargetBinding : [TargetCommitment] -> [ContractId Target] -> Update [CheckedTarget]

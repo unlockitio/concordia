@@ -10,8 +10,8 @@
 -- checks never read it.
 module Cap.Auctions.TypesV1 where
 
--- | Stable auction identity. `operator` is the party whose authority anchors
--- the auction — a single seller, an auction house, or a decentralized
+-- | Stable auction identity. `operator` is the party under whose authority
+-- the auction runs — a single seller, an auction house, or a decentralized
 -- (multi-hosted) party are all one `Party` here.
 data AuctionId = AuctionId
   with

@@ -5,14 +5,14 @@
 -- and its instances (`Set`, `Map`, `Optional`, scalars) come straight from
 -- `Splice.Util`; only the `SetState` action wrapper is ours.
 --
--- `Patchable` is the machinery behind the reconciling drift policy
--- (`Cap.Governance.TargetPolicies.driftReconciles`); conflicts resolve governor-wins.
+-- `Patchable` is the machinery behind the merging drift policy
+-- (`Cap.Governance.TargetPolicies.driftMerges`); conflicts resolve governor-wins.
 module Cap.Core.Patchable (Patchable (..), SetState (..), applySetState) where
 
 import Splice.Util (Patchable (..))
 
 -- | A generic delta action over patchable state: move the value from `base`
--- to `new`. Enacted with `applySetState`, so an action needs no bespoke arg
+-- to `new`. Applied with `applySetState`, so an action needs no bespoke arg
 -- record when it is a pure state change.
 data SetState a = SetState
   with
@@ -20,7 +20,7 @@ data SetState a = SetState
     new : a
   deriving (Eq, Show)
 
--- | Enact a `SetState` against the fresh state: `patch new base current`, so
+-- | Apply a `SetState` against the fresh state: `patch new base current`, so
 -- concurrent approved changes compose instead of last-write-wins.
 applySetState : Patchable a => SetState a -> a -> a
 applySetState s current = patch s.new s.base current

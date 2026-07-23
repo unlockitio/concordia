@@ -1,0 +1,123 @@
+-- Copyright (c) 2026 Unlockit. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+-- =============================================================================
+-- Vote — one SV's ballot on a `VoteRequest`, implemented as a cap-governance
+-- `Ballot` (which `requires` cap-core `Submittable`). One template spans the
+-- lifecycle: S_Empty (uncast right, authority-minted) → S_Full (cast,
+-- dual-signed) → S_Withdrawn. The vote value (`accept`) is a typed field the
+-- interface never reads — `tally` downcasts `Ballot` → `Vote` to read it.
+-- =============================================================================
+module Cap.BabyDso.CapVersion.Vote where
+
+import qualified DA.Map as Map
+import qualified DA.Set as Set
+
+import Splice.Api.Token.MetadataV1
+import Cap.Core.CheckedFetchV1 (require)
+import Cap.Core.SubmittableV1
+import Cap.Core.MechanismV1 (Mechanism)
+import Cap.Governance.BallotV1
+import Cap.Governance.GovernorV1 (Governor)
+import Cap.Governance.TargetUtil (fetchTargetFromContext)
+
+import Cap.BabyDso.CapVersion.Common (svListKey)
+import Cap.BabyDso.CapVersion.DsoRules (DsoRules, dsoRulesKey)
+
+-- | Decode the opaque `Ballot_Cast.vote`: a binary vote rides `AV_Bool`.
+decodeVote : AnyValue -> Update Bool
+decodeVote (AV_Bool b) = pure b
+decodeVote _ = fail "vote is not a boolean"
+
+-- | Tally decoder over both ballot formats: a cast `Vote` yields its one
+-- direction, a `VoteBox` its whole vote map, anything else `[]`. Pairs with
+-- `Cap.Governance.Tallies.quorateMajorityAll`.
+decodeVotes : Ballot -> [Bool]
+decodeVotes b
+  | Some v <- fromInterface @Vote b = [v.accept]
+  | Some box <- fromInterface @VoteBox b = Map.values box.votes
+  | otherwise = []
+
+template Vote
+  with
+    dso       : Party
+    org       : Text         -- the organization whose live SV list governs a cast
+    governor  : ContractId Governor
+    voter     : Party
+    state     : SubmittableState
+    accept    : Bool         -- meaningful only in S_Full
+    expiresAt : Time
+  where
+    -- The voter co-signs only once the vote is cast: an uncast right is the
+    -- authority's to mint, a cast ballot needs both.
+    signatory (dso :: (if state == S_Full then [voter] else []))
+    observer voter
+
+    interface instance Submittable for Vote where
+      view = SubmittableView with
+        mechanism = toInterfaceContractId @Mechanism governor
+        authorities = Set.singleton dso
+        slot = None                    -- no completeness; distinctness is checked instead
+        state
+        meta = emptyMetadata
+
+    interface instance Ballot for Vote where
+      view = BallotView with
+        governor = toInterfaceContractId @Mechanism governor
+        voters = Set.singleton voter    -- closed: the fixed choices admit only this SV
+        expiresAt; meta = emptyMetadata
+
+      -- Splice's cast-time actor validation (`getAndValidateSvParty`): admit the
+      -- LIVE SV list from the context and refuse a caster no longer on it. The
+      -- snapshot still rules the tally, so an earlier cast keeps counting.
+      ballot_castImpl arg = do
+        accept <- decodeVote arg.vote
+        rules <- fetchTargetFromContext @DsoRules (dsoRulesKey dso org) svListKey arg.extraArgs.context
+        require "Caster is a sv" (voter `Map.member` rules.svs)
+        cid <- create this with state = S_Full; accept
+        pure (toInterfaceContractId @Ballot cid)
+
+      ballot_withdrawImpl _ = do
+        cid <- create this with state = S_Withdrawn
+        pure (toInterfaceContractId @Ballot cid)
+
+      ballot_consumeImpl _ = pure (Ballot_ConsumeResult with meta = emptyMetadata)
+
+-- | The CONTAINER ballot format: Splice's vote-map shape on the same `Ballot`
+-- interface — ONE authority-signed contract accumulating every SV's vote,
+-- recreated on each cast. Same choices, same tally threshold as `Vote`.
+template VoteBox
+  with
+    dso       : Party
+    governor  : ContractId Governor
+    voters    : Set.Set Party           -- the snapshot
+    votes     : Map.Map Party Bool
+    expiresAt : Time
+  where
+    signatory dso
+    observer voters
+
+    interface instance Submittable for VoteBox where
+      view = SubmittableView with
+        mechanism = toInterfaceContractId @Mechanism governor
+        authorities = Set.singleton dso
+        slot = None
+        state = if Map.null votes then S_Empty else S_Full
+        meta = emptyMetadata
+
+    interface instance Ballot for VoteBox where
+      view = BallotView with
+        governor = toInterfaceContractId @Mechanism governor
+        voters
+        expiresAt; meta = emptyMetadata
+
+      ballot_castImpl arg = do
+        accept <- decodeVote arg.vote
+        cid <- create this with votes = Map.insert arg.voter accept votes
+        pure (toInterfaceContractId @Ballot cid)
+
+      ballot_withdrawImpl arg = do
+        cid <- create this with votes = Map.delete arg.voter votes
+        pure (toInterfaceContractId @Ballot cid)
+
+      ballot_consumeImpl _ = pure (Ballot_ConsumeResult with meta = emptyMetadata)
