@@ -74,7 +74,7 @@ interface AuctionOutcome where
 
   -- | The unhappy path: the settlement window elapsed unfulfilled. Consuming,
   -- for the same once-only reason. Executor-only (unlike governance's
-  -- anyone-callable expiry) because failing an outcome moves money.
+  -- authority-free expiry) because failing an outcome moves money.
   choice AuctionOutcome_Fail : AuctionOutcome_FailResult
     with
       actors : [Party]

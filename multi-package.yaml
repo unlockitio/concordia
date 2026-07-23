@@ -38,12 +38,12 @@ packages:
 # --- examples ---
 # Baby-DSO (each variant with its own -Test package so no template package
 # carries a daml-script dep):
-#   original    the plain-Daml Splice reproduction — the governance oracle,
+#   original    the plain-Daml Splice reproduction — the governance reference,
 #               no cap dependency; its golden vectors prove the others.
 #   cap-version the submission example: Splice's three decision machines
 #               (VoteRequest, Confirmation, AmuletPriceVote) on the cap
 #               standard.
-- ./cap-governance/examples/BabyDso/original/Impl
-- ./cap-governance/examples/BabyDso/original/Test
-- ./cap-governance/examples/BabyDso/cap-version/impl
-- ./cap-governance/examples/BabyDso/cap-version/Test
+- ./examples/BabyDso/original/Impl
+- ./examples/BabyDso/original/Test
+- ./examples/BabyDso/cap-version/impl
+- ./examples/BabyDso/cap-version/Test

@@ -12,7 +12,7 @@
 -- types, `fetchChecked*`, `require`, `authoritySigned`) lives one layer down in
 -- `Cap.Core.CheckedFetchV1`.
 --
--- The gate proves; it never consumes: when and how the cover is spent is the
+-- The check proves; it never consumes: when and how the cover is spent is the
 -- implementation's, inside its resolution or afterwards through expiry.
 module Cap.Core.ChecksV1 where
 
@@ -31,13 +31,13 @@ checkAuthoritySigned c =
   require "contract is signed by its authority"
     (authoritySigned (view c).authorities (signatory c))
 
--- | Admit one presented submittable: fetch it through its `Submittable` face
--- bound to this mechanism (a submittable whose `mechanism` is not this anchor
+-- | Admit one presented submittable: fetch it through its `Submittable` interface
+-- bound to this mechanism (a submittable bound to a different mechanism
 -- aborts) and require the authority signed it. Run per item by both
 -- `admitSubmittables` (distinct set) and `admitSubmittablesWithCompleteness` (exact cover).
 admitSubmittable : Set Party -> ContractId Mechanism -> ContractId Submittable -> Update (ContractId Submittable, Submittable)
-admitSubmittable authorities anchor scid = do
-  s <- fetchCheckedInterface (ForMechanism anchor) scid
+admitSubmittable authorities mechanism scid = do
+  s <- fetchCheckedInterface (ForMechanism mechanism) scid
   require "submittable is signed by the authority" (authoritySigned authorities (signatory s)) -- this might be overforcing, we might want a mechanism hwere participants can withdraw at will 
   pure (scid, s)
 
@@ -47,15 +47,15 @@ admitSubmittable authorities anchor scid = do
 -- consume to stop a recount. Completeness uses `admitSubmittablesWithCompleteness`
 -- instead, where exact-cover already subsumes this check.
 admitSubmittables : Set Party -> ContractId Mechanism -> [ContractId Submittable] -> Update [(ContractId Submittable, Submittable)]
-admitSubmittables authorities anchor scids = do
+admitSubmittables authorities mechanism scids = do
   require "the presented submittables are distinct" (unique scids)
-  forA scids (admitSubmittable authorities anchor)
+  forA scids (admitSubmittable authorities mechanism)
 
 -- | Proof at resolution of exact cover: admit each submittable (bound, signed)
 -- and prove its slots are exactly `0 .. n-1`. Cover subsumes distinctness — a
 -- repeated cid repeats a slot and fails — so no separate distinctness check is
 -- run here (that is `admitSubmittables`'s job, for the completeness-free path). The
--- mechanism's own signature is the fixed body's separate step, run before the gate.
+-- mechanism's own signature is the fixed body's separate step, run before the check.
 admitSubmittablesWithCompleteness : Int -> ContractId Mechanism -> Mechanism -> [ContractId Submittable] -> Update [(ContractId Submittable, Submittable)]
 admitSubmittablesWithCompleteness n self r scids = do
   pairs <- forA scids (admitSubmittable (view r).authorities self)

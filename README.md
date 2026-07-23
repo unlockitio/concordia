@@ -17,28 +17,26 @@ private inputs, a rule resolves those inputs into an outcome, and the outcome
 triggers a downstream executable action — atomically, with on-ledger authority.
 Auctions and governance are the two worked instances.
 
+## Milestone 1
+
+Each deliverable maps to one place in the repo:
+
+| M1 deliverable | Where to look |
+| --- | --- |
+| Design document for `cap-core` | [`DESIGN.md`](DESIGN.md) |
+| First-release scope and out-of-scope items | [`SCOPE.md`](SCOPE.md) |
+| Extension points for downstream modules | [`POST-RELEASE.md`](POST-RELEASE.md) |
+| Prototype of a typical workflow on Canton sandbox | [`examples/BabyDso/DEMOS.md`](examples/BabyDso/DEMOS.md) — [how to run](#running-the-demos) |
+
+M1 tracks as [issue #538](https://github.com/canton-foundation/canton-dev-fund/issues/538).
+
 ## Architecture at a glance
 
-Concordia is a **two-tier interface library**. Interface choice bodies are
-fixed, so the library forces only what is universal and leaves everything a
-legitimate format might vary to the implementing templates.
+Concordia is a **two-tier library**. Composed of domain-agnostic interfaces
+and domain standards that require cap-core and add their own methods and interfaces:
 
-- **`cap-core`.** Domain-agnostic interfaces: `Submittable` and
-  `Mechanism` (the submission and mechanism faces), `Outcome`, the
-  shared `ChecksV1` functions the domain fixed bodies call, and a `util`
-  helper package. This tier captures the shared structure: privacy-preserving
-  submission, one-door resolution, an optional completeness proof, and
-  outcomes that execute with pre-committed authority.
-- **domain standards.** Each `requires` cap-core and adds its
-  own methods and interfaces:
-  - **`cap-governance`** — governors, ballots, tally-driven resolution, and
-    timelocked executables.
-  - **`cap-auctions`** — sealed/open, single- and multi-unit auction formats,
-    settling through the **Canton Token Standard V2**, which it
-    will import.
-
-A workflow author writes templates that implement a domain interface; CAP sits **above**
-Canton's asset and settlement layer — outcomes compose with the Token Standard.
+A workflow author writes templates that implements the interfaces of both cap-core and cap-governance; CAP sits **above**
+Canton's asset and settlement layer — auction outcomes compose with the Token Standard.
 
 ## Repository layout
 
@@ -50,13 +48,12 @@ concordia/
 │   └── util/                       #   public toolkit: checked-fetch, patchable, policies, time
 ├── cap-governance/                 # Tier 2: governance
 │   ├── Interfaces/                 #   target, outcome, ballot, governor
-│   ├── util/
-│   └── examples/BabyDso/           #   Splice DSO reproduced twice — see below
-│       ├── original/{Impl,Test}    #     plain-Daml oracle + its demo scripts
-│       └── cap-version/{impl,Test} #     same mechanisms on cap + its demo scripts
+│   └── util/
 ├── cap-auctions/                   # Tier 2: auctions (Token Standard V2, CIP-0112)
-│   ├── Interfaces/                 #   types, bid, outcome, auction
-│   └── examples/                   #   reference auction implementation
+│   └── Interfaces/                 #   types, bid, outcome, auction
+├── examples/BabyDso/               # Splice DSO reproduced twice — see below
+│   ├── original/{Impl,Test}        #   plain-Daml reference + its demo scripts
+│   └── cap-version/{impl,Test}     #   same mechanisms on cap + its demo scripts
 ├── lib/                            # vendored Token Standard DARs (prebuilt binaries)
 ├── docs/                           # architecture docs (threat models inline) and glossary
 ├── multi-package.yaml              # dpm workspace (build order + data-dependencies)
@@ -65,17 +62,6 @@ concordia/
 └── README.md                       # this file
 ```
 
-## Documentation
-
-The core reads:
-
-- [`docs/cap-core-architecture.md`](docs/cap-core-architecture.md) — the base
-  model, the enforcement boundary, and the completeness proof.
-- [`docs/cap-governance-architecture.md`](docs/cap-governance-architecture.md)
-  and [`docs/cap-auctions-architecture.md`](docs/cap-auctions-architecture.md)
-  — the two standards, each ending in a **Threat model** section.
-- [`docs/glossary.md`](docs/glossary.md) — one entry per concept; every doc
-  uses exactly these terms.
 
 ## Building
 
@@ -97,7 +83,7 @@ The **BabyDso** example reproduces Splice's DSO governance twice — once in
 plain Daml (`original/`) and once on the cap interfaces (`cap-version/`) — and
 runs the same demo scripts in both, so the diff is exactly what the cap
 standard adds. The full catalogue (six demos, what each proves) is in
-[`cap-governance/examples/BabyDso/DEMOS.md`](cap-governance/examples/BabyDso/DEMOS.md).
+[`examples/BabyDso/DEMOS.md`](examples/BabyDso/DEMOS.md).
 
 Prerequisite: **Daml SDK 3.4.11** via `dpm`. Build the DARs first:
 
@@ -110,10 +96,10 @@ package from the repo root with `--package-root`:
 
 ```bash
 # cap version
-dpm test --package-root cap-governance/examples/BabyDso/cap-version/Test
+dpm test --package-root examples/BabyDso/cap-version/Test
 
-# plain-Daml oracle
-dpm test --package-root cap-governance/examples/BabyDso/original/Test
+# plain-Daml reference
+dpm test --package-root examples/BabyDso/original/Test
 ```
 
 **On a Canton sandbox** (the Milestone 1 deliverable) — two terminals. The
@@ -127,12 +113,12 @@ dpm sandbox --static-time
 # terminal 2 — the cap version
 dpm script --all --ledger-host localhost --ledger-port 6865 \
   --static-time --upload-dar true \
-  --dar cap-governance/examples/BabyDso/cap-version/Test/.daml/dist/cap-version-test-0.1.0.dar
+  --dar examples/BabyDso/cap-version/Test/.daml/dist/cap-version-test-0.1.0.dar
 
-# the plain-Daml oracle, same shape
+# the plain-Daml reference, same shape
 dpm script --all --ledger-host localhost --ledger-port 6865 \
   --static-time --upload-dar true \
-  --dar cap-governance/examples/BabyDso/original/Test/.daml/dist/baby-dso-test-0.1.0.dar
+  --dar examples/BabyDso/original/Test/.daml/dist/baby-dso-test-0.1.0.dar
 ```
 
 Every demo reports `SUCCESS` on the sandbox (`ok` under `dpm test`).

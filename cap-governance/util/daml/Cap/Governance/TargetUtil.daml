@@ -10,7 +10,7 @@ import Splice.Api.Token.MetadataV1 (AnyValue (..), ChoiceContext (..))
 import Cap.Core.CheckedFetchV1 (require, fetchCheckedInterface, authoritySigned)
 import Cap.Governance.TargetV1
 
--- | Enact a state change on one committed target: downcast the checked target
+-- | Apply a state change on one committed target: downcast the checked target
 -- to its template type, archive the presented cid, and create the successor
 -- `f` returns. 
 mutateTarget : forall t. (HasCreate t, HasArchive t, HasFromInterface t Target)
@@ -23,7 +23,7 @@ mutateTarget c tcid f = case fromInterface @t c.target of
 
 -- | Admit a live target delivered in a choice context: read its cid under
 -- `ctxKey`, checked-fetch it under `key`, require the authority's signature, and
--- downcast. For implementation bodies needing governed state the fixed doors do
+-- downcast. For implementation bodies needing governed state the fixed choices do
 -- not hand them.
 fetchTargetFromContext : forall t. HasFromInterface t Target => ForTarget -> Text -> ChoiceContext -> Update t
 fetchTargetFromContext key ctxKey ctx = case TextMap.lookup ctxKey ctx.values of

@@ -20,6 +20,6 @@ driftAborts c =
        <> " still carries the approved state token " <> show c.commitment.stateToken)
     False
 
--- | Reconciling policy: all drifts allowed
-driftReconciles : CheckedTarget -> Update ()
-driftReconciles _ = pure ()
+-- | Merging policy: permits every drift; the merge is executeImpl's field-wise patch.
+driftMerges : CheckedTarget -> Update ()
+driftMerges _ = pure ()

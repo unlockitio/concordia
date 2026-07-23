@@ -3,7 +3,7 @@
 
 -- | The library's temporal vocabulary: the `isOpen` predicate — the single home
 -- for the floor-inclusive/ceiling-exclusive convention — and the two window
--- checks (`checkWindow`, `checkFloor`) every temporal door is phrased in, so no
+-- checks (`checkWindow`, `checkFloor`) every temporal choice is phrased in, so no
 -- site re-hand-rolls the comparison or the abort.
 module Cap.Core.TimeV1 where
 

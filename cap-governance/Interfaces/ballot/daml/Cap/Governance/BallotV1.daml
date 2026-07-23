@@ -5,7 +5,7 @@
 -- votes against a mechanism — one vote for a per-voter format, many for a
 -- container ("ballot box") format that accumulates all votes in one contract,
 -- Splice-style. `Ballot requires Submittable`. It names the mechanism only as
--- its `Mechanism` face, so this package does not depend on `Governor` — the
+-- its `Mechanism` interface, so this package does not depend on `Governor` — the
 -- dependency runs `Governor -> Ballot`.
 module Cap.Governance.BallotV1 where
 
@@ -27,8 +27,8 @@ data BallotView = BallotView
   with
     governor : ContractId Mechanism
       -- ^ Binds exactly one mechanism (the governor) by cid, as its `Mechanism`
-      -- face. The `Submittable` face carries the same binding; the two faces MUST
-      -- agree — admission proves the Submittable face only.
+      -- interface. The `Submittable` interface carries the same binding; the two interfaces MUST
+      -- agree — admission proves the Submittable interface only.
     voters : Set Party
       -- ^ Who may cast/withdraw here; empty = open — eligibility is then the implementation's.
     expiresAt : Time
@@ -39,8 +39,8 @@ data BallotView = BallotView
       -- ^ Display and extension data; never security-relevant.
   deriving (Eq, Show)
 
--- | A ballot's fine group is the one mechanism it binds — the same anchor the
--- `Submittable` face uses, so both faces agree on "this mechanism".
+-- | A ballot's fine group is the one mechanism it binds — the same one the
+-- `Submittable` interface uses, so both interfaces agree on "this mechanism".
 instance HasCheckedFetch BallotView ForMechanism where
   contractGroupId v = ForMechanism v.governor
 
@@ -133,8 +133,9 @@ interface Ballot requires Submittable where
     controller (view (toInterface @Submittable this)).authorities
     do ballot_consumeImpl this (Ballot_Consume with extraArgs)
 
-  -- | Lets any party with visibility archive an expired ballot. Effect-free,
-  -- because the caller is arbitrary. By definition exipry is unrestricted archival.
+  -- | Archives an expired ballot. The body checks the deadline alone, adding
+  -- no authority check, so it stays effect-free; who may call it is whatever the
+  -- implementation's visibility admits.
   choice Ballot_Expire : Ballot_ExpireResult
     with
       actor : Party

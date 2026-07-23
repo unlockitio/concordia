@@ -15,12 +15,12 @@ import Splice.Api.Token.MetadataV1
 data MechanismView = MechanismView
   with
     authorities : Set Party
-      -- ^ The signature anchor: every member signs the mechanism and every
+      -- ^ The authority: every member signs the mechanism and every
       -- submittable.
       -- MUST be non-empty at mint — the fixed checks reject an empty (vacuous)
-      -- anchor, so an empty-authority mechanism is inert.
+      -- authority, so an empty-authority mechanism is inert.
     size : Optional Int
-      -- ^ The completeness switch and the number of participants in one field.
+      -- ^ The completeness flag and the number of participants in one field.
       -- MUST: `size = Some _` implies `expiresAt = Some _`. A completeness
       -- mechanism proves exact cover at resolution, but its submittables expire
       -- and become anyone-archivable independently; once one is archived, cover

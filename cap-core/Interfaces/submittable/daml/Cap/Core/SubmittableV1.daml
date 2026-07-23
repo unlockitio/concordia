@@ -36,11 +36,11 @@ data SubmittableView = SubmittableView
       -- ^ The mechanism this submittable belongs to. Only ever compared, never
       -- fetched through, so the mechanism may already be archived.
     authorities : Set Party
-      -- ^ The authority anchor; every member signs. MUST be non-empty at mint —
-      -- the fixed checks reject an empty (vacuous) anchor.
+      -- ^ The authority; every member signs. MUST be non-empty at mint —
+      -- the fixed checks reject an empty (vacuous) authority.
     slot : Optional Int
       -- ^ The slot this submittable covers. `Some` on every artifact of a
-      -- completeness mechanism — the gate demands it; `None` when the mechanism
+      -- completeness mechanism — the check demands it; `None` when the mechanism
       -- declares no completeness (no slot set exists). 
     state : SubmittableState
       -- ^ WARNING: an implementation-written claim the interface cannot verify.

@@ -14,9 +14,9 @@
 -- authority inside `Auction_SubmitBid`. `BidView.auctionId` carries identity
 -- *data* for discovery only; the security-relevant binding never lived in the view.
 --
--- `Bid` requires `Submittable` (cap-core): the face is supplied from the
+-- `Bid` requires `Submittable` (cap-core): the interface is supplied from the
 -- template's own fields, with `slot = None` unless the format declares
--- completeness. Unslotted, the face is inert — the gate never runs and
+-- completeness. Unslotted, the interface is inert — the check never runs and
 -- `Submittable_Consume` refuses, so the operator gains no destruction lever
 -- over bids.
 module Cap.Auctions.BidV1 where
