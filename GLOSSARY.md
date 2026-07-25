@@ -25,6 +25,46 @@ wait or retry — a cost that grows as more participants act concurrently.
 <sub>Source: CAP design; standard concurrency-control term.</sub>
 
 
+## CS sense
+
+Terms used in a specific computer-science sense within the design.
+
+### Binding
+An artifact bound to a specific referent's group.
+
+<sub>Source: CAP design (no external source).</sub>
+
+### Hook
+Extension point the fixed body must call; body supplied by the implementation.
+
+<sub>Source: CAP design (no external source).</sub>
+
+### Opaque
+Content the interface can't read; only a decoder interprets it.
+
+<sub>Source: CAP design (no external source).</sub>
+
+### Policy
+A behavior body supplied to a hook; named ready-made ones live in `*.Policies`.
+
+<sub>Source: CAP design (no external source).</sub>
+
+### Referent
+A contract (mechanism/target) owning an identity group others bind to.
+
+<sub>Source: CAP design (no external source).</sub>
+
+### Skeleton
+Interface + fixed bodies with holes a domain fills.
+
+<sub>Source: CAP design (no external source).</sub>
+
+### Tool
+Opt-in reusable utility body (a `util/` helper, not a forced check).
+
+<sub>Source: CAP design (no external source).</sub>
+
+
 ## cap-core
 
 Domain-agnostic primitives for [mechanisms](#mechanism).
@@ -112,7 +152,7 @@ which is what lets the set be proved complete.
 <sub>Source: CAP `cap-core` design (no external source).</sub>
 
 ### Standing
-Said of a [submission](#submission) that outlives a single [resolution](#resolution).
+Said of a contract that outlives an action on itself.
 
 <sub>Source: CAP `cap-core` design (no external source).</sub>
 

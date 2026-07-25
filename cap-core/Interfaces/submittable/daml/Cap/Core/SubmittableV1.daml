@@ -1,57 +1,41 @@
 -- Copyright (c) 2026 Unlockit. All rights reserved.
 -- SPDX-License-Identifier: Apache-2.0
 
--- | The `Submittable` interface: the single live artifact a slot holds while
--- a mechanism runs.
---
 -- A submittable records which mechanism and which slot.
 -- The submission itself can be read by downcasting a full
 -- submittable to the implementation's own template.
 module Cap.Core.SubmittableV1 where
 
-import DA.Optional (isSome)
 import DA.Set (Set)
 
 import Splice.Api.Token.MetadataV1
 import Cap.Core.CheckedFetchV1 (HasCheckedFetch (..))
 import Cap.Core.MechanismV1 (Mechanism, ForMechanism (..))
 
--- | The lifecycle state. 
+
 data SubmittableState
   = S_Empty
       -- ^ The slot is registered; nothing has been submitted.
   | S_Full
-      -- ^ Holds the participant's submission — the only state resolution
-      -- scores.
+      -- ^ Holds the submission that resolution counts.
   | S_Withdrawn
       -- ^ A submission that was retracted.
   | ExtSubmittableState with dummyUnitField : ()
   deriving (Eq, Show)
 
--- | View of a submittable. Content checks are the implementation's
--- responsibility.
 data SubmittableView = SubmittableView
   with
     mechanism : ContractId Mechanism
-      -- ^ The mechanism this submittable belongs to. Only ever compared, never
-      -- fetched through, so the mechanism may already be archived.
+      -- ^ The mechanism this submittable belongs to. To be compared,
+      -- may already be archived.
     authorities : Set Party
-      -- ^ The authority; every member signs. MUST be non-empty at mint —
-      -- the fixed checks reject an empty (vacuous) authority.
+      -- ^ The authority whose signature admission requires.
     slot : Optional Int
-      -- ^ The slot this submittable covers. `Some` on every artifact of a
-      -- completeness mechanism — the check demands it; `None` when the mechanism
-      -- declares no completeness (no slot set exists). 
+      -- ^ The slot this submittable covers. `Some` under
+      -- completeness, `None` otherwise.
     state : SubmittableState
-      -- ^ WARNING: an implementation-written claim the interface cannot verify.
-      -- The implementation MUST mint `S_Full` exactly when the contract carries
-      -- a submission — the fixed bodies filter on it.
-    meta : Metadata
-      -- ^ Display and extension data; never security-relevant.
-  deriving (Eq, Show)
-
-data Submittable_ConsumeResult = Submittable_ConsumeResult
-  with
+      -- ^ The implementation MUST have `S_Full` exactly when the contract
+      -- carries a submission — the fixed bodies filter on it.
     meta : Metadata
   deriving (Eq, Show)
 
@@ -60,13 +44,3 @@ instance HasCheckedFetch SubmittableView ForMechanism where
 
 interface Submittable where
   viewtype SubmittableView
-
-  -- Under review: may be removed 
-  choice Submittable_Consume : Submittable_ConsumeResult
-    controller (view this).authorities
-    do
-      assertMsg "unslotted submittable is not consumable through the interface"
-        (isSome (view this).slot)
-      pure Submittable_ConsumeResult with meta = emptyMetadata
-
-

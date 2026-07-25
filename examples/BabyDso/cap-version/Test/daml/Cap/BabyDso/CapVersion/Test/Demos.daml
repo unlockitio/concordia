@@ -16,7 +16,7 @@ import Splice.Api.Token.MetadataV1 (AnyValue (..), ChoiceContext (..), ExtraArgs
 import Cap.Core.Patchable (SetState (..))
 import Cap.Core.SubmittableV1 (SubmittableState (..))
 import Cap.Governance.BallotV1 (Ballot, Ballot_Cast (..))
-import Cap.Governance.GovernorV1 (Governor, Governor_ResolveResult, Proposal (..))
+import Cap.Governance.GovernorV1 (Governor, Governor_ResolveResult)
 import Cap.Governance.TargetV1 (Target)
 
 import Cap.BabyDso.CapVersion.AmuletPriceVote (AmuletPriceVote)
@@ -73,8 +73,6 @@ getAmuletRules : Setup -> Script (ContractId AmuletRules, AmuletRules)
 getAmuletRules s = do
   [(cid, r)] <- query @AmuletRules s.dso
   pure (cid, r)
-
-
 
 -- =============================================================================
 -- Demo 0 — the container ballot format (DEMOS.md)
@@ -134,7 +132,6 @@ requestVote s sv action = do
   (ar, _) <- getAmuletRules s
   submit (actAs [sv] <> readAs [s.dso]) $ exerciseCmd s.mechanism DsoMechanism_RequestVote with
     sv
-    proposal = Proposal with url = ""; body = ""
     action
     dsoRulesCid = rules
     amuletRulesCid = Some ar
@@ -264,12 +261,6 @@ demo_voting = do
   passTime (days 7)
   closeVoteFail s s.sv1 reqP
 
-
-
-
-
-
-
 -- --- confirmation-mechanism helpers --------------------------------------------
 
 confirm : Setup -> Party -> GovAction -> Script (ContractId Confirmation)
@@ -331,8 +322,6 @@ demo_confirmation = do
   d2' <- confirm s s.sv2 grant
   execute s s.sv2 grant None [d4, d1', d2']
 
-
-
   -- four state-pinned actions, every confirmation gathered at price 10.0 (see setup)
   let priceA = GA_SetAmuletPrice with newPrice = 10.5
   let priceB = GA_SetAmuletPrice with newPrice = 15.0
@@ -345,7 +334,7 @@ demo_confirmation = do
   [c1, c2, c3] <- forA [s.sv1, s.sv2, s.sv3] $ \sv -> confirm s sv priceC
   [p1, p2, p3] <- forA [s.sv1, s.sv2, s.sv3] $ \sv -> confirm s sv payout
 
-  -- at which price did they see amulet ? A: 10
+  -- the state pin every confirmer saw: the price 10.0
   pin10 <- pinOf s b4
 
   -- priceA executes on the state its confirmers saw
@@ -357,8 +346,8 @@ demo_confirmation = do
   -- tolerates below aborts it
   executeFail s s.sv1 payout pin10 [p1, p2, p3]
 
-  -- priceB was approved at 10.0; the live price is 10.5, within the declared
-  -- drifPolicy (DSORules.daml: 143) tolerance (1.0): it executes
+  -- priceB was approved at 10.0; the live price is 10.5, within the drift
+  -- policy tolerance its `actionSpec` declares (1.0): it executes
   execute s s.sv1 priceB pin10 [b1, b2, b3]
   (_, ar) <- getAmuletRules s
   ar.amuletPrice === 15.0
@@ -380,9 +369,6 @@ demo_confirmation = do
   execute s s.sv1 payout pin15 [p1', p2', p3']
   (_, ar) <- getAmuletRules s
   ar.reserve === 75.0
-
-
-
 
 -- --- median-mechanism helpers ------------------------------------------------
 
@@ -468,7 +454,6 @@ demo_two_organizations = do
   (ar, _) <- getAmuletRules s
   reqY <- submit (actAs [s.sv1] <> readAs [s.dso]) $ exerciseCmd mechanism2 DsoMechanism_RequestVote with
     sv = s.sv1
-    proposal = Proposal with url = ""; body = ""
     action = GA_SetConfig (SetState with new = cfgX; base = r0.config)
     dsoRulesCid = rules2
     amuletRulesCid = Some ar

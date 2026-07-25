@@ -1,18 +1,10 @@
 -- Copyright (c) 2026 Unlockit. All rights reserved.
 -- SPDX-License-Identifier: Apache-2.0
 
--- | Reference decision rules — pure functions an implementation wires as its
--- `tally`. No fixed body calls them. Each takes a decoder because the vote is
--- opaque to the interface. A decoder MUST return `None` for a ballot it does not
--- recognize — the rule discards it without aborting, so a foreign
--- authority-signed ballot can neither skew the count nor block resolution.
+-- | Reference decision rules — pure functions an implementation supplies as its
+-- `tally`.
+-- Each takes a decoder because the vote is opaque to the interface.
 
--- A decoder downcasts a cast ballot to the concrete template it recognizes and
--- reads the vote off it; the vote is opaque here, so decoders live in the implementation.
-
--- The rules do not deduplicate per voter: under completeness one live ballot
--- per slot is structural; without it, dedup before wiring wherever multiple
--- ballots per voter are not legitimate.
 module Cap.Governance.Tallies where
 
 import DA.List (sort, (!!))
@@ -25,8 +17,8 @@ import Cap.Governance.GovernorV1 (Verdict (..))
 
 -- | Yes/no decided by quorum: approved at `quorum` yes-votes, rejected at
 -- `quorum` no-votes, lapsed otherwise.
--- `quorum` is an absolute count denominated in the electorate (number of voters, 
--- not turnout number os votes cast)
+-- `quorum` is an absolute count denominated in the electorate (number of
+-- voters, not turnout).
 quorateMajority : Int -> (Ballot -> Optional Bool) -> [Ballot] -> Verdict
 quorateMajority quorum decode ballots
   | countOf identity >= quorum = VApproved None

@@ -1,10 +1,7 @@
 -- Copyright (c) 2026 Unlockit. All rights reserved.
 -- SPDX-License-Identifier: Apache-2.0
 
--- | The `GovernanceOutcome` interface: an approved action bound to the targets
--- its approvers saw. It requires cap-core's `Outcome` (identity, window,
--- expiry) and owns governance's one execute choice: `GovernanceOutcome_Execute`
--- executes at most once inside the window, only against the committed targets.
+
 module Cap.Governance.OutcomeV1 where
 
 import DA.Action (when)
@@ -15,17 +12,14 @@ import Cap.Core.TimeV1 (isOpen)
 import Cap.Core.OutcomeV1 (Outcome, isExecutor)
 import Cap.Governance.TargetV1 (Target, TargetCommitment, CheckedTarget (..), checkTargetBinding)
 
--- | View of an approved action. The authority, source, and execution window
--- live on the required `Outcome` interface; this view carries only what is
--- governance's alone.
+
 data GovernanceOutcomeView = GovernanceOutcomeView
   with
     committedTargets : [TargetCommitment]
-      -- ^ The targets this outcome was approved to act upon, in the order the
-      -- executor must present them; empty for a targetless outcome (e.g. a mint).
-      -- MUST be set by the implementation to the approved targets
+      -- ^ The targets this outcome was approved to act upon.
+      -- `governor_issueOutcome` MUST populate it with exactly the targets and
+      -- state pins the approved decision authorized.
     meta : Metadata
-      -- ^ Display and extension data; never security-relevant.
   deriving (Eq, Show)
 
 data GovernanceOutcome_ExecuteResult = GovernanceOutcome_ExecuteResult
@@ -41,20 +35,16 @@ interface GovernanceOutcome requires Outcome where
     -- longer matches the fresh one.
     -- MUST abort to refuse execution; on return, `governanceOutcome_executeImpl`
     -- MUST apply its change as a field-wise patch onto the fresh state it is handed.
+
   governanceOutcome_executeImpl : [CheckedTarget] -> GovernanceOutcome_Execute -> Update GovernanceOutcome_ExecuteResult
     -- ^ The applied effect, run with the outcome signatories' authority in
-    -- scope. The checked targets arrive as the fixed body verified them, in
-    -- commitment order.
+    -- scope. The checked targets MUST arrive in commitment order.
 
-  -- | Execute the outcome. Consuming: fires at most once, only inside the
-  -- committed window, only against the committed targets.
   choice GovernanceOutcome_Execute : GovernanceOutcome_ExecuteResult
     with
       actors : [Party]
       targets : [ContractId Target]
-        -- ^ The live targets to act upon, checked against `committedTargets`
-        -- standing state is archive-and-recreated, so the
-        -- outcome pins identity and state.
+        -- ^ The live targets to act upon, checked against `committedTargets`.
       extraArgs : ExtraArgs
     controller actors
     do

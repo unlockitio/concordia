@@ -1,14 +1,6 @@
 -- Copyright (c) 2026 Unlockit. All rights reserved.
 -- SPDX-License-Identifier: Apache-2.0
 
--- =============================================================================
--- Baby-Splice cross-cutting glue shared by the decision workflows: the
--- choice-context keys, the supermajority threshold, and `readTargets` (the
--- resolution-side counterpart of the close choice). Family-agnostic on purpose —
--- every governor family (`VoteRequest`, `AmuletConfigVoteRequest`) shares it.
--- The governed state, its config, and each family's action language live with
--- their own target module.
--- =============================================================================
 module Cap.BabyDso.CapVersion.Common where
 
 import qualified DA.TextMap as TextMap

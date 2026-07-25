@@ -1,9 +1,7 @@
 -- Copyright (c) 2026 Unlockit. All rights reserved.
 -- SPDX-License-Identifier: Apache-2.0
 
--- | The `Target` interface: a standing contract an approved outcome acts upon
--- (e.g. config, rules, treasury). Identity-only.
--- turning "which contract, in which state" into stable, trusted claims.
+
 module Cap.Governance.TargetV1 where
 
 import DA.Optional (isSome)
@@ -12,9 +10,20 @@ import DA.Set (Set)
 import Splice.Api.Token.MetadataV1
 import Cap.Core.CheckedFetchV1 (HasCheckedFetch (..), fetchCheckedInterface, require, authoritySigned)
 
--- | A target's identifying key: its authority plus an `id` distinguishing
+data TargetView = TargetView
+  with
+    authorities : Set Party
+    id : Text
+      -- ^ Distinguishes several targets of one authority; part of `ForTarget`.
+    stateToken : Optional Text
+      -- ^ An opaque token that ONLY changes when action-relevant state changes.
+    meta : Metadata
+  deriving (Eq, Show)
+
+
+-- A target's identifying key: its authority plus an `id` distinguishing
 -- several targets of one authority, so an approved outcome cannot be redirected
--- to a different target of the same authority. 
+-- to a different target of the same authority.
 -- Authority MUST guarantee key uniqueness.
 data ForTarget = ForTarget
   with
@@ -22,55 +31,37 @@ data ForTarget = ForTarget
     id : Text
   deriving (Eq, Show)
 
--- | View of a contract that can be acted upon: the binding identity, the state
--- token, and nothing security-relevant beyond them.
-data TargetView = TargetView
-  with
-    authorities : Set Party
-      -- ^ The authority whose ledger authority the action runs under.
-      -- MUST be non-empty at mint — the fixed checks reject an empty authority.
-    id : Text
-      -- ^ Distinguishes targets of one authority; with `authorities` it is the
-      -- identifying key.
-      -- MUST force at most one live target per key
-    stateToken : Optional Text
-      -- ^ An opaque token that changes whenever action-relevant state changes ONLY.
-    meta : Metadata
-      -- ^ Display and extension data; never security-relevant.
-  deriving (Eq, Show)
-
--- | A target's group is its identifying key `(authorities, id)` — the group
--- `checkTargetBinding` checks a presented target against, so a look-alike under
--- the same authority but a different `id` aborts.
 instance HasCheckedFetch TargetView ForTarget where
   contractGroupId v = ForTarget v.authorities v.id
+
 
 interface Target where
   viewtype TargetView
 
--- | What an approval commits an outcome to act upon: the target's identifying
--- key, plus optionally the state the approvers saw. `stateToken = None` is an
--- identity-only pin — itself part of what was approved, never an omission.
+-- What an approval commits an outcome to act upon: the target's identifying
+-- key, plus optionally the state the approvers saw. `stateToken = None`
+-- pins the Target by identity only.
 data TargetCommitment = TargetCommitment
   with
     targetKey : ForTarget
     stateToken : Optional Text
+    -- ^ copy of Target.stateToken when outcome is issued
   deriving (Eq, Show)
 
--- | One commitment's outcome from `checkTargetBinding`: the target as the fixed
--- body fetched and verified it (act on this, never re-resolve), plus whether a
--- pinned state has drifted.
+
+-- To be used by drift policies to decide what to do based on the drift.
 data CheckedTarget = CheckedTarget
   with
     target : Target
+    -- ^ current state
     commitment : TargetCommitment
+    -- ^ what the approvers saw
     drifted : Bool
-      -- ^ True iff the commitment pinned a state and the target no longer carries
-      -- it. Always False for an identity-only pin.
+      -- ^ True if state drifted. False for an identity-only pin.
 
--- | Verify the live targets presented at execution are the ones committed at
--- approval, aborts on wrong key or forged signature aborts, a pinned (use other term)
--- state is compared and routed to the caller's drift policy (not enforced here).
+-- Verify the live targets presented at execution are the ones committed at
+-- approval: a wrong key or a missing authority signature aborts; a committed
+-- state pin is compared and routed to the caller's drift policy (not enforced here).
 checkTargetBinding : [TargetCommitment] -> [ContractId Target] -> Update [CheckedTarget]
 checkTargetBinding committed presented = do
   require "the presented targets pair with the committed targets"

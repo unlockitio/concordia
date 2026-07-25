@@ -4,10 +4,6 @@
 -- =============================================================================
 -- GovOutcome — an approved `GovAction`, implemented as a cap-governance
 -- `GovernanceOutcome` (which `requires` cap-core `Outcome`).
--- `governanceOutcome_executeImpl` delegates to `applyAction`, the shared effect
--- both workflows run. The voting workflow's `VoteRequest` chains the execute choice
--- into resolution (atomic, Splice-style), so the outcome is created and
--- consumed in one transaction.
 -- =============================================================================
 module Cap.BabyDso.CapVersion.GovOutcome where
 
