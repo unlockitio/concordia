@@ -1,18 +1,7 @@
 -- Copyright (c) 2026 Unlockit. All rights reserved.
 -- SPDX-License-Identifier: Apache-2.0
 
--- | Governor-specific timing profiles for the `Mechanism` hooks — the ones
--- that also pin the timelock (`executeAfter`). The generic window profiles
--- (`resolveAfterClose`, `withdrawBeforeOpen`, `noWithdraw`) live in
--- `Cap.Core.Policies` and are wired on the `Mechanism` interface directly.
---
--- Wire into `interface instance Mechanism for T` (one line per hook):
---
--- @
---   submittableAllowed _  = pure ()
---   resolutionAllowed now = windowedResolution (toInterface @Governor this) now
---   withdrawAllowed now   = withdrawBeforeOpen (toInterface @Mechanism this) now
--- @
+-- | Governor-specific timing profiles for the `Governor` hooks
 module Cap.Governance.Policies where
 
 import Cap.Core.MechanismV1

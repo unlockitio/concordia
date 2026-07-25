@@ -2,16 +2,7 @@
 -- SPDX-License-Identifier: Apache-2.0
 
 -- =============================================================================
--- Confirmation — Splice's operational-quorum artifact (template of the same
--- name), implemented as a cap-core `Submittable` minted already cast: a
--- confirmation IS its submission. It binds the standing `DsoMechanism` by cid on
--- the core interface and the ACTION by value in its own fine group (`ForDecision`),
--- so the execute choice's checked fetch proves binding AND action-matching in
--- one call — the check Splice's `DsoRules_ExecuteConfirmedAction` hand-writes.
--- Value identity makes concurrent symmetric initiation convergent: two SVs
--- confirming the same action land in the same group with nothing to coordinate.
--- State-pinned actions add the observed target token to that identity, so only
--- same-state confirmations aggregate.
+-- Confirmation — Splice's operational-quorum artifact.
 -- =============================================================================
 module Cap.BabyDso.CapVersion.Confirmation where
 

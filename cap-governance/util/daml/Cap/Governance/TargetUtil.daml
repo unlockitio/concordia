@@ -12,7 +12,7 @@ import Cap.Governance.TargetV1
 
 -- | Apply a state change on one committed target: downcast the checked target
 -- to its template type, archive the presented cid, and create the successor
--- `f` returns. 
+-- `f` returns.
 mutateTarget : forall t. (HasCreate t, HasArchive t, HasFromInterface t Target)
   => CheckedTarget -> ContractId Target -> (t -> Update t) -> Update (ContractId t)
 mutateTarget c tcid f = case fromInterface @t c.target of

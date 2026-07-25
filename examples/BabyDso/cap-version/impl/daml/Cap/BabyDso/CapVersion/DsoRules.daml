@@ -2,10 +2,7 @@
 -- SPDX-License-Identifier: Apache-2.0
 
 -- =============================================================================
--- DsoRules — the GOVERNED state (SV list + config) and nothing else: a
--- cap-governance `Target`. It churns freely (every applied action
--- archives and recreates it); every choice the SVs exercise to make a decision 
--- lives on `DsoMechanism`, which reads this contract fresh by cid.
+-- DsoRules — the GOVERNED state (SV list + config).
 -- =============================================================================
 
 module Cap.BabyDso.CapVersion.DsoRules where
@@ -129,7 +126,7 @@ actionSpec dso org action = case action of
     pure r with svs = Map.insert arg.newSvParty arg.newSvName r.svs
 
   GA_SetConfig change -> onDsoRules $ \r -> pure r with config = applySetState change r.config
-  
+
   GA_SetAmuletPrice {newPrice} ->
     (onAmuletRules $ \r -> pure r with amuletPrice = newPrice) with
       pinsState = True; onDrift = priceDriftWithin 1.0

@@ -2,14 +2,7 @@
 -- SPDX-License-Identifier: Apache-2.0
 
 -- =============================================================================
--- AmuletPriceVote — Splice's STANDING per-SV price vote (template of the same
--- name), implemented as a cap-governance `Ballot`: one vote per SV, living
--- across every mining round, re-read at each round advance — cross-decision
--- replay is the intended semantics, so it binds the mechanism by plain
--- `ForMechanism` with no decision discriminator. S_Empty is Splice's `None`
--- price (new SV: registered, not yet priced); S_Full carries the price.
--- Re-pricing is `Ballot_Cast` (rate-limited, Splice's `lastUpdatedAt`
--- cooldown); abstaining again is `Ballot_Withdraw`.
+-- AmuletPriceVote — Splice's STANDING per-SV price vote.
 -- =============================================================================
 module Cap.BabyDso.CapVersion.AmuletPriceVote where
 

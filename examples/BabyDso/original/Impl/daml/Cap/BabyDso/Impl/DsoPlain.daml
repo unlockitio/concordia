@@ -19,7 +19,7 @@
 -- fields that changed against that base onto the live config. So two config
 -- votes proposed against the same base but touching different fields COMPOSE in
 -- either order, instead of the later one reverting the earlier (Splice's `patch`
--- branch — golden vector GV-20).
+-- branch).
 --
 -- =============================================================================
 module Cap.BabyDso.Impl.DsoPlain where
@@ -65,7 +65,7 @@ data Vote = Vote with
     optCastAt : Optional Time
   deriving (Eq, Show)
 
--- Mirrors VoteRequestOutcome (the value the golden vectors assert).
+-- Mirrors VoteRequestOutcome (the close result the demos assert).
 data VoteRequestOutcome
   = VRO_Accepted with effectiveAt : Time
   | VRO_Rejected
@@ -86,7 +86,6 @@ data GovAction
       newParticipantId : Text
       newSvRewardWeight : Int
       reason           : Text
-      
   -- Whole-config amendment (mirrors SRARC_SetConfig / DsoRules_SetConfig).
   -- baseConfig = the config the vote was prepared against; None replaces wholesale.
   | SetConfig with
@@ -578,10 +577,7 @@ executeAction self action = case action of
     void (exercise self DsoRules_ConfirmSvOnboarding with newSvParty; newSvName; newParticipantId; newSvRewardWeight; reason)
   SetConfig{..}         -> void (exercise self DsoRules_SetConfig with newConfig; baseConfig)
 
-
-
-
-  -- --- Splice-equivalent utility helpers (mirrors splice-util / DsoRules) -------
+-- --- Splice-equivalent utility helpers (mirrors splice-util / DsoRules) -------
 
 -- | Splice's Util.require: wraps the message identically.
 require : Text -> Bool -> Update ()
@@ -715,5 +711,3 @@ instance HasCheckedFetch AmuletPriceVote ForDso where
 
 instance HasCheckedFetch AmuletPriceVote ForOwner where
   contractGroupId v = ForOwner with dso = v.dso; owner = v.sv
-
--- --- Domain types (mirror DsoRules.daml) -------------------------------------

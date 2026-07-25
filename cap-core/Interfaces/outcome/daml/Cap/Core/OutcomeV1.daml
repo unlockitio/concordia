@@ -1,11 +1,10 @@
 -- Copyright (c) 2026 Unlockit. All rights reserved.
 -- SPDX-License-Identifier: Apache-2.0
 
--- | The `Outcome` interface: an outcome carrying pre-committed authority,
--- executable at most once inside its window. The interface is domain-neutral —
--- identity, window, executor set, and expiry; the execute choice is the
--- domain's own (governance's target-bound `GovernanceOutcome_Execute`,
--- auctions' settle/fail pair), each layered on this via `requires`.
+
+-- | The `Outcome` interface: pre-committed authority, executable at most once
+-- inside its window. The execute choice is the domain's own, layered on via
+-- `requires`.
 module Cap.Core.OutcomeV1 where
 
 import DA.Set (Set)
@@ -13,33 +12,26 @@ import DA.Set (Set)
 import Splice.Api.Token.MetadataV1
 import Cap.Core.CheckedFetchV1 (HasCheckedFetch (..))
 import Cap.Core.MechanismV1 (Mechanism, ForMechanism (..))
+import Cap.Core.TimeV1 (checkFloor)
 
--- | View of an executable outcome.
+
 data OutcomeView = OutcomeView
   with
     authorities : Set Party
-      -- ^ The authority whose joint ledger authority this outcome carries.
-      -- MUST be non-empty at mint — an empty authority can never execute.
+      -- ^ The authority this outcome carries. MUST be non-empty at mint.
     source : ContractId Mechanism
-      -- ^ The mechanism whose resolution issued this outcome. Only ever compared,
-      -- never fetched through, so the mechanism may already be archived.
-      -- MUST be set by the implementation to the mechanism that actually issued it.
+      -- ^ The mechanism whose resolution issued this outcome; to be compared,
+      -- so it may already be archived.
     executeAfter : Time
-      -- ^ The instant the timelock lifts: execution is blocked strictly before
-      -- it. Part of what was approved, the implementation MUST set it to the
-      -- value the approvers saw. Set it to the creation time (or any past
-      -- instant) for immediate execution.
+      -- ^ Execution blocked before it. MUST be the value
+      -- the approvers saw; use a past instant for immediate execution.
     executeUntil : Optional Time
-      -- ^ Execution deadline; None = no deadline. WARNING: an undated outcome
-      -- stays executable forever, against context its approvers never saw — date
-      -- every outcome you issue, doubly so under a state-pinning drift policy.
+      -- ^ Execution deadline. `None` = no deadline (never expirable).
     meta : Metadata
-      -- ^ Display and extension data; never security-relevant.
+      -- ^ Display and extension data.
   deriving (Eq, Show)
 
--- | An outcome's fine group is the one contract that issued it, so a relying
--- contract admits "the outcome of *this* mechanism" and a look-alike issued
--- elsewhere under the same authority aborts.
+-- | Groups an outcome by its issuing mechanism (`source`).
 instance HasCheckedFetch OutcomeView ForMechanism where
   contractGroupId v = ForMechanism v.source
 
@@ -52,14 +44,10 @@ interface Outcome where
   viewtype OutcomeView
 
   isExecutor : [Party] -> Bool
-    -- ^ Whether this actor set may trigger the domain's execute choice; varies
-    -- per authority model. Plural because settlement (Token Standard V2) can
-    -- need several executors jointly.
+    -- ^ Whether this actor set may trigger the domain's execute choice.
 
-  -- | Archives an outcome past its execution deadline. The body checks the
-  -- deadline alone, adding no authority check, so it stays effect-free; who may
-  -- call it is whatever the implementation's visibility admits. An undated
-  -- outcome (`executeUntil = None`) is never expirable — the cost `executeUntil` warns of.
+  -- | Archives an outcome past its execution deadline (`executeUntil`).
+  -- Deadline-only, no authority check. Undated outcomes are not expirable.
   choice Outcome_Expire : Outcome_ExpireResult
     with
       actor : Party
@@ -69,5 +57,5 @@ interface Outcome where
         None -> abort "outcome has no execution deadline"
         Some e -> do
           now <- getTime
-          assertMsg "outcome not yet past its execution deadline" (now >= e)
+          checkFloor "outcome not yet past its execution deadline" now e
           pure Outcome_ExpireResult with meta = emptyMetadata

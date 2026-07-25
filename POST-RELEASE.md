@@ -3,19 +3,8 @@
 
 # Post-release extension points
 
-This document is the Milestone 1 deliverable *"documented extension points for
-downstream modules"*: what can be built on CAP after the final milestone (M6)
-without changing the released library. It describes the library as M6 releases
-it; where a capability lands in an earlier milestone, the mapping is in
-[`SCOPE.md`](SCOPE.md). Terms carry their [`GLOSSARY.md`](GLOSSARY.md)
-meanings.
-
-The adoption milestones (M7–M8) pay on external teams reusing CAP in pilot or
-production applications. The sections below are the ways a team does that,
-ordered from cheapest to deepest: extend a deployed system, add a format to a
-shipped domain, build a new domain on `cap-core`. The last section is how the
-library itself grows after release without breaking adopters. The M6 extension
-guide walks the same seams with worked code; this document is the map.
+This document is the Milestone 1 deliverable *documented extension points for
+downstream modules*: what can be built on CAP after the final milestone. 
 
 ## Extension model
 
@@ -99,21 +88,17 @@ multi-unit) fill this spine; later formats fill the same one.
 
 The deepest tier, and the proposal's stated direction: `cap-core` is the
 foundation for further allocation-oriented modules. A new domain is a package
-beside `cap-governance` and `cap-auctions`: its interfaces `requires` the core
-trio (`Mechanism`, `Submittable`, `Outcome`), its fixed bodies reuse the
-shared checks (`Cap.Core.ChecksV1`) and declare their own admission group
-beside `ForMechanism` and `ForTarget`, and formats implement the result. The
-two shipped domains are the proof the spine is generic; each direction below
+beside `cap-governance` and `cap-auctions` where its interfaces require the core
+(`Mechanism`, `Submittable`, `Outcome`), its fixed bodies may reuse the
+shared checks (`Cap.Core.ChecksV1`). Each direction below
 is a further instantiation.
 
 | Direction | Submittables are | Resolution is | Outcomes are |
 | --- | --- | --- | --- |
-| Order matching | orders | the matching rule | matched trades, settling as Token Standard DvP |
+| Order matching | orders | the matching rule | matched trades |
 | Collateral allocation | pledges | the allocation rule | collateral commitments |
 | Resource distribution | claims | the distribution rule | delivery obligations |
 
-Credential-weighted decision flows, the proposal's fourth direction, need no
-new domain — see the governance section above.
 
 ## Library growth after release
 

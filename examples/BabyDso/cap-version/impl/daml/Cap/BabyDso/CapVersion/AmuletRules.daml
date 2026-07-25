@@ -34,18 +34,6 @@ template AmuletRules
         stateToken = Some (show amuletPrice)
         meta = emptyMetadata
 
-    choice ASetAmuletPrice : ContractId AmuletRules
-      with
-        newAmuletPrice : Decimal
-      controller dso
-      do create this with amuletPrice = newAmuletPrice
-
-    choice ASetTransferFee : ContractId AmuletRules
-      with
-        newTransferFee : Decimal
-      controller dso
-      do create this with transferFee = newTransferFee
-
 -- | The identifying key of a dso's `AmuletRules` target.
 amuletRulesKey : Party -> ForTarget
 amuletRulesKey dso = ForTarget with authorities = Set.singleton dso; id = "amulet-rules"

@@ -3,10 +3,7 @@
 
 -- =============================================================================
 -- Vote — one SV's ballot on a `VoteRequest`, implemented as a cap-governance
--- `Ballot` (which `requires` cap-core `Submittable`). One template spans the
--- lifecycle: S_Empty (uncast right, authority-minted) → S_Full (cast,
--- dual-signed) → S_Withdrawn. The vote value (`accept`) is a typed field the
--- interface never reads — `tally` downcasts `Ballot` → `Vote` to read it.
+-- `Ballot`.
 -- =============================================================================
 module Cap.BabyDso.CapVersion.Vote where
 

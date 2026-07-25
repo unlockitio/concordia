@@ -3,21 +3,7 @@
 
 -- =============================================================================
 -- VoteRequest — Splice's deliberate-governance workflow: a per-decision governor
--- under vote, implemented as a cap-governance `Governor` (which `requires`
--- cap-core `Mechanism`). LINEAR shape: the contract IS the decision, resolution
--- consumes it, `ForMechanism` cid-binding is the anti-replay guarantee.
---
--- Splice-faithful and ATOMIC: resolution funnels through
--- `DsoRules_CloseVoteRequest` (a current sv triggers, the dso signature
--- resolves), and `Governor_Resolve` DECIDES and EXECUTES in one transaction — on
--- approval `onResolved` immediately exercises `GovernanceOutcome_Execute` on
--- the freshly issued outcome against the target the close choice delivered in
--- `extraArgs.context`, so the outcome never lingers.
---
--- Timing profile: `windowed` — forced, not stylistic: atomic execution needs
--- `now >= executeAfter`, and `executeAfter >= submissionClosesAt` is a template
--- invariant, so with a zero timelock the execution window opens exactly when
--- resolution waits for the close.
+-- under vote, implemented as a cap-governance `Governor`.
 -- =============================================================================
 module Cap.BabyDso.CapVersion.VoteRequest where
 
@@ -43,7 +29,6 @@ template VoteRequest
   with
     dso                : Party
     proposer           : Party
-    proposal           : Proposal
     action             : GovAction
     commitment         : TargetCommitment   -- target key + optional state pin; voters approve it with the action
     snapshot           : Set Party   -- the electorate at creation; quorum denominator
@@ -73,7 +58,7 @@ template VoteRequest
       withdrawAllowed now   = noWithdraw (toInterface @Mechanism this) now
 
     interface instance Governor for VoteRequest where
-      view = GovernorView with proposer; proposal; executeAfter; meta = emptyMetadata
+      view = GovernorView with proposer; executeAfter; meta = emptyMetadata
 
       -- Funnelled, Splice-style: only the dso resolves, and an sv reaches the
       -- dso signature through `DsoRules_CloseVoteRequest`, which validates the

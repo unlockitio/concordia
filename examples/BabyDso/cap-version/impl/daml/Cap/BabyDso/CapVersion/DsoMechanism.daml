@@ -3,11 +3,7 @@
 
 -- =============================================================================
 -- DsoMechanism — the standing mechanism, and the single contract that holds
--- every choice the SVs exercise to make a decision . 
--- Splice's DsoRules is split in two here: this mechanism holds no governed state
---  (the SV list and config live on the `DsoRules` target, each choice reads its fresh by cid)
--- The mechanism's cid never changes over the life of the institution.
--- Standing submittables can therefore reference the mechanism by cid
+-- every choice the SVs exercise to make a decision.
 -- =============================================================================
 module Cap.BabyDso.CapVersion.DsoMechanism where
 
@@ -27,7 +23,7 @@ import Cap.Core.Policies (noWithdraw)
 import Cap.Governance.TargetV1 (Target, TargetCommitment (..))
 import Cap.Governance.OutcomeV1 (GovernanceOutcome, GovernanceOutcome_Execute (..))
 import Cap.Governance.BallotV1 (Ballot, Ballot_Consume (..))
-import Cap.Governance.GovernorV1 (Governor, Governor_Resolve (..), Governor_ResolveResult, Proposal)
+import Cap.Governance.GovernorV1 (Governor, Governor_Resolve (..), Governor_ResolveResult)
 import Cap.Governance.Tallies (median)
 
 import Cap.BabyDso.CapVersion.Common
@@ -72,7 +68,7 @@ template DsoMechanism
   with
     dso     : Party
     org     : Text    -- the one organization this mechanism's choices govern
-    opensAt : Time    -- genesis: the standing window opens here and it doesnt close
+    opensAt : Time    -- genesis: the standing window opens here and never closes
   where
     signatory dso
 
@@ -81,15 +77,13 @@ template DsoMechanism
         authorities = Set.singleton dso
         size = None
         submissionOpensAt = opensAt
-        submissionClosesAt = None   
+        submissionClosesAt = None
         expiresAt = None
         meta = emptyMetadata
 
       submittableAllowed _ = pure ()
       resolutionAllowed _  = pure ()
       withdrawAllowed now  = noWithdraw (toInterface @Mechanism this) now
-
-
 
     -- === The voting workflow's mint choice (Splice: DsoRules_RequestVote) ========
 
@@ -100,7 +94,6 @@ template DsoMechanism
     nonconsuming choice DsoMechanism_RequestVote : ContractId VoteRequest
       with
         sv                 : Party
-        proposal           : Proposal
         action             : GovAction
         dsoRulesCid        : ContractId DsoRules
         amuletRulesCid     : Optional (ContractId AmuletRules)  -- required iff the action targets AmuletRules
@@ -116,7 +109,7 @@ template DsoMechanism
         let timeout = fromOptional rules.config.voteRequestTimeout voteRequestTimeout
         let closesAt = addRelTime now timeout
         reqCid <- create VoteRequest with
-          dso; proposer = sv; proposal; action
+          dso; proposer = sv; action
           commitment = TargetCommitment with targetKey = spec.targetKey; stateToken = seenToken
           snapshot = Set.fromList (Map.keys rules.svs)
           submissionOpensAt = now
@@ -136,7 +129,7 @@ template DsoMechanism
 
     -- === The voting workflow's close choice (Splice: DsoRules_CloseVoteRequest) ==
 
-    -- | Dso signature resolves the governor (VoteRequest). 
+    -- | Dso signature resolves the governor (VoteRequest).
     nonconsuming choice DsoMechanism_CloseVoteRequest : Governor_ResolveResult
       with
         sv          : Party
@@ -182,10 +175,10 @@ template DsoMechanism
           confirmer = sv; action; seenToken
           expiresAt = addRelTime now rules.config.actionConfirmationTimeout
 
-    -- | Threshold execution (Splice: DsoRules_ExecuteConfirmedAction).
-    -- The checked fetch under `ForDecision`
-    -- proves each confirmation is dso-signed, mechanism-bound, and for this action
-    -- archiving spends it. Effect-at-most-once rests on consuming the target.
+    -- | Threshold execution (Splice: DsoRules_ExecuteConfirmedAction). The
+    -- checked fetch under `ForDecision` proves each confirmation is signed by the dso,
+    -- mechanism-bound, and for this action; archiving spends it.
+    -- Effect-at-most-once rests on consuming the target.
     nonconsuming choice DsoMechanism_ExecuteConfirmedAction : ()
       with
         sv               : Party
@@ -230,7 +223,7 @@ template DsoMechanism
 
     -- === The price-vote workflow (Splice: amulet price + round advance) ========
 
-    -- | Mint an SV's standing price slot, unpriced. 
+    -- | Mint an SV's standing price slot, unpriced.
     nonconsuming choice DsoMechanism_RegisterPriceVote : ContractId AmuletPriceVote
       with
         sv          : Party

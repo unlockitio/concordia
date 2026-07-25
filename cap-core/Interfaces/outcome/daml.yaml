@@ -16,6 +16,7 @@ data-dependencies:
 - ../../../lib/splice-api-token-metadata-v1-1.0.0.dar
 - ../../../lib/splice-util-0.1.7.dar
 - ../../util/checked-fetch/.daml/dist/cap-core-checked-fetch-v1-0.1.0.dar
+- ../../util/time/.daml/dist/cap-core-time-v1-0.1.0.dar
 - ../mechanism/.daml/dist/cap-core-mechanism-v1-0.1.0.dar
 build-options:
   - --target=2.1

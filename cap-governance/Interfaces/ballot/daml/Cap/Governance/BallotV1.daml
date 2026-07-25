@@ -2,11 +2,8 @@
 -- SPDX-License-Identifier: Apache-2.0
 
 -- | The `Ballot` voting interface: a re-castable submittable carrying opaque
--- votes against a mechanism — one vote for a per-voter format, many for a
--- container ("ballot box") format that accumulates all votes in one contract,
--- Splice-style. `Ballot requires Submittable`. It names the mechanism only as
--- its `Mechanism` interface, so this package does not depend on `Governor` — the
--- dependency runs `Governor -> Ballot`.
+-- votes against a mechanism; a format may hold one vote per contract or many.
+
 module Cap.Governance.BallotV1 where
 
 import DA.Set (Set)
@@ -18,29 +15,19 @@ import Cap.Core.MechanismV1
 import Cap.Core.CheckedFetchV1
 import Cap.Core.TimeV1 (checkWindow)
 
--- | View of a ballot across its whole life — uncast → cast → withdrawn. Exposes
--- the fact of a cast (binding, state) but hides the votes' values and voters,
--- so secret ballots are implementable.
--- MUST: a cast (full) ballot carries at least one real, decodable vote — the
--- interface cannot check what it cannot see.
 data BallotView = BallotView
   with
     governor : ContractId Mechanism
-      -- ^ Binds exactly one mechanism (the governor) by cid, as its `Mechanism`
-      -- interface. The `Submittable` interface carries the same binding; the two interfaces MUST
-      -- agree — admission proves the Submittable interface only.
+      -- ^ Binds exactly one mechanism by cid, as its `Mechanism`
     voters : Set Party
-      -- ^ Who may cast/withdraw here; empty = open — eligibility is then the implementation's.
+      -- ^ Who may cast/withdraw here
     expiresAt : Time
       -- ^ When the ballot becomes archivable by anyone with visibility.
-      -- MUST NOT precede a declared close of voting on a cast ballot; set it
-      -- generously past the close for resolution grace.
+      -- MUST NOT precede a declared close of voting on a cast ballot
     meta : Metadata
-      -- ^ Display and extension data; never security-relevant.
   deriving (Eq, Show)
 
--- | A ballot's fine group is the one mechanism it binds — the same one the
--- `Submittable` interface uses, so both interfaces agree on "this mechanism".
+
 instance HasCheckedFetch BallotView ForMechanism where
   contractGroupId v = ForMechanism v.governor
 
@@ -58,36 +45,27 @@ interface Ballot requires Submittable where
   viewtype BallotView
 
   ballot_castImpl : Ballot_Cast -> Update (ContractId Ballot)
-    -- ^ Builds the cast (full) state, recording the opaque vote as `voter`'s.
+    -- ^ Builds the cast full state, recording the opaque vote as `voter`'s.
     -- Runs with the authority's and the casting voter's signatures in scope.
-    -- The successor MUST preserve governor, voters, authority, and slot; MUST
-    -- be `S_Full`, authority-signed, and MUST set an `expiresAt` no earlier
-    -- than the close of voting. When `voters` is empty (open format) the
-    -- implementation MUST enforce its own eligibility rule on `voter`.
+    -- The successor:
+    -- MUST preserve governor, voters, authority, and slot;
+    -- MUST be `S_Full`, authority-signed,
+    -- When `voters` is empty (open format) the implementation
+    -- MUST enforce its own eligibility rule on `voter`.
+
   ballot_withdrawImpl : Ballot_Withdraw -> Update (ContractId Ballot)
-    -- ^ Builds the withdrawn successor, releasing escrowed weight named in
-    -- `extraArgs.context`. MUST retract only `voter`'s own vote (a container
-    -- keeps the others), and when `voters` is empty MUST enforce eligibility.
-    -- The successor MUST preserve governor, voters, authority, and slot (so
-    -- completeness stays provable) and MUST stay authority-signed.
+    -- ^ Builds the withdrawn successor. Same obligations as `ballot_castImpl`.
+
   ballot_consumeImpl : Ballot_Consume -> Update Ballot_ConsumeResult
     -- ^ The authority's teardown effect: release escrowed weight named in
     -- `extraArgs.context`, mirroring `ballot_withdrawImpl` on the terminal path.
 
 
-
-
-  -- Some of this MIGHT be passed to SUBMITTABLE.
-
-
   -- | Cast (or re-cast) a vote — empty→full, withdrawn→full, or full→full.
-  -- Controlled by the casting voter and consuming: the predecessor's archive is
-  -- the no-double-vote guarantee for a per-voter format; a container's map key
-  -- is its own. The vote is opaque (`tally` decodes it).
   choice Ballot_Cast : ContractId Ballot
     with
       voter : Party
-        -- ^ The casting party; checked against `voters` unless the format is open.
+        -- ^ The casting party, checked against `voters` unless the format is open.
       vote : AnyValue
         -- ^ Each format documents its encoding, and the interface never reads it.
       extraArgs : ExtraArgs
@@ -99,17 +77,14 @@ interface Ballot requires Submittable where
       assertMsg "caster is not an eligible voter"
         (Set.null bv.voters || voter `Set.member` bv.voters)
       -- Read the governor for its window and policy; the fetch aborts if it is
-      -- (resolved or withdrawn), so a cast against a closed vote can't follow.
+      -- resolved or withdrawn.
       r <- fetch bv.governor
       let mv = view r
       checkWindow "submissions are open" now mv.submissionOpensAt mv.submissionClosesAt
       submittableAllowed r now
       ballot_castImpl this (Ballot_Cast with voter; vote; extraArgs)
 
-  -- | Withdraw — empty→withdrawn (decline) or full→withdrawn (retract); on a
-  -- container, retracts only the caller's own vote. Controlled by the
-  -- withdrawing voter, so no one else can retract your vote; consuming, and
-  -- the successor keeps the slot covered.
+  -- | Withdraw — empty→withdrawn (decline) or full→withdrawn (retract)
   choice Ballot_Withdraw : ContractId Ballot
     with
       voter : Party
@@ -122,20 +97,14 @@ interface Ballot requires Submittable where
         (Set.null bv.voters || voter `Set.member` bv.voters)
       ballot_withdrawImpl this (Ballot_Withdraw with voter; extraArgs)
 
-  -- | The authority's teardown of a ballot, and the escrow-release path for
-  -- weighted formats: resolution reads ballots but never consumes them, so a
-  -- format that locks a holding at cast releases it here (via `ballot_consumeImpl`) or
-  -- through the voter's own `Ballot_Withdraw`. Not time-guarded, so the authority
-  -- can reclaim a spent ballot whenever it likes.
+
   choice Ballot_Consume : Ballot_ConsumeResult
     with
       extraArgs : ExtraArgs
     controller (view (toInterface @Submittable this)).authorities
     do ballot_consumeImpl this (Ballot_Consume with extraArgs)
 
-  -- | Archives an expired ballot. The body checks the deadline alone, adding
-  -- no authority check, so it stays effect-free; who may call it is whatever the
-  -- implementation's visibility admits.
+  -- | Archives an expired ballot
   choice Ballot_Expire : Ballot_ExpireResult
     with
       actor : Party

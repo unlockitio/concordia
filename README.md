@@ -55,8 +55,9 @@ concordia/
 │   ├── original/{Impl,Test}        #   plain-Daml reference + its demo scripts
 │   └── cap-version/{impl,Test}     #   same mechanisms on cap + its demo scripts
 ├── lib/                            # vendored Token Standard DARs (prebuilt binaries)
-├── docs/                           # architecture docs (threat models inline) and glossary
 ├── multi-package.yaml              # dpm workspace (build order + data-dependencies)
+├── DESIGN.md                       # cap-core design (threat models inline)
+├── GLOSSARY.md                     # source of truth for the project's concepts
 ├── CHANGELOG.md
 ├── LICENSE                         # Apache-2.0
 └── README.md                       # this file
@@ -82,7 +83,7 @@ rework noted there.
 The **BabyDso** example reproduces Splice's DSO governance twice — once in
 plain Daml (`original/`) and once on the cap interfaces (`cap-version/`) — and
 runs the same demo scripts in both, so the diff is exactly what the cap
-standard adds. The full catalogue (six demos, what each proves) is in
+standard adds. The full catalogue (five demos, what each proves) is in
 [`examples/BabyDso/DEMOS.md`](examples/BabyDso/DEMOS.md).
 
 Prerequisite: **Daml SDK 3.4.11** via `dpm`. Build the DARs first:
@@ -95,10 +96,13 @@ dpm build --all        # from the repo root (uses multi-package.yaml)
 package from the repo root with `--package-root`:
 
 ```bash
-# cap version
+# cap version — expect a Test Summary of 6 scripts `ok`
+# (setup + demo_ballot_box, demo_voting, demo_confirmation,
+#  demo_median, demo_two_organizations)
 dpm test --package-root examples/BabyDso/cap-version/Test
 
-# plain-Daml reference
+# plain-Daml reference — expect 5 scripts `ok`
+# (same demos minus the cap-only demo_ballot_box)
 dpm test --package-root examples/BabyDso/original/Test
 ```
 
@@ -121,11 +125,12 @@ dpm script --all --ledger-host localhost --ledger-port 6865 \
   --dar examples/BabyDso/original/Test/.daml/dist/baby-dso-test-0.1.0.dar
 ```
 
-Every demo reports `SUCCESS` on the sandbox (`ok` under `dpm test`).
+Expected: every script reports `SUCCESS` — 6 for the cap version, 5 for the
+reference (the same counts `dpm test` reports as `ok`).
 
 ## Contributing
 
-External adopters and contributors are welcome to read the docs, open issues,
+External adopters and contributors are welcome to read the design, open issues,
 and comment. The library is pre-release and its interfaces are still moving, so
 please open an issue to discuss before substantial changes.
 

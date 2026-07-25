@@ -9,8 +9,8 @@
 packages:
 # --- tier 1: cap-core ---
 # Shared value types come from the Token Standard's official metadata DAR,
-# vendored as a prebuilt binary at lib/ (not built here) — see
-# docs/cap-core-architecture.md. All packages data-depend on it directly.
+# vendored as a prebuilt binary at lib/ (not built here). All packages
+# data-depend on it directly.
 # Interfaces/ holds the frozen interfaces; util/ the public toolkit
 # (checked-fetch, time, patchable, policies); internal/ the library-only checks.
 - ./cap-core/util/time
@@ -39,8 +39,9 @@ packages:
 # Baby-DSO (each variant with its own -Test package so no template package
 # carries a daml-script dep):
 #   original    the plain-Daml Splice reproduction — the governance reference,
-#               no cap dependency; its golden vectors prove the others.
-#   cap-version the submission example: Splice's three decision machines
+#               no cap dependency; the behavioural baseline the cap-version
+#               demos are checked against.
+#   cap-version the submission example: Splice's three approval mechanisms
 #               (VoteRequest, Confirmation, AmuletPriceVote) on the cap
 #               standard.
 - ./examples/BabyDso/original/Impl

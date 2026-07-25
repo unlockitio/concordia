@@ -8,7 +8,7 @@ plain-Daml reproduction with no cap dependency, and `cap-version/` implements
 the same [mechanisms](../../GLOSSARY.md#mechanism) on the cap interfaces. Every demo below runs in **both**
 packages under the same name, with the same parties, action, and step order —
 so the diff between the two scripts is exactly what the cap standard adds.
-Demos 1–3 walk Splice's three different mechansims end to end. Demo 4 exercises
+Demos 1–3 walk Splice's three different [mechanisms](../../GLOSSARY.md#mechanism) end to end. Demo 4 exercises
 a scenario outside the scope Splice was designed for — a reasonable decision for
 a single application on its own network, but that a reusable standard must
 generalize.
@@ -48,13 +48,13 @@ outside Splice's single-application design scope.
 Every demo approves one `GovAction`; the diff between the two packages is what
 the cap standard adds per action. All actions run through both [mechanisms](../../GLOSSARY.md#mechanism) (Splice
 splits the action sets; here one set serves both). Each cap action's whole meaning
-— [target](../../GLOSSARY.md#target), [pin](../../GLOSSARY.md#pin), [drift](../../GLOSSARY.md#drift) policy, effect — is one `ActionSpec` record.
+— [target](../../GLOSSARY.md#target), [pin](../../GLOSSARY.md#pin), [drift](../../GLOSSARY.md#drift) [policy](../../GLOSSARY.md#policy), effect — is one `ActionSpec` record.
 
 | Action | Effect | `original` realizes it as | `cap-version` adds | Demos |
 |---|---|---|---|---|
 | `GA_SetConfig` | Whole-config amendment of `DsoRules` | `SetConfig` carrying an explicit `baseConfig`, [merged](../../GLOSSARY.md#merge) field-wise (`Patchable`) | `SetState` delta, same field-wise [merge](../../GLOSSARY.md#merge); [target](../../GLOSSARY.md#target) bound by key (one `DsoRules` per `org`), `driftAborts` | 0, 1, 4 |
 | `GA_SetTransferFee` | Fee write on `AmuletRules` | grant stand-in `NoOp` (no state change) | identity-pinned — [drift](../../GLOSSARY.md#drift) ignored, write lands on fresh state; replays exactly | 2 |
-| `GA_SetAmuletPrice` | Price write on `AmuletRules` | direct `ASetAmuletPrice` choice (median path), no [pin](../../GLOSSARY.md#pin) or policy | state-pinned on the price token; [drift](../../GLOSSARY.md#drift) routed to `priceDriftWithin 1.0` | 1, 2 |
+| `GA_SetAmuletPrice` | Price write on `AmuletRules` | direct `ASetAmuletPrice` choice (median path), no [pin](../../GLOSSARY.md#pin) or [policy](../../GLOSSARY.md#policy) | state-pinned on the price token; [drift](../../GLOSSARY.md#drift) routed to `priceDriftWithin 1.0` | 1, 2 |
 | `GA_PayFromReserve` | Payout from the `AmuletRules` reserve | no equivalent (non-idempotent, outside Splice's action set) | state-pinned; strict `driftAborts`, so any [drift](../../GLOSSARY.md#drift) since approval refuses | 1, 2 |
 
 
@@ -81,7 +81,7 @@ field-wise `Patchable` [merge](../../GLOSSARY.md#merge) in `original`, the same 
 delta in `cap-version`. The cap version [resolves](../../GLOSSARY.md#resolution) with a state-pinned case: a
 reserve payout is approved by [vote](../../GLOSSARY.md#vote) at price 10.0, the confirmation [mechanism](../../GLOSSARY.md#mechanism)
 moves the price before [resolution](../../GLOSSARY.md#resolution), and the voteRequestClose [resolves](../../GLOSSARY.md#resolution),
-the aborts according to `driftAborts` policy, if policy was `driftMerges` 
+the aborts according to `driftAborts` [policy](../../GLOSSARY.md#policy), if [policy](../../GLOSSARY.md#policy) was `driftMerges` 
 the change would be applied.
 
 ```mermaid
@@ -139,16 +139,16 @@ its confirmer never intended. In `original` (grant stand-in `NoOp`) this second
 execution is admitted: nothing between the TTL and action equality scopes
 *when* a confirmation may still be used, which is why Splice keeps
 confirmable actions idempotent by convention. In `cap-version` that scope is
-declared per action — each action's whole meaning ([target](../../GLOSSARY.md#target), [pin](../../GLOSSARY.md#pin), [drift](../../GLOSSARY.md#drift) policy,
+declared per action — each action's whole meaning ([target](../../GLOSSARY.md#target), [pin](../../GLOSSARY.md#pin), [drift](../../GLOSSARY.md#drift) [policy](../../GLOSSARY.md#policy),
 effect) is one `ActionSpec` record. The `GA_SetTransferFee` action is
 identity-pinned and replays exactly as in `original`. State-pinned actions
 instead [pin](../../GLOSSARY.md#pin) the state their confirmers saw (the [target](../../GLOSSARY.md#target)'s [state token](../../GLOSSARY.md#state-token)) and
-route [drift](../../GLOSSARY.md#drift) to their own declared policy (in this case: "has the ground moved 
+route [drift](../../GLOSSARY.md#drift) to their own declared [policy](../../GLOSSARY.md#policy) (in this case: "has the ground moved 
 more than 1 since the confirmers approved ?"): the demo confirms three
 `GA_SetAmuletPrice` actions and a `GA_PayFromReserve` payout against the same (initial)
 state, executes the first price, and shows the second can still execute, 
 the third refused for [drifting](../../GLOSSARY.md#drift) beyond the bound, the
-payout actionwith the `driftAborts` policy is refused since the state changed,
+payout actionwith the `driftAborts` [policy](../../GLOSSARY.md#policy) is refused since the state changed,
 until re-approved against the live state. Stale leftovers are
 unable to aggregate with fresh confirmations
 
@@ -214,7 +214,7 @@ Negative case: advancing with a cherry-picked subset of [votes](../../GLOSSARY.m
 median is only sound over exactly the current [participants](../../GLOSSARY.md#participant), proven at the
 advance choice by exact [cover](../../GLOSSARY.md#cover) against the live SV list (an unpriced [vote](../../GLOSSARY.md#vote) [covers](../../GLOSSARY.md#cover)
 its SV without counting). In the cap version every [standing](../../GLOSSARY.md#standing) [vote](../../GLOSSARY.md#vote) is [admitted](../../GLOSSARY.md#admission)
-under the [mechanism](../../GLOSSARY.md#mechanism)'s binding group, and pricing runs through the same
+under the [mechanism](../../GLOSSARY.md#mechanism)'s [binding](../../GLOSSARY.md#binding) group, and pricing runs through the same
 `Ballot_Cast` choice the [voting](../../GLOSSARY.md#vote) [mechanism](../../GLOSSARY.md#mechanism) uses.
 
 ```mermaid
@@ -262,8 +262,8 @@ institution 2's state — outside Splice's design scope, since it runs as the
 sole instance on its own network. In `cap-version` each organization is its
 own [target](../../GLOSSARY.md#target) `id` on `DsoRules`, and the same replay is refused twice, at named
 checks: [resolving](../../GLOSSARY.md#resolution) org 1's approved request against org 2's rules dies at the
-[outcome](../../GLOSSARY.md#outcome)'s [target](../../GLOSSARY.md#target) binding, and [resolving](../../GLOSSARY.md#resolution) org 2's own request with org 1's
-[ballots](../../GLOSSARY.md#ballot) dies at the [ballots](../../GLOSSARY.md#ballot)' contract-identity binding. The honest [resolution](../../GLOSSARY.md#resolution) under
+[outcome](../../GLOSSARY.md#outcome)'s [target](../../GLOSSARY.md#target) [binding](../../GLOSSARY.md#binding), and [resolving](../../GLOSSARY.md#resolution) org 2's own request with org 1's
+[ballots](../../GLOSSARY.md#ballot) dies at the [ballots](../../GLOSSARY.md#ballot)' contract-identity [binding](../../GLOSSARY.md#binding). The honest [resolution](../../GLOSSARY.md#resolution) under
 organization 1 then succeeds unchanged, and organization 2 never moves.
 
 ```mermaid

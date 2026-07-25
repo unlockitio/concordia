@@ -1,9 +1,7 @@
 -- Copyright (c) 2026 Unlockit. All rights reserved.
 -- SPDX-License-Identifier: Apache-2.0
 
--- | `Governor` requires `Mechanism` and is
--- resolved with `Ballot`s (its own package); `Governor_Resolve` is the one
--- resolve choice, running the shared cap-core checks then governance's own.
+
 module Cap.Governance.GovernorV1 where
 
 import DA.Optional (catOptionals)
@@ -17,37 +15,16 @@ import Cap.Core.ChecksV1
 import Cap.Governance.OutcomeV1
 import Cap.Governance.BallotV1
 
--- Shared data
---------------
 
--- | The proposal put before the electorate.
-data Proposal = Proposal
-  with
-    url : Text
-    body : Text
-  deriving (Eq, Show)
-
--- Governor
------------
-
--- | View of a governor under vote. The authority, voting window, expiry, and
--- completeness flag live on the governor's `MechanismView`; this view carries
--- only what is governance's alone.
 data GovernorView = GovernorView
   with
     proposer : Party
-    proposal : Proposal
     executeAfter : Time
-      -- ^ The timelock: the instant the approved outcome may first execute —
-      -- part of what voters approve. `governor_issueOutcome` MUST pin each issued
-      -- outcome's `executeAfter` to exactly this value.
+      -- ^ The instant the approved outcome may first execute
     meta : Metadata
-      -- ^ Display and extension data; never security-relevant.
   deriving (Eq, Show)
 
--- | The tally's verdict (method-level, not serialized). `VApproved` may carry a
--- selected option, opaque to the interface. A winning "do nothing" is
--- `VRejected`.
+-- `VApproved` may carry a selected option, opaque to the interface.
 data Verdict
   = VApproved (Optional Text)
   | VRejected
@@ -55,17 +32,14 @@ data Verdict
     -- ^ The vote never became definitive (e.g. quorum not reached).
   deriving (Eq, Show)
 
--- | Serialized outcome of a resolution. The extension constructor works around
--- the current lack of variant upgrading in Daml 3.x.
+
 data ResolutionOutcome
   = RO_Approved
       with
         outcomeCids : [ContractId GovernanceOutcome]
-          -- ^ One per obligation of the approved action; independent lifecycles
-          -- get independent contracts. Never empty.
+          -- ^ The GovernanceOutcome contracts the approval produced.
         option : Optional Text
-          -- ^ The winning option for multi-option governors, exactly as `tally`
-          -- selected it; None for plain approve/reject.
+          -- ^ The winning option if necessary
   | RO_Rejected
   | RO_Lapsed
   | ExtResolutionOutcome with dummyUnitField : ()
@@ -92,33 +66,22 @@ interface Governor requires Mechanism where
   viewtype GovernorView
 
   tally : [Ballot] -> Verdict
-    -- ^ THE social choice function — pure. Side effects belong in `onResolved`.
+    -- ^ The social choice function. Side effects implemented in `onResolved`
   isResolver : Party -> Bool
-    -- ^ Who may trigger resolution. Resolution is safe-by-construction except
-    -- submittable selection (gated under completeness), so broad resolver sets
-    -- are fine.
-  governor_issueOutcome : ContractId Mechanism -> Optional Text -> ExtraArgs -> Update [ContractId GovernanceOutcome]
-    -- ^ Builds the approved outcomes. Gets this governor's own mechanism cid (passed in
-    -- because an implementation cannot see its own cid), the winning option as
-    -- `tally` selected it (None for approve/reject), and the resolver's `extraArgs`.
-    -- MUST return at least one outcome, each signed by this governor's
-    -- authority, with `source` exactly the given cid, `executeAfter` exactly
-    -- the governor's `executeAfter` and any `executeUntil` past both issuance
-    -- and that instant; MUST set each `committedTargets` to the targets the
-    -- approved option authorized.
-  onResolved : ResolutionOutcome -> ExtraArgs -> Update Metadata
-    -- ^ Side effects atomic with resolution (rejection record, successor on a
-    -- lapse, notifications), run with the authority's signature in scope; the
-    -- returned metadata lands in the result.
-  governor_withdrawImpl : Governor_Withdraw -> Update Governor_WithdrawResult
-    -- ^ Cleanup on withdrawal (release pre-minted rights or escrow named in
-    -- `extraArgs.context`). Runs after `Mechanism`'s `withdrawAllowed` passed.
+    -- ^ Who may trigger resolution.
 
-  -- | Resolve the governor with its ballots. Consuming: a governor resolves
-  -- exactly once. Ballots are read, not consumed — teardown is a later
-  -- `Ballot_Consume`/`Ballot_Expire`; they only lose their mechanism binding once the
-  -- governor dies. Issuing the outcome can be made atomic with resolution,
-  -- useful to prevent frontrunning.
+  governor_issueOutcome : ContractId Mechanism -> Optional Text -> ExtraArgs -> Update [ContractId GovernanceOutcome]
+    -- ^ Builds the approved outcomes.
+    -- MUST set each `committedTargets` to the targets the
+    -- approved option authorized.
+
+  onResolved : ResolutionOutcome -> ExtraArgs -> Update Metadata
+    -- ^ Side effects atomic with resolution
+
+  governor_withdrawImpl : Governor_Withdraw -> Update Governor_WithdrawResult
+    -- ^ Cleanup on withdrawal
+
+
   choice Governor_Resolve : Governor_ResolveResult
     with
       resolver : Party
@@ -151,9 +114,7 @@ interface Governor requires Mechanism where
       resultMeta <- onResolved this outcome extraArgs
       pure Governor_ResolveResult with outcome; resolvedAt = now; meta = resultMeta
 
-  -- | Consuming. Timing is the `withdrawAllowed` policy; the standard profile
-  -- allows withdrawal only before voting opens, so a proposer can never cancel a
-  -- losing vote.
+
   choice Governor_Withdraw : Governor_WithdrawResult
     with
       extraArgs : ExtraArgs
@@ -163,10 +124,7 @@ interface Governor requires Mechanism where
       withdrawAllowed (toInterface @Mechanism this) now
       governor_withdrawImpl this (Governor_Withdraw with extraArgs)
 
-  -- | Archives a governor that can no longer resolve. The body checks the
-  -- deadline alone, adding no authority check, so it stays effect-free; who may
-  -- call it is whatever the implementation's visibility admits. Never before the
-  -- close, because `expiresAt` MUST sit past it (`MechanismView`).
+
   choice Governor_Expire : Governor_ExpireResult
     with
       actor : Party
@@ -181,26 +139,21 @@ interface Governor requires Mechanism where
 
 -- | Admit the ballots presented at resolution as `(cid, ballot)` pairs to tally.
 -- Under completeness the cap-core check proves binding, authority signature, and
--- exact cover (which subsumes distinctness); without it, there is no cover, so
--- the check asserts distinctness directly. Either way no ballot is counted twice.
+-- exact cover
 admitBallots : ContractId Governor -> Mechanism -> [ContractId Ballot] -> Update [(ContractId Ballot, Ballot)]
 admitBallots self res ballots = do
   let mechanism = toInterfaceContractId @Mechanism self
   let scids = map (toInterfaceContractId @Submittable) ballots
   pairs <- case (view res).size of
-    Some n -> admitSubmittablesWithCompleteness n (toInterfaceContractId @Mechanism self) res scids
+    Some n -> admitSubmittablesWithCompleteness n mechanism res scids
     None -> admitSubmittables (view res).authorities mechanism scids
 
   forA pairs $ \(scid, s) -> case fromInterface @Ballot s of
     None -> abort "admitted submittable is not a ballot"
     Some b -> pure (fromInterfaceContractId @Ballot scid, b)
 
--- | Score one presented ballot. A full ballot is returned to tally; the check
--- already proved the set distinct, so it needs no consuming here. Vote
--- provenance is the trusted template's own (its signatory and controller
--- structure), not re-proved here — a container format records votes on an
--- authority-signed contract the voters never sign. An uncast or withdrawn one
--- only fills a slot, illegal unless the governor declares completeness.
+
+-- Decides whether a ballot may enter a tally.
 admitTally : Bool -> Ballot -> Update (Optional Ballot)
 admitTally covered b =
   case (view (toInterface @Submittable b)).state of

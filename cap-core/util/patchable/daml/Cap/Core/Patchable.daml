@@ -1,19 +1,14 @@
 -- Copyright (c) 2026 Unlockit. All rights reserved.
 -- SPDX-License-Identifier: Apache-2.0
 
--- | Cap's `SetState` delta over Splice's `Patchable` three-way merge. `patch`
--- and its instances (`Set`, `Map`, `Optional`, scalars) come straight from
--- `Splice.Util`; only the `SetState` action wrapper is ours.
---
--- `Patchable` is the machinery behind the merging drift policy
--- (`Cap.Governance.TargetPolicies.driftMerges`); conflicts resolve governor-wins.
+-- `Patchable` is the tool behind the merging drift policy
+
 module Cap.Core.Patchable (Patchable (..), SetState (..), applySetState) where
 
 import Splice.Util (Patchable (..))
 
--- | A generic delta action over patchable state: move the value from `base`
--- to `new`. Applied with `applySetState`, so an action needs no bespoke arg
--- record when it is a pure state change.
+-- | A generic delta action over patchable state. Moves the value from `base`
+-- to `new`. Applied with `applySetState`.
 data SetState a = SetState
   with
     base : a

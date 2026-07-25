@@ -1,19 +1,9 @@
 -- Copyright (c) 2026 Unlockit. All rights reserved.
 -- SPDX-License-Identifier: Apache-2.0
 
--- | The fixed checks for the DOMAIN submit and resolve choices run over a
--- mechanism's `MechanismView` and its submittables. They are functions, not
--- interface methods or choices: the enforcement locus is the domain interface's
--- fixed choice body, which calls them and which implementations cannot override.
--- A domain that skips a call here is non-conforming at the interface-author
--- level, never at the template level.
---
--- The checked-fetch vocabulary these build on (`HasCheckedFetch`, the group
--- types, `fetchChecked*`, `require`, `authoritySigned`) lives one layer down in
--- `Cap.Core.CheckedFetchV1`.
---
--- The check proves; it never consumes: when and how the cover is spent is the
--- implementation's, inside its resolution or afterwards through expiry.
+-- | The fixed checks the domain's submit and resolve choices run over a
+-- mechanism and its submittables. Functions called from fixed choice bodies,
+-- not overridable. The check proves; it never consumes.
 module Cap.Core.ChecksV1 where
 
 import DA.List (sort, unique)
@@ -23,39 +13,30 @@ import Cap.Core.CheckedFetchV1
 import Cap.Core.SubmittableV1
 import Cap.Core.MechanismV1
 
--- | The full authority's signature must be in scope, for any cap artifact whose
--- view carries an `authorities` set. Reads the set from the artifact's own view,
--- so it can never be checked against a foreign set.
+-- | Require the artifact's full authority signed it. Reads `authorities` from
+-- the artifact's own view.
 checkAuthoritySigned : (HasInterfaceView i v, HasField "authorities" v (Set Party), HasSignatory i) => i -> Update ()
 checkAuthoritySigned c =
   require "contract is signed by its authority"
     (authoritySigned (view c).authorities (signatory c))
 
--- | Admit one presented submittable: fetch it through its `Submittable` interface
--- bound to this mechanism (a submittable bound to a different mechanism
--- aborts) and require the authority signed it. Run per item by both
--- `admitSubmittables` (distinct set) and `admitSubmittablesWithCompleteness` (exact cover).
+-- | Admit one submittable: fetch it bound to this mechanism and require the
+-- authority signed it.
 admitSubmittable : Set Party -> ContractId Mechanism -> ContractId Submittable -> Update (ContractId Submittable, Submittable)
 admitSubmittable authorities mechanism scid = do
   s <- fetchCheckedInterface (ForMechanism mechanism) scid
-  require "submittable is signed by the authority" (authoritySigned authorities (signatory s)) -- this might be overforcing, we might want a mechanism hwere participants can withdraw at will 
+  require "submittable is signed by the authority" (authoritySigned authorities (signatory s))
   pure (scid, s)
 
--- | The completeness-free admission: each submittable bound and authority-signed,
--- and the set itself distinct. Distinctness (no cid twice) is the no-double-count
--- guard where there is no cover to give it — which is why resolution never has to
--- consume to stop a recount. Completeness uses `admitSubmittablesWithCompleteness`
--- instead, where exact-cover already subsumes this check.
+-- | Completeness-free admission: each submittable bound and signed, and the set
+-- distinct (the no-double-count guard when there is no cover).
 admitSubmittables : Set Party -> ContractId Mechanism -> [ContractId Submittable] -> Update [(ContractId Submittable, Submittable)]
 admitSubmittables authorities mechanism scids = do
   require "the presented submittables are distinct" (unique scids)
   forA scids (admitSubmittable authorities mechanism)
 
--- | Proof at resolution of exact cover: admit each submittable (bound, signed)
--- and prove its slots are exactly `0 .. n-1`. Cover subsumes distinctness — a
--- repeated cid repeats a slot and fails — so no separate distinctness check is
--- run here (that is `admitSubmittables`'s job, for the completeness-free path). The
--- mechanism's own signature is the fixed body's separate step, run before the check.
+-- | Exact-cover admission: admit each submittable (bound, signed) and prove its
+-- slots are exactly `0 .. n-1`. Cover subsumes distinctness.
 admitSubmittablesWithCompleteness : Int -> ContractId Mechanism -> Mechanism -> [ContractId Submittable] -> Update [(ContractId Submittable, Submittable)]
 admitSubmittablesWithCompleteness n self r scids = do
   pairs <- forA scids (admitSubmittable (view r).authorities self)
@@ -65,8 +46,8 @@ admitSubmittablesWithCompleteness n self r scids = do
   checkSlotCover n slots
   pure pairs
 
--- | The exact-cover assertion: the gathered slots must be exactly `0 .. n-1`,
--- each once. `n` MUST be sealed on the view at genesis.
+-- | Assert the gathered slots are exactly `0 .. n-1`, each once. `n` MUST be
+-- sealed on the view at genesis.
 checkSlotCover : Int -> [Int] -> Update ()
 checkSlotCover n slots = do
   require "size is non-negative" (n >= 0)
