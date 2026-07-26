@@ -96,8 +96,16 @@ on-ledger fact.
 
 <sub>Source: CAP `cap-core` design (no external source).</sub>
 
+### Execute
+Carrying out the action a resolved [outcome](#outcome) holds — the point at
+which its pre-committed [authority](#authority) takes effect. Execution follows
+[resolution](#resolution) and may occur at most once, within the
+[outcome](#outcome)'s window.
+
+<sub>Source: CAP `cap-core` design (no external source).</sub>
+
 ### Executor
-The party permitted to execute an approved [outcome](#outcome).
+The party permitted to [execute](#execute) an approved [outcome](#outcome).
 
 
 <sub>Source: CAP `cap-governance` design (no external source).</sub>
@@ -107,7 +115,7 @@ The archival of a [mechanism](#mechanism) artifact — a [ballot](#ballot), a
 [governor](#governor), an [outcome](#outcome) — once it can no longer play its
 part, past a stated deadline. Expiry moves no value and produces no
 [outcome](#outcome), so anyone may trigger it; it is deliberately separate from
-[resolution](#resolution) and execution.
+[resolution](#resolution) and [execution](#execute).
 
 <sub>Source: CAP `cap-core` design (no external source).</sub>
 
@@ -118,7 +126,7 @@ An interaction between participants that collects a set of
 <sub>Source: CAP `cap-core` design (no external source).</sub>
 
 ### Outcome
-A pre-approved action to be executed — the product of resolving a
+A pre-approved action to be [executed](#execute) — the product of resolving a
 [mechanism](#mechanism).
 
 <sub>Source: CAP `cap-core` design (no external source).</sub>
