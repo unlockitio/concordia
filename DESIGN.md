@@ -13,8 +13,7 @@ an interface method the implementation supplies.
 
 This document shows the interfaces,
 the proof they are reusable — including what Splice could reuse — the
-trade-offs, and what is enforced versus trusted. Terms link to the [glossary](GLOSSARY.md); the
-file-by-file reference is [`DESIGN_old.md`](DESIGN_old.md).
+trade-offs, and what is enforced versus trusted. Terms link to the [glossary](GLOSSARY.md).
 
 ## 1. The interfaces, exemplified with BabyDso
 
