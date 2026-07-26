@@ -16,8 +16,8 @@ generalize.
 | # | Demo | Splice [mechanisms](../../GLOSSARY.md#mechanism) | What it shows in one line |
 |---|---|---|---|
 | 0 | `demo_ballot_box` | (cap-version only) | The container [ballot](../../GLOSSARY.md#ballot) format: Splice's single-contract [vote](../../GLOSSARY.md#vote) map on the same choices |
-| 1 | `demo_voting` | `VoteRequest` | Full lifecycle: request → [cast](../../GLOSSARY.md#cast) → [resolve](../../GLOSSARY.md#resolution) → execute, plus concurrent-outcome handling |
-| 2 | `demo_confirmation` | `Confirmation` ([standing](../../GLOSSARY.md#standing), per-decision) | A [quorum](../../GLOSSARY.md#quorum) built asynchronously; execution consumes it at [threshold](../../GLOSSARY.md#threshold) |
+| 1 | `demo_voting` | `VoteRequest` | Full lifecycle: request → [cast](../../GLOSSARY.md#cast) → [resolve](../../GLOSSARY.md#resolution) → [execute](../../GLOSSARY.md#execute), plus concurrent-outcome handling |
+| 2 | `demo_confirmation` | `Confirmation` ([standing](../../GLOSSARY.md#standing), per-decision) | A [quorum](../../GLOSSARY.md#quorum) built asynchronously; [execution](../../GLOSSARY.md#execute) consumes it at [threshold](../../GLOSSARY.md#threshold) |
 | 3 | `demo_median` | `AmuletPriceVote` ([standing](../../GLOSSARY.md#standing), persistent) | One [standing](../../GLOSSARY.md#standing) [vote](../../GLOSSARY.md#vote) per SV, re-read every round; the median needs exactly the [participants](../../GLOSSARY.md#participant) |
 | 4 | `demo_two_organizations` | generalization | Two organizations sharing one [authority](../../GLOSSARY.md#authority) party: what keeps a decision inside its institution |
 
@@ -28,11 +28,11 @@ different shape of "collect SV approvals, then act":
 
 1. **`VoteRequest`** — one request contract per decision. SVs [cast](../../GLOSSARY.md#cast)
    yes/no onto it, and once the [threshold](../../GLOSSARY.md#threshold) is met the request is *closed*: it
-   [resolves](../../GLOSSARY.md#resolution), produces the [outcome](../../GLOSSARY.md#outcome), and executes, all in one transaction, then is
-   consumed. A decision has a lifecycle: request → [cast](../../GLOSSARY.md#cast) → [resolve](../../GLOSSARY.md#resolution) → execute.
+   [resolves](../../GLOSSARY.md#resolution), produces the [outcome](../../GLOSSARY.md#outcome), and [executes](../../GLOSSARY.md#execute), all in one transaction, then is
+   consumed. A decision has a lifecycle: request → [cast](../../GLOSSARY.md#cast) → [resolve](../../GLOSSARY.md#resolution) → [execute](../../GLOSSARY.md#execute).
 2. **`Confirmation` ([standing](../../GLOSSARY.md#standing), per-decision)** — each SV independently creates a
    `Confirmation` contract for a given action. There is no shared request; the
-   [quorum](../../GLOSSARY.md#quorum) is assembled asynchronously and execution consumes the confirmations
+   [quorum](../../GLOSSARY.md#quorum) is assembled asynchronously and [execution](../../GLOSSARY.md#execute) consumes the confirmations
    once enough exist. Confirmations are [standing](../../GLOSSARY.md#standing) (valid for a time window) and
    per-decision.
 3. **`AmuletPriceVote` ([standing](../../GLOSSARY.md#standing), persistent)** — each SV holds *one* persistent
@@ -129,14 +129,14 @@ sequenceDiagram
 ## Demo 2 — `demo_confirmation`
 
 A grant-shaped action through the confirmation [mechanism](../../GLOSSARY.md#mechanism): two of four SVs
-confirm, execution fails below the [threshold](../../GLOSSARY.md#threshold), the rest confirm, and execution
-consumes three confirmations and executes the action. Negative case: a spent
+confirm, [execution](../../GLOSSARY.md#execute) fails below the [threshold](../../GLOSSARY.md#threshold), the rest confirm, and [execution](../../GLOSSARY.md#execute)
+consumes three confirmations and [executes](../../GLOSSARY.md#execute) the action. Negative case: a spent
 confirmation cannot be presented again. A *live* confirmation, though, is valid
 for its whole time window: the demo gathers one more confirmation than the
-[threshold](../../GLOSSARY.md#threshold), executes once, then combines the leftover — created for that first
-decision — with fresh ones into a **second execution of the same action**, one
+[threshold](../../GLOSSARY.md#threshold), [executes](../../GLOSSARY.md#execute) once, then combines the leftover — created for that first
+decision — with fresh ones into a **second [execution](../../GLOSSARY.md#execute) of the same action**, one
 its confirmer never intended. In `original` (grant stand-in `NoOp`) this second
-execution is admitted: nothing between the TTL and action equality scopes
+[execution](../../GLOSSARY.md#execute) is admitted: nothing between the TTL and action equality scopes
 *when* a confirmation may still be used, which is why Splice keeps
 confirmable actions idempotent by convention. In `cap-version` that scope is
 declared per action — each action's whole meaning ([target](../../GLOSSARY.md#target), [pin](../../GLOSSARY.md#pin), [drift](../../GLOSSARY.md#drift) [policy](../../GLOSSARY.md#policy),
@@ -146,7 +146,7 @@ instead [pin](../../GLOSSARY.md#pin) the state their confirmers saw (the [target
 route [drift](../../GLOSSARY.md#drift) to their own declared [policy](../../GLOSSARY.md#policy) (in this case: "has the ground moved 
 more than 1 since the confirmers approved ?"): the demo confirms three
 `GA_SetAmuletPrice` actions and a `GA_PayFromReserve` payout against the same (initial)
-state, executes the first price, and shows the second can still execute, 
+state, [executes](../../GLOSSARY.md#execute) the first price, and shows the second can still [execute](../../GLOSSARY.md#execute), 
 the third refused for [drifting](../../GLOSSARY.md#drift) beyond the bound, the
 payout actionwith the `driftAborts` [policy](../../GLOSSARY.md#policy) is refused since the state changed,
 until re-approved against the live state. Stale leftovers are
@@ -257,7 +257,7 @@ Two `DsoRules` instances — different configs, different organizations — host
 by the same `dso` [authority](../../GLOSSARY.md#authority) party. A `SetConfig` [vote](../../GLOSSARY.md#vote) is opened and approved
 under institution 1, then [resolved](../../GLOSSARY.md#resolution) presenting institution 2's rules. Splice's
 [admission](../../GLOSSARY.md#admission) is keyed by the [authority](../../GLOSSARY.md#authority) party, which both organizations share, so
-in `original` the [resolution](../../GLOSSARY.md#resolution) passes and institution 1's action executes on
+in `original` the [resolution](../../GLOSSARY.md#resolution) passes and institution 1's action [executes](../../GLOSSARY.md#execute) on
 institution 2's state — outside Splice's design scope, since it runs as the
 sole instance on its own network. In `cap-version` each organization is its
 own [target](../../GLOSSARY.md#target) `id` on `DsoRules`, and the same replay is refused twice, at named
