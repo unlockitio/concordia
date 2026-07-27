@@ -65,7 +65,7 @@ same [mechanisms](GLOSSARY.md#mechanism) on the CAP interfaces. Every demo runs 
 the same parties, action, and step order — **the diff between the two packages
 is exactly what CAP adds**, and the demo assertions are the behavioural match.
 
-What the diff contains is the code Splice could reuse. In `original/`, window,
+What the diff contains is the code Splice could reuse. In `original/`, time windows,
 eligibility, threshold, and [execution](GLOSSARY.md#execute) are re-implemented
 per [mechanism](GLOSSARY.md#mechanism) inside `DsoRules`, and the package defines for itself what
 `cap-version/` imports: the checked-fetch [admission](GLOSSARY.md#admission)
