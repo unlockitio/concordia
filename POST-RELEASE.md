@@ -43,18 +43,8 @@ reference (`examples/BabyDso/cap-version`) demonstrates each of these.
 
 ## New governance formats
 
-A governance format is three interface instances — `Governor`, `Ballot`,
-`GovernanceOutcome` — plus `Target` instances on its governed state. The fixed
-bodies carry admission, the completeness proof, timing, target binding, and
-drift detection; the format supplies the methods.
-
-- **A new decision rule.** The tally is a pure function `[Ballot] -> Verdict`;
-  the released rules (`Cap.Governance.Tallies`: quorate majority, weighted,
-  median, turnout threshold) are reference bodies, not a closed set. A new
-  rule is one function.
-- **Delegated and quadratic formats.** Liquid democracy, delegated voting, and
-  quadratic funding are later formats on the same spine: delegation state is
-  the format's own templates, and the weights land in its tally.
+A new a Governance format can be created by adding a new decision rule to Tally. 
+Interfaces supporting vote delegation can also be implemented in the future. 
 
 ## New auction formats
 
