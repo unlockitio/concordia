@@ -30,25 +30,16 @@ The cheapest tier: a system already running on CAP grows by pure deploys,
 often one new template or one new case in an application datatype. The BabyDso
 reference (`examples/BabyDso/cap-version`) demonstrates each of these.
 
-- **A new governance action.** The action set is an application datatype, so a
-  new action is one constructor and one dispatch case (`GovAction` /
-  `ActionSpec` in the BabyDso `DsoMechanism`); the mechanism contract and the
-  authority identity stay fixed.
 - **A new governable target.** Any standing contract becomes governable with
-  an `interface instance Target` (`Cap.Governance.TargetV1`); a `Patchable`
-  instance on its config adds field-wise merge, so two approvals touching
-  different fields compose in either order.
+  an `interface instance Target`.
 - **Eligibility.** The participation right is the eligibility mechanism: an
   empty `Submittable` minted only to eligible parties. Institutions bring
-  their own identity or KYC system and compose it here, because the core
-  forces none.
+  their own identity or KYC system and compose with this.
 - **A drift policy per action.** Whether an approved outcome executes over a
-  target that changed since approval is declared per action: `driftAborts`
-  refuses, `driftMerges` merges (`Cap.Governance.TargetPolicies`), or the
-  application writes its own `onTargetDrift`.
+  target that changed since approval is declared per action.
 - **A timing profile.** Submission, resolution, and withdrawal windows are
   three `Mechanism` hooks; `Cap.Core.Policies` and `Cap.Governance.Policies`
-  ship named profiles, and an application may write its own.
+  ship named policies, but an application may write its own.
 
 ## New governance formats
 
