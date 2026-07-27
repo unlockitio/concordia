@@ -48,21 +48,7 @@ Interfaces supporting vote delegation can also be implemented in the future.
 
 ## New auction formats
 
-An auction format is three interface instances — `Auction`, `Bid`,
-`AuctionOutcome`. The M4 formats (sealed-bid first- and second-price, Dutch,
-multi-unit) fill this spine; later formats fill the same one.
-
-- **Later formats.** Combinatorial auctions, continuous double auctions, and
-  call/periodic markets are admitted without a core change: bid content is the
-  format's own (opaque at the interface), the pricing rule is
-  `auction_resolveImpl`, and one-outcome-per-obligation resolution already
-  covers multi-winner clearing.
-- **Settlement variants.** Settlement composes with the Token Standard V2 —
-  the reference flow issues allocations, so clearing and asset movement are
-  one atomic DvP, and `isExecutor` is plural for joint settlement. A format
-  may vary escrow timing, legs, and instruments in
-  `auctionOutcome_settleImpl`, under the fixed obligation that all legs of a
-  settlement execute atomically.
+New auction formats such as Combinatorial Auctions and Continuous Auctions can be implemented by extending cap-core.
 
 ## New domains on cap-core
 
