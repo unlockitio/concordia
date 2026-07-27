@@ -8,18 +8,17 @@ downstream modules*: what can be built on CAP after the final milestone.
 
 ## Extension model
 
-Interface choice bodies are fixed in Daml, so the library splits every
+The library splits every
 behaviour across three surfaces:
 
 - **Fixed choice bodies** — admission of every contract id, the completeness
-  cover, window and authority checks (`cap-core/internal/checks`). An
+  cover, time window and fetch checks. An
   extension inherits these guarantees and cannot weaken them.
-- **Interface methods** — what a legitimate format varies: the tally, the
-  pricing rule, the drift policy, the settlement legs. An extension is chiefly
+- **Interface methods** — what an implementation can define (e.g the tally, the
+  pricing rule, the drift policy). An extension is
   the method bodies it supplies.
-- **The opt-in toolkit** — default method bodies and helpers (`cap-core/util`,
-  `cap-governance/util`). Using one saves work; skipping one never locks a
-  format out.
+- **The opt-in toolkit** — default method bodies and helpers. 
+	They are opt-in so they do not lock formats out.
 
 Extension is deployment: new templates implementing the released interfaces,
 uploaded beside the released DARs. Nothing below re-opens a released interface
