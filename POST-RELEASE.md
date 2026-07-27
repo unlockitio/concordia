@@ -48,7 +48,8 @@ Interfaces supporting vote delegation can also be implemented in the future.
 
 ## New auction formats
 
-New auction formats such as Combinatorial Auctions and Continuous Auctions can be implemented by extending cap-core.
+New auction formats that include a single seller can be easily extended by cap-auctions.
+New auction formats such as Combinatorial Auctions and Continuous Auctions can be implemented might need extending cap-core.
 
 ## New domains on cap-core
 
