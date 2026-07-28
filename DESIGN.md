@@ -170,7 +170,7 @@ constructors on serialized result and state types, and DA's official
 shared value types. The checked-fetch admission discipline is Splice's own
 `Splice.Util`, re-exported. The [`cap-auctions`](cap-auctions/) domain
 will compose settlement with Token
-Standard V2 holdings and allocations and versions in lockstep with it.
+Standard V2 holdings and allocations and is planned to version in lockstep with it.
 
 ## 6. Scope and evolution
 
