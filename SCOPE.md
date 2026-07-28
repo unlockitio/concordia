@@ -112,10 +112,10 @@ Spanning all three packages:
 <!-- Each line carries its "why". This list is the maturity signal; keep the
      rationale clause on every entry. -->
 
-| Excluded | Why it is out | Admitted later without an interface major? |
-|---|---|---|
-| Full Development Fund operational governance | CAP is the reusable primitive, not the DAO that runs the fund | N/A — an application built *on top* of CAP |
-| Exhaustive format coverage — combinatorial & continuous-double auctions, liquid-democracy / delegated voting, quadratic funding | The bounded set proves reuse, not completeness of either domain | **Yes** — the spine admits them as later formats |
-| Custody / matching engine / off-ledger settlement infra | cap-auctions issues settlement obligations only | N/A — separate layer |
-| KYC / identity / electorate membership | The participation-right pattern is the eligibility mechanism; institutions bring their own | N/A — a template/authority decision, not core |
-| Production UI / indexer / wallet | CAP is a Daml library; front-ends are downstream — the M5 reference flows ship demo front-ends only to exercise them, not production surface | N/A — separate layer |
+| Excluded | Why it is out |
+|---|---|
+| Full Development Fund operational governance | CAP is the reusable primitive, not the DAO that runs the fund | 
+| Other formats — combinatorial & continuous-double auctions, delegated voting, quadratic funding | The bounded set proves reuse, not completeness of either domain |
+| Custody / matching engine / off-ledger settlement infra | cap-auctions issues settlement obligations only |
+| KYC / identity / electorate membership | The participation-right pattern is the eligibility mechanism; institutions bring their own |
+| Production UI / indexer / wallet | CAP is a Daml library; front-ends are downstream — the M5 reference flows ship demo front-ends only to exercise them, not production surface |
