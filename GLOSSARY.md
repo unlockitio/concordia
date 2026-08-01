@@ -60,7 +60,7 @@ Interface + fixed bodies with holes a domain fills.
 <sub>Source: CAP design (no external source).</sub>
 
 ### Tool
-Opt-in reusable utility body (a `util/` helper, not a forced check).
+Opt-in reusable utility body (a helper, not a forced check).
 
 <sub>Source: CAP design (no external source).</sub>
 
