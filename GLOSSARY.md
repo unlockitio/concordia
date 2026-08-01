@@ -35,7 +35,7 @@ An artifact bound to a specific referent's group.
 <sub>Source: CAP design (no external source).</sub>
 
 ### Hook
-Extension point the fixed body must call; body supplied by the implementation.
+Extension point the fixed body must call, the logic is supplied by the implementation.
 
 <sub>Source: CAP design (no external source).</sub>
 
