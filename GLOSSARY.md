@@ -45,7 +45,7 @@ Content the interface can't read; only a decoder interprets it.
 <sub>Source: CAP design (no external source).</sub>
 
 ### Policy
-A behavior body supplied to a hook; named ready-made ones live in `*.Policies`.
+A named behavior body supplied to a hook.
 
 <sub>Source: CAP design (no external source).</sub>
 
