@@ -39,17 +39,16 @@ flowchart LR
 
 | Interface | One line | Fixed choices | Source |
 | --- | --- | --- | --- |
-| `Mechanism` | Anything awaiting [resolution](GLOSSARY.md#resolution): [authority](GLOSSARY.md#authority) set, submission window, [completeness](GLOSSARY.md#completeness) flag, timing hooks | — | [`MechanismV1.daml`](cap-core/Interfaces/mechanism/daml/Cap/Core/MechanismV1.daml) |
+| `Mechanism` | The shared frame that a set of [submittables](GLOSSARY.md#submittable) bind to and resolve against | — | [`MechanismV1.daml`](cap-core/Interfaces/mechanism/daml/Cap/Core/MechanismV1.daml) |
 | `Submittable` | One live [submission](GLOSSARY.md#submission) [slot](GLOSSARY.md#slot), bound to its [mechanism](GLOSSARY.md#mechanism) by contract group | — | [`SubmittableV1.daml`](cap-core/Interfaces/submittable/daml/Cap/Core/SubmittableV1.daml) |
-| `Outcome` | Pre-committed authority, executable at most once inside a window | `Outcome_Expire` | [`OutcomeV1.daml`](cap-core/Interfaces/outcome/daml/Cap/Core/OutcomeV1.daml) |
-| `Governor` | A proposal [resolved](GLOSSARY.md#resolution) with ballots through a single fixed choice | `Governor_Resolve`, `_Withdraw`, `_Expire` | [`GovernorV1.daml`](cap-governance/Interfaces/governor/daml/Cap/Governance/GovernorV1.daml) |
+| `Outcome` | Pre-committed authority, executable at most once inside a time window | `Outcome_Expire` | [`OutcomeV1.daml`](cap-core/Interfaces/outcome/daml/Cap/Core/OutcomeV1.daml) |
+| `Governor` | A proposal to be [resolved](GLOSSARY.md#resolution) with ballots as input | `Governor_Resolve`, `_Withdraw`, `_Expire` | [`GovernorV1.daml`](cap-governance/Interfaces/governor/daml/Cap/Governance/GovernorV1.daml) |
 | `Ballot` | A re-castable submittable carrying [opaque](GLOSSARY.md#opaque) votes; per-voter or container format | `Ballot_Cast`, `_Withdraw`, `_Consume`, `_Expire` | [`BallotV1.daml`](cap-governance/Interfaces/ballot/daml/Cap/Governance/BallotV1.daml) |
 | `Target` | A [standing](GLOSSARY.md#standing) contract an approved outcome acts on, identified by key, not cid | — | [`TargetV1.daml`](cap-governance/Interfaces/target/daml/Cap/Governance/TargetV1.daml) |
 | `GovernanceOutcome` | The approved action; carries governance's single [execute](GLOSSARY.md#execute) choice | `GovernanceOutcome_Execute` | [`OutcomeV1.daml`](cap-governance/Interfaces/outcome/daml/Cap/Governance/OutcomeV1.daml) |
 
 The lifecycle passes through four fixed choices: [cast](GLOSSARY.md#cast) →
-[resolve](GLOSSARY.md#resolution) → [execute](GLOSSARY.md#execute) → [expire](GLOSSARY.md#expiry). Each
-choice's checks run in its fixed body; the implementation supplies the format.
+[resolve](GLOSSARY.md#resolution) → [execute](GLOSSARY.md#execute) → [expire](GLOSSARY.md#expiry).
 
 ## 2. The proof of reusability: Splice's DSO governance, rebuilt on CAP
 
@@ -70,18 +69,9 @@ eligibility, threshold, and [execution](GLOSSARY.md#execute) are re-implemented
 per [mechanism](GLOSSARY.md#mechanism) inside `DsoRules`, and the package defines for itself what
 `cap-version/` imports: the checked-fetch [admission](GLOSSARY.md#admission)
 [tools](GLOSSARY.md#tool), `require`, the `Patchable` [merge](GLOSSARY.md#merge),
-the median. On CAP, those lifecycle checks — window and eligibility, ballot
-[admission](GLOSSARY.md#admission), [verdict](GLOSSARY.md#verdict) handling,
-[execution](GLOSSARY.md#execute) at most once — come from the fixed bodies of
+the median. On CAP, those checks come from the fixed bodies of
 `Ballot_Cast`, `Governor_Resolve`, and `GovernanceOutcome_Execute` instead of
-being rewritten three times; the vote tally itself is one library call
-(`quorateMajorityAll`); a [mechanism](GLOSSARY.md#mechanism) definition shrinks to its format — a
-`tally`, an eligibility source, an effect
-([one `ActionSpec` record per action](examples/BabyDso/DEMOS.md#the-actions)).
-And the reuse compounds *inside* Splice: all three [mechanisms](GLOSSARY.md#mechanism) share the same
-cast, withdraw, and admission code, where the plain version carries a separate
-copy per [mechanism](GLOSSARY.md#mechanism).
-
+being rewritten three times; the vote tally itself is one library call.
 What the rebuild concretely improves over the plain version, demo-assertable:
 
 - **Decisions stay inside their institution.** In the plain reproduction,

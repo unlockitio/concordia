@@ -8,114 +8,95 @@ and out-of-scope items"*: what the first CAP release (through M6) will and will
 not contain, each in-scope capability mapped to the milestone that builds it and
 the artifact that proves it.
 
-## What the first release is
-First release = the cap-core spine + one bounded governance set plus
-one bounded auction set, each proving the same core end-to-end. The
-goal is to demonstrate reuse, not to exhaust either domain.
+## First Release
+First release builds cap-core, cap-governance and cap-auctions interface layer, plus usability and value demonstrations. This scope is not fixed — it can be revised as the ecosystem's needs surface.
 
-## In scope — capability → milestone → proof
-                                        
-| Capability | First release contains | Milestone | Proven by |
-|---|---|---|---|
-| cap-core | interface layer + opt-in toolkit | M1 | sandbox prototype |
-| Toolkit growth | helpers and default implementations as the modules surface reusable patterns | M1-M6 | reuse across both modules |
-| Governance interfaces | Splice-generalizable | M1 | BabyDso reference flow + sandbox prototype |
-| Governance interfaces | Privacy test | M2 | BabyDso with privacy flow + sandbox test |
-| Decision rules | majority with configurable quorum and approval threshold | M3 | sandbox tests |
-| Weighted voting | weights by stake, token holdings, or external input | M3 | sandbox tests |
-| Auction formats | sealed-bid first-price, sealed-bid second-price, Dutch, multi-unit | M4 | sandbox tests |
-| Settlement | Token Standard V2 composability | M4–M5 | sandbox test |
-| Reference flows | one governance and one auction flow, both reusing the same `cap-core` | M5 | end-to-end tests |
-| Reference-flow demos | a prototype frontend + backend driving each reference flow | M5 | running governance and auction demos |
-| Open-source release | API docs, developer setup, extension guide, Apache 2.0 | M6 | public repo |
-| Public walkthrough | at least one walkthrough, tutorial, or technical session | M6 | published walkthrough |
+## In scope
 
-### cap-core 
+Each package's deliverables below, as capability → proof → milestone: the
+milestone that builds each capability and the artifact that proves it.
 
-The spine is largely in place: the **interface layer**
-(`Submittable`, `Mechanism`, `Outcome`), and the
-opt-in **toolkit** (`time`, `policies`, `checked-fetch`, `patchable`).
-Completeness, privacy, expiry handling, submission windows, and atomic
-downstream execution are part of this surface and are specified in
-[`DESIGN.md`](DESIGN.md).
+The refernce flows are usefull to test the generability of the interfaces so the interfacs might be changed due to requirments of the different refernce flows.
+These reference flows also allow to prove that the interfaces are at least generalizable for this broad set of use cases. 
+
+### cap-core
+
+The interface layer (`Submittable`, `Mechanism`, `Outcome`) and the opt-in
+toolkit (`time`, `policies`, `checked-fetch`, `patchable`) — completeness,
+privacy, expiry, submission windows, and atomic downstream execution — all
+specified in [`DESIGN.md`](DESIGN.md).
+
+| Capability | First release contains | Proven by | Milestone |
+|---|---|---|---:|
+| Interfaces | interface layer + opt-in toolkit | [interfaces](cap-core/Interfaces) | **M1** |
+
+**The scope for cap-core is deliberately narrow** — the interface layer is meant
+to be stable. First-release work on the core is extending the toolkit (opt-in
+helpers as the modules surface reusable patterns; never constrains a format,
+only saves work) and adapting the interfaces only on a proven need, weighed
+against the under-forcing/over-forcing asymmetry.
+
+### cap-governance 
+
+| Capability | First release contains | Proven by | Milestone |
+|---|---|---|---:|
+| Interfaces | interface layer | [Interfaces](cap-governance/Interfaces/) | **M1** |
+| Interfaces | opt-in toolkit | [Toolkit](cap-governance/util) | **M1** |
+| Implementation | Splice-generalizable flow | [cap-version implementation](examples/BabyDso/cap-version/impl) | **M1** |
+| Demo | Splice-generalizable flow demos | [DEMOS.md](examples/BabyDso/DEMOS.md) | **M1** |
+| Implementation | Private votes reference flow | code | **M2** |
+| Demo | Private votes reference flow demo | sandbox prototype | **M2** |
+| Toolkit | Extend tallies with quorum/threshold rules | sandbox tests | **M3** |
+| Toolkit | Default implementations for downstream execution hooks (tbd) | sandbox tests | **M3** |
+| Interfaces | Generalized weighted ballots logic | code | **M3** |
+| Implementation | Weighted voting flow | code | **M3** |
+| Demo | Weighted voting flow demo | sandbox prototype | **M3** |
+| Implementation | A prototype frontend + backend driving the governance flow | code | **M5** |
+| Demo | A prototype frontend + backend driving the governance flow demo | end-to-end tests | **M5** |
 
 
-**The scope for cap-core is deliberately narrow.** The interface layer is meant
-to be stable, so first-release work on the core is:
+The interface layer is `Governor`, `Ballot`, `Outcome`, `Target`; it already
+drives a Splice-shaped flow end-to-end (the M1 BabyDso reference), and the M2
+should confirm the same interfaces hold when votes stay private through
+resolution. Weighted voting *might* require new interfaces.
 
-- **Extending the toolkit** — adding opt-in helpers and default implementations
-  as the two modules surface reusable patterns. Toolkit growth never constrains
-  a format; it only saves work.
-- **Adapting the interfaces only on a proven need** — if building governance or
-  auctions reveals a genuine addition the frozen surface should carry. A change
-  here is the exception, weighed against the under-forcing/over-forcing
-  asymmetry, not routine.
+### cap-auctions 
 
-### cap-governance (bounded set)
+| Capability | First release contains | Proven by | Milestone |
+|---|---|---|---:|
+| Interfaces | interface layer | [Interfaces](cap-auctions/Interfaces/) | **M1** |
+| Toolkit | opt-in toolkit | code | **M2** |
+| Implementation | sealed-bid first-price | code | **M2** |
+| Demo | sealed-bid first-price demo | sandbox protype | **M2** |
+| Toolkit | second-price payment rule | code | **M3** |
+| Implementation | Dutch auction (multi-round) | code | **M4** |
+| Demo | Dutch demo | sandbox protype | **M4** |
+| Implementation | multi-unit | code | **M4** |
+| Demo | multi-unit demo | sandbox protype | **M4** |
+| Implementation | a prototype frontend + backend driving the auction flow | code | **M5** |
+| Demo | a prototype frontend + backend driving the auction flow | end-to-end tests | **M5** |
 
-The **interface layer** (`Governor`, `Ballot`, `Outcome`, `Target`) already
-proves generalizable: it drives a Splice-shaped governance flow end-to-end
-(the BabyDso reference). The next step in scope is to **test it against
-privacy** — confirming the same interfaces hold when submissions stay private
-through resolution.
-
-First-release work on cap-governance is:
-
-- **Proving the interfaces** — the Splice generalization and the pending
-  privacy test. Interfaces change only if that surfaces a genuine need.
-- **Extending the toolkit** — growing the opt-in helpers and default
-  implementations: `Policies`, `Tallies`, `TargetPolicies`, `TargetUtil`. The
-  `Tallies` set covers, for example, majority with configurable quorum and
-  approval threshold.
-- **Adding weighted governace mechanisms** — attribute weights to participants,
-  for example by stake, token holdings, or an external weight input. This
-  *might* require new interfaces.
-- **A prototype frontend + backend** for the governance reference flow (M5), to
-  drive it end-to-end.
-
-### cap-auctions (bounded set)
-
-Work on cap-auctions is starting. The **interface layer** (`Auction`, `Bid`,
-`Outcome`) reuses the same spine, and settlement **composes with the Token
-Standard V2** — an auction clears and the asset moves in one atomic DvP, rather
-than cap-auctions moving assets itself.
-
-First-release work on cap-auctions is:
-
-- **Building the toolkit** — the opt-in helpers and default implementations for
-  the auction formats (still to be written).
-- **Implementing and testing the formats** — sealed-bid first-price,
-  sealed-bid second-price, Dutch, and multi-unit, each with sandbox tests.
-- **Wiring settlement** — issuing Token Standard V2 allocations from an
-  approved outcome.
-- **A prototype frontend + backend** for the auction reference flow (M5), to
-  drive it end-to-end.
+The interface layer is `Auction`, `Bid`, `Outcome`, reusing the same skeleton.
+Settlement **composes with the Token Standard V2**.
 
 ### Cross-cutting
 
-Spanning all three packages:
+| Capability | First release contains | Proven by | Milestone |
+|---|---|---|---:|
+| Toolkit | helpers and default implementations that appear with new use cases | reuse | **M1–M6** |
+| Open-source release | API docs, developer setup, extension guide, Apache 2.0 | public repo | **M6** |
+| Public walkthrough | at least one walkthrough, tutorial, or technical session | published walkthrough | **M6** |
 
-- **Versioning** — Daml 3.x / LF 2.1, versioned in lockstep with Token
-  Standard V2.
-- **Tests** — Daml Script and sandbox integration tests for every supported
-  governance rule and auction format.
-- **Reference flows** — one end-to-end governance flow and one end-to-end
-  auction flow, both reusing the same `cap-core`, proving the reuse claim.
-- **Documentation** — API docs, developer setup instructions, and an extension
-  guide for building new modules on `cap-core`.
-- **Public walkthrough** — at least one walkthrough, tutorial, or technical
-  session for external evaluation.
-- **Licence** — public open-source release under Apache 2.0.
 
 ## Out of scope
 
 <!-- Each line carries its "why". This list is the maturity signal; keep the
      rationale clause on every entry. -->
 
-| Excluded | Why it is out |
-|---|---|
-| Full Development Fund operational governance | CAP is the reusable primitive, not the DAO that runs the fund | 
-| Other formats — combinatorial & continuous-double auctions, delegated voting, quadratic funding | The bounded set proves reuse, not completeness of either domain |
-| Custody / matching engine / off-ledger settlement infra | cap-auctions issues settlement obligations only |
-| KYC / identity / electorate membership | The participation-right pattern is the eligibility mechanism; institutions bring their own |
-| Production UI / indexer / wallet | CAP is a Daml library; front-ends are downstream — the M5 reference flows ship demo front-ends only to exercise them, not production surface |
+| Excluded | Why it is out | Where it lands |
+|---|---|---|
+| Other formats — combinatorial & continuous-double auctions, delegated voting, quadratic funding | The bounded set proves reuse, not completeness of either domain | Buildable on `cap-core` after release — these are what the extension points enable, not gaps ([POST-RELEASE.md](POST-RELEASE.md): new [governance](POST-RELEASE.md#new-governance-formats) and [auction](POST-RELEASE.md#new-auction-formats) formats) |
+| Full Development Fund operational governance | CAP is the reusable primitive, not the DAO that runs the fund | Architectural boundary |
+| Custody / matching engine / off-ledger settlement infra | cap-auctions deals only with the enforcement layer | Architectural boundary |
+| KYC / identity / electorate membership | The participation-right pattern is the eligibility mechanism; institutions bring their own | Architectural boundary |
+| Production UI / indexer / wallet | CAP is a Daml library; front-ends are downstream — the M5 reference flows ship demo front-ends only to exercise them, not production surface | Architectural boundary |
