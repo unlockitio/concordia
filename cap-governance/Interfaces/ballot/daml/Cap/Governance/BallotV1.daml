@@ -24,7 +24,6 @@ data BallotView = BallotView
     expiresAt : Time
       -- ^ When the ballot becomes archivable by anyone with visibility.
       -- MUST NOT precede a declared close of voting on a cast ballot
-    meta : Metadata
   deriving (Eq, Show)
 
 

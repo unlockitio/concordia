@@ -28,7 +28,7 @@ specified in [`DESIGN.md`](DESIGN.md).
 
 | Capability | First release contains | Proven by | Milestone |
 |---|---|---|---:|
-| Interfaces | interface layer + opt-in toolkit | [interfaces](cap-core/Interfaces) | **M1** |
+| Interfaces | Interface layer | [interfaces](cap-core/Interfaces) | **M1** |
 
 **The scope for cap-core is deliberately narrow** — the interface layer is meant
 to be stable. First-release work on the core is extending the toolkit (opt-in
@@ -40,8 +40,8 @@ against the under-forcing/over-forcing asymmetry.
 
 | Capability | First release contains | Proven by | Milestone |
 |---|---|---|---:|
-| Interfaces | interface layer | [Interfaces](cap-governance/Interfaces/) | **M1** |
-| Interfaces | opt-in toolkit | [Toolkit](cap-governance/util) | **M1** |
+| Interfaces | Interface layer | [Interfaces](cap-governance/Interfaces/) | **M1** |
+| Interfaces | Opt-in toolkit | [Toolkit](cap-governance/util) | **M1** |
 | Implementation | Splice-generalizable flow | [cap-version implementation](examples/BabyDso/cap-version/impl) | **M1** |
 | Demo | Splice-generalizable flow demos | [DEMOS.md](examples/BabyDso/DEMOS.md) | **M1** |
 | Implementation | Private votes reference flow | code | **M2** |

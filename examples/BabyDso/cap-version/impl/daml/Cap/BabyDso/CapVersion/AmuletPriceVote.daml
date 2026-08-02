@@ -61,7 +61,6 @@ template AmuletPriceVote
         governor = mechanism
         voters = Set.singleton voter    -- closed: the fixed choices admit only this SV
         expiresAt = foreverTime  -- standing: never anyone-archivable; GC is the mechanism's choice
-        meta = emptyMetadata
 
       -- Re-price at will, rate-limited (Splice: "an SV cannot block round
       -- advancement by changing their price vote too often"). Cooldown and

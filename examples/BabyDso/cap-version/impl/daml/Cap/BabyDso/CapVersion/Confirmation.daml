@@ -16,23 +16,24 @@ import Cap.Core.MechanismV1 (Mechanism)
 import Cap.BabyDso.CapVersion.DsoRules (GovAction)
 
 -- | Decision identity for the standing confirmation workflow: the mechanism, the
--- action VALUE, and the state token the confirmer saw (None for identity-pinned
--- actions). State-pinned confirmations aggregate only per observed state.
+-- action VALUE, and the state tokens the confirmer saw, in binding order (None
+-- per identity-pinned binding). State-pinned confirmations aggregate only per
+-- observed state.
 data ForDecision = ForDecision
   with
     mechanism : ContractId Mechanism
     action : GovAction
-    seenToken : Optional Text
+    seenTokens : [Optional Text]
   deriving (Eq, Show)
 
 template Confirmation
   with
-    dso       : Party
-    mechanism : ContractId Mechanism   -- the standing DsoMechanism
-    confirmer : Party
-    action    : GovAction
-    seenToken : Optional Text          -- target token read at confirm time; None for identity-pinned actions
-    expiresAt : Time
+    dso        : Party
+    mechanism  : ContractId Mechanism   -- the standing DsoMechanism
+    confirmer  : Party
+    action     : GovAction
+    seenTokens : [Optional Text]        -- tokens read at confirm time, in binding order; None per identity-pinned binding
+    expiresAt  : Time
   where
     signatory dso
     observer confirmer
@@ -56,4 +57,4 @@ template Confirmation
         require "confirmation is past its expiry" (now >= expiresAt)
 
 instance HasCheckedFetch Confirmation ForDecision where
-  contractGroupId c = ForDecision with mechanism = c.mechanism; action = c.action; seenToken = c.seenToken
+  contractGroupId c = ForDecision with mechanism = c.mechanism; action = c.action; seenTokens = c.seenTokens

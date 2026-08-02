@@ -25,10 +25,13 @@ packages:
 # target and outcome before governor: GovernanceOutcome requires cap-core's
 # Outcome and binds Targets; Governor issues GovernanceOutcomes.
 # ballot before governor: Governor is resolved with Ballots (Governor -> Ballot).
+# action stands alone: Action_Issue returns GovernanceOutcomes; nothing imports
+# action back — governors exercise it from implementations only.
 - ./cap-governance/Interfaces/target
 - ./cap-governance/Interfaces/outcome
 - ./cap-governance/Interfaces/ballot
 - ./cap-governance/Interfaces/governor
+- ./cap-governance/Interfaces/action
 - ./cap-governance/util
 # --- tier 2: cap-auctions ---
 - ./cap-auctions/Interfaces/types
@@ -47,4 +50,7 @@ packages:
 - ./examples/BabyDso/original/Impl
 - ./examples/BabyDso/original/Test
 - ./examples/BabyDso/cap-version/impl
+# The demo-5 extension: a new action in its own package (data-depends on impl,
+# never modifies it) — the deployed base DAR stays byte-identical.
+- ./examples/BabyDso/cap-version/extension
 - ./examples/BabyDso/cap-version/Test

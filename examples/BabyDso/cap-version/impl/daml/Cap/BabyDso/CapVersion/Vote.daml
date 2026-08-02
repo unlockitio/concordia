@@ -62,7 +62,7 @@ template Vote
       view = BallotView with
         governor = toInterfaceContractId @Mechanism governor
         voters = Set.singleton voter    -- closed: the fixed choices admit only this SV
-        expiresAt; meta = emptyMetadata
+        expiresAt
 
       -- Splice's cast-time actor validation (`getAndValidateSvParty`): admit the
       -- LIVE SV list from the context and refuse a caster no longer on it. The
@@ -106,7 +106,7 @@ template VoteBox
       view = BallotView with
         governor = toInterfaceContractId @Mechanism governor
         voters
-        expiresAt; meta = emptyMetadata
+        expiresAt
 
       ballot_castImpl arg = do
         accept <- decodeVote arg.vote

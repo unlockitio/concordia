@@ -7,12 +7,9 @@ CAP is a two-tier Daml interface library for [mechanisms](GLOSSARY.md#mechanism)
 submissions, [resolve](GLOSSARY.md#resolve) them into an outcome, and [execute](GLOSSARY.md#execute) that outcome with
 pre-committed authority. **cap-core** fixes the shape every such [mechanism](GLOSSARY.md#mechanism)
 shares; a domain standard (**cap-governance** , **cap-auctions** )
-instantiates it. One principle divides the design: every *guarantee* lives in a
-fixed interface choice body no implementation can override; every *freedom* is
-an interface method the implementation supplies.
+instantiates it. 
 
-This document shows the interfaces,
-the proof they are reusable — including what Splice could reuse — the
+This document shows the interfaces, the proof they are reusable (with DSO as an example), the
 trade-offs, and what is enforced versus trusted. Terms link to the [glossary](GLOSSARY.md).
 
 ## 1. The interfaces, exemplified with BabyDso
@@ -46,9 +43,12 @@ flowchart LR
 | `Ballot` | A re-castable submittable carrying [opaque](GLOSSARY.md#opaque) votes; per-voter or container format | `Ballot_Cast`, `_Withdraw`, `_Consume`, `_Expire` | [`BallotV1.daml`](cap-governance/Interfaces/ballot/daml/Cap/Governance/BallotV1.daml) |
 | `Target` | A [standing](GLOSSARY.md#standing) contract an approved outcome acts on, identified by key, not cid | — | [`TargetV1.daml`](cap-governance/Interfaces/target/daml/Cap/Governance/TargetV1.daml) |
 | `GovernanceOutcome` | The approved action; carries governance's single [execute](GLOSSARY.md#execute) choice | `GovernanceOutcome_Execute` | [`OutcomeV1.daml`](cap-governance/Interfaces/outcome/daml/Cap/Governance/OutcomeV1.daml) |
+| `Action` | A proposed action from any package, [opaque](GLOSSARY.md#opaque) to the [mechanism](GLOSSARY.md#mechanism) that carries it; approval mints its authority-signed [outcome](GLOSSARY.md#outcome) | `Action_Issue` | [`ActionV1.daml`](cap-governance/Interfaces/action/daml/Cap/Governance/ActionV1.daml) |
 
 The lifecycle passes through four fixed choices: [cast](GLOSSARY.md#cast) →
 [resolve](GLOSSARY.md#resolution) → [execute](GLOSSARY.md#execute) → [expire](GLOSSARY.md#expiry).
+
+
 
 ## 2. The proof of reusability: Splice's DSO governance, rebuilt on CAP
 
@@ -98,6 +98,29 @@ demo proves is [`DEMOS.md`](examples/BabyDso/DEMOS.md); how to run them and
 the expected output is
 [`README.md#running-the-demos`](README.md#running-the-demos).
 
+### Adding an action after deployment
+
+A governance action can be added in a new package, with no change to the
+deployed ones (demo 5). Two Daml facts force the shape of the seam:
+
+- A deployed package cannot **create** a contract of a template it does not
+  know — the only door to new code is exercising an interface choice on a
+  contract that already exists.
+- A contract can only be created with the signatures its creator holds — so a
+  proposal starts with the proposer's signature alone, and the
+  [authority](GLOSSARY.md#authority)'s signature can only be added at a point
+  where the authority acts.
+
+The `Action` interface is the door those two facts leave open. The proposer
+creates the proposal; the [mechanism](GLOSSARY.md#mechanism) reads its
+[target](GLOSSARY.md#target) bindings from the view and reads any
+[pin](GLOSSARY.md#pin) on-ledger. On
+approval, `Action_Issue` archives the proposal and creates the action's own
+[outcome](GLOSSARY.md#outcome) under the authority signature in scope at
+[resolution](GLOSSARY.md#resolution). Until that moment the proposal is
+the proposer's, and withdrawing it is legitimate; a request whose action was
+withdrawn mid-vote can only [expire](GLOSSARY.md#expiry).
+
 ## 3. Interface design decisions and trade-offs
 
 Each row is a decision fixed in the interfaces — the chosen shape, the
@@ -106,12 +129,13 @@ decision lives in code: [`DESIGN_old.md` §6](DESIGN_old.md#6-where-each-design-
 
 | Decision | Rejected alternative — and its cost |
 | --- | --- |
-| The [authority](GLOSSARY.md#authority) is a **set of parties, all of whom must sign** (`authorities : Set Party`) a singleton whose one party is decentralized party, and explicit multi-party sets, are all instantiations | A single `Party` field — locks out explicit multi-party authorities |
-| [Completeness](GLOSSARY.md#completeness) is **opt-in, and a count** (`size : Optional Int`): `Some n` proves exact [cover](GLOSSARY.md#cover) of slots `0..n-1` at resolution (the interface does not block a party *list*)  | Mandatory completeness — forces slot enrollment on formats that resolve by [quorum](GLOSSARY.md#quorum); a party *list* instead of a count — ties slots to identities, locking out secret ballots and identity-free formats |
+| The [authority](GLOSSARY.md#authority) is a **set of parties, all of whom must sign**. A singleton whose one party is decentralized party, and explicit multi-party sets, are all instantiations | A single `Party` field — locks out explicit multi-party authorities |
+| [Completeness](GLOSSARY.md#completeness) is **opt-in, and a count**: it proves exact [cover](GLOSSARY.md#cover) of slots `0..n-1` at resolution (the interface does not block a party *list*)  | Mandatory completeness — forces slot enrollment on formats that resolve by [quorum](GLOSSARY.md#quorum); a party *list* instead of a count — ties slots to identities, locking out secret ballots and identity-free formats |
 | The **vote is [opaque](GLOSSARY.md#opaque)** (`AnyValue` at cast; no view field, method result, or choice return carries its content) | A typed vote field — fixes one encoding for every format and leaks content sealed formats must hide |
 | The submission **window is on the `MechanismView`** — mandatory open, optional close — and the timing hooks can **only tighten** it | Timing left wholly to implementations — no cross-implementation guarantee survives; a mandatory close — locks out [standing](GLOSSARY.md#standing) [mechanisms](GLOSSARY.md#mechanism) with no fixed close |
 | cap-core's `Outcome` **declares no [execute](GLOSSARY.md#execute) choice** — identity, window, [expiry](GLOSSARY.md#expiry) only; the [execute](GLOSSARY.md#execute) choice is each domain's own, layered via `requires` | One generic [execute](GLOSSARY.md#execute) choice in the core — forces a single [execution](GLOSSARY.md#execute) shape (arguments, target model) on every domain forever |
 | A [target](GLOSSARY.md#target) is **bound by key** (`ForTarget`: authority + `id`), with an optional state token for [pinning](GLOSSARY.md#pin) | Binding by contract id — breaks the moment standing state is archived-and-recreated, so every concurrent change would invalidate every approval |
+| An extension action **pairs a proposer-signed proposal (`Action`) with its own [outcome](GLOSSARY.md#outcome) template** carrying its effect and [drift](GLOSSARY.md#drift) [policy](GLOSSARY.md#policy) — each action keeps a bespoke executor set, window, and record, and every contract type means one thing | An `apply` hook on `Action` plus one stock bundle outcome — halves each extension and gives multi-action approvals, but freezes one effect signature into the interface forever, adds a lock obligation (a missed lock results in a proposer veto over an approved decision), and moves [drift](GLOSSARY.md#drift) refusal from the fixed [execute](GLOSSARY.md#execute) hook into trusted effect code |
 | Serialized result and state types carry **`Ext…` extension constructors** | Closed types — any grown result forces a new interface major |
 
 ## 4. What is enforced, and what is trusted
@@ -148,6 +172,8 @@ What this buys against a malicious actor, and where it is exercised:
 | executor — [execute](GLOSSARY.md#execute) on state the approvers did not see | state pin + drift policy | demos 1, 2 |
 | executor — redirect an outcome to another target or organization | `ForTarget` key binding | demo 4 |
 | resolver — resolve governor A with governor B's ballots | `ForMechanism` group admission | demo 4 |
+| proposer — keep any power over an action once approved | `Action_Issue` archives the proposal; the outcome carries only the authority's signature | demo 5 |
+| extension author — escape the [execute](GLOSSARY.md#execute) checks | window, executor, [binding](GLOSSARY.md#binding), and [drift](GLOSSARY.md#drift) routing run in the fixed `GovernanceOutcome_Execute` body, not in extension code | demo 5 |
 
 
 ## 5. Ecosystem alignment

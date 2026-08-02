@@ -1,0 +1,105 @@
+-- Copyright (c) 2026 Unlockit. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+-- =============================================================================
+-- OffboardAndCompensate — a governance action the base package has never seen:
+-- offboard an SV and pay them from the reserve, atomically. Two
+-- committed targets — more than the base `GovOutcome` can even express.
+-- =============================================================================
+module Cap.BabyDso.Extension.OffboardAndCompensate where
+
+import Prelude hiding (Action)
+
+import qualified DA.Map as Map
+import qualified DA.Set as Set
+
+import Splice.Api.Token.MetadataV1 (emptyMetadata)
+import Cap.Core.CheckedFetchV1 (require)
+import Cap.Core.MechanismV1 (Mechanism)
+import Cap.Core.OutcomeV1
+import Cap.Governance.ActionV1
+import Cap.Governance.OutcomeV1
+import Cap.Governance.TargetV1 (TargetCommitment)
+import Cap.Governance.TargetUtil (mutateTarget)
+import Cap.Governance.TargetPolicies (driftAborts)
+
+import Cap.BabyDso.CapVersion.AmuletRules (AmuletRules (..), amuletRulesKey)
+import Cap.BabyDso.CapVersion.DsoRules (DsoRules (..), dsoRulesKey)
+
+-- | The action: proposer-signed, opaque to the funnel that carries it.
+template OffboardAndCompensate
+  with
+    dso      : Party
+    org      : Text
+    proposer : Party
+    member   : Party    -- the SV to offboard
+    amount   : Decimal  -- amount drawn from the reserve
+  where
+    signatory proposer
+    observer dso
+
+    interface instance Action for OffboardAndCompensate where
+      view = ActionView with
+        authorities = Set.singleton dso
+        -- The rules binding is identity-only (the offboard is a delta on fresh
+        -- state); the reserve binding pins, because the action is
+        -- non-idempotent.
+        bindings =
+          [ TargetBinding with targetKey = dsoRulesKey dso org; pinsState = False
+          , TargetBinding with targetKey = amuletRulesKey dso; pinsState = True
+          ]
+        meta = emptyMetadata
+
+      action_issueImpl selfCid arg = do
+        archive (fromInterfaceContractId @OffboardAndCompensate selfCid)
+        cid <- create OffboardAndCompensateOutcome with
+          dso; member; amount
+          source = arg.source
+          commitments = arg.bindings
+          executeAfter = arg.executeAfter
+          executeUntil = arg.executeUntil
+        pure Action_IssueResult with
+          outcomeCids = [toInterfaceContractId @GovernanceOutcome cid]
+          meta = emptyMetadata
+
+-- | The approved action, carrying its own drift policy and effect.
+template OffboardAndCompensateOutcome
+  with
+    dso          : Party
+    member       : Party
+    amount       : Decimal
+    source       : ContractId Mechanism
+    commitments  : [TargetCommitment]
+    executeAfter : Time
+    executeUntil : Optional Time
+  where
+    signatory dso
+
+    interface instance Outcome for OffboardAndCompensateOutcome where
+      view = OutcomeView with
+        authorities = Set.singleton dso
+        source; executeAfter; executeUntil
+        meta = emptyMetadata
+
+      isExecutor _ = True
+
+    interface instance GovernanceOutcome for OffboardAndCompensateOutcome where
+      view = GovernanceOutcomeView with committedTargets = commitments
+
+      -- Any reserve drift since approval refuses.
+      onTargetDrift = driftAborts
+
+      governanceOutcome_executeImpl checked args = case (checked, args.targets) of
+        ([cRules, cReserve], [rulesCid, reserveCid]) -> do
+          _ <- mutateTarget @DsoRules cRules rulesCid $ \r -> do
+            require "There is more than one sv" (Map.size r.svs > 1)
+            case Map.lookup member r.svs of
+              None -> fail "Not a sv"
+              Some name -> pure r with
+                svs = Map.delete member r.svs
+                offboardedSvs = Map.insert member name r.offboardedSvs
+          _ <- mutateTarget @AmuletRules cReserve reserveCid $ \r -> do
+            require "Reserve covers the amount" (r.reserve >= amount)
+            pure r with reserve = r.reserve - amount
+          pure GovernanceOutcome_ExecuteResult with meta = emptyMetadata
+        _ -> fail "OffboardAndCompensate executes on its two committed targets in order"

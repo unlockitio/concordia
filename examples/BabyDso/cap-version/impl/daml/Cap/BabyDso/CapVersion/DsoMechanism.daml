@@ -20,18 +20,18 @@ import Cap.Core.CheckedFetchV1 (require, fetchAndArchive, fetchReferenceData, fe
 import Cap.Core.MechanismV1
 import Cap.Core.SubmittableV1 (SubmittableState (..))
 import Cap.Core.Policies (noWithdraw)
+import Cap.Governance.ActionV1 (TargetBinding (..))
 import Cap.Governance.TargetV1 (Target, TargetCommitment (..))
-import Cap.Governance.OutcomeV1 (GovernanceOutcome, GovernanceOutcome_Execute (..))
+import Cap.Governance.OutcomeV1 (GovernanceOutcome_Execute (..))
 import Cap.Governance.BallotV1 (Ballot, Ballot_Consume (..))
 import Cap.Governance.GovernorV1 (Governor, Governor_Resolve (..), Governor_ResolveResult)
 import Cap.Governance.Tallies (median)
 
 import Cap.BabyDso.CapVersion.Common
-import Cap.BabyDso.CapVersion.DsoRules (DsoRules, ActionSpec (..), actionSpec, GovAction (..))
-import Cap.BabyDso.CapVersion.GovOutcome (GovOutcome (..))
+import Cap.BabyDso.CapVersion.DsoRules (DsoRules, actionBindings, GovAction (..))
+import Cap.BabyDso.CapVersion.GovOutcome (issueActionOutcomes)
 import Cap.BabyDso.CapVersion.Confirmation
 import Cap.BabyDso.CapVersion.AmuletPriceVote
-import Cap.BabyDso.CapVersion.AmuletRules (AmuletRules, amuletRulesKey)
 import Cap.BabyDso.CapVersion.Vote (Vote (..))
 import Cap.BabyDso.CapVersion.VoteRequest (VoteRequest (..))
 
@@ -46,23 +46,20 @@ template OpenMiningRound
   where
     signatory dso
 
--- | The presented contract matching the spec's target key.
-targetCidFor : Party -> ActionSpec -> ContractId DsoRules -> Optional (ContractId AmuletRules) -> Update (ContractId Target)
-targetCidFor dso spec dsoRulesCid amuletRulesCid
-  | spec.targetKey == amuletRulesKey dso = case amuletRulesCid of
-      Some cid -> pure (toInterfaceContractId @Target cid)
-      None -> fail "an AmuletRules action requires the AmuletRules target"
-  | otherwise = pure (toInterfaceContractId @Target dsoRulesCid)
-
--- | Read the target's state token on-ledger for a state-pinning action; None
--- for every other action, so the pin is never proposer-supplied.
-readSeenToken : ActionSpec -> ContractId Target -> Update (Optional Text)
-readSeenToken spec tcid
-  | not spec.pinsState = pure None
-  | otherwise = do
-      t <- fetchCheckedInterface spec.targetKey tcid
-      require "target is signed by its authority" (authoritySigned spec.targetKey.authorities (signatory t))
-      pure (view t).stateToken
+-- | Form the commitments for an action's bindings from the presented targets
+-- (one per binding, in binding order). A pinned binding's token is read
+-- on-ledger here, never proposer-supplied; an unpinned target is not read.
+readCommitments : [TargetBinding] -> [ContractId Target] -> Update [TargetCommitment]
+readCommitments bindings targets = do
+  require "one presented target per binding" (length bindings == length targets)
+  forA (zip bindings targets) $ \(b, tcid) -> do
+    token <-
+      if not b.pinsState then pure None
+      else do
+        t <- fetchCheckedInterface b.targetKey tcid
+        require "target is signed by its authority" (authoritySigned b.targetKey.authorities (signatory t))
+        pure (view t).stateToken
+    pure TargetCommitment with targetKey = b.targetKey; stateToken = token
 
 template DsoMechanism
   with
@@ -96,21 +93,21 @@ template DsoMechanism
         sv                 : Party
         action             : GovAction
         dsoRulesCid        : ContractId DsoRules
-        amuletRulesCid     : Optional (ContractId AmuletRules)  -- required iff the action targets AmuletRules
-        voteRequestTimeout : Optional RelTime                   -- None = config's default
+        targets            : [ContractId Target]  -- one per binding, in binding order; only pinned ones are read
+        voteRequestTimeout : Optional RelTime     -- None = config's default
       controller sv
       do
         rules <- fetch dsoRulesCid
         require "Rules belong to this organization" (rules.dso == dso && rules.org == org)
         require "Proposer is a sv" (sv `Map.member` rules.svs)
-        let spec = actionSpec dso org action
-        seenToken <- readSeenToken spec =<< targetCidFor dso spec dsoRulesCid amuletRulesCid
+        bindings <- actionBindings dso org action
+        commitments <- readCommitments bindings targets
         now <- getTime
         let timeout = fromOptional rules.config.voteRequestTimeout voteRequestTimeout
         let closesAt = addRelTime now timeout
         reqCid <- create VoteRequest with
           dso; proposer = sv; action
-          commitment = TargetCommitment with targetKey = spec.targetKey; stateToken = seenToken
+          commitments
           snapshot = Set.fromList (Map.keys rules.svs)
           submissionOpensAt = now
           submissionClosesAt = closesAt
@@ -158,21 +155,22 @@ template DsoMechanism
     -- through this choice, no signing ceremony. One transaction per confirmer.
     nonconsuming choice DsoMechanism_ConfirmAction : ContractId Confirmation
       with
-        sv             : Party
-        action         : GovAction
-        dsoRulesCid    : ContractId DsoRules
-        amuletRulesCid : Optional (ContractId AmuletRules)  -- required iff the action targets AmuletRules
+        sv          : Party
+        action      : GovAction
+        dsoRulesCid : ContractId DsoRules
+        targets     : [ContractId Target]  -- one per binding, in binding order; only pinned ones are read
       controller sv
       do
         rules <- fetch dsoRulesCid
         require "Rules belong to this organization" (rules.dso == dso && rules.org == org)
         require "Confirmer is a sv" (sv `Map.member` rules.svs)
-        let spec = actionSpec dso org action
-        seenToken <- readSeenToken spec =<< targetCidFor dso spec dsoRulesCid amuletRulesCid
+        bindings <- actionBindings dso org action
+        commitments <- readCommitments bindings targets
         now <- getTime
         create Confirmation with
           dso; mechanism = toInterfaceContractId @Mechanism self
-          confirmer = sv; action; seenToken
+          confirmer = sv; action
+          seenTokens = map (.stateToken) commitments
           expiresAt = addRelTime now rules.config.actionConfirmationTimeout
 
     -- | Threshold execution (Splice: DsoRules_ExecuteConfirmedAction). The
@@ -183,43 +181,37 @@ template DsoMechanism
       with
         sv               : Party
         action           : GovAction
-        seenToken        : Optional Text  -- the group's pin; only same-token confirmations aggregate
+        seenTokens       : [Optional Text]  -- the group's pins, in binding order; only same-token confirmations aggregate
         confirmationCids : [ContractId Confirmation]
         dsoRulesCid      : ContractId DsoRules
-        amuletRulesCid   : Optional (ContractId AmuletRules)  -- required iff the action targets AmuletRules
+        targets          : [ContractId Target]  -- one per binding, in binding order
       controller sv
       do
         rules <- fetch dsoRulesCid
         require "Rules belong to this organization" (rules.dso == dso && rules.org == org)
         require "Executor is a sv" (sv `Map.member` rules.svs)
         now <- getTime
-        let group = ForDecision with mechanism = toInterfaceContractId @Mechanism self; action; seenToken
+        let group = ForDecision with mechanism = toInterfaceContractId @Mechanism self; action; seenTokens
         confs <- forA confirmationCids (fetchAndArchive group)
         forA_ confs $ \c ->
           require "Confirmation has not expired" (now < c.expiresAt)
         let confirmers = Set.fromList [c.confirmer | c <- confs, c.confirmer `Map.member` rules.svs]
         require "Enough current svs confirmed the action"
           (Set.size confirmers >= requiredNumVotes (Map.size rules.svs))
-        let spec = actionSpec dso org action
-        tcid <- targetCidFor dso spec dsoRulesCid amuletRulesCid
-        let commitment = TargetCommitment with
-              targetKey = spec.targetKey
-              stateToken = if spec.pinsState then seenToken else None
-        outcome <- create GovOutcome with
-          dso
-          source = toInterfaceContractId @Mechanism self
-          action
-          commitment
-          executeAfter = now
-          executeUntil = addRelTime now rules.config.actionConfirmationTimeout
-        _ <- exercise (toInterfaceContractId @GovernanceOutcome outcome)
-          GovernanceOutcome_Execute with
-            actors = [sv]
-            targets = [tcid]
-            extraArgs = ExtraArgs with
+        bindings <- actionBindings dso org action
+        require "one seen token per binding" (length bindings == length seenTokens)
+        let commitments = zipWith
+              (\b token -> TargetCommitment with
+                targetKey = b.targetKey
+                stateToken = if b.pinsState then token else None)
+              bindings seenTokens
+        let extraArgs = ExtraArgs with
               context = ChoiceContext with values = TextMap.empty
               meta = emptyMetadata
-        pure ()
+        outcomeCids <- issueActionOutcomes dso (toInterfaceContractId @Mechanism self)
+          action commitments now (addRelTime now rules.config.actionConfirmationTimeout) extraArgs
+        forA_ outcomeCids $ \oc ->
+          exercise oc GovernanceOutcome_Execute with actors = [sv]; targets; extraArgs
 
     -- === The price-vote workflow (Splice: amulet price + round advance) ========
 

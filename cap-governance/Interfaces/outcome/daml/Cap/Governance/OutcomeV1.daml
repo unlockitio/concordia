@@ -1,6 +1,7 @@
 -- Copyright (c) 2026 Unlockit. All rights reserved.
 -- SPDX-License-Identifier: Apache-2.0
 
+-- Exists after resolve
 
 module Cap.Governance.OutcomeV1 where
 
@@ -19,7 +20,6 @@ data GovernanceOutcomeView = GovernanceOutcomeView
       -- ^ The targets this outcome was approved to act upon.
       -- `governor_issueOutcome` MUST populate it with exactly the targets and
       -- state pins the approved decision authorized.
-    meta : Metadata
   deriving (Eq, Show)
 
 data GovernanceOutcome_ExecuteResult = GovernanceOutcome_ExecuteResult

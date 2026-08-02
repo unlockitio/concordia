@@ -1,0 +1,68 @@
+-- Copyright (c) 2026 Unlockit. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+-- Useful to add new actions 
+-- Exists before resolve
+
+module Cap.Governance.ActionV1 where
+
+import Prelude hiding (Action)
+
+import DA.Set (Set)
+
+import Splice.Api.Token.MetadataV1
+import Cap.Core.MechanismV1 (Mechanism)
+import Cap.Governance.OutcomeV1 (GovernanceOutcome)
+import Cap.Governance.TargetV1 (ForTarget, TargetCommitment)
+
+
+-- | One target the action asks to act upon.
+data TargetBinding = TargetBinding
+  with
+    targetKey : ForTarget
+    pinsState : Bool
+      -- ^ The one bit of the drift policy needed as data before the outcome
+      -- exists: it tells the mechanism whether to read a state token at
+      -- proposal, and whether approvals aggregate across state changes.
+  deriving (Eq, Show)
+
+data ActionView = ActionView
+  with
+    authorities : Set Party
+    bindings : [TargetBinding]
+    meta : Metadata
+  deriving (Eq, Show)
+
+data Action_IssueResult = Action_IssueResult
+  with
+    outcomeCids : [ContractId GovernanceOutcome]
+    meta : Metadata
+  deriving (Eq, Show)
+
+
+-- | A governance action as a contract, opaque to the mechanism that carries
+-- it. Approval mints the authority-signed `GovernanceOutcome`s that execute it.
+interface Action where
+  viewtype ActionView
+
+  action_issueImpl : ContractId Action -> Action_Issue -> Update Action_IssueResult
+    -- ^ MUST create outcomes signed by `authorities` whose `committedTargets`
+    -- are exactly the bindings passed to `Action_Issue`. Single-use actions
+    -- MUST archive `self`.
+
+  -- | Mint the approved outcomes. Nonconsuming: lifecycle belongs to the impl
+  -- (standing actions persist, single-use ones archive). No authority check —
+  -- the impl's creates demand authority signatures only a resolution supplies.
+  nonconsuming choice Action_Issue : Action_IssueResult
+    with
+      actors : [Party]
+      source : ContractId Mechanism
+        -- ^ The mechanism whose resolution is issuing.
+      bindings : [TargetCommitment]
+        -- ^ The view's bindings, each pin resolved on-ledger by the mechanism.
+      executeAfter : Time
+      executeUntil : Optional Time
+      extraArgs : ExtraArgs
+    controller actors
+    do
+      action_issueImpl this self (Action_Issue with actors; source; bindings; executeAfter; executeUntil; extraArgs)

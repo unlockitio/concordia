@@ -11,7 +11,9 @@ so the diff between the two scripts is exactly what the cap standard adds.
 Demos 1–3 walk Splice's three different [mechanisms](../../GLOSSARY.md#mechanism) end to end. Demo 4 exercises
 a scenario outside the scope Splice was designed for — a reasonable decision for
 a single application on its own network, but that a reusable standard must
-generalize.
+generalize. Demo 5 adds a new governance action **after deployment, in its own
+package**. In Splice this change requires upgrading the deployed rules package;
+here the deployed packages stay untouched.
 
 | # | Demo | Splice [mechanisms](../../GLOSSARY.md#mechanism) | What it shows in one line |
 |---|---|---|---|
@@ -20,6 +22,7 @@ generalize.
 | 2 | `demo_confirmation` | `Confirmation` ([standing](../../GLOSSARY.md#standing), per-decision) | A [quorum](../../GLOSSARY.md#quorum) built asynchronously; [execution](../../GLOSSARY.md#execute) consumes it at [threshold](../../GLOSSARY.md#threshold) |
 | 3 | `demo_median` | `AmuletPriceVote` ([standing](../../GLOSSARY.md#standing), persistent) | One [standing](../../GLOSSARY.md#standing) [vote](../../GLOSSARY.md#vote) per SV, re-read every round; the median needs exactly the [participants](../../GLOSSARY.md#participant) |
 | 4 | `demo_two_organizations` | generalization | Two organizations sharing one [authority](../../GLOSSARY.md#authority) party: what keeps a decision inside its institution |
+| 5 | `demo_extension` | extensibility (cap-version only) | An action added after deployment, in its own package |
 
 ## Background: 3 mechanisms of Splice DSO
 
@@ -56,6 +59,7 @@ splits the action sets; here one set serves both). Each cap action's whole meani
 | `GA_SetTransferFee` | Fee write on `AmuletRules` | grant stand-in `NoOp` (no state change) | identity-pinned — [drift](../../GLOSSARY.md#drift) ignored, write lands on fresh state; replays exactly | 2 |
 | `GA_SetAmuletPrice` | Price write on `AmuletRules` | direct `ASetAmuletPrice` choice (median path), no [pin](../../GLOSSARY.md#pin) or [policy](../../GLOSSARY.md#policy) | state-pinned on the price token; [drift](../../GLOSSARY.md#drift) routed to `priceDriftWithin 1.0` | 1, 2 |
 | `GA_PayFromReserve` | Payout from the `AmuletRules` reserve | no equivalent (non-idempotent, outside Splice's action set) | state-pinned; strict `driftAborts`, so any [drift](../../GLOSSARY.md#drift) since approval refuses | 1, 2 |
+| `GA_Extension` | Carries an `Action` contract from a package deployed later | no equivalent — the action enum is closed inside the deployed rules template | the open case: [targets](../../GLOSSARY.md#target), [pins](../../GLOSSARY.md#pin), [drift](../../GLOSSARY.md#drift) [policy](../../GLOSSARY.md#policy), and effect all arrive from the new package | 5 |
 
 
 ## Demo 0 — `demo_ballot_box`
@@ -299,6 +303,77 @@ sequenceDiagram
     sv1->>A1: CloseVoteRequest reqX, ballotsX, target = R1
     A1->>R1: voteCooldownTime 1m → 2m
     Note over R2: org2 unchanged — voteCooldownTime still 9m
+```
+
+## Demo 5 — `demo_extension`
+
+A new package, `cap-version/extension/`, adds an action the base package has
+never seen: `OffboardAndCompensate` — offboard an SV and, in the same
+transaction, pay them from the reserve. The package holds two templates. The
+action is signed by the proposer and implements the `Action` interface. The
+[outcome](../../GLOSSARY.md#outcome) implements `GovernanceOutcome` and carries the action's [drift](../../GLOSSARY.md#drift) [policy](../../GLOSSARY.md#policy) and
+effect.
+
+The demo then runs a normal [vote](../../GLOSSARY.md#vote). An SV creates the proposal and opens a [vote](../../GLOSSARY.md#vote)
+on it, as `GA_Extension`. The request reads the action's [targets](../../GLOSSARY.md#target) and [pins](../../GLOSSARY.md#pin)
+from the proposal's view. SVs [cast](../../GLOSSARY.md#cast) on the same `Vote` [ballots](../../GLOSSARY.md#ballot), and the same
+close choice [resolves](../../GLOSSARY.md#resolution). On approval, `Action_Issue` mints the extension's
+[outcome](../../GLOSSARY.md#outcome), and it [executes](../../GLOSSARY.md#execute) on **both** committed [targets](../../GLOSSARY.md#target) in the closing
+transaction. The base `GovOutcome` supports only one committed [target](../../GLOSSARY.md#target) — the
+new action does more than any built-in, and still changed nothing in the base.
+
+Negative case: a second proposal is opened with the reserve [pinned](../../GLOSSARY.md#pin) at price
+10.0. Before the close, the confirmation [mechanism](../../GLOSSARY.md#mechanism) moves the price. The close
+aborts under the extension's own `driftAborts` [policy](../../GLOSSARY.md#policy) — the same [drift](../../GLOSSARY.md#drift)
+protection as the built-ins ([DESIGN.md §4](../../DESIGN.md#4-what-is-enforced-and-what-is-trusted)
+states where it is enforced).
+
+In `original/`, the same addition needs a new variant in the action enum and a
+new case in the rules template. That means upgrading and redeploying the
+deployed governance package — itself a governance [vote](../../GLOSSARY.md#vote) — and migrating the
+live contracts. We only describe that cost here; `original/` stays a pure
+Splice reproduction.
+
+Verify the claim itself:
+
+```bash
+# the extension links the base as a data-dependency only — it never rebuilds it
+grep -A14 data-dependencies examples/BabyDso/cap-version/extension/daml.yaml
+
+# the commit that adds the extension touches extension/, Test/, and this file —
+# nothing under cap-version/impl
+git log --stat -- examples/BabyDso/cap-version/extension
+
+# demos 0–5, including the extension lifecycle
+dpm test --package-root examples/BabyDso/cap-version/Test
+```
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor sv1 as sv1 (proposer)
+    actor sv2
+    actor sv3
+    participant X as extension package
+    participant A as DsoMechanism (unchanged)
+    participant B as Vote ballots (unchanged)
+    participant R as DsoRules + AmuletRules
+
+    Note over sv1,R: A new action, from a package the base has never seen
+    sv1->>X: create OffboardAndCompensate (proposer-signed)
+    sv1->>A: DsoMechanism_RequestVote (GA_Extension)
+    Note over A: bindings read from the Action view —<br/>reserve pin read on-ledger at 10.0
+    A->>B: mint VoteRequest + sv1's yes + one Ballot per SV (one tx)
+    sv2->>B: Ballot_Cast (yes)
+    sv3->>B: Ballot_Cast (yes)
+    sv1->>A: DsoMechanism_CloseVoteRequest
+    A->>X: resolve → Action_Issue mints the extension outcome (transient)
+    X->>R: execute: offboard sv4 + pay 25.0 — one tx, two committed targets
+
+    Note over sv1,R: Same drift rails as the built-ins
+    sv1->>A: second proposal, reserve binding pinned @ price 10.0
+    Note over A,R: confirmation mechanism moves price 10.0 → 10.5
+    sv1--xA: CloseVoteRequest — the extension's driftAborts refuses the stale approval
 ```
 
 ## Running the demos

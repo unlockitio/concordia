@@ -21,7 +21,6 @@ data GovernorView = GovernorView
     proposer : Party
     executeAfter : Time
       -- ^ The instant the approved outcome may first execute
-    meta : Metadata
   deriving (Eq, Show)
 
 -- `VApproved` may carry a selected option, opaque to the interface.

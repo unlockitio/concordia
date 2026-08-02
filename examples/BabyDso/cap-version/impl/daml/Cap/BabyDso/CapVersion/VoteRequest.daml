@@ -14,7 +14,7 @@ import qualified DA.Set as Set
 import Splice.Api.Token.MetadataV1 (emptyMetadata)
 import Cap.Governance.TargetV1 (TargetCommitment)
 import Cap.Core.MechanismV1
-import Cap.Governance.OutcomeV1 (GovernanceOutcome, GovernanceOutcome_Execute (..))
+import Cap.Governance.OutcomeV1 (GovernanceOutcome_Execute (..))
 import Cap.Core.Policies (noWithdraw)
 import Cap.Governance.GovernorV1
 import Cap.Governance.Policies (windowedResolution)
@@ -23,14 +23,14 @@ import Cap.Governance.Tallies (quorateMajorityAll)
 import Cap.BabyDso.CapVersion.Common (readTargets, requiredNumVotes)
 import Cap.BabyDso.CapVersion.DsoRules (GovAction)
 import Cap.BabyDso.CapVersion.Vote (decodeVotes)
-import Cap.BabyDso.CapVersion.GovOutcome (GovOutcome (..))
+import Cap.BabyDso.CapVersion.GovOutcome (issueActionOutcomes)
 
 template VoteRequest
   with
     dso                : Party
     proposer           : Party
     action             : GovAction
-    commitment         : TargetCommitment   -- target key + optional state pin; voters approve it with the action
+    commitments        : [TargetCommitment]  -- target keys + optional state pins, in binding order; voters approve them with the action
     snapshot           : Set Party   -- the electorate at creation; quorum denominator
     executeAfter       : Time        -- timelock; MUST be >= submissionClosesAt
     executeUntil       : Time        -- deadline pinned onto the issued outcome
@@ -58,7 +58,7 @@ template VoteRequest
       withdrawAllowed now   = noWithdraw (toInterface @Mechanism this) now
 
     interface instance Governor for VoteRequest where
-      view = GovernorView with proposer; executeAfter; meta = emptyMetadata
+      view = GovernorView with proposer; executeAfter
 
       -- Funnelled, Splice-style: only the dso resolves, and an sv reaches the
       -- dso signature through `DsoRules_CloseVoteRequest`, which validates the
@@ -71,12 +71,10 @@ template VoteRequest
       -- discipline rather than re-checking it.
       tally = quorateMajorityAll (requiredNumVotes (Set.size snapshot)) decodeVotes
 
-      -- Approval issues exactly one GovOutcome, its window, source, and target
-      -- commitment pinned to what the voters approved.
-      governor_issueOutcome mechanism _option _extraArgs = do
-        cid <- create GovOutcome with
-          dso; source = mechanism; action; commitment; executeAfter; executeUntil
-        pure [toInterfaceContractId @GovernanceOutcome cid]
+      -- Approval issues the action's outcomes, their window, source, and target
+      -- commitments pinned to what the voters approved.
+      governor_issueOutcome mechanism _option extraArgs =
+        issueActionOutcomes dso mechanism action commitments executeAfter executeUntil extraArgs
 
       -- Atomic execution: an approval executes its outcome in this same tx,
       -- against the target the resolver named. Runs under the dso authority

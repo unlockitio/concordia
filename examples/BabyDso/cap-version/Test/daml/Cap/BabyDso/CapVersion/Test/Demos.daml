@@ -5,6 +5,8 @@
 -- DEMOS.md and shares `setup`.
 module Cap.BabyDso.CapVersion.Test.Demos where
 
+import Prelude hiding (Action)
+
 import DA.Assert ((===))
 import qualified DA.Map as Map
 import qualified DA.Set as Set
@@ -15,6 +17,7 @@ import Daml.Script
 import Splice.Api.Token.MetadataV1 (AnyValue (..), ChoiceContext (..), ExtraArgs (..), emptyMetadata)
 import Cap.Core.Patchable (SetState (..))
 import Cap.Core.SubmittableV1 (SubmittableState (..))
+import Cap.Governance.ActionV1 (Action)
 import Cap.Governance.BallotV1 (Ballot, Ballot_Cast (..))
 import Cap.Governance.GovernorV1 (Governor, Governor_ResolveResult)
 import Cap.Governance.TargetV1 (Target)
@@ -27,6 +30,8 @@ import Cap.BabyDso.CapVersion.Confirmation
 import Cap.BabyDso.CapVersion.DsoRules
 import Cap.BabyDso.CapVersion.Vote (Vote (..), VoteBox (..))
 import Cap.BabyDso.CapVersion.VoteRequest (VoteRequest (..))
+
+import Cap.BabyDso.Extension.OffboardAndCompensate (OffboardAndCompensate (..))
 
 -- --- shared fixture: one dso, four SVs, DsoRules, AmuletRules, the mechanism ----
 
@@ -124,17 +129,39 @@ ctxWithRules rules = ExtraArgs with
       [(svListKey, AV_ContractId (coerceContractId (toInterfaceContractId @Target rules)))]
   meta = emptyMetadata
 
+-- | The live target of a built-in action's one binding (demo 5's extension
+-- action presents its two explicitly).
+targetsForAction : Setup -> GovAction -> Script [ContractId Target]
+targetsForAction s action = do
+  let spec = actionSpec s.dso "org1" action
+  if spec.targetKey == amuletRulesKey s.dso
+    then do (ar, _) <- getAmuletRules s; pure [toInterfaceContractId @Target ar]
+    else do (rules, _) <- getRules s; pure [toInterfaceContractId @Target rules]
+
 -- | Opens a vote: the request, the requester's yes, and every voting right
 -- mint in one transaction (the choice's Splice-style auto-accept).
 requestVote : Setup -> Party -> GovAction -> Script (ContractId VoteRequest)
 requestVote s sv action = do
   (rules, _) <- getRules s
-  (ar, _) <- getAmuletRules s
+  targets <- targetsForAction s action
   submit (actAs [sv] <> readAs [s.dso]) $ exerciseCmd s.mechanism DsoMechanism_RequestVote with
     sv
     action
     dsoRulesCid = rules
-    amuletRulesCid = Some ar
+    targets
+    voteRequestTimeout = None
+
+-- | Opens a vote on an extension action: same choice, the action arrives as an
+-- `Action` contract. Targets in this proposal's binding order (rules, reserve).
+requestExtension : Setup -> Party -> ContractId Action -> Script (ContractId VoteRequest)
+requestExtension s sv actionCid = do
+  (rules, _) <- getRules s
+  (ar, _) <- getAmuletRules s
+  submit (actAs [sv] <> readAs [s.dso]) $ exerciseCmd s.mechanism DsoMechanism_RequestVote with
+    sv
+    action = GA_Extension actionCid
+    dsoRulesCid = rules
+    targets = [toInterfaceContractId @Target rules, toInterfaceContractId @Target ar]
     voteRequestTimeout = None
 
 -- | Both workflows share the one `Ballot_Cast` choice: an `AV_Bool` casts a
@@ -167,13 +194,14 @@ castVoteFail s voter req accept = do
     exerciseCmd (toInterfaceContractId @Ballot vcid) Ballot_Cast with
       voter; vote = AV_Bool accept; extraArgs = ctxWithRules rules
 
--- | The live target the request committed to, by its key.
+-- | The live targets the request committed to, by their keys, in order.
 targetsFor : Setup -> ContractId VoteRequest -> Script [ContractId Target]
 targetsFor s req = do
   Some vr <- queryContractId s.dso req
-  if vr.commitment.targetKey == amuletRulesKey s.dso
-    then do (ar, _) <- getAmuletRules s; pure [toInterfaceContractId @Target ar]
-    else do (rules, _) <- getRules s; pure [toInterfaceContractId @Target rules]
+  forA vr.commitments $ \c ->
+    if c.targetKey == amuletRulesKey s.dso
+      then do (ar, _) <- getAmuletRules s; pure (toInterfaceContractId @Target ar)
+      else do (rules, _) <- getRules s; pure (toInterfaceContractId @Target rules)
 
 -- | Close, presenting the request's cast ballots and its committed target.
 closeVote : Setup -> Party -> ContractId VoteRequest -> Script Governor_ResolveResult
@@ -266,29 +294,32 @@ demo_voting = do
 confirm : Setup -> Party -> GovAction -> Script (ContractId Confirmation)
 confirm s sv action = do
   (rules, _) <- getRules s
-  (ar, _) <- getAmuletRules s
+  targets <- targetsForAction s action
   submit (actAs [sv] <> readAs [s.dso]) $ exerciseCmd s.mechanism DsoMechanism_ConfirmAction with
-    sv; action; dsoRulesCid = rules; amuletRulesCid = Some ar
+    sv; action; dsoRulesCid = rules; targets
 
 execute : Setup -> Party -> GovAction -> Optional Text -> [ContractId Confirmation] -> Script ()
 execute s sv action seenToken confirmationCids = do
   (rules, _) <- getRules s
-  (ar, _) <- getAmuletRules s
+  targets <- targetsForAction s action
   submit (actAs [sv] <> readAs [s.dso]) $ exerciseCmd s.mechanism DsoMechanism_ExecuteConfirmedAction with
-    sv; action; seenToken; confirmationCids; dsoRulesCid = rules; amuletRulesCid = Some ar
+    sv; action; seenTokens = [seenToken]; confirmationCids; dsoRulesCid = rules; targets
 
 executeFail : Setup -> Party -> GovAction -> Optional Text -> [ContractId Confirmation] -> Script ()
 executeFail s sv action seenToken confirmationCids = do
   (rules, _) <- getRules s
-  (ar, _) <- getAmuletRules s
+  targets <- targetsForAction s action
   submitMustFail (actAs [sv] <> readAs [s.dso]) $ exerciseCmd s.mechanism DsoMechanism_ExecuteConfirmedAction with
-    sv; action; seenToken; confirmationCids; dsoRulesCid = rules; amuletRulesCid = Some ar
+    sv; action; seenTokens = [seenToken]; confirmationCids; dsoRulesCid = rules; targets
 
--- | The state token a confirmation pinned at confirm time.
+-- | The state token a built-in's confirmation pinned at confirm time (one
+-- binding, one token).
 pinOf : Setup -> ContractId Confirmation -> Script (Optional Text)
 pinOf s cid = do
   Some c <- queryContractId s.dso cid
-  pure c.seenToken
+  case c.seenTokens of
+    [t] -> pure t
+    _ -> fail "confirmation does not carry exactly one token"
 
 -- =============================================================================
 -- Demo 2 — the confirmation mechanism (DEMOS.md)
@@ -451,12 +482,11 @@ demo_two_organizations = do
     offboardedSvs = Map.empty
     config = r0.config with voteCooldownTime = minutes 9
   mechanism2 <- submit s.dso $ createCmd DsoMechanism with dso = s.dso; org = "org2"; opensAt = now
-  (ar, _) <- getAmuletRules s
   reqY <- submit (actAs [s.sv1] <> readAs [s.dso]) $ exerciseCmd mechanism2 DsoMechanism_RequestVote with
     sv = s.sv1
     action = GA_SetConfig (SetState with new = cfgX; base = r0.config)
     dsoRulesCid = rules2
-    amuletRulesCid = Some ar
+    targets = [toInterfaceContractId @Target rules2]
     voteRequestTimeout = None
   passTime (days 7)
 
@@ -484,3 +514,47 @@ demo_two_organizations = do
   r1.config.voteCooldownTime === minutes 2
   [(_, o2)] <- queryFilter @DsoRules s.dso (\r -> r.org == "org2")
   o2.config.voteCooldownTime === minutes 9
+
+-- =============================================================================
+-- Demo 5 — an action from a new package, base packages untouched (DEMOS.md)
+-- =============================================================================
+
+demo_extension : Script ()
+demo_extension = do
+  s <- setup
+
+  -- the proposal comes from a package the deployed base has never seen
+  prop <- submit s.sv1 $ createCmd OffboardAndCompensate with
+    dso = s.dso; org = "org1"; proposer = s.sv1; member = s.sv4; amount = 25.0
+  req <- requestExtension s s.sv1 (toInterfaceContractId @Action prop)
+
+  -- the same ballots, casts, and close as every other vote
+  _ <- castVote s s.sv2 req True
+  _ <- castVote s s.sv3 req True
+  passTime (days 7)
+  _ <- closeVote s s.sv1 req
+
+  -- both committed targets moved in one transaction; the proposal is consumed
+  (_, r1) <- getRules s
+  assert (not (s.sv4 `Map.member` r1.svs))
+  assert (s.sv4 `Map.member` r1.offboardedSvs)
+  (_, ar1) <- getAmuletRules s
+  ar1.reserve === 75.0
+  props <- query @OffboardAndCompensate s.sv1
+  props === []
+
+  -- a second severance, its reserve binding pinned at price 10.0; the
+  -- confirmation workflow moves the price before the close, so the extension's
+  -- own driftAborts refuses the stale approval — same rails as the built-ins
+  prop2 <- submit s.sv1 $ createCmd OffboardAndCompensate with
+    dso = s.dso; org = "org1"; proposer = s.sv1; member = s.sv3; amount = 10.0
+  req2 <- requestExtension s s.sv1 (toInterfaceContractId @Action prop2)
+  _ <- castVote s s.sv2 req2 True
+  let reprice = GA_SetAmuletPrice with newPrice = 10.5
+  [x1, x2] <- forA [s.sv1, s.sv2] $ \sv -> confirm s sv reprice
+  pin <- pinOf s x1
+  execute s s.sv1 reprice pin [x1, x2]
+  passTime (days 7)
+  closeVoteFail s s.sv1 req2
+  (_, r2) <- getRules s
+  assert (s.sv3 `Map.member` r2.svs)

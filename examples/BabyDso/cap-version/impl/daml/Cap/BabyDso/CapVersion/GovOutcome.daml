@@ -9,9 +9,10 @@ module Cap.BabyDso.CapVersion.GovOutcome where
 
 import qualified DA.Set as Set
 
-import Splice.Api.Token.MetadataV1 (emptyMetadata)
+import Splice.Api.Token.MetadataV1 (ExtraArgs, emptyMetadata)
 import Cap.Core.MechanismV1 (Mechanism)
 import Cap.Core.OutcomeV1
+import Cap.Governance.ActionV1 (Action_Issue (..))
 import Cap.Governance.OutcomeV1
 import Cap.Governance.TargetV1 (TargetCommitment)
 
@@ -21,12 +22,12 @@ template GovOutcome
   with
     dso          : Party
     source       : ContractId Mechanism   -- the VoteRequest whose resolution issued this
-    action       : GovAction
+    action       : GovAction       -- this outcome implements the built-in actions defined in DsoRules
     commitment   : TargetCommitment  -- the target and optional state pin the approvers bound
     executeAfter : Time            -- the timelock, pinned from the governor
     executeUntil : Time            -- mandatory deadline: no undated outcome
   where
-    signatory dso
+    signatory dso 
 
     interface instance Outcome for GovOutcome where
       view = OutcomeView with
@@ -46,7 +47,6 @@ template GovOutcome
         -- The commitment formed at proposal: state-pinned or identity-only,
         -- declared per action by `actionSpec`.
         committedTargets = [commitment]
-        meta = emptyMetadata
 
       -- The action's declared drift policy; identity-only commitments never
       -- reach it. The commitment's key id carries the org for rules actions.
@@ -56,4 +56,24 @@ template GovOutcome
         ([c], [tcid]) -> do
           (actionSpec dso commitment.targetKey.id action).effect c tcid
           pure GovernanceOutcome_ExecuteResult with meta = emptyMetadata
-        _ -> fail "a GovAction acts on exactly one committed target"
+        _ -> fail "a built-in GovAction acts on exactly one committed target"
+
+-- | The one dispatch from an approved action to its outcomes: a built-in
+-- becomes a `GovOutcome`; an extension action mints its own outcome template
+-- through `Action_Issue`. Shared by both workflows.
+issueActionOutcomes
+  : Party -> ContractId Mechanism -> GovAction -> [TargetCommitment]
+  -> Time -> Time -> ExtraArgs -> Update [ContractId GovernanceOutcome]
+issueActionOutcomes dso source action commitments executeAfter executeUntil extraArgs =
+  case action of
+    GA_Extension actionCid -> do
+      res <- exercise actionCid Action_Issue with
+        actors = [dso]; source; bindings = commitments
+        executeAfter; executeUntil = Some executeUntil; extraArgs
+      pure res.outcomeCids
+    _ -> case commitments of
+      [commitment] -> do
+        cid <- create GovOutcome with
+          dso; source; action; commitment; executeAfter; executeUntil
+        pure [toInterfaceContractId @GovernanceOutcome cid]
+      _ -> fail "a built-in GovAction acts on exactly one committed target"
