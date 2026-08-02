@@ -3,22 +3,7 @@
 
 -- | The `Bid` interface: a contract that is a live bid — bound to one auction,
 -- owned by one bidder, consumable by that auction's resolution.
---
--- The interface never carries the bid's economic content — no view field, method
--- result, or choice return — so sealed formats have nothing to leak from it; the
--- only code that reads a bid value is the implementation's own pricing rule,
--- after downcasting to its concrete template.
---
--- The unforgeable bid→auction binding is the implementing template's
--- `auction : ContractId Auction` field, written under the auction signatories'
--- authority inside `Auction_SubmitBid`. `BidView.auctionId` carries identity
--- *data* for discovery only; the security-relevant binding never lived in the view.
---
--- `Bid` requires `Submittable` (cap-core): the interface is supplied from the
--- template's own fields, with `slot = None` unless the format declares
--- completeness. Unslotted, the interface is inert — the check never runs and
--- the interface offers no consume path, so the operator gains no destruction
--- lever over bids.
+
 module Cap.Auctions.BidV1 where
 
 import Splice.Api.Token.MetadataV1
@@ -31,9 +16,7 @@ data BidView = BidView
     auctionId : AuctionId
     bidder : Party
     meta : Metadata
-      -- ^ Display and extension data (reserved `cap-auctions/` keys); never
-      -- security-relevant. Normative: MUST NOT expose the bid's economic
-      -- content for sealed formats.
+      
   deriving (Eq, Show)
 
 data Bid_WithdrawResult = Bid_WithdrawResult
@@ -52,29 +35,16 @@ interface Bid requires Submittable where
   viewtype BidView
 
   bid_withdrawImpl : ContractId Bid -> Bid_Withdraw -> Update Bid_WithdrawResult
-    -- ^ Runs with the bidder's and the bid signatories' authority in scope
-    -- (bidder-triggered on a co-signed bid), so it can release the escrow
-    -- referenced in `extraArgs.context`.
-  bid_revealImpl : ContractId Bid -> Bid_Reveal -> Update Bid_RevealResult
-    -- ^ MUST verify the reveal against the commitment and abort on mismatch;
-    -- the interface makes this airtight by omission — no interface field or
-    -- result carries the bid value, so no path bypasses the template's check.
 
-  -- | Bidder exits and is made whole (escrow released). Implementations
-  -- whose format makes bids binding MUST abort outside their withdrawal
-  -- window — but the choice must exist, because it is also the recovery path
-  -- for a bid stranded by a cancelled or censoring auction.
+  bid_revealImpl : ContractId Bid -> Bid_Reveal -> Update Bid_RevealResult
+
   choice Bid_Withdraw : Bid_WithdrawResult
     with
       extraArgs : ExtraArgs
     controller (view this).bidder
     do bid_withdrawImpl this self arg
 
-  -- | Second phase of commit–reveal. `revealData` carries the plaintext (and
-  -- salt) in a format-specific encoding; open formats abort unconditionally
-  -- ("nothing to reveal"). At interface level so a generic wallet can complete
-  -- the protocol without the concrete template. Consuming: the revealed bid is a
-  -- fresh contract id, so a stale pre-reveal bid can never be priced.
+  -- | Second phase of commit–reveal.
   choice Bid_Reveal : Bid_RevealResult
     with
       revealData : AnyValue

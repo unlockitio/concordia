@@ -2,17 +2,7 @@
 -- SPDX-License-Identifier: Apache-2.0
 
 -- | The `AuctionOutcome` interface: a contract that is one settlement
--- obligation produced by a resolution — it awards something to one party and
--- can be settled or failed, exactly once.
---
--- Resolution emits one outcome per *obligation*, not one per auction. Losers
--- get no outcome — a losing bid is not an obligation — but resolution settles
--- each loser's escrow so a consumed bid never leaves funds locked without a
--- path back.
---
--- Conforming implementations MUST mint outcomes signed by exactly the parties
--- settlement needs (e.g. the operator-controlled award
--- choice on the winning bid runs with operator, seller, and winner.)
+-- obligation produced by a resolution 
 
 module Cap.Auctions.OutcomeV1 where
 
@@ -47,8 +37,7 @@ interface AuctionOutcome where
   viewtype AuctionOutcomeView
 
   isExecutor : [Party] -> Bool
-    -- ^ Whether this actor set may settle or fail the outcome. Plural because
-    -- Token Standard V2 settlement can need several executors jointly.
+
 
   auctionOutcome_settleImpl : ContractId AuctionOutcome -> AuctionOutcome_Settle -> Update AuctionOutcome_SettleResult
     -- ^ MUST validate every settlement leg named in `extraArgs.context` exactly
@@ -59,10 +48,7 @@ interface AuctionOutcome where
     -- (return the lot, refund or seize deposits). MUST NOT run while the
     -- settlement window is still open.
 
-  -- | Perform the exchange this obligation describes, atomically, in this
-  -- one transaction. `extraArgs.context` carries the settlement legs
-  -- (allocation cids under the reserved keys) plus any registry-supplied
-  -- contexts. Consuming: settling twice is impossible by construction.
+
   choice AuctionOutcome_Settle : AuctionOutcome_SettleResult
     with
       actors : [Party]
@@ -72,9 +58,6 @@ interface AuctionOutcome where
       assertMsg "actors are not an executor set" (isExecutor this actors)
       auctionOutcome_settleImpl this self arg
 
-  -- | The unhappy path: the settlement window elapsed unfulfilled. Consuming,
-  -- for the same once-only reason. Executor-only (unlike governance's
-  -- authority-free expiry) because failing an outcome moves money.
   choice AuctionOutcome_Fail : AuctionOutcome_FailResult
     with
       actors : [Party]
