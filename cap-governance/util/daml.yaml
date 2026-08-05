@@ -3,20 +3,19 @@
 
 # Tier 2 (Governance, optional) — reusable helpers for implementing the
 # governance interfaces. Four modules:
-#   Cap.Governance.Policies        Governor-specific timing profiles — the ones
-#                                  that also pin the timelock (windowed and
-#                                  confirmation resolution). The generic window
-#                                  profiles live in cap-core-util's
-#                                  Cap.Core.Policies.
 #   Cap.Governance.Tallies         Reference decision rules (quorate majority,
 #                                  weighted quorate, turnout threshold) an
 #                                  implementation wires as its `tally`.
-#   Cap.Governance.TargetPolicies  Named drift policies for GovernanceOutcome's
-#                                  onTargetDrift hook — strict and merging
-#                                  profiles.
-#   Cap.Governance.TargetUtil      mutateTarget — the archive-and-recreate step
-#                                  for governanceOutcome_executeImpl branches
-#                                  acting on a committed Target.
+#   Cap.Governance.TargetUtil      Everything for acting on a committed target:
+#                                  drift detection (targetDrifted), the named
+#                                  drift policies (driftAborts/noDrift),
+#                                  and fetchTargetFromContext (authenticated
+#                                  context read).
+#   Cap.Governance.ActionUtil      Data actions as per-target specs
+#                                  (TargetEntry/ActionSpec), TypedAction (the
+#                                  native-or-extension union), the NativeAction
+#                                  class, and anyActionBuildRefs (commit either
+#                                  kind's targets).
 # Domain-agnostic helpers live in cap-core-util (Cap.Core.Patchable,
 # Cap.Core.Policies); the HasCheckedFetch instances live with their views
 # (GovernorV1, TargetV1, and cap-core's OutcomeV1), and the machinery in
@@ -38,9 +37,10 @@ data-dependencies:
 - ../../cap-core/Interfaces/submittable/.daml/dist/cap-core-submittable-v1-0.1.0.dar
 - ../../cap-core/Interfaces/mechanism/.daml/dist/cap-core-mechanism-v1-0.1.0.dar
 - ../../cap-core/internal/checks/.daml/dist/cap-core-checks-v1-0.1.0.dar
-- ../../cap-core/util/policies/.daml/dist/cap-core-policies-0.1.0.dar
+- ../../cap-core/Interfaces/outcome/.daml/dist/cap-core-outcome-v1-0.1.0.dar
 - ../Interfaces/target/.daml/dist/cap-governance-target-v1-0.1.0.dar
-- ../Interfaces/ballot/.daml/dist/cap-governance-ballot-v1-0.1.0.dar
+- ../Interfaces/outcome/.daml/dist/cap-governance-outcome-v1-0.1.0.dar
+- ../Interfaces/action/.daml/dist/cap-governance-action-v1-0.1.0.dar
 - ../Interfaces/governor/.daml/dist/cap-governance-governor-v1-0.1.0.dar
 build-options:
   - --target=2.1

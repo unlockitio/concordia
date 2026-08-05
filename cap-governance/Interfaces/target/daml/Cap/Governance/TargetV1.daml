@@ -4,11 +4,12 @@
 
 module Cap.Governance.TargetV1 where
 
-import DA.Optional (isSome)
 import DA.Set (Set)
+import DA.Map (Map)
+import qualified DA.Map as Map
 
 import Splice.Api.Token.MetadataV1
-import Cap.Core.CheckedFetchV1 (HasCheckedFetch (..), fetchCheckedInterface, require, authoritySigned)
+import Cap.Core.CheckedFetchV1 (HasCheckedFetch (..), HasAuthority (..), authoritySigned, require)
 
 data TargetView = TargetView
   with
@@ -20,7 +21,6 @@ data TargetView = TargetView
     meta : Metadata
   deriving (Eq, Show)
 
-
 -- A target's identifying key: its authority plus an `id` distinguishing
 -- several targets of one authority, so an approved outcome cannot be redirected
 -- to a different target of the same authority.
@@ -29,50 +29,63 @@ data ForTarget = ForTarget
   with
     authorities : Set Party
     id : Text
-  deriving (Eq, Show)
+  deriving (Eq, Show, Ord)
 
 instance HasCheckedFetch TargetView ForTarget where
   contractGroupId v = ForTarget v.authorities v.id
 
+instance HasAuthority ForTarget where
+  keyAuthorities k = k.authorities
 
 interface Target where
   viewtype TargetView
 
--- What an approval commits an outcome to act upon: the target's identifying
--- key, plus optionally the state the approvers saw. `stateToken = None`
--- pins the Target by identity only.
-data TargetCommitment = TargetCommitment
+
+-- | Used to fix a target + a state
+data TargetRef = TargetRef
   with
     targetKey : ForTarget
     stateToken : Optional Text
-    -- ^ copy of Target.stateToken when outcome is issued
   deriving (Eq, Show)
 
 
--- To be used by drift policies to decide what to do based on the drift.
-data CheckedTarget = CheckedTarget
-  with
-    target : Target
-    -- ^ current state
-    commitment : TargetCommitment
-    -- ^ what the approvers saw
-    drifted : Bool
-      -- ^ True if state drifted. False for an identity-only pin.
 
--- Verify the live targets presented at execution are the ones committed at
--- approval: a wrong key or a missing authority signature aborts; a committed
--- state pin is compared and routed to the caller's drift policy (not enforced here).
-checkTargetBinding : [TargetCommitment] -> [ContractId Target] -> Update [CheckedTarget]
-checkTargetBinding committed presented = do
-  require "the presented targets pair with the committed targets"
-    (length committed == length presented)
-  forA (zip committed presented) $ \(c, cid) -> do
-    t <- fetchCheckedInterface c.targetKey cid
-    require "target is signed by its authority" (authoritySigned c.targetKey.authorities (signatory t))
-    drifted <- case c.stateToken of
-      None -> pure False
-      Some pinned -> do
-        let found = (view t).stateToken
-        require "a state-pinned target exposes a state token" (isSome found)
-        pure (Some pinned /= found)
-    pure CheckedTarget with target = t; commitment = c; drifted
+-- | A presented target's own authority-verified key, plus its payload. The key
+-- is read from the target itself and checked against its signatories, so a
+-- presented contract can only ever be treated as the target it actually is.
+readTargetKey : ContractId Target -> Update (ForTarget, Target)
+readTargetKey cid = do
+  t <- fetch cid
+  let key = ForTarget with authorities = (view t).authorities; id = (view t).id
+  require "target is signed by its authority" (authoritySigned key.authorities (signatory t))
+  pure (key, t)
+
+-- | Match presented targets to a key-addressed declaration by each target's OWN
+-- key. Aborts unless they form a bijection with the declared keys: every
+-- presented target is declared and authority-signed, all are distinct, and every
+-- declared key is present. Presentation order is irrelevant.
+matchByKey : Map ForTarget e -> [ContractId Target] -> Update (Map ForTarget (e, ContractId Target, Target))
+matchByKey decl cids = do
+  pairs <- forA cids $ \cid -> do
+    (key, t) <- readTargetKey cid
+    case Map.lookup key decl of
+      None -> fail ("presented target is not declared: " <> show key)
+      Some e -> pure (key, (e, cid, t))
+  let matched = Map.fromList pairs
+  require "presented targets are distinct" (Map.size matched == length pairs)
+  require "every declared target is presented" (Map.size matched == Map.size decl)
+  pure matched
+
+-- | Build the committed refs from a key-addressed declaration (`True` records
+-- the state token) and the presented targets, matched by key.
+buildRefs : Map ForTarget Bool -> [ContractId Target] -> Update [TargetRef]
+buildRefs pins cids = do
+  matched <- matchByKey pins cids
+  pure
+    [ TargetRef with
+        targetKey = key
+        stateToken = if pinsState then (view t).stateToken else None
+    | (key, (pinsState, _, t)) <- Map.toList matched ]
+
+
+

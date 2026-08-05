@@ -23,5 +23,6 @@ data-dependencies:
 - ../../../../cap-governance/Interfaces/governor/.daml/dist/cap-governance-governor-v1-0.1.0.dar
 - ../../../../cap-governance/Interfaces/outcome/.daml/dist/cap-governance-outcome-v1-0.1.0.dar
 - ../../../../cap-governance/Interfaces/action/.daml/dist/cap-governance-action-v1-0.1.0.dar
+- ../../../../cap-governance/util/.daml/dist/cap-governance-util-0.1.0.dar
 build-options:
   - --target=2.1

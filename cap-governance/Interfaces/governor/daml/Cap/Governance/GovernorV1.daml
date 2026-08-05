@@ -4,28 +4,44 @@
 
 module Cap.Governance.GovernorV1 where
 
-import DA.Optional (catOptionals)
+import DA.Action (when)
 
 import Splice.Api.Token.MetadataV1
 import Cap.Core.SubmittableV1
 import Cap.Core.MechanismV1
-import Cap.Core.CheckedFetchV1
 import Cap.Core.TimeV1 (checkFloor)
 import Cap.Core.ChecksV1
+import Cap.Governance.ActionV1 (AnyAction (..))
 import Cap.Governance.OutcomeV1
-import Cap.Governance.BallotV1
+import Cap.Governance.TargetV1 (TargetRef)
 
 
 data GovernorView = GovernorView
   with
-    proposer : Party
-    executeAfter : Time
-      -- ^ The instant the approved outcome may first execute
+    standing : Bool
+      -- ^ False: this governor is one decision — the fixed bodies archive it on
+      -- resolve and withdraw. True: persistent — `onResolved` MUST spend a
+      -- decision artifact (the submittables, or a decision contract) so a
+      -- second resolve of the same decision aborts or lapses without effect.
+    meta : Metadata
+    
   deriving (Eq, Show)
 
--- `VApproved` may carry a selected option, opaque to the interface.
+-- | A decision's identity: exactly `Governor_Resolve`'s discriminator pair.
+-- The mechanism is deliberately absent — the fixed admission already proves
+-- it (`ForMechanism`), so the two checks compose, institution-scoped then
+-- decision-scoped.
+data ForDecision = ForDecision
+  with
+    action : AnyAction
+    commitments : [TargetRef]
+  deriving (Eq, Show)
+
+-- | The decision rule's result. Closed by design: the fixed resolve body
+-- branches on it, so an unknown constructor could carry no meaning.
 data Verdict
-  = VApproved (Optional Text)
+  = VApproved (Optional AnyValue)
+      -- ^ May carry the winning value, opaque to the interface.
   | VRejected
   | VLapsed
     -- ^ The vote never became definitive (e.g. quorum not reached).
@@ -37,8 +53,8 @@ data ResolutionOutcome
       with
         outcomeCids : [ContractId GovernanceOutcome]
           -- ^ The GovernanceOutcome contracts the approval produced.
-        option : Optional Text
-          -- ^ The winning option if necessary
+        option : Optional AnyValue
+          -- ^ The winning value if necessary
   | RO_Rejected
   | RO_Lapsed
   | ExtResolutionOutcome with dummyUnitField : ()
@@ -61,67 +77,122 @@ data Governor_ExpireResult = Governor_ExpireResult
     meta : Metadata
   deriving (Eq, Show)
 
+-- | The resolution procedure for ONE action — the steps the fixed
+-- `Governor_Resolve` body runs for any decision of that action (who may resolve
+-- it, then admit/tally/issue/onResolved), selected from the action by
+-- `resolutionFor`. A decision (action + commitments) feeds its commitments in;
+-- the action alone selects the procedure.
+data Resolution = Resolution with
+  isResolver : Party -> Bool
+    -- ^ Who may trigger resolution of this action's decisions.
+  admit : [TargetRef] -> [(ContractId Submittable, Submittable)] -> ExtraArgs -> Update ()
+    -- ^ Decision-scoped admission, after the fixed institution-scoped one and
+    -- the `decisionOf` comparison. MUST abort unless the presented
+    -- submittables satisfy the decision's cover/electorate rule, its window (if
+    -- any) admits resolution now, and every `extraArgs.context` claim `tally`
+    -- relies on matches live state.
+  tally : [Submittable] -> ExtraArgs -> Verdict
+    -- ^ The social choice function, pure, over every admitted submittable.
+    -- Decoders MUST filter on `state` and rely only on claims `admit` validated.
+  issue : ContractId Mechanism -> [TargetRef] -> Optional AnyValue -> [Submittable] -> ExtraArgs -> Update [ContractId GovernanceOutcome]
+    -- ^ From the winning option, produce the approved outcomes — mint native
+    -- ones, delegate extension ones. MUST set each `committedTargets`.
+  onResolved : ResolutionOutcome -> [ContractId Submittable] -> ExtraArgs -> Update Metadata
+    -- ^ Side effects atomic with resolution (e.g. a standing governor spends its
+    -- decision artifact here so a second resolve has no effect).
+
 interface Governor requires Mechanism where
   viewtype GovernorView
 
-  tally : [Ballot] -> Verdict
-    -- ^ The social choice function. Side effects implemented in `onResolved`
-  isResolver : Party -> Bool
-    -- ^ Who may trigger resolution.
+  isWithdrawer : Optional AnyAction -> Party -> Bool
+    -- ^ Who may withdraw this decision (`None` = per-decision).
 
-  governor_issueOutcome : ContractId Mechanism -> Optional Text -> ExtraArgs -> Update [ContractId GovernanceOutcome]
-    -- ^ Builds the approved outcomes.
-    -- MUST set each `committedTargets` to the targets the
-    -- approved option authorized.
+  decisionOf : Submittable -> Optional ForDecision
+    -- ^ The decision (action + TargetRefs) a submittable belongs to; the fixed resolve requires it to
+    -- equal the decision being resolved, isolating a mechanism's decisions from
+    -- each other against a malicious resolver. A standing format MUST return
+    -- `Some`. `None` is reserved for a per-decision governor, where the
+    -- mechanism binding alone isolates it (the resolve's `action` is `None`).
 
-  onResolved : ResolutionOutcome -> ExtraArgs -> Update Metadata
-    -- ^ Side effects atomic with resolution
+  resolutionFor : Optional AnyAction -> Resolution
+    -- ^ The `Resolution` procedure for an action — admit, tally, issue,
+    -- onResolved. A per-decision governor returns a constant one (the resolve's
+    -- `action` is `None`); a standing governor dispatches on the action to the
+    -- matching one.
 
   governor_withdrawImpl : Governor_Withdraw -> Update Governor_WithdrawResult
-    -- ^ Cleanup on withdrawal
+    -- ^ Cleanup on withdrawal of the named decision.
 
 
-  choice Governor_Resolve : Governor_ResolveResult
+  nonconsuming choice Governor_Resolve : Governor_ResolveResult
     with
       resolver : Party
-      ballots : [ContractId Ballot]
-        -- ^ Every live ballot on the governor's slots
+      action : Optional AnyAction
+        -- ^ Which decision to resolve; `None` on a per-decision governor (its
+        -- stored action rules). Untrusted until the resolution's `admit` accepts
+        -- it. Does not allow Batch resolve yet
+      commitments : [TargetRef]
+        -- ^ The decision's committed targets; untrusted until the resolution's
+        -- `admit` accepts them.
+      submittables : [ContractId Submittable]
+        -- ^ Every submittable presented for this decision
       extraArgs : ExtraArgs
     controller resolver
     do
       let res = toInterface @Mechanism this
       let rv = view res
-      assertMsg "not authorised to resolve" (isResolver this resolver)
+      -- Dispatch on the action once; every per-decision step comes from `r`.
+      let r = resolutionFor this action
+      assertMsg "not authorised to resolve" (r.isResolver resolver)
       checkAuthoritySigned res
       now <- getTime
       checkFloor "resolution does not precede the submission open" now rv.submissionOpensAt
       resolutionAllowed res now
 
-      -- Admit the ballots, then score each:
-      -- a cast ballot is tallied and consumed, an uncast/withdrawn one only fills
-      -- its slot. No per-voter dedup — one ballot per slot is structural.
-      admitted <- admitBallots self res ballots
-      tallied <- forA admitted $ \(_, b) -> admitTally (rv.size /= None) b
+      -- Admission: bound to this mechanism,
+      -- authority-signed, distinct — or exact slot cover under declared
+      -- completeness.
+      let mechanism = toInterfaceContractId @Mechanism self
+      admitted <- case rv.size of
+        Some n -> admitSubmittablesWithCompleteness n rv.authorities mechanism submittables
+        None -> admitSubmittables rv.authorities mechanism submittables
 
-      outcome <- case tally this (catOptionals tallied) of
+      -- Decision-scoped admission: every submittable that declares a decision
+      -- identity declares this decision's; the live-state remainder is the
+      -- hook's.
+      case action of
+        None -> pure ()
+        Some a -> do
+          let decision = ForDecision with action = a; commitments
+          assertMsg "a submittable does not match this decision"
+            (all (\(_, s) -> decisionOf this s `elem` [None, Some decision]) admitted)
+
+      r.admit commitments admitted extraArgs
+
+      outcome <- case r.tally (map snd admitted) extraArgs of
         VRejected -> pure RO_Rejected
         VLapsed -> pure RO_Lapsed
         VApproved option -> do
-          let mechanism = toInterfaceContractId @Mechanism self
-          outcomeCids <- governor_issueOutcome this mechanism option extraArgs
+          outcomeCids <- r.issue mechanism commitments option (map snd admitted) extraArgs
           pure RO_Approved with outcomeCids; option
-      resultMeta <- onResolved this outcome extraArgs
+      resultMeta <- r.onResolved outcome (map fst admitted) extraArgs
+      when (not (view this).standing) (archive self)
       pure Governor_ResolveResult with outcome; resolvedAt = now; meta = resultMeta
 
 
-  choice Governor_Withdraw : Governor_WithdrawResult
+  nonconsuming choice Governor_Withdraw : Governor_WithdrawResult
     with
+      actor : Party
+      action : Optional AnyAction
       extraArgs : ExtraArgs
-    controller (view this).proposer
+    controller actor
     do
+      assertMsg "not authorised to withdraw" (isWithdrawer this action actor)
       now <- getTime
       withdrawAllowed (toInterface @Mechanism this) now
-      governor_withdrawImpl this (Governor_Withdraw with extraArgs)
+      result <- governor_withdrawImpl this (Governor_Withdraw with actor; action; extraArgs)
+      when (not (view this).standing) (archive self)
+      pure result
 
 
   choice Governor_Expire : Governor_ExpireResult
@@ -135,28 +206,3 @@ interface Governor requires Mechanism where
           now <- getTime
           assertMsg "governor not yet expired" (now >= e)
           pure Governor_ExpireResult with meta = emptyMetadata
-
--- | Admit the ballots presented at resolution as `(cid, ballot)` pairs to tally.
--- Under completeness the cap-core check proves binding, authority signature, and
--- exact cover
-admitBallots : ContractId Governor -> Mechanism -> [ContractId Ballot] -> Update [(ContractId Ballot, Ballot)]
-admitBallots self res ballots = do
-  let mechanism = toInterfaceContractId @Mechanism self
-  let scids = map (toInterfaceContractId @Submittable) ballots
-  pairs <- case (view res).size of
-    Some n -> admitSubmittablesWithCompleteness n mechanism res scids
-    None -> admitSubmittables (view res).authorities mechanism scids
-
-  forA pairs $ \(scid, s) -> case fromInterface @Ballot s of
-    None -> abort "admitted submittable is not a ballot"
-    Some b -> pure (fromInterfaceContractId @Ballot scid, b)
-
-
--- Decides whether a ballot may enter a tally.
-admitTally : Bool -> Ballot -> Update (Optional Ballot)
-admitTally covered b =
-  case (view (toInterface @Submittable b)).state of
-    S_Full -> pure (Some b)
-    _ -> do
-      assertMsg "an uncovered resolution takes only cast ballots" covered
-      pure None

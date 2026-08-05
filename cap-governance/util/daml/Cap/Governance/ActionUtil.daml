@@ -1,0 +1,114 @@
+-- Copyright (c) 2026 Unlockit. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | `TypedAction` — the union of an implementation's own actions with any
+-- contract `Action` — the generic per-target execution format any outcome can
+-- reuse, and the native-only spec machinery.
+module Cap.Governance.ActionUtil where
+
+import Prelude hiding (Action)
+
+import DA.Action (when, void)
+import DA.Foldable (forA_)
+import DA.Map (Map)
+import qualified DA.Map as Map
+
+import Splice.Api.Token.MetadataV1 (ExtraArgs)
+import Cap.Core.SubmittableV1 (Submittable)
+import Cap.Governance.ActionV1 (Action, Action_buildRefs (..), Action_IssueOutcome (..))
+import Cap.Governance.OutcomeV1 (TargetContext (..), GovernanceOutcome, GovernanceOutcome_Execute (..))
+import Cap.Governance.TargetUtil (Policy, targetDrifted)
+import Cap.Governance.TargetV1 (Target, ForTarget, TargetRef (..), buildRefs)
+
+-- | One action that is either a native or an extension.
+data TypedAction a
+  = Native a
+  -- ^ the closed set of actions the implementation knows
+  | Extension (ContractId Action)
+  -- ^ actions the implementation has never seen
+  deriving (Eq, Show)
+
+
+-- === Per-target execution (any outcome, native or extension) ===============
+
+-- | An effect that must read the commitment or the choice context, or
+-- condition across targets, writes `governanceOutcome_executeImpl` directly
+-- (the batch `[TargetContext]`) instead of going through `isolatedTargetsExecute`.
+type ActionEffect = ContractId Target -> Target -> Update ()
+
+-- | Archive the committed target and recreate it with
+-- `f` applied to its fresh state (the new cid is discarded).
+editTarget : forall t. (HasCreate t, HasArchive t, HasFromInterface t Target) => (t -> Update t) -> ActionEffect
+editTarget f tcid target = case fromInterface @t target of
+  None -> fail "committed target is not the expected template"
+  Some t -> do
+    archive (fromInterfaceContractId @t tcid)
+    void (create =<< f t)
+
+-- | The standard `governanceOutcome_executeImpl` body: each context's target is
+-- matched to its entry by key, its policy-guarded effect run on fresh state.
+-- Drift is measured from the context's commitment; the effect only ever sees
+-- fresh state. Takes no `ExtraArgs`.
+isolatedTargetsExecute : Map ForTarget (Policy, ActionEffect) -> [TargetContext] -> Update ()
+isolatedTargetsExecute entries contexts =
+  forA_ contexts $ \ctx -> case Map.lookup ctx.commitment.targetKey entries of
+    None -> fail "no effect for committed target"
+    Some (policy, effect) -> do
+      drifted <- targetDrifted ctx.commitment ctx.target
+      when drifted (policy ctx.commitment ctx.target)
+      effect ctx.targetCid ctx.target
+
+
+-- | Build TargetRefs for either Native or Extended actions
+anyActionBuildRefs : NativeAction ctx a => ctx -> TypedAction a -> [Party] -> [ContractId Target] -> Update [TargetRef]
+anyActionBuildRefs ctx ea actors targets = case ea of
+  Native a      -> buildRefs (fmap (\e -> e.pinsState) (actionSpec ctx a)) targets
+  Extension cid -> exercise cid Action_buildRefs with actors; targets
+
+-- | Issue either action kind's outcomes — twin of `anyActionBuildRefs`: a
+-- native mints through its own `issueNativeOutcome`, an extension through its
+-- own `Action_IssueOutcome`.
+anyActionIssueOutcome : NativeAction ctx a => ctx -> TypedAction a -> Action_IssueOutcome -> Update [ContractId GovernanceOutcome]
+anyActionIssueOutcome ctx ea arg = case ea of
+  Native a      -> issueNativeOutcome ctx a arg
+  Extension cid -> do
+    res <- exercise cid arg
+    pure res.outcomeCids
+
+-- | The canonical consuming-resolution step for `onResolved`: spend the admitted
+-- submittables and execute the issued outcomes on the presented live targets.
+spendAndExecute : [ContractId Submittable] -> [ContractId GovernanceOutcome] -> [Party] -> [ContractId Target] -> ExtraArgs -> Update ()
+spendAndExecute scids outcomeCids actors targets extraArgs = do
+  forA_ scids archive
+  forA_ outcomeCids $ \oc ->
+    exercise oc GovernanceOutcome_Execute with actors; targets; extraArgs
+
+
+-- === Native actions only ===================================================
+
+
+-- An extension carries its own targets (view `targets`) and writes its own
+-- `governanceOutcome_executeImpl`; everything below is for the closed set of
+-- actions an implementation defines as data.
+
+-- | One target's share of a native data action: whether it records the state
+-- token, how drift is handled, and the write. Its target is the `ActionSpec` map key.
+data TargetEntry = TargetEntry with
+    pinsState : Bool
+    policy    : Policy
+    effect    : ActionEffect
+
+-- | A native action as its per-target entries, keyed by target. Specs compose
+-- by map union.
+type ActionSpec = Map ForTarget TargetEntry
+
+-- | The implementer contract for native actions ONLY: build the per-target
+-- spec, and mint the impl's own outcome (the interface can't create it).
+class NativeAction ctx a where
+  actionSpec : ctx -> a -> ActionSpec
+  issueNativeOutcome : ctx -> a -> Action_IssueOutcome -> Update [ContractId GovernanceOutcome]
+
+-- | `governanceOutcome_executeImpl` for a spec-driven native outcome: run each
+-- entry's policy-guarded effect on its target, matched by key.
+nativeActionExecute : ActionSpec -> [TargetContext] -> Update ()
+nativeActionExecute spec = isolatedTargetsExecute (fmap (\e -> (e.policy, e.effect)) spec)

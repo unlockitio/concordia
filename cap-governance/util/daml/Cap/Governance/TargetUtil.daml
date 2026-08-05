@@ -1,25 +1,16 @@
 -- Copyright (c) 2026 Unlockit. All rights reserved.
 -- SPDX-License-Identifier: Apache-2.0
 
--- | Helpers for `governanceOutcome_executeImpl` bodies that act on committed targets.
+-- | Fetching a committed target from a choice context, and drift detection +
+-- policies for `governanceOutcome_executeImpl` bodies.
 module Cap.Governance.TargetUtil where
 
+import DA.Optional (isSome)
 import qualified DA.TextMap as TextMap
 
 import Splice.Api.Token.MetadataV1 (AnyValue (..), ChoiceContext (..))
-import Cap.Core.CheckedFetchV1 (require, fetchCheckedInterface, authoritySigned)
+import Cap.Core.CheckedFetchV1 (fetchAuthentic, require)
 import Cap.Governance.TargetV1
-
--- | Apply a state change on one committed target: downcast the checked target
--- to its template type, archive the presented cid, and create the successor
--- `f` returns.
-mutateTarget : forall t. (HasCreate t, HasArchive t, HasFromInterface t Target)
-  => CheckedTarget -> ContractId Target -> (t -> Update t) -> Update (ContractId t)
-mutateTarget c tcid f = case fromInterface @t c.target of
-  None -> fail "committed target is not the expected template"
-  Some t -> do
-    archive (fromInterfaceContractId @t tcid)
-    create =<< f t
 
 -- | Admit a live target delivered in a choice context: read its cid under
 -- `ctxKey`, checked-fetch it under `key`, require the authority's signature, and
@@ -28,9 +19,42 @@ mutateTarget c tcid f = case fromInterface @t c.target of
 fetchTargetFromContext : forall t. HasFromInterface t Target => ForTarget -> Text -> ChoiceContext -> Update t
 fetchTargetFromContext key ctxKey ctx = case TextMap.lookup ctxKey ctx.values of
   Some (AV_ContractId cid) -> do
-    t <- fetchCheckedInterface key (coerceContractId cid : ContractId Target)
-    require "target is signed by its authority" (authoritySigned key.authorities (signatory t))
+    t <- fetchAuthentic key (coerceContractId cid : ContractId Target)
     case fromInterface @t t of
       None -> fail "context target is not the expected template"
       Some r -> pure r
   _ -> fail ("context lacks a target under " <> ctxKey)
+
+
+
+
+-- --- DRIFT: detection + policies ---------------------------------------------
+
+-- | Whether a committed target's recorded state no longer matches the current one.
+-- Identity-only commitments (no token) never drift.
+targetDrifted : TargetRef -> Target -> Update Bool
+targetDrifted commitment target = case commitment.stateToken of
+  None -> pure False
+  Some pinned -> do
+    let found = (view target).stateToken
+    assertMsg "a state-pinned target exposes a state token" (isSome found)
+    pure (Some pinned /= found)
+
+
+-- | A drift policy: what to do when a target has drifted from its commitment.
+-- Per-target only — it sees one target, so it cannot condition on cross-target drift.
+type Policy = TargetRef -> Target -> Update ()
+
+-- | Strict policy: any drift refuses execution.
+driftAborts : Policy
+driftAborts commitment _ =
+  require
+    ("target " <> show commitment.targetKey
+       <> " still carries the approved state token " <> show commitment.stateToken)
+    False
+
+-- | Inert policy for an identity-only target: never actually invoked.
+-- (Merge-on-drift is not a policy: commit the target by key only and let the
+-- effect patch fresh state — `driftMerges` was identical to this and has been removed.)
+noDrift : Policy
+noDrift _ _ = pure ()

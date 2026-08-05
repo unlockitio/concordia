@@ -1,11 +1,10 @@
 # Copyright (c) 2026 Unlockit. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-# Tier 2 (Governance) — `Governor`. Resolved with `Ballot`s, which live in
-# their own package: `Ballot` names the mechanism only as a `Mechanism`, so the
-# dependency runs one way (`Governor -> Ballot`) with no cycle. The binding was
-# never the typed field anyway — admission proves the (untyped) Submittable
-# face, so the split forges nothing.
+# Tier 2 (Governance) — `Governor`. Resolves `Submittable`s (the Ballot
+# package is a cast/withdraw lifecycle standard the governor never reads), and
+# names its decisions with `ActionV1.AnyAction` + `TargetRef` commitments, so
+# the dependency runs `Governor -> Action -> Outcome -> Target` with no cycle.
 sdk-version: 3.4.11
 name: cap-governance-governor-v1
 version: 0.1.0
@@ -24,6 +23,6 @@ data-dependencies:
 - ../../../cap-core/Interfaces/outcome/.daml/dist/cap-core-outcome-v1-0.1.0.dar
 - ../target/.daml/dist/cap-governance-target-v1-0.1.0.dar
 - ../outcome/.daml/dist/cap-governance-outcome-v1-0.1.0.dar
-- ../ballot/.daml/dist/cap-governance-ballot-v1-0.1.0.dar
+- ../action/.daml/dist/cap-governance-action-v1-0.1.0.dar
 build-options:
   - --target=2.1

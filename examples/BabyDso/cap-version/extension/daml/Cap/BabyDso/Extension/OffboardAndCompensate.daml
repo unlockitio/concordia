@@ -18,10 +18,10 @@ import Cap.Core.CheckedFetchV1 (require)
 import Cap.Core.MechanismV1 (Mechanism)
 import Cap.Core.OutcomeV1
 import Cap.Governance.ActionV1
+import Cap.Governance.ActionUtil (isolatedTargetsExecute, editTarget)
 import Cap.Governance.OutcomeV1
-import Cap.Governance.TargetV1 (TargetCommitment)
-import Cap.Governance.TargetUtil (mutateTarget)
-import Cap.Governance.TargetPolicies (driftAborts)
+import Cap.Governance.TargetV1 (TargetRef)
+import Cap.Governance.TargetUtil (driftAborts, noDrift)
 
 import Cap.BabyDso.CapVersion.AmuletRules (AmuletRules (..), amuletRulesKey)
 import Cap.BabyDso.CapVersion.DsoRules (DsoRules (..), dsoRulesKey)
@@ -40,25 +40,21 @@ template OffboardAndCompensate
 
     interface instance Action for OffboardAndCompensate where
       view = ActionView with
-        authorities = Set.singleton dso
-        -- The rules binding is identity-only (the offboard is a delta on fresh
-        -- state); the reserve binding pins, because the action is
-        -- non-idempotent.
-        bindings =
-          [ TargetBinding with targetKey = dsoRulesKey dso org; pinsState = False
-          , TargetBinding with targetKey = amuletRulesKey dso; pinsState = True
-          ]
+        -- rules is identity-only; reserve records the state token (payout is non-idempotent).
+        targets = Map.fromList
+          [ (dsoRulesKey dso org, False)
+          , (amuletRulesKey dso, True) ]
         meta = emptyMetadata
 
-      action_issueImpl selfCid arg = do
+      action_issueOutcomeImpl selfCid arg = do
         archive (fromInterfaceContractId @OffboardAndCompensate selfCid)
         cid <- create OffboardAndCompensateOutcome with
-          dso; member; amount
+          dso; org; member; amount
           source = arg.source
-          commitments = arg.bindings
+          commitments = arg.committedTargets
           executeAfter = arg.executeAfter
           executeUntil = arg.executeUntil
-        pure Action_IssueResult with
+        pure Action_IssueOutcomeResult with
           outcomeCids = [toInterfaceContractId @GovernanceOutcome cid]
           meta = emptyMetadata
 
@@ -66,10 +62,11 @@ template OffboardAndCompensate
 template OffboardAndCompensateOutcome
   with
     dso          : Party
+    org          : Text
     member       : Party
     amount       : Decimal
     source       : ContractId Mechanism
-    commitments  : [TargetCommitment]
+    commitments  : [TargetRef]
     executeAfter : Time
     executeUntil : Optional Time
   where
@@ -86,20 +83,23 @@ template OffboardAndCompensateOutcome
     interface instance GovernanceOutcome for OffboardAndCompensateOutcome where
       view = GovernanceOutcomeView with committedTargets = commitments
 
-      -- Any reserve drift since approval refuses.
-      onTargetDrift = driftAborts
-
-      governanceOutcome_executeImpl checked args = case (checked, args.targets) of
-        ([cRules, cReserve], [rulesCid, reserveCid]) -> do
-          _ <- mutateTarget @DsoRules cRules rulesCid $ \r -> do
-            require "There is more than one sv" (Map.size r.svs > 1)
-            case Map.lookup member r.svs of
-              None -> fail "Not a sv"
-              Some name -> pure r with
-                svs = Map.delete member r.svs
-                offboardedSvs = Map.insert member name r.offboardedSvs
-          _ <- mutateTarget @AmuletRules cReserve reserveCid $ \r -> do
-            require "Reserve covers the amount" (r.reserve >= amount)
-            pure r with reserve = r.reserve - amount
-          pure GovernanceOutcome_ExecuteResult with meta = emptyMetadata
-        _ -> fail "OffboardAndCompensate executes on its two committed targets in order"
+      -- One effect per committed target, matched by key: rules (identity-only),
+      -- reserve (records the state token — any drift refuses).
+      governanceOutcome_executeImpl ctxs _ = isolatedTargetsExecute
+        (Map.fromList
+          [ ( dsoRulesKey dso org
+            , ( noDrift
+              , editTarget @DsoRules $ \r -> do
+                  require "There is more than one sv" (Map.size r.svs > 1)
+                  case Map.lookup member r.svs of
+                    None -> fail "Not a sv"
+                    Some name -> pure r with
+                      svs = Map.delete member r.svs
+                      offboardedSvs = Map.insert member name r.offboardedSvs ) )
+          , ( amuletRulesKey dso
+            , ( driftAborts
+              , editTarget @AmuletRules $ \r -> do
+                  require "Reserve covers the amount" (r.reserve >= amount)
+                  pure r with reserve = r.reserve - amount ) )
+          ])
+        ctxs

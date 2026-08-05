@@ -97,12 +97,12 @@ package from the repo root with `--package-root`:
 
 ```bash
 # cap version — expect a Test Summary of 6 scripts `ok`
-# (setup + demo_ballot_box, demo_voting, demo_confirmation,
-#  demo_median, demo_two_organizations)
+# (setup + demo_voting, demo_confirmation, demo_median,
+#  demo_two_organizations, demo_extension)
 dpm test --package-root examples/BabyDso/cap-version/Test
 
 # plain-Daml reference — expect 5 scripts `ok`
-# (same demos minus the cap-only demo_ballot_box)
+# (same demos minus the cap-only demo_extension)
 dpm test --package-root examples/BabyDso/original/Test
 ```
 

@@ -17,13 +17,6 @@ did not submit is provably accounted for.
 
 <sub>Source: CAP design (no external source).</sub>
 
-### Contention
-The condition where participants attempt to act on the same shared state at the
-same time, forcing their actions to be ordered one after another so that some must
-wait or retry — a cost that grows as more participants act concurrently.
-
-<sub>Source: CAP design; standard concurrency-control term.</sub>
-
 
 ## CS sense
 
@@ -207,6 +200,14 @@ decides twice. (Contrast an [auction](#auctions), where the say is backed by val
 
 <sub>Source: CAP `cap-governance` design (no external source).</sub>
 
+### Action
+What a [decision](#decision) enacts: the [targets](#target) it acts on, the effect
+applied to each, and a per-target [drift](#drift) [policy](#policy) for a target that
+moved since approval. Approval turns an action into an [outcome](#outcome), and only
+that outcome [executes](#execute) it.
+
+<sub>Source: CAP `cap-governance` design (no external source).</sub>
+
 ### Ballot
 The container voters [cast](#cast) into exactly one [governor](#governor):
 it records who voted and when, and carries the [votes](#vote) as its content.
@@ -227,6 +228,14 @@ What an approval binds an [outcome](#outcome) to act upon: the [target](#target)
 it may touch, identified by stable key, and optionally the [state token](#state-token)
 the approvers saw. Execution must present exactly what was committed; anything
 else is refused.
+
+<sub>Source: CAP `cap-governance` design (no external source).</sub>
+
+### Decision
+A single ruling a [mechanism](#mechanism) makes on one [action](#action), bound to
+the [commitments](#commitment) its approval acts on. The mechanism, the action, and
+those commitments identify it — the same action ruled on by another mechanism, or
+against different commitments, is a different decision.
 
 <sub>Source: CAP `cap-governance` design (no external source).</sub>
 
@@ -253,14 +262,6 @@ re-applied as a field-wise patch onto the [target](#target)'s *current* state.
 Because each change patches only the fields it touches instead of replacing the
 whole state, two approvals touching different fields compose in either order
 instead of the later reverting the earlier.
-
-<sub>Source: CAP `cap-governance` design (no external source).</sub>
-
-### Pin
-The binding of a [commitment](#commitment) to what the approvers actually saw: an
-*identity pin* fixes only which [target](#target); a *state pin* also fixes the
-target's [state token](#state-token). A pin is what makes [drift](#drift)
-detectable — execution can tell whether the target still matches what was approved.
 
 <sub>Source: CAP `cap-governance` design (no external source).</sub>
 

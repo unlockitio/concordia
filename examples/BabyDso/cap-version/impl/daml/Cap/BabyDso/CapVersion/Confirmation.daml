@@ -2,7 +2,11 @@
 -- SPDX-License-Identifier: Apache-2.0
 
 -- =============================================================================
--- Confirmation — Splice's operational-quorum artifact.
+-- Confirmation — Splice's operational-quorum artifact. Decision identity —
+-- mechanism, action VALUE, and the commitments the confirmer saw — is proven
+-- at resolution: the fixed admission binds the mechanism, and `decisionOf`
+-- plus the fixed isolation match action and commitments. Confirmations that record a state token
+-- aggregate only per observed state.
 -- =============================================================================
 module Cap.BabyDso.CapVersion.Confirmation where
 
@@ -13,27 +17,20 @@ import Cap.Core.CheckedFetchV1 (HasCheckedFetch (..), require)
 import Cap.Core.SubmittableV1
 import Cap.Core.MechanismV1 (Mechanism)
 
-import Cap.BabyDso.CapVersion.DsoRules (GovAction)
+import Cap.Governance.ActionUtil (TypedAction)
+import Cap.Governance.GovernorV1 (ForDecision (..))
+import Cap.Governance.TargetV1 (TargetRef)
 
--- | Decision identity for the standing confirmation workflow: the mechanism, the
--- action VALUE, and the state tokens the confirmer saw, in binding order (None
--- per identity-pinned binding). State-pinned confirmations aggregate only per
--- observed state.
-data ForDecision = ForDecision
-  with
-    mechanism : ContractId Mechanism
-    action : GovAction
-    seenTokens : [Optional Text]
-  deriving (Eq, Show)
+import Cap.BabyDso.CapVersion.DsoRules (GovAction, encodeGovDecision)
 
 template Confirmation
   with
-    dso        : Party
-    mechanism  : ContractId Mechanism   -- the standing DsoMechanism
-    confirmer  : Party
-    action     : GovAction
-    seenTokens : [Optional Text]        -- tokens read at confirm time, in binding order; None per identity-pinned binding
-    expiresAt  : Time
+    dso         : Party
+    mechanism   : ContractId Mechanism   -- the standing DsoMechanism
+    confirmer   : Party
+    action      : TypedAction GovAction
+    commitments : [TargetRef]            -- targets committed at confirm time, in binding order
+    expiresAt   : Time
   where
     signatory dso
     observer confirmer
@@ -56,5 +53,10 @@ template Confirmation
         now <- getTime
         require "confirmation is past its expiry" (now >= expiresAt)
 
+-- | The one home of a confirmation's decision identity: which action, against
+-- which commitments. `decisionOf` returns it and the fixed isolation compares it
+-- to the resolve's pair; the mechanism component is the fixed admission's (`ForMechanism`).
 instance HasCheckedFetch Confirmation ForDecision where
-  contractGroupId c = ForDecision with mechanism = c.mechanism; action = c.action; seenTokens = c.seenTokens
+  contractGroupId c = ForDecision with
+    action = encodeGovDecision c.action
+    commitments = c.commitments

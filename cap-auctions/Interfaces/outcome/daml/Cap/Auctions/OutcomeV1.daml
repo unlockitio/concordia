@@ -41,7 +41,7 @@ interface AuctionOutcome where
 
   auctionOutcome_settleImpl : ContractId AuctionOutcome -> AuctionOutcome_Settle -> Update AuctionOutcome_SettleResult
     -- ^ MUST validate every settlement leg named in `extraArgs.context` exactly
-    -- — amount, sender, receiver, instrument, and settlement reference pinned to
+    -- — amount, sender, receiver, instrument, and settlement reference tied to
     -- `self` — and execute all legs in this one transaction (DvP atomicity).
   auctionOutcome_failImpl : ContractId AuctionOutcome -> AuctionOutcome_Fail -> Update AuctionOutcome_FailResult
     -- ^ Makes parties whole per the implementation's declared policy

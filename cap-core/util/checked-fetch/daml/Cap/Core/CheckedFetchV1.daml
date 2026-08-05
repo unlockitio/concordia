@@ -10,6 +10,8 @@ module Cap.Core.CheckedFetchV1
   , fetchAndArchive
   , fetchReferenceData
   , authoritySigned
+  , HasAuthority (..)
+  , fetchAuthentic
   ) where
 
 import DA.Set (Set)
@@ -28,3 +30,16 @@ import Splice.Util
 authoritySigned : Set Party -> [Party] -> Bool
 authoritySigned authorities sigs =
   not (Set.null authorities) && all (`elem` sigs) (Set.toList authorities)
+
+-- | A checked-fetch key that carries an authority set.
+class HasAuthority k where
+  keyAuthorities : k -> Set Party
+
+-- | Fetch a checked contract and prove it authentic 
+fetchAuthentic
+  : (HasFetch i, HasInterfaceView i v, HasCheckedFetch v k, HasAuthority k, HasSignatory i)
+  => k -> ContractId i -> Update i
+fetchAuthentic key cid = do
+  t <- fetchCheckedInterface key cid
+  require "contract is signed by its authority" (authoritySigned (keyAuthorities key) (signatory t))
+  pure t

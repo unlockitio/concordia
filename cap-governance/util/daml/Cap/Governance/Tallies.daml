@@ -3,14 +3,16 @@
 
 -- | Reference decision rules — pure functions an implementation supplies as its
 -- `tally`.
--- Each takes a decoder because the vote is opaque to the interface.
+-- Each takes a decoder because the submission is opaque to the interface.
+-- Decoders MUST filter on the submittable's `state`: an admitted submittable
+-- may be empty or withdrawn.
 
 module Cap.Governance.Tallies where
 
 import DA.List (sort, (!!))
 import DA.Optional (mapOptional)
 
-import Cap.Governance.BallotV1 (Ballot)
+import Cap.Core.SubmittableV1 (Submittable)
 import Cap.Governance.GovernorV1 (Verdict (..))
 
 
@@ -19,50 +21,39 @@ import Cap.Governance.GovernorV1 (Verdict (..))
 -- `quorum` no-votes, lapsed otherwise.
 -- `quorum` is an absolute count denominated in the electorate (number of
 -- voters, not turnout).
-quorateMajority : Int -> (Ballot -> Optional Bool) -> [Ballot] -> Verdict
-quorateMajority quorum decode ballots
+quorateMajority : Int -> (Submittable -> Optional Bool) -> [Submittable] -> Verdict
+quorateMajority quorum decode subs
   | countOf identity >= quorum = VApproved None
   | countOf not >= quorum = VRejected
   | otherwise = VLapsed
   where
-    votes = mapOptional decode ballots
+    votes = mapOptional decode subs
     countOf side = length (filter side votes)
 
--- | `quorateMajority` for decoders yielding many votes per ballot: a container
--- ("ballot box") ballot carries its whole vote map, a per-voter ballot a
--- singleton. An unrecognized ballot decodes to `[]`.
-quorateMajorityAll : Int -> (Ballot -> [Bool]) -> [Ballot] -> Verdict
-quorateMajorityAll quorum decode ballots
+-- | `quorateMajority` for decoders yielding many votes per submittable: a
+-- container ("ballot box") ballot carries its whole vote map, a per-voter
+-- ballot a singleton. An unrecognized submittable decodes to `[]`.
+quorateMajorityAll : Int -> (Submittable -> [Bool]) -> [Submittable] -> Verdict
+quorateMajorityAll quorum decode subs
   | countOf identity >= quorum = VApproved None
   | countOf not >= quorum = VRejected
   | otherwise = VLapsed
   where
-    votes = concatMap decode ballots
+    votes = concatMap decode subs
     countOf side = length (filter side votes)
 
--- | Weighted yes/no decided by quorum: the decoder yields each ballot's
+-- | Weighted yes/no decided by quorum: the decoder yields each submission's
 -- weight and direction. Approved at `quorum` yes-weight, rejected at `quorum`
 -- no-weight, lapsed otherwise. `quorum` is denominated in the electorate's
 -- total weight, snapshotted at governor creation.
-weightedQuorate : Decimal -> (Ballot -> Optional (Decimal, Bool)) -> [Ballot] -> Verdict
-weightedQuorate quorum decode ballots
+weightedQuorate : Decimal -> (Submittable -> Optional (Decimal, Bool)) -> [Submittable] -> Verdict
+weightedQuorate quorum decode subs
   | weightOf identity >= quorum = VApproved None
   | weightOf not >= quorum = VRejected
   | otherwise = VLapsed
   where
-    votes = mapOptional decode ballots
+    votes = mapOptional decode subs
     weightOf side = sum [w | (w, s) <- votes, side s]
-
--- | Value selection by median (Splice's amulet-price rule): the median of the
--- decoded values is the approved result, carried on the option channel as
--- `show`n text — `DA.Text.parseDecimal` recovers it in `governor_issueOutcome`.
--- Lapsed when nothing decodes. A median is not monotone under further casts, so
--- callers MUST wire a close-gated resolution profile (`windowedResolution`),
--- never a confirmation one.
-medianValue : (Ballot -> Optional Decimal) -> [Ballot] -> Verdict
-medianValue decode ballots = case mapOptional decode ballots of
-  [] -> VLapsed
-  votes -> VApproved (Some (show (median votes)))
 
 -- | Not defined for the empty list.
 median : [Decimal] -> Decimal
@@ -77,9 +68,9 @@ median xs0 = 0.5 * (xs !! ((n - 1) / 2) + xs !! (n / 2))
 -- otherwise; lapsed only when nothing decodes. Sound only under completeness,
 -- where the denominator is proven rather than resolver-chosen; without
 -- completeness a turnout share flips under omission — use a quorate rule.
-turnoutThreshold : Decimal -> (Ballot -> Optional Bool) -> [Ballot] -> Verdict
-turnoutThreshold threshold decode ballots =
-  case mapOptional decode ballots of
+turnoutThreshold : Decimal -> (Submittable -> Optional Bool) -> [Submittable] -> Verdict
+turnoutThreshold threshold decode subs =
+  case mapOptional decode subs of
     [] -> VLapsed
     votes
       | intToDecimal (length (filter identity votes))

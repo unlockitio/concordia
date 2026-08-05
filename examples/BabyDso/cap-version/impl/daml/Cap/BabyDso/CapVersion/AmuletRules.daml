@@ -13,6 +13,7 @@ import DA.Text (parseDecimal)
 
 import Splice.Api.Token.MetadataV1 (emptyMetadata)
 import Cap.Core.CheckedFetchV1 (require)
+import Cap.Governance.TargetUtil (Policy)
 import Cap.Governance.TargetV1
 
 template AmuletRules
@@ -25,8 +26,8 @@ template AmuletRules
     ensure amuletPrice > 0.0 && reserve >= 0.0
     signatory dso
 
-    -- Token covers the price only: a fee change recreates the contract (new cid)
-    -- without rolling the token.
+    -- The state token covers the price only: a fee change recreates the contract
+    -- (new cid) without rolling the token.
     interface instance Target for AmuletRules where
       view = TargetView with
         authorities = Set.singleton dso
@@ -38,14 +39,14 @@ template AmuletRules
 amuletRulesKey : Party -> ForTarget
 amuletRulesKey dso = ForTarget with authorities = Set.singleton dso; id = "amulet-rules"
 
--- | Bounded drift policy: accept a drifted price pin while the live price is
--- within `tolerance` of the pinned one; abort beyond.
-priceDriftWithin : Decimal -> CheckedTarget -> Update ()
-priceDriftWithin tolerance c = do
-  pinned <- case c.commitment.stateToken >>= parseDecimal of
+-- | Bounded drift policy: accept a drifted price while the live price is
+-- within `tolerance` of the recorded one; abort beyond.
+priceDriftWithin : Decimal -> Policy
+priceDriftWithin tolerance commitment target = do
+  pinned <- case commitment.stateToken >>= parseDecimal of
     Some p -> pure p
     None -> fail "pinned token does not carry a price"
-  current <- case fromInterface @AmuletRules c.target of
+  current <- case fromInterface @AmuletRules target of
     Some r -> pure r.amuletPrice
     None -> fail "drifted target is not AmuletRules"
   require "price drift is within tolerance" (abs (current - pinned) <= tolerance)

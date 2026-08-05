@@ -7,28 +7,25 @@
 
 module Cap.BabyDso.CapVersion.DsoRules where
 
-import Prelude hiding (Action)
-
-import DA.Action (void)
 import qualified DA.Map as Map
 import qualified DA.Set as Set
 import DA.Time (RelTime)
 
-import Splice.Api.Token.MetadataV1 (emptyMetadata)
+import Splice.Api.Token.MetadataV1 (AnyValue (..), emptyMetadata)
 import Cap.Core.CheckedFetchV1 (require)
 import Cap.Core.Patchable (applySetState, Patchable (..), SetState)
-import Cap.Governance.ActionV1 (Action, TargetBinding (..))
+import Cap.Governance.ActionV1 (AnyAction (..))
+import Cap.Governance.ActionUtil (ActionSpec, TargetEntry (..), TypedAction (..), editTarget)
 import Cap.Governance.TargetV1
-import Cap.Governance.TargetUtil (mutateTarget)
-import Cap.Governance.TargetPolicies (driftAborts)
+import Cap.Governance.TargetUtil (driftAborts, noDrift)
 
 import Cap.BabyDso.CapVersion.AmuletRules
 
 
-
--- | The delta an approved action applies to `DsoRules` — shared by the voting
--- and confirmation workflows (Splice splits the two action sets; the shapes are
--- what this example demonstrates, so one set serves both).
+-- | The delta an approved action applies — shared by the voting and
+-- confirmation workflows. This is the payload of the library's
+-- `TypedAction GovAction`; the open case (`Extension`) carries an `Action`
+-- contract from a package this one has never seen.
 data GovAction
   = GA_OffboardSv OffboardSv
   | GA_AddSv AddSv
@@ -36,28 +33,30 @@ data GovAction
       -- ^ Whole-config replacement, patched field-wise onto fresh state
   | GA_SetAmuletPrice with
       newPrice : Decimal
-      -- ^ Price write on the `AmuletRules` target; its approval pins the state
-      -- token read at proposal, and drift beyond the policy tolerance aborts.
+      -- ^ Price write on the `AmuletRules` target; its approval records the
+      -- state token read at proposal, and drift beyond the policy tolerance aborts.
   | GA_SetTransferFee with
       newFee : Decimal
-      -- ^ Fee write on the `AmuletRules` target, identity-pinned: any drift is
-      -- accepted, the write lands on fresh state.
+      -- ^ Fee write on the `AmuletRules` target, committed by key only: any drift
+      -- is accepted, the write lands on fresh state.
   | GA_PayFromReserve with
       amount : Decimal
-      -- ^ Payout from the `AmuletRules` reserve, state-pinned under the strict
-      -- policy: non-idempotent, so any drift since approval aborts.
-  | GA_Extension (ContractId Action)
-      -- ^ The open case: an action from a package this one has never seen —
-      -- its targets, pins, drift policy, and effect all live in that package.
+      -- ^ Payout from the `AmuletRules` reserve, recording the state token under
+      -- the strict policy: non-idempotent, so any drift since approval aborts.
   deriving (Eq, Show)
 
--- | The whole governance meaning of one action: the target it applies to,
--- whether its approval pins the state seen, its drift policy, and its effect.
-data ActionSpec = ActionSpec with
-    targetKey : ForTarget
-    pinsState : Bool
-    onDrift : CheckedTarget -> Update ()
-    effect : CheckedTarget -> ContractId Target -> Update ()
+-- | The mechanism-supplied spec context: which dso and organization the
+-- payload's targets belong to.
+data DsoCtx = DsoCtx with
+    dso : Party
+    org : Text
+
+-- | Encode a decision for `Governor_Resolve`: an extension is its proposal
+-- cid; a native payload rides its `show` (injective, and only ever compared
+-- for equality — never decoded back).
+encodeGovDecision : TypedAction GovAction -> AnyAction
+encodeGovDecision (Extension cid) = AA_Extension cid
+encodeGovDecision (Native a) = AA_Native (AV_Text (show a))
 
 
 data OffboardSv = OffboardSv with
@@ -89,7 +88,7 @@ instance Patchable DsoRulesConfig where
 template DsoRules
   with
     dso           : Party
-    org           : Text   -- distinguishes organizations sharing the dso party
+    org           : Text   -- distinguishes organizations sharing the dso party (for demo only)
     svs           : Map.Map Party Text
     offboardedSvs : Map.Map Party Text
     config        : DsoRulesConfig
@@ -110,12 +109,11 @@ dsoRulesKey : Party -> Text -> ForTarget
 dsoRulesKey dso org = ForTarget with authorities = Set.singleton dso; id = org
 
 
--- | The single per-action dispatch, shared by both workflows. 
--- `org` names the organization whose `DsoRules` a
--- rules action applies to.
--- Adding a new action can be done trough the action interface
-actionSpec : Party -> Text -> GovAction -> ActionSpec
-actionSpec dso org action = case action of
+-- | The per-action dispatch, shared by both workflows: each payload's whole
+-- governance meaning as a library `ActionSpec` (target, state token, drift policy,
+-- effect). Extension actions never reach it — they carry their own spec.
+govActionSpec : DsoCtx -> GovAction -> ActionSpec
+govActionSpec ctx action = case action of
   GA_OffboardSv arg -> onDsoRules $ \r -> do
     require "There is more than one sv" (Map.size r.svs > 1)
     case Map.lookup arg.sv r.svs of
@@ -134,37 +132,19 @@ actionSpec dso org action = case action of
   GA_SetConfig change -> onDsoRules $ \r -> pure r with config = applySetState change r.config
 
   GA_SetAmuletPrice {newPrice} ->
-    (onAmuletRules $ \r -> pure r with amuletPrice = newPrice) with
-      pinsState = True; onDrift = priceDriftWithin 1.0
+    onAmuletRules True (priceDriftWithin 1.0) $ \r -> pure r with amuletPrice = newPrice
 
-  GA_SetTransferFee {newFee} -> onAmuletRules $ \r -> pure r with transferFee = newFee
+  GA_SetTransferFee {newFee} ->
+    onAmuletRules False noDrift $ \r -> pure r with transferFee = newFee
 
   GA_PayFromReserve {amount} ->
-    (onAmuletRules $ \r -> do
+    onAmuletRules True driftAborts $ \r -> do
       require "Reserve covers the payout" (r.reserve >= amount)
-      pure r with reserve = r.reserve - amount) with
-      pinsState = True
-
-  GA_Extension _ -> error "an extension action carries its own spec"
+      pure r with reserve = r.reserve - amount
   where
-    onDsoRules f = ActionSpec with
-      targetKey = dsoRulesKey dso org
-      pinsState = False
-      onDrift = driftAborts
-      effect = \c tcid -> void (mutateTarget @DsoRules c tcid f)
-    onAmuletRules f = ActionSpec with
-      targetKey = amuletRulesKey dso
-      pinsState = False
-      onDrift = driftAborts
-      effect = \c tcid -> void (mutateTarget @AmuletRules c tcid f)
-
--- | The request-time data of an action, in binding order: a built-in's from
--- its `actionSpec`, an extension's from its `Action` view.
-actionBindings : Party -> Text -> GovAction -> Update [TargetBinding]
-actionBindings dso org action = case action of
-  GA_Extension cid -> do
-    a <- fetch cid
-    pure (view a).bindings
-  _ -> do
-    let spec = actionSpec dso org action
-    pure [TargetBinding with targetKey = spec.targetKey; pinsState = spec.pinsState]
+    onDsoRules f = Map.fromList
+      [ ( dsoRulesKey ctx.dso ctx.org
+        , TargetEntry with pinsState = False; policy = noDrift; effect = editTarget @DsoRules f ) ]
+    onAmuletRules pinsState policy f = Map.fromList
+      [ ( amuletRulesKey ctx.dso
+        , TargetEntry with pinsState; policy; effect = editTarget @AmuletRules f ) ]

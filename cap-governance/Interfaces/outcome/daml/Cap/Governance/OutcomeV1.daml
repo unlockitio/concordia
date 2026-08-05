@@ -5,21 +5,20 @@
 
 module Cap.Governance.OutcomeV1 where
 
-import DA.Action (when)
-import DA.Foldable (forA_)
+import qualified DA.Map as Map
 
 import Splice.Api.Token.MetadataV1
 import Cap.Core.TimeV1 (isOpen)
 import Cap.Core.OutcomeV1 (Outcome, isExecutor)
-import Cap.Governance.TargetV1 (Target, TargetCommitment, CheckedTarget (..), checkTargetBinding)
+import Cap.Governance.TargetV1 (Target, TargetRef (..), matchByKey)
 
 
 data GovernanceOutcomeView = GovernanceOutcomeView
   with
-    committedTargets : [TargetCommitment]
+    committedTargets : [TargetRef]
       -- ^ The targets this outcome was approved to act upon.
-      -- `governor_issueOutcome` MUST populate it with exactly the targets and
-      -- state pins the approved decision authorized.
+      -- MUST populate it with exactly the targets and
+      -- state tokens the approved decision authorized.
   deriving (Eq, Show)
 
 data GovernanceOutcome_ExecuteResult = GovernanceOutcome_ExecuteResult
@@ -27,24 +26,42 @@ data GovernanceOutcome_ExecuteResult = GovernanceOutcome_ExecuteResult
     meta : Metadata
   deriving (Eq, Show)
 
+-- | One committed target Ref at outcome creation, its its current state and its live
+-- cid contract
+data TargetContext = TargetContext with
+    commitment : TargetRef
+    target     : Target
+    targetCid  : ContractId Target
+
+-- | Reconcile the presented live targets against the committed refs by key: one
+-- `TargetContext` per committed target, in any presentation order.
+toContexts : [TargetRef] -> [ContractId Target] -> Update [TargetContext]
+toContexts committed cids = do
+  let decl = Map.fromList [(r.targetKey, r.stateToken) | r <- committed]
+  matched <- matchByKey decl cids
+  pure
+    [ TargetContext with
+        commitment = TargetRef with targetKey = key; stateToken = tok
+        target = t
+        targetCid = cid
+    | (key, (tok, cid, t)) <- Map.toList matched ]
+
+
 interface GovernanceOutcome requires Outcome where
   viewtype GovernanceOutcomeView
 
-  onTargetDrift : CheckedTarget -> Update ()
-    -- ^ The drift policy, invoked per committed target whose pinned state no
-    -- longer matches the fresh one.
-    -- MUST abort to refuse execution; on return, `governanceOutcome_executeImpl`
-    -- MUST apply its change as a field-wise patch onto the fresh state it is handed.
+  -- Forwards to the effect + drift logic defined alongside the action.
 
-  governanceOutcome_executeImpl : [CheckedTarget] -> GovernanceOutcome_Execute -> Update GovernanceOutcome_ExecuteResult
-    -- ^ The applied effect, run with the outcome signatories' authority in
-    -- scope. The checked targets MUST arrive in commitment order.
+  governanceOutcome_executeImpl : [TargetContext] -> ExtraArgs -> Update ()
+    -- ^ Apply the approved outcome across all committed targets at once. Owns the
+    -- whole execute logic — drift detection, policy (MUST abort to refuse), effect
+    -- — and may condition any target's effect on any target's drift.
 
   choice GovernanceOutcome_Execute : GovernanceOutcome_ExecuteResult
     with
       actors : [Party]
       targets : [ContractId Target]
-        -- ^ The live targets to act upon, checked against `committedTargets`.
+        -- ^ The live targets to act upon, matched to `committedTargets` by key.
       extraArgs : ExtraArgs
     controller actors
     do
@@ -54,6 +71,7 @@ interface GovernanceOutcome requires Outcome where
       assertMsg "outcome is outside its execution window"
         (isOpen now cv.executeAfter cv.executeUntil)
       assertMsg "actors are not an executor set" (isExecutor core actors)
-      checked <- checkTargetBinding (view this).committedTargets targets
-      forA_ checked $ \c -> when c.drifted (onTargetDrift this c)
-      governanceOutcome_executeImpl this checked (GovernanceOutcome_Execute with actors; targets; extraArgs)
+
+      contexts <- toContexts (view this).committedTargets targets
+      governanceOutcome_executeImpl this contexts extraArgs
+      pure (GovernanceOutcome_ExecuteResult with meta = emptyMetadata)

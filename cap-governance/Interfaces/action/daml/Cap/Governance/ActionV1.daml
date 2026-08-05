@@ -3,40 +3,45 @@
 
 -- Useful to add new actions 
 -- Exists before resolve
+-- needs new outcome contracts when new effect is needed
+-- Provides the necessary data to build ActionSpec
 
+-- Cannot have onDrift and Effect here to not tie the execution to the liveness of this contract
 module Cap.Governance.ActionV1 where
 
 import Prelude hiding (Action)
 
-import DA.Set (Set)
+import DA.Map (Map)
 
 import Splice.Api.Token.MetadataV1
 import Cap.Core.MechanismV1 (Mechanism)
 import Cap.Governance.OutcomeV1 (GovernanceOutcome)
-import Cap.Governance.TargetV1 (ForTarget, TargetCommitment)
+import Cap.Governance.TargetV1 (Target, ForTarget, TargetRef, buildRefs)
 
-
--- | One target the action asks to act upon.
-data TargetBinding = TargetBinding
-  with
-    targetKey : ForTarget
-    pinsState : Bool
-      -- ^ The one bit of the drift policy needed as data before the outcome
-      -- exists: it tells the mechanism whether to read a state token at
-      -- proposal, and whether approvals aggregate across state changes.
-  deriving (Eq, Show)
-
+-- it is the action that defines whether the state token is recorded or not
 data ActionView = ActionView
   with
-    authorities : Set Party
-    bindings : [TargetBinding]
+    targets : Map ForTarget Bool
+      -- ^ each committed target's key → whether approval records its state token
     meta : Metadata
   deriving (Eq, Show)
 
-data Action_IssueResult = Action_IssueResult
+data Action_IssueOutcomeResult = Action_IssueOutcomeResult
   with
     outcomeCids : [ContractId GovernanceOutcome]
     meta : Metadata
+  deriving (Eq, Show)
+
+-- | A decision's action as the frozen layer carries it: a format-native
+-- payload rides opaque, an extension action is its proposal contract.
+-- Formats MUST document their `AA_Native` encoding; the interface never
+-- reads it. Deliberately closed (no extension constructor): the two kinds are
+-- exhaustive — an action's logic lives either in the format (native, any value)
+-- or in its own contract (extension), and `AA_Native`'s `AnyValue` already
+-- carries any data shape.
+data AnyAction
+  = AA_Native AnyValue
+  | AA_Extension (ContractId Action)
   deriving (Eq, Show)
 
 
@@ -45,24 +50,41 @@ data Action_IssueResult = Action_IssueResult
 interface Action where
   viewtype ActionView
 
-  action_issueImpl : ContractId Action -> Action_Issue -> Update Action_IssueResult
-    -- ^ MUST create outcomes signed by `authorities` whose `committedTargets`
-    -- are exactly the bindings passed to `Action_Issue`. Single-use actions
+  action_issueOutcomeImpl : ContractId Action -> Action_IssueOutcome -> Update Action_IssueOutcomeResult
+    -- Action-specific issue logic only; general issue logic lives in the
+    -- resolution's `issue` step.
+    -- ^ MUST create outcomes signed by the `actors` passed to the choice and whose `committedTargets`
+    -- are exactly the ones passed to `Action_IssueOutcome`. Single-use actions
     -- MUST archive `self`.
+
+  -- | Resolve the action's committed targets at proposal time, against the live
+  -- targets the proposer presents. Read-only: it records state, changes nothing.
+  -- One shared body for all actions: the view's `targets` map drives the match
+  -- by key, so presentation order does not matter.
+  nonconsuming choice Action_buildRefs : [TargetRef]
+    with
+      actors  : [Party]
+      targets : [ContractId Target]
+    controller actors
+    do buildRefs (view this).targets targets
+
 
   -- | Mint the approved outcomes. Nonconsuming: lifecycle belongs to the impl
   -- (standing actions persist, single-use ones archive). No authority check —
   -- the impl's creates demand authority signatures only a resolution supplies.
-  nonconsuming choice Action_Issue : Action_IssueResult
+  nonconsuming choice Action_IssueOutcome : Action_IssueOutcomeResult
     with
       actors : [Party]
       source : ContractId Mechanism
         -- ^ The mechanism whose resolution is issuing.
-      bindings : [TargetCommitment]
-        -- ^ The view's bindings, each pin resolved on-ledger by the mechanism.
+      committedTargets : [TargetRef]
+        -- ^ The view's commitments, each state token resolved on-ledger by the mechanism.
+      winningOption : Optional AnyValue
+        -- ^ The tally's winning value, for actions parameterized by it. Decoded
+        -- at issue into a typed outcome field; the effect never sees it.
       executeAfter : Time
       executeUntil : Optional Time
       extraArgs : ExtraArgs
     controller actors
     do
-      action_issueImpl this self (Action_Issue with actors; source; bindings; executeAfter; executeUntil; extraArgs)
+      action_issueOutcomeImpl this self (Action_IssueOutcome with ..)

@@ -37,9 +37,9 @@ admitSubmittables authorities mechanism scids = do
 
 -- | Exact-cover admission: admit each submittable (bound, signed) and prove its
 -- slots are exactly `0 .. n-1`. Cover subsumes distinctness.
-admitSubmittablesWithCompleteness : Int -> ContractId Mechanism -> Mechanism -> [ContractId Submittable] -> Update [(ContractId Submittable, Submittable)]
-admitSubmittablesWithCompleteness n self r scids = do
-  pairs <- forA scids (admitSubmittable (view r).authorities self)
+admitSubmittablesWithCompleteness : Int -> Set Party -> ContractId Mechanism -> [ContractId Submittable] -> Update [(ContractId Submittable, Submittable)]
+admitSubmittablesWithCompleteness n authorities mechanism scids = do
+  pairs <- forA scids (admitSubmittable authorities mechanism)
   slots <- forA pairs $ \(_, s) -> case (view s).slot of
     None -> abort "The requirement 'submittable carries a slot' was not met."
     Some k -> pure k
@@ -49,7 +49,6 @@ admitSubmittablesWithCompleteness n self r scids = do
 -- | Assert the gathered slots are exactly `0 .. n-1`, each once. `n` MUST be
 -- sealed on the view at genesis.
 checkSlotCover : Int -> [Int] -> Update ()
-checkSlotCover n slots = do
-  require "size is non-negative" (n >= 0)
+checkSlotCover n slots =
   require "the submittables cover the slots exactly"
     (sort slots == [0 .. n - 1])

@@ -30,6 +30,11 @@ data BallotView = BallotView
 instance HasCheckedFetch BallotView ForMechanism where
   contractGroupId v = ForMechanism v.governor
 
+-- | A voter is eligible when named in `voters`, or when `voters` is empty — an
+-- open format admits anyone, and the implementation enforces its own rule.
+isEligibleVoter : Set Party -> Party -> Bool
+isEligibleVoter voters voter = Set.null voters || voter `Set.member` voters
+
 data Ballot_ConsumeResult = Ballot_ConsumeResult
   with
     meta : Metadata
@@ -73,8 +78,7 @@ interface Ballot requires Submittable where
       let bv = view this
       now <- getTime
       assertMsg "ballot expired" (now < bv.expiresAt)
-      assertMsg "caster is not an eligible voter"
-        (Set.null bv.voters || voter `Set.member` bv.voters)
+      assertMsg "caster is not an eligible voter" (isEligibleVoter bv.voters voter)
       -- Read the governor for its window and policy; the fetch aborts if it is
       -- resolved or withdrawn.
       r <- fetch bv.governor
@@ -92,8 +96,7 @@ interface Ballot requires Submittable where
     controller voter
     do
       let bv = view this
-      assertMsg "withdrawer is not an eligible voter"
-        (Set.null bv.voters || voter `Set.member` bv.voters)
+      assertMsg "withdrawer is not an eligible voter" (isEligibleVoter bv.voters voter)
       ballot_withdrawImpl this (Ballot_Withdraw with voter; extraArgs)
 
 

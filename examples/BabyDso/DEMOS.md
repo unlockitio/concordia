@@ -6,35 +6,34 @@
 BabyDso reproduces Splice's DSO governance twice: `original/` is an idiomatic
 plain-Daml reproduction with no cap dependency, and `cap-version/` implements
 the same [mechanisms](../../GLOSSARY.md#mechanism) on the cap interfaces. Every demo below runs in **both**
-packages under the same name, with the same parties, action, and step order —
+packages under the same name, with the same parties, [action](../../GLOSSARY.md#action), and step order —
 so the diff between the two scripts is exactly what the cap standard adds.
 Demos 1–3 walk Splice's three different [mechanisms](../../GLOSSARY.md#mechanism) end to end. Demo 4 exercises
-a scenario outside the scope Splice was designed for — a reasonable decision for
+a scenario outside the scope Splice was designed for — a reasonable [decision](../../GLOSSARY.md#decision) for
 a single application on its own network, but that a reusable standard must
-generalize. Demo 5 adds a new governance action **after deployment, in its own
+generalize. Demo 5 adds a new governance [action](../../GLOSSARY.md#action) **after deployment, in its own
 package**. In Splice this change requires upgrading the deployed rules package;
 here the deployed packages stay untouched.
 
 | # | Demo | Splice [mechanisms](../../GLOSSARY.md#mechanism) | What it shows in one line |
 |---|---|---|---|
-| 0 | `demo_ballot_box` | (cap-version only) | The container [ballot](../../GLOSSARY.md#ballot) format: Splice's single-contract [vote](../../GLOSSARY.md#vote) map on the same choices |
 | 1 | `demo_voting` | `VoteRequest` | Full lifecycle: request → [cast](../../GLOSSARY.md#cast) → [resolve](../../GLOSSARY.md#resolution) → [execute](../../GLOSSARY.md#execute), plus concurrent-outcome handling |
 | 2 | `demo_confirmation` | `Confirmation` ([standing](../../GLOSSARY.md#standing), per-decision) | A [quorum](../../GLOSSARY.md#quorum) built asynchronously; [execution](../../GLOSSARY.md#execute) consumes it at [threshold](../../GLOSSARY.md#threshold) |
 | 3 | `demo_median` | `AmuletPriceVote` ([standing](../../GLOSSARY.md#standing), persistent) | One [standing](../../GLOSSARY.md#standing) [vote](../../GLOSSARY.md#vote) per SV, re-read every round; the median needs exactly the [participants](../../GLOSSARY.md#participant) |
-| 4 | `demo_two_organizations` | generalization | Two organizations sharing one [authority](../../GLOSSARY.md#authority) party: what keeps a decision inside its institution |
-| 5 | `demo_extension` | extensibility (cap-version only) | An action added after deployment, in its own package |
+| 4 | `demo_two_organizations` | generalization | Two organizations sharing one [authority](../../GLOSSARY.md#authority) party: what keeps a [decision](../../GLOSSARY.md#decision) inside its institution |
+| 5 | `demo_extension` | extensibility (cap-version only) | An [action](../../GLOSSARY.md#action) added after deployment, in its own package |
 
 ## Background: 3 mechanisms of Splice DSO
 
 Splice's DSO governance runs on three distinct approval [mechanisms](../../GLOSSARY.md#mechanism), each a
 different shape of "collect SV approvals, then act":
 
-1. **`VoteRequest`** — one request contract per decision. SVs [cast](../../GLOSSARY.md#cast)
+1. **`VoteRequest`** — one request contract per [decision](../../GLOSSARY.md#decision). SVs [cast](../../GLOSSARY.md#cast)
    yes/no onto it, and once the [threshold](../../GLOSSARY.md#threshold) is met the request is *closed*: it
    [resolves](../../GLOSSARY.md#resolution), produces the [outcome](../../GLOSSARY.md#outcome), and [executes](../../GLOSSARY.md#execute), all in one transaction, then is
-   consumed. A decision has a lifecycle: request → [cast](../../GLOSSARY.md#cast) → [resolve](../../GLOSSARY.md#resolution) → [execute](../../GLOSSARY.md#execute).
+   consumed. A [decision](../../GLOSSARY.md#decision) has a lifecycle: request → [cast](../../GLOSSARY.md#cast) → [resolve](../../GLOSSARY.md#resolution) → [execute](../../GLOSSARY.md#execute).
 2. **`Confirmation` ([standing](../../GLOSSARY.md#standing), per-decision)** — each SV independently creates a
-   `Confirmation` contract for a given action. There is no shared request; the
+   `Confirmation` contract for a given [action](../../GLOSSARY.md#action). There is no shared request; the
    [quorum](../../GLOSSARY.md#quorum) is assembled asynchronously and [execution](../../GLOSSARY.md#execute) consumes the confirmations
    once enough exist. Confirmations are [standing](../../GLOSSARY.md#standing) (valid for a time window) and
    per-decision.
@@ -49,28 +48,18 @@ outside Splice's single-application design scope.
 ## The actions
 
 Every demo approves one `GovAction`; the diff between the two packages is what
-the cap standard adds per action. All actions run through both [mechanisms](../../GLOSSARY.md#mechanism) (Splice
-splits the action sets; here one set serves both). Each cap action's whole meaning
-— [target](../../GLOSSARY.md#target), [pin](../../GLOSSARY.md#pin), [drift](../../GLOSSARY.md#drift) [policy](../../GLOSSARY.md#policy), effect — is one `ActionSpec` record.
+the cap standard adds per [action](../../GLOSSARY.md#action). All [actions](../../GLOSSARY.md#action) run through both [mechanisms](../../GLOSSARY.md#mechanism) (Splice
+splits the [action](../../GLOSSARY.md#action) sets; here one set serves both). Each cap [action](../../GLOSSARY.md#action)'s whole meaning
+— [target](../../GLOSSARY.md#target), [state token](../../GLOSSARY.md#state-token), [drift](../../GLOSSARY.md#drift) [policy](../../GLOSSARY.md#policy), effect — is one `ActionSpec` record.
 
-| Action | Effect | `original` realizes it as | `cap-version` adds | Demos |
+| [Action](../../GLOSSARY.md#action) | Effect | `original` realizes it as | `cap-version` adds | Demos |
 |---|---|---|---|---|
-| `GA_SetConfig` | Whole-config amendment of `DsoRules` | `SetConfig` carrying an explicit `baseConfig`, [merged](../../GLOSSARY.md#merge) field-wise (`Patchable`) | `SetState` delta, same field-wise [merge](../../GLOSSARY.md#merge); [target](../../GLOSSARY.md#target) bound by key (one `DsoRules` per `org`), `driftAborts` | 0, 1, 4 |
-| `GA_SetTransferFee` | Fee write on `AmuletRules` | grant stand-in `NoOp` (no state change) | identity-pinned — [drift](../../GLOSSARY.md#drift) ignored, write lands on fresh state; replays exactly | 2 |
-| `GA_SetAmuletPrice` | Price write on `AmuletRules` | direct `ASetAmuletPrice` choice (median path), no [pin](../../GLOSSARY.md#pin) or [policy](../../GLOSSARY.md#policy) | state-pinned on the price token; [drift](../../GLOSSARY.md#drift) routed to `priceDriftWithin 1.0` | 1, 2 |
-| `GA_PayFromReserve` | Payout from the `AmuletRules` reserve | no equivalent (non-idempotent, outside Splice's action set) | state-pinned; strict `driftAborts`, so any [drift](../../GLOSSARY.md#drift) since approval refuses | 1, 2 |
-| `GA_Extension` | Carries an `Action` contract from a package deployed later | no equivalent — the action enum is closed inside the deployed rules template | the open case: [targets](../../GLOSSARY.md#target), [pins](../../GLOSSARY.md#pin), [drift](../../GLOSSARY.md#drift) [policy](../../GLOSSARY.md#policy), and effect all arrive from the new package | 5 |
+| `GA_SetConfig` | Whole-config amendment of `DsoRules` | `SetConfig` carrying an explicit `baseConfig`, [merged](../../GLOSSARY.md#merge) field-wise (`Patchable`) | `SetState` delta, same field-wise [merge](../../GLOSSARY.md#merge); [target](../../GLOSSARY.md#target) bound by key (one `DsoRules` per `org`), `driftAborts` | 1, 4 |
+| `GA_SetTransferFee` | Fee write on `AmuletRules` | grant stand-in `NoOp` (no state change) | committed by key only — [drift](../../GLOSSARY.md#drift) ignored, write lands on fresh state; replays exactly | 2 |
+| `GA_SetAmuletPrice` | Price write on `AmuletRules` | direct `ASetAmuletPrice` choice (median path), no [state token](../../GLOSSARY.md#state-token) or [policy](../../GLOSSARY.md#policy) | records the price [state token](../../GLOSSARY.md#state-token); [drift](../../GLOSSARY.md#drift) routed to `priceDriftWithin 1.0` | 1, 2 |
+| `GA_PayFromReserve` | Payout from the `AmuletRules` reserve | no equivalent (non-idempotent, outside Splice's [action](../../GLOSSARY.md#action) set) | records the [state token](../../GLOSSARY.md#state-token); strict `driftAborts`, so any [drift](../../GLOSSARY.md#drift) since approval refuses | 1, 2 |
+| `GA_Extension` | Carries an `Action` contract from a package deployed later | no equivalent — the [action](../../GLOSSARY.md#action) enum is closed inside the deployed rules template | the open case: [targets](../../GLOSSARY.md#target), [state tokens](../../GLOSSARY.md#state-token), [drift](../../GLOSSARY.md#drift) [policy](../../GLOSSARY.md#policy), and effect all arrive from the new package | 5 |
 
-
-## Demo 0 — `demo_ballot_box`
-
-`cap-version` only, no `original` counterpart: it exists just to show that
-cap-governance also supports one authority-signed
-contract accumulating every SV's [vote](../../GLOSSARY.md#vote) in a map, recreated on each
-[cast](../../GLOSSARY.md#cast). Three SVs [cast](../../GLOSSARY.md#cast) into the same contract through the same `Ballot_Cast`
-choice the per-voter format uses, and the same close choice [resolves](../../GLOSSARY.md#resolution) it at the
-same [threshold](../../GLOSSARY.md#threshold). The rest of the demos use the per-voter format, which is what
-dissolves Splice's [cast](../../GLOSSARY.md#cast) cooldown and [contention](../../GLOSSARY.md#contention).
 
 ## Demo 1 — `demo_voting`
 
@@ -82,11 +71,11 @@ case: a non-SV cannot [cast](../../GLOSSARY.md#cast). Then two concurrent config
 [votes](../../GLOSSARY.md#vote) prepared against the same base but touching different fields both [resolve](../../GLOSSARY.md#resolution),
 and the second patches onto the first instead of reverting it — Splice's
 field-wise `Patchable` [merge](../../GLOSSARY.md#merge) in `original`, the same [merge](../../GLOSSARY.md#merge) as cap's `SetState`
-delta in `cap-version`. The cap version [resolves](../../GLOSSARY.md#resolution) with a state-pinned case: a
+delta in `cap-version`. The cap version [resolves](../../GLOSSARY.md#resolution) with a case that records the [state token](../../GLOSSARY.md#state-token): a
 reserve payout is approved by [vote](../../GLOSSARY.md#vote) at price 10.0, the confirmation [mechanism](../../GLOSSARY.md#mechanism)
 moves the price before [resolution](../../GLOSSARY.md#resolution), and the voteRequestClose [resolves](../../GLOSSARY.md#resolution),
-the aborts according to `driftAborts` [policy](../../GLOSSARY.md#policy), if [policy](../../GLOSSARY.md#policy) was `driftMerges` 
-the change would be applied.
+the aborts according to the `driftAborts` [policy](../../GLOSSARY.md#policy); a drift-tolerant [policy](../../GLOSSARY.md#policy)
+would instead apply the change.
 
 ```mermaid
 sequenceDiagram
@@ -121,8 +110,8 @@ sequenceDiagram
     A->>R: execute reqC (patches onto reqB)
     Note over R: DsoRules config now:<br/>actionConfirmationTimeout = 10m + voteCooldownTime = 3m<br/>(both fields set, reqC patched onto reqB)
 
-    Note over sv1,R: State-pinned drift under driftAborts — the stale approval cannot execute
-    sv1->>A: RequestVote reqP (GA_PayFromReserve, pinned @ price 10.0)
+    Note over sv1,R: Recorded state token, drift under driftAborts — the stale approval cannot execute
+    sv1->>A: RequestVote reqP (GA_PayFromReserve, state token @ price 10.0)
     sv2->>B: cast reqP
     sv3->>B: cast reqP
     Note over A,R: confirmation mechanism moves price 10.0 → 10.5
@@ -132,24 +121,24 @@ sequenceDiagram
 
 ## Demo 2 — `demo_confirmation`
 
-A grant-shaped action through the confirmation [mechanism](../../GLOSSARY.md#mechanism): two of four SVs
+A grant-shaped [action](../../GLOSSARY.md#action) through the confirmation [mechanism](../../GLOSSARY.md#mechanism): two of four SVs
 confirm, [execution](../../GLOSSARY.md#execute) fails below the [threshold](../../GLOSSARY.md#threshold), the rest confirm, and [execution](../../GLOSSARY.md#execute)
-consumes three confirmations and [executes](../../GLOSSARY.md#execute) the action. Negative case: a spent
+consumes three confirmations and [executes](../../GLOSSARY.md#execute) the [action](../../GLOSSARY.md#action). Negative case: a spent
 confirmation cannot be presented again. A *live* confirmation, though, is valid
 for its whole time window: the demo gathers one more confirmation than the
 [threshold](../../GLOSSARY.md#threshold), [executes](../../GLOSSARY.md#execute) once, then combines the leftover — created for that first
-decision — with fresh ones into a **second [execution](../../GLOSSARY.md#execute) of the same action**, one
+[decision](../../GLOSSARY.md#decision) — with fresh ones into a **second [execution](../../GLOSSARY.md#execute) of the same [action](../../GLOSSARY.md#action)**, one
 its confirmer never intended. In `original` (grant stand-in `NoOp`) this second
-[execution](../../GLOSSARY.md#execute) is admitted: nothing between the TTL and action equality scopes
+[execution](../../GLOSSARY.md#execute) is admitted: nothing between the TTL and [action](../../GLOSSARY.md#action) equality scopes
 *when* a confirmation may still be used, which is why Splice keeps
-confirmable actions idempotent by convention. In `cap-version` that scope is
-declared per action — each action's whole meaning ([target](../../GLOSSARY.md#target), [pin](../../GLOSSARY.md#pin), [drift](../../GLOSSARY.md#drift) [policy](../../GLOSSARY.md#policy),
-effect) is one `ActionSpec` record. The `GA_SetTransferFee` action is
-identity-pinned and replays exactly as in `original`. State-pinned actions
-instead [pin](../../GLOSSARY.md#pin) the state their confirmers saw (the [target](../../GLOSSARY.md#target)'s [state token](../../GLOSSARY.md#state-token)) and
+confirmable [actions](../../GLOSSARY.md#action) idempotent by convention. In `cap-version` that scope is
+declared per [action](../../GLOSSARY.md#action) — each [action](../../GLOSSARY.md#action)'s whole meaning ([target](../../GLOSSARY.md#target), [state token](../../GLOSSARY.md#state-token), [drift](../../GLOSSARY.md#drift) [policy](../../GLOSSARY.md#policy),
+effect) is one `ActionSpec` record. The `GA_SetTransferFee` [action](../../GLOSSARY.md#action) is
+committed by key only and replays exactly as in `original`. [Actions](../../GLOSSARY.md#action) that record a [state token](../../GLOSSARY.md#state-token)
+instead record the state their confirmers saw (the [target](../../GLOSSARY.md#target)'s [state token](../../GLOSSARY.md#state-token)) and
 route [drift](../../GLOSSARY.md#drift) to their own declared [policy](../../GLOSSARY.md#policy) (in this case: "has the ground moved 
 more than 1 since the confirmers approved ?"): the demo confirms three
-`GA_SetAmuletPrice` actions and a `GA_PayFromReserve` payout against the same (initial)
+`GA_SetAmuletPrice` [actions](../../GLOSSARY.md#action) and a `GA_PayFromReserve` payout against the same (initial)
 state, [executes](../../GLOSSARY.md#execute) the first price, and shows the second can still [execute](../../GLOSSARY.md#execute), 
 the third refused for [drifting](../../GLOSSARY.md#drift) beyond the bound, the
 payout actionwith the `driftAborts` [policy](../../GLOSSARY.md#policy) is refused since the state changed,
@@ -167,7 +156,7 @@ sequenceDiagram
     participant C as Confirmations
     participant AR as AmuletRules
 
-    Note over sv1,AR: Identity-pinned action (allow replay) — GA_SetTransferFee 0.2 (Splice equivalent)
+    Note over sv1,AR: Key-only action (allow replay) — GA_SetTransferFee 0.2 (Splice equivalent)
     sv1->>A: ConfirmAction (grant)
     A->>C: mint d1
     sv2->>A: ConfirmAction (grant)
@@ -184,28 +173,28 @@ sequenceDiagram
     sv1->>A: ConfirmAction (grant) ⇒ d1'
     sv2->>A: ConfirmAction (grant) ⇒ d2'
     sv2->>A: ExecuteConfirmedAction [d4,d1',d2']
-    A->>AR: archive d4,d1',d2' + transferFee = 0.2 again — identity pin admits the replay (one tx)
+    A->>AR: archive d4,d1',d2' + transferFee = 0.2 again — key-only commitment admits the replay (one tx)
 
-    Note over sv1,AR: State-pinned actions — every confirmation gathered at amuletPrice 10.0 (pin10)
-    Note over sv1,sv4: confirm priceA(10.5)×3, priceB(15.0)×4, priceC(20.0)×3, payout(25.0)×3 — all seenToken = pin10
-    sv1->>A: Execute priceA pin10 [a1,a2,a3]
+    Note over sv1,AR: Actions that record the state token — every confirmation gathered at amuletPrice 10.0 (token10)
+    Note over sv1,sv4: confirm priceA(10.5)×3, priceB(15.0)×4, priceC(20.0)×3, payout(25.0)×3 — all seenToken = token10
+    sv1->>A: Execute priceA token10 [a1,a2,a3]
     A->>AR: amuletPrice 10.0 → 10.5
-    Note over A,AR: live price 10.5, drift 0.5 from the pinned 10.0
-    sv1--xA: Execute payout pin10 [p1,p2,p3] — strict driftAborts: 0.5 drift refuses
-    sv1->>A: Execute priceB pin10 [b1,b2,b3] — priceDriftWithin 1.0 tolerates 0.5
+    Note over A,AR: live price 10.5, drift 0.5 from the recorded 10.0
+    sv1--xA: Execute payout token10 [p1,p2,p3] — strict driftAborts: 0.5 drift refuses
+    sv1->>A: Execute priceB token10 [b1,b2,b3] — priceDriftWithin 1.0 tolerates 0.5
     A->>AR: amuletPrice 10.5 → 15.0
-    sv1--xA: Execute priceC pin10 [c1,c2,c3] — drift 5.0 > 1.0 tolerance, refused
+    sv1--xA: Execute priceC token10 [c1,c2,c3] — drift 5.0 > 1.0 tolerance, refused
 
-    Note over sv1,AR: State pin blocks cross-state aggregation
-    sv1->>A: ConfirmAction priceB ⇒ f1 (pins live state, pin15)
-    sv2->>A: ConfirmAction priceB ⇒ f2 (pin15)
-    sv2--xA: Execute priceB pin10 [b4,f1,f2] — f1,f2 pin15 ≠ group pin10
-    sv2--xA: Execute priceB pin15 [b4,f1,f2] — b4 pins10 ≠ group pin15
+    Note over sv1,AR: Recorded state token blocks cross-state aggregation
+    sv1->>A: ConfirmAction priceB ⇒ f1 (records live state, token15)
+    sv2->>A: ConfirmAction priceB ⇒ f2 (token15)
+    sv2--xA: Execute priceB token10 [b4,f1,f2] — f1,f2 token15 ≠ group token10
+    sv2--xA: Execute priceB token15 [b4,f1,f2] — b4 token10 ≠ group token15
     Note over sv1,AR: Payout re-approved against the live state
-    sv1->>A: ConfirmAction payout ⇒ p1' (pin15)
-    sv2->>A: ConfirmAction payout ⇒ p2' (pin15)
-    sv3->>A: ConfirmAction payout ⇒ p3' (pin15)
-    sv1->>A: Execute payout pin15 [p1',p2',p3']
+    sv1->>A: ConfirmAction payout ⇒ p1' (token15)
+    sv2->>A: ConfirmAction payout ⇒ p2' (token15)
+    sv3->>A: ConfirmAction payout ⇒ p3' (token15)
+    sv1->>A: Execute payout token15 [p1',p2',p3']
     A->>AR: reserve 100.0 → 75.0
 ```
 
@@ -261,7 +250,7 @@ Two `DsoRules` instances — different configs, different organizations — host
 by the same `dso` [authority](../../GLOSSARY.md#authority) party. A `SetConfig` [vote](../../GLOSSARY.md#vote) is opened and approved
 under institution 1, then [resolved](../../GLOSSARY.md#resolution) presenting institution 2's rules. Splice's
 [admission](../../GLOSSARY.md#admission) is keyed by the [authority](../../GLOSSARY.md#authority) party, which both organizations share, so
-in `original` the [resolution](../../GLOSSARY.md#resolution) passes and institution 1's action [executes](../../GLOSSARY.md#execute) on
+in `original` the [resolution](../../GLOSSARY.md#resolution) passes and institution 1's [action](../../GLOSSARY.md#action) [executes](../../GLOSSARY.md#execute) on
 institution 2's state — outside Splice's design scope, since it runs as the
 sole instance on its own network. In `cap-version` each organization is its
 own [target](../../GLOSSARY.md#target) `id` on `DsoRules`, and the same replay is refused twice, at named
@@ -293,7 +282,7 @@ sequenceDiagram
 
     Note over sv1,R2: Replay 1 — resolve org1's approved request, presenting org2's rules
     sv1--xA2: CloseVoteRequest reqX, ballotsX, target = R2
-    Note over A2,R2: refused: outcome's target binding — reqX pins org1's key, not only the DSO
+    Note over A2,R2: refused: outcome's target binding — reqX fixes org1's key, not only the DSO
 
     Note over sv1,R2: Replay 2 — resolve org2's own request with org1's ballots
     sv1--xA2: CloseVoteRequest reqY, ballotsX, target = R2
@@ -307,28 +296,28 @@ sequenceDiagram
 
 ## Demo 5 — `demo_extension`
 
-A new package, `cap-version/extension/`, adds an action the base package has
+A new package, `cap-version/extension/`, adds an [action](../../GLOSSARY.md#action) the base package has
 never seen: `OffboardAndCompensate` — offboard an SV and, in the same
 transaction, pay them from the reserve. The package holds two templates. The
-action is signed by the proposer and implements the `Action` interface. The
-[outcome](../../GLOSSARY.md#outcome) implements `GovernanceOutcome` and carries the action's [drift](../../GLOSSARY.md#drift) [policy](../../GLOSSARY.md#policy) and
+[action](../../GLOSSARY.md#action) is signed by the [proposer](../../GLOSSARY.md#proposer) and implements the `Action` interface. The
+[outcome](../../GLOSSARY.md#outcome) implements `GovernanceOutcome` and carries the [action](../../GLOSSARY.md#action)'s [drift](../../GLOSSARY.md#drift) [policy](../../GLOSSARY.md#policy) and
 effect.
 
 The demo then runs a normal [vote](../../GLOSSARY.md#vote). An SV creates the proposal and opens a [vote](../../GLOSSARY.md#vote)
-on it, as `GA_Extension`. The request reads the action's [targets](../../GLOSSARY.md#target) and [pins](../../GLOSSARY.md#pin)
+on it, as `GA_Extension`. The request reads the [action](../../GLOSSARY.md#action)'s [targets](../../GLOSSARY.md#target) and [state tokens](../../GLOSSARY.md#state-token)
 from the proposal's view. SVs [cast](../../GLOSSARY.md#cast) on the same `Vote` [ballots](../../GLOSSARY.md#ballot), and the same
-close choice [resolves](../../GLOSSARY.md#resolution). On approval, `Action_Issue` mints the extension's
+close choice [resolves](../../GLOSSARY.md#resolution). On approval, `Action_IssueOutcome` mints the extension's
 [outcome](../../GLOSSARY.md#outcome), and it [executes](../../GLOSSARY.md#execute) on **both** committed [targets](../../GLOSSARY.md#target) in the closing
 transaction. The base `GovOutcome` supports only one committed [target](../../GLOSSARY.md#target) — the
-new action does more than any built-in, and still changed nothing in the base.
+new [action](../../GLOSSARY.md#action) does more than any native, and still changed nothing in the base.
 
-Negative case: a second proposal is opened with the reserve [pinned](../../GLOSSARY.md#pin) at price
+Negative case: a second proposal is opened with the reserve's [state token](../../GLOSSARY.md#state-token) recorded at price
 10.0. Before the close, the confirmation [mechanism](../../GLOSSARY.md#mechanism) moves the price. The close
 aborts under the extension's own `driftAborts` [policy](../../GLOSSARY.md#policy) — the same [drift](../../GLOSSARY.md#drift)
-protection as the built-ins ([DESIGN.md §4](../../DESIGN.md#4-what-is-enforced-and-what-is-trusted)
+protection as the native [actions](../../GLOSSARY.md#action) ([DESIGN.md §4](../../DESIGN.md#4-what-is-enforced-and-what-is-trusted)
 states where it is enforced).
 
-In `original/`, the same addition needs a new variant in the action enum and a
+In `original/`, the same addition needs a new variant in the [action](../../GLOSSARY.md#action) enum and a
 new case in the rules template. That means upgrading and redeploying the
 deployed governance package — itself a governance [vote](../../GLOSSARY.md#vote) — and migrating the
 live contracts. We only describe that cost here; `original/` stays a pure
@@ -362,16 +351,16 @@ sequenceDiagram
     Note over sv1,R: A new action, from a package the base has never seen
     sv1->>X: create OffboardAndCompensate (proposer-signed)
     sv1->>A: DsoMechanism_RequestVote (GA_Extension)
-    Note over A: bindings read from the Action view —<br/>reserve pin read on-ledger at 10.0
+    Note over A: bindings read from the Action view —<br/>reserve state token read on-ledger at 10.0
     A->>B: mint VoteRequest + sv1's yes + one Ballot per SV (one tx)
     sv2->>B: Ballot_Cast (yes)
     sv3->>B: Ballot_Cast (yes)
     sv1->>A: DsoMechanism_CloseVoteRequest
-    A->>X: resolve → Action_Issue mints the extension outcome (transient)
+    A->>X: resolve → Action_IssueOutcome mints the extension outcome (transient)
     X->>R: execute: offboard sv4 + pay 25.0 — one tx, two committed targets
 
-    Note over sv1,R: Same drift rails as the built-ins
-    sv1->>A: second proposal, reserve binding pinned @ price 10.0
+    Note over sv1,R: Same drift rails as the native actions
+    sv1->>A: second proposal, reserve binding's state token @ price 10.0
     Note over A,R: confirmation mechanism moves price 10.0 → 10.5
     sv1--xA: CloseVoteRequest — the extension's driftAborts refuses the stale approval
 ```

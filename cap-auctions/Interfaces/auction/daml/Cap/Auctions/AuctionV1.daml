@@ -95,8 +95,8 @@ interface Auction requires Mechanism where
             assertMsg "a full submittable must be priced as a bid"
               ((view e).state /= S_Full)
           void $ admitSubmittablesWithCompleteness n
+            rv.authorities
             (toInterfaceContractId @Mechanism self)
-            (toInterface this)
             (map (toInterfaceContractId @Submittable) bidCids <> evidence)
       auction_resolveImpl this self arg
 
