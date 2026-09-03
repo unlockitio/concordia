@@ -1,0 +1,199 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Examples.BabyDso.Plain.DsoRules where
+
+import DA.List (unique)
+import DA.Map (Map)
+import qualified DA.Map as Map
+
+import Splice.Util (Patchable (..), patchScalar, require)
+
+import Cap.Examples.BabyDso.Plain.AmuletRules
+
+data DsoRulesConfig = DsoRulesConfig
+  with
+    activeSynchronizerId : Text
+  deriving (Eq, Show)
+
+instance Patchable DsoRulesConfig where
+  patch new base current = DsoRulesConfig with
+    activeSynchronizerId =
+      patchScalar new.activeSynchronizerId base.activeSynchronizerId current.activeSynchronizerId
+
+data AmuletRules_ActionRequiringConfirmation
+  = CRARC_SetConfig AmuletRules_SetConfig
+  deriving (Eq, Show)
+
+data DsoRules_ActionRequiringConfirmation
+  = SRARC_SetConfig DsoRules_SetConfig
+  deriving (Eq, Show)
+
+data ActionRequiringConfirmation
+  = ARC_AmuletRules with
+      amuletRulesAction : AmuletRules_ActionRequiringConfirmation
+  | ARC_DsoRules with
+      dsoAction : DsoRules_ActionRequiringConfirmation
+  deriving (Eq, Show)
+
+data Vote = Vote
+  with
+    sv : Party
+    accept : Bool
+  deriving (Eq, Show)
+
+data VoteRequestOutcome
+  = VRO_Accepted with
+      effectiveAt : Time
+  | VRO_Rejected
+  | VRO_Expired
+  deriving (Eq, Show)
+
+requiredNumVotes : Int -> Int
+requiredNumVotes numSvs =
+  let f = floor (intToDecimal (numSvs - 1) / 3.0)
+  in ceiling (intToDecimal (numSvs + f + 1) / 2.0)
+
+template Confirmation
+  with
+    dso : Party
+    confirmer : Party
+    action : ActionRequiringConfirmation
+    expiresAt : Time
+  where
+    signatory dso
+
+template VoteRequest
+  with
+    dso : Party
+    requester : Party
+    action : ActionRequiringConfirmation
+    voteBefore : Time
+    votes : Map Party Vote
+    targetEffectiveAt : Optional Time
+  where
+    signatory dso
+
+    ensure optional True (voteBefore <=) targetEffectiveAt
+
+template DsoRules
+  with
+    dso : Party
+    svs : [Party]
+    config : DsoRulesConfig
+  where
+    signatory dso
+    observer svs
+
+    choice DsoRules_SetConfig : ContractId DsoRules
+      with
+        newConfig : DsoRulesConfig
+        baseConfig : Optional DsoRulesConfig
+      controller dso
+      do case baseConfig of
+           None -> create this with config = newConfig
+           Some base -> create this with config = patch newConfig base config
+
+    nonconsuming choice DsoRules_ConfirmAction : ContractId Confirmation
+      with
+        confirmer : Party
+        action : ActionRequiringConfirmation
+        expiresAt : Time
+      controller confirmer
+      do
+        require "Confirmer is an SV" (confirmer `elem` svs)
+        create Confirmation with dso; confirmer; action; expiresAt
+
+    nonconsuming choice DsoRules_ExecuteConfirmedAction : ()
+      with
+        action : ActionRequiringConfirmation
+        amuletRulesCid : Optional (ContractId AmuletRules)
+        confirmationCids : [ContractId Confirmation]
+        sv : Party
+      controller sv
+      do
+        require "Caller is an SV" (sv `elem` svs)
+        require "Enough confirmations"
+          (length confirmationCids >= requiredNumVotes (length svs))
+        confirmers <- forA confirmationCids $ \cid -> do
+          confirmation <- fetch cid
+          archive cid
+          require "Confirmer is an SV" (confirmation.confirmer `elem` svs)
+          require "Confirmed action matches" (confirmation.action == action)
+          pure confirmation.confirmer
+        require "No duplicate confirmers" (unique confirmers)
+        executeActionRequiringConfirmation dso self amuletRulesCid action
+
+    nonconsuming choice DsoRules_RequestVote : ContractId VoteRequest
+      with
+        requester : Party
+        action : ActionRequiringConfirmation
+        voteBefore : Time
+        targetEffectiveAt : Optional Time
+      controller requester
+      do
+        require "Requester is an SV" (requester `elem` svs)
+        create VoteRequest with
+          dso
+          requester
+          action
+          voteBefore
+          votes = Map.fromList [(requester, Vote with sv = requester; accept = True)]
+          targetEffectiveAt
+
+    nonconsuming choice DsoRules_CastVote : ContractId VoteRequest
+      with
+        requestCid : ContractId VoteRequest
+        vote : Vote
+      controller vote.sv
+      do
+        require "Voter is an SV" (vote.sv `elem` svs)
+        request <- fetch requestCid
+        archive requestCid
+        create request with votes = Map.insert vote.sv vote request.votes
+
+    nonconsuming choice DsoRules_CloseVoteRequest : VoteRequestOutcome
+      with
+        requestCid : ContractId VoteRequest
+        amuletRulesCid : Optional (ContractId AmuletRules)
+        sv : Party
+      controller sv
+      do
+        require "Caller is an SV" (sv `elem` svs)
+        now <- getTime
+        request <- fetch requestCid
+        archive requestCid
+        let quorum = requiredNumVotes (length svs)
+            valid = filter (\v -> v.sv `elem` svs) (Map.values request.votes)
+            yays = length (filter (.accept) valid)
+            nays = length valid - yays
+        if nays >= quorum
+          then pure VRO_Rejected
+          else case request.targetEffectiveAt of
+            Some effectiveAt
+              | now >= effectiveAt && yays >= quorum -> do
+                  executeActionRequiringConfirmation dso self amuletRulesCid request.action
+                  pure VRO_Accepted with effectiveAt
+              | now >= effectiveAt -> pure VRO_Rejected
+              | now >= request.voteBefore && yays + nays < quorum -> pure VRO_Expired
+              | otherwise -> abort "no definitive outcome for voting request with effectivity"
+            None
+              | yays >= quorum -> do
+                  executeActionRequiringConfirmation dso self amuletRulesCid request.action
+                  pure VRO_Accepted with effectiveAt = now
+              | now >= request.voteBefore -> pure VRO_Expired
+              | otherwise -> abort "no definitive outcome for voting request without effectivity"
+
+executeActionRequiringConfirmation
+  : Party -> ContractId DsoRules -> Optional (ContractId AmuletRules)
+  -> ActionRequiringConfirmation -> Update ()
+executeActionRequiringConfirmation _dso dsoRulesCid amuletRulesCid action = case action of
+  ARC_AmuletRules with .. -> case amuletRulesCid of
+    None -> abort "amuletRulesCid was not defined."
+    Some cid -> case amuletRulesAction of
+      CRARC_SetConfig choiceArg -> do
+        _ <- exercise cid choiceArg
+        pure ()
+  ARC_DsoRules with .. -> case dsoAction of
+    SRARC_SetConfig choiceArg -> do
+      _ <- exercise dsoRulesCid choiceArg
+      pure ()

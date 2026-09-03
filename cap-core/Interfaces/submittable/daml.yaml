@@ -1,9 +1,22 @@
-# Copyright (c) 2026 Unlockit. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-# Tier 1 — the `Submittable` primitive: the single live artifact a slot holds
-# while a mechanism runs, in one of three states (empty, full, withdrawn).
-# Domain submittables `requires` this.
+# cap-core — `Submittable`: one live slot of one mechanism, in one of three
+# states (empty, full, withdrawn), declaring the mechanism it belongs to
+# (`SubmittableView.mechanism`) — the fixed resolve reads that declaration
+# rather than asking the resolver to recognize each format.
+#
+# Carries the cgids: `ResolverKey`, and the `Mechanism` built on it. They sit
+# here rather than with the doors because a submittable's view field IS a
+# `Mechanism` while the resolver's doors take a `ContractId Submittable` —
+# putting them with the doors would close `submittable -> resolver ->
+# submittable`.
+#
+# Nothing here names cap-governance. `Mechanism` has no action component, and
+# `submittedAgainst` is an `AnyValue` — a governance ballot encodes its committed
+# targets there, and cap-core never learns what a target is.
+#
+# `Mechanism.resolverCid` is an `AnyContractId`, not a `ContractId Resolver`,
+# for the cycle above.
 sdk-version: 3.4.11
 name: cap-core-submittable-v1
 version: 0.1.0
@@ -14,7 +27,6 @@ dependencies:
 data-dependencies:
 - ../../../lib/splice-api-token-metadata-v1-1.0.0.dar
 - ../../../lib/splice-util-0.1.7.dar
-- ../../util/checked-fetch/.daml/dist/cap-core-checked-fetch-v1-0.1.0.dar
-- ../mechanism/.daml/dist/cap-core-mechanism-v1-0.1.0.dar
+- ../../cap-core-utils/.daml/dist/cap-core-utils-0.1.0.dar
 build-options:
   - --target=2.1

@@ -1,0 +1,195 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Examples.FirstPrice.BidV1 where
+
+import qualified DA.Map as Map
+import DA.Optional (optionalToList)
+import qualified DA.Set as Set
+
+import Splice.Api.Token.MetadataV1
+import qualified Splice.Api.Token.AllocationV2 as Alloc
+import qualified Splice.Api.Token.AllocationInstructionV2 as AllocInstr
+import qualified Splice.Api.Token.HoldingV2 as Holding
+
+import Splice.Util (require)
+import Splice.TokenStandard.Utils
+  (receiverSide, regularAccountOwner, regularAccountParties, senderSide)
+
+import Cap.Core.SubmittableV1
+import Cap.Auctions.OneLotBidV1
+import Cap.Auctions.Utils
+  ( lotLeg
+  , paymentLeg
+  , settlementOf
+  )
+
+import Cap.Examples.FirstPrice.SettlementV1
+
+
+
+template AuctionBid
+  with
+    terms : OneLotAuctionTerms
+    bidderPaymentAccount : Holding.Account
+    bidderLotAccount : Holding.Account
+    mechanism : Mechanism
+    quotes : [Quote]
+    paymentAllocation : Optional (ContractId Alloc.Allocation)
+  where
+    signatory Set.toList terms.authorities
+           <> [bidderOf bidderPaymentAccount | not (null quotes)]
+    observer bidderOf bidderPaymentAccount
+
+    ensure terms.direction == Forward
+
+    interface instance Submittable for AuctionBid where
+      view = SubmittableView with
+        mechanism
+        opensAt = terms.entryClosesAt
+        closesAt = terms.biddingClosesAt
+        expiresAt = Some terms.expiresAt
+        meta = emptyMetadata
+
+    interface instance OneLotBid for AuctionBid where
+      view = OneLotBidView with
+        terms
+        availableActions = Map.fromList $
+          (if null quotes
+             then (BA_Submit, [[bidderOf bidderPaymentAccount]])
+             else (BA_Award, [Set.toList terms.authorities <> [sellerOf terms]]))
+          :: [(BA_Release, [Set.toList terms.authorities])]
+        bidderPaymentAccount
+        bidderLotAccount
+        quotes
+        paymentAllocation
+        lotAllocation = None
+        meta = emptyMetadata
+
+      oneLotBid_submitImpl self arg = do
+        require "this seat holds no bid yet" (null quotes)
+        paymentCid <- case arg.paymentAllocation of
+          Some cid -> pure cid
+          None -> abort "a bid names the allocation it pays from"
+        let bv = view (toInterface @OneLotBid this)
+        paymentView <- view <$> fetch paymentCid
+        require "the payment allocation is the one this bid implies"
+          (paymentView.allocation == bidderPaymentAllocation bv arg.quotes)
+        archive self
+        toInterfaceContractId <$>
+          create this with
+            quotes = arg.quotes
+            paymentAllocation = arg.paymentAllocation
+
+      oneLotBid_withdrawImpl _ _ =
+        abort "a bid cannot be withdrawn after seeing the field quotes"
+
+      oneLotBid_releaseImpl self _ = do
+        archive self
+        released <- forA (optionalToList paymentAllocation) $ \cid -> do
+          escrow <- view <$> fetch cid
+          _ <- exercise cid Alloc.Allocation_Cancel with
+            actors = escrow.settlement.executors
+            extraArgs = terms.registries.paymentAllocate.cancelArgs
+          pure cid
+        pure OneLotBid_ReleaseResult with released; meta = emptyMetadata
+
+      oneLotBid_expireImpl self _ = do
+        archive self
+        pure OneLotBid_ExpireResult with released = []; meta = emptyMetadata
+
+      oneLotBid_awardImpl self arg = do
+        archive self
+        award <- case arg.awarded of
+          [a] -> pure a
+          _ -> abort "this format awards a single quote"
+
+        paymentFactory <- exercise terms.registries.paymentAllocate.factoryCid
+          AllocInstr.AllocationFactory_PublicFetch with
+            actors = regularAccountParties bidderPaymentAccount
+        require "the payment allocation factory is administered by the payment admin"
+          (paymentFactory.admin == terms.payment.admin)
+        lotFactory <- exercise terms.registries.lotAllocate.factoryCid
+          AllocInstr.AllocationFactory_PublicFetch with
+            actors = regularAccountParties terms.sellerLotAccount
+        require "the lot allocation factory is administered by the lot admin"
+          (lotFactory.admin == terms.lot.instrument.admin)
+
+        sellerEscrowView <- view <$> fetch arg.lotAllocationCid
+        require "the lot allocation matches the auction terms"
+          (sellerEscrowView.allocation == sellerLotAllocation terms)
+
+        bidderEscrowCid <- case paymentAllocation of
+          Some cid -> pure cid
+          None -> abort "this seat holds no committed payment allocation"
+
+        let settlement = settlementOf terms [bidderOf bidderPaymentAccount]
+            pLeg = paymentLeg terms paymentLegId bidderPaymentAccount award.price
+            lLeg = lotLeg terms lotLegId bidderLotAccount award.quantity
+
+        lotAllocationCid <- reallocate
+          terms.registries.lotAllocate
+          arg.lotAllocationCid
+          sellerEscrowView
+          settlement
+          [senderSide lLeg]
+          None
+
+        bidderEscrowView <- view <$> fetch bidderEscrowCid
+        paymentAllocationCid <- reallocate
+          terms.registries.paymentAllocate
+          bidderEscrowCid
+          bidderEscrowView
+          settlement
+          [senderSide pLeg]
+          None
+      
+        sellerReceiptCid <- allocateOneStep
+          terms.registries.paymentAllocate
+          settlement
+          (receiptAllocation terms.payment.admin terms.sellerPaymentAccount
+            terms.expiresAt [receiverSide pLeg])
+          []
+
+        winnerReceiptCid <- allocateOneStep
+          terms.registries.lotAllocate
+          settlement
+          (receiptAllocation terms.lot.instrument.admin bidderLotAccount
+            terms.expiresAt [receiverSide lLeg])
+          []
+
+        now <- getTime
+
+        settlementCid <- create AuctionSettlement with
+          terms
+          winnerPaymentAccount = bidderPaymentAccount
+          winnerLotAccount = bidderLotAccount
+          award
+          lotAllocationCid
+          paymentAllocationCid
+          sellerReceiptCid
+          winnerReceiptCid
+          opensAt = now
+          closesAt = terms.expiresAt
+
+        pure OneLotBid_AwardResult with
+          allocation =
+            [lotAllocationCid, paymentAllocationCid, sellerReceiptCid, winnerReceiptCid]
+          created = [coerceContractId settlementCid]
+          meta = emptyMetadata
+
+bidderOf : Holding.Account -> Party
+bidderOf = regularAccountOwner
+
+preLotSettlementOf : OneLotAuctionTerms -> Alloc.SettlementInfo
+preLotSettlementOf terms = (settlementOf terms []) with id = terms.saleId <> "/pre-lot"
+
+receiptAllocation
+  : Party -> Holding.Account -> Time -> [Alloc.TransferLegSide] -> Alloc.AllocationSpecification
+receiptAllocation admin receiver deadline sides = Alloc.AllocationSpecification with
+  admin
+  authorizer = receiver
+  transferLegSides = sides
+  settlementDeadline = Some deadline
+  nextIterationFunding = None
+  committed = True
+  meta = emptyMetadata

@@ -1,0 +1,21 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Core.Utils.Internal.Admission
+  ( admitActors
+  , entitled
+  ) where
+
+import DA.Map (Map)
+import qualified DA.Map as Map
+
+admitActors : [[Party]] -> [Party] -> Bool
+admitActors groups sigs =
+  not (null groups)
+    && all (not . null) groups
+    && any (all (`elem` sigs)) groups
+
+entitled : Ord k => Map k [[Party]] -> k -> [Party] -> Bool
+entitled availableActions action actors =
+  case Map.lookup action availableActions of
+    None -> False
+    Some groups -> admitActors groups actors

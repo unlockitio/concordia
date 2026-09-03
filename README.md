@@ -1,4 +1,4 @@
-<!-- Copyright (c) 2026 Unlockit. All rights reserved. -->
+<!-- Copyright (c) 2026 Unlockit -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
 # Concordia — Canton Allocation Primitives (CAP)
@@ -17,116 +17,148 @@ private inputs, a rule resolves those inputs into an outcome, and the outcome
 triggers a downstream executable action — atomically, with on-ledger authority.
 Auctions and governance are the two worked instances.
 
-## Milestone 1
+## Milestone 2 — first executable slices in both proving domains
 
-Each deliverable maps to one place in the repo:
+M2 adds one reference format per domain,
+built on the same `cap-core`, each running as Daml Script and against
+a Canton sandbox.
+
+
+| M2 deliverable | Where to look |
+| --- | --- |
+| Majority-vote reference slice on `cap-core` | [`examples/governance/private-majority-vote`](examples/governance/private-majority-vote) — [demos](examples/governance/private-majority-vote/DEMOS.md) |
+| Sealed-bid auction reference slice on `cap-core` | [`examples/auctions/sealed-bid-first-price`](examples/auctions/sealed-bid-first-price) — [demos](examples/auctions/sealed-bid-first-price/DEMOS.md) |
+| Private ballot handling demonstrated | `whoSeesWhat` — [governance demos](examples/governance/private-majority-vote/DEMOS.md) |
+| Private bid handling demonstrated | `whoSeesWhat` — [auction demos](examples/auctions/sealed-bid-first-price/DEMOS.md) |
+| Daml Script tests for both slices | `.../private-majority-vote/test`, `.../sealed-bid-first-price/test` — [how to run](#running-the-slices) |
+| Sandbox integration tests for both slices | [`scripts/sandbox-test.sh`](scripts/sandbox-test.sh) — [how to run](#on-a-canton-sandbox) |
+
+
+
+M2 tracks as [issue #539](https://github.com/canton-foundation/canton-dev-fund/issues/539).
+
+## Milestone 1
 
 | M1 deliverable | Where to look |
 | --- | --- |
 | Design document for `cap-core` | [`DESIGN.md`](DESIGN.md) |
 | First-release scope and out-of-scope items | [`SCOPE.md`](SCOPE.md) |
 | Extension points for downstream modules | [`POST-RELEASE.md`](POST-RELEASE.md) |
-| Prototype of a typical workflow on Canton sandbox | [`examples/BabyDso/DEMOS.md`](examples/BabyDso/DEMOS.md) — [how to run](#running-the-demos) |
+| Prototype of a typical workflow on Canton sandbox | [`examples/governance/baby-dso`](examples/governance/baby-dso/DEMOS.md) |
 
 M1 tracks as [issue #538](https://github.com/canton-foundation/canton-dev-fund/issues/538).
 
 ## Architecture at a glance
 
-Concordia is a **two-tier library**. Composed of domain-agnostic interfaces
-and domain standards that require cap-core and add their own methods and interfaces:
+Concordia is a **three-tier library**: domain-agnostic interfaces in `cap-core`,
+and per-domain standards that require them and add their own.
 
-A workflow author writes templates that implements the interfaces of both cap-core and cap-governance; CAP sits **above**
-Canton's asset and settlement layer — auction outcomes compose with the Token Standard.
+- **`cap-core`** — `Submittable` (a private input, admitted by a declared check)
+  and `Resolver` (the mechanism: window, authority set, resolution), plus
+  `cap-core-utils`, the implementer's toolkit.
+- **`cap-governance`** — `Ballot`, `AuthenticTarget` (the state an execution acts
+  on, and what drift means for it), `Action` (an effect arriving from a package
+  deployed after the core), `Executable`.
+- **`cap-auctions`** — `OneLotBid`, `Settlement`, and a registry binding;
+  settlement composes with the Token Standard V2 rather than restating it.
+
+A format author writes templates implementing the tiers they need. CAP sits
+**above** Canton's asset and settlement layer.
 
 ## Repository layout
 
 ```
 concordia/
-├── cap-core/                       # Tier 1: domain-agnostic interfaces
-│   ├── Interfaces/                 #   mechanism, submittable, outcome
-│   ├── internal/checks/            #   library-only fixed-body checks the interfaces call
-│   └── util/                       #   public toolkit: checked-fetch, patchable, policies, time
-├── cap-governance/                 # Tier 2: governance
-│   ├── Interfaces/                 #   target, outcome, ballot, governor
-│   └── util/
-├── cap-auctions/                   # Tier 2: auctions (Token Standard V2, CIP-0112)
-│   └── Interfaces/                 #   types, bid, outcome, auction
-├── examples/BabyDso/               # Splice DSO reproduced twice — see below
-│   ├── original/{Impl,Test}        #   plain-Daml reference + its demo scripts
-│   └── cap-version/{impl,Test}     #   same mechanisms on cap + its demo scripts
-├── lib/                            # vendored Token Standard DARs (prebuilt binaries)
-├── multi-package.yaml              # dpm workspace (build order + data-dependencies)
-├── DESIGN.md                       # cap-core design (threat models inline)
-├── GLOSSARY.md                     # source of truth for the project's concepts
+├── cap-core/                          # Tier 1: domain-agnostic
+│   ├── Interfaces/{submittable,resolver}
+│   └── cap-core-utils/                #   admission, execution, patch, time, value
+├── cap-governance/                    # Tier 2: governance
+│   ├── Interfaces/{binding,executable,action,ballot}
+│   └── cap-governance-utils/          #   drift
+├── cap-auctions/                      # Tier 2: auctions (Token Standard V2)
+│   ├── Interfaces/{bid,settlement}
+│   ├── cap-auctions-registry/
+│   └── cap-auctions-utils/
+├── examples/governance/
+│   ├── baby-dso/                      # M1: Splice DSO governance
+│   │   ├── plain/                     #   the shape being argued against
+│   │   └── cap/{ans,config,governance,action,test}
+│   └── private-majority-vote/         # M2: private ballots, {impl,test}
+├── examples/auctions/
+│   └── sealed-bid-first-price/        # M2: private bids, {impl,fixtures,test}
+├── lib/                               # vendored Token Standard DARs (prebuilt)
+├── scripts/sandbox-test.sh            # sandbox integration run
+├── multi-package.yaml                 # dpm workspace (build order)
+├── DESIGN.md                          # cap-core design (threat models inline)
+├── SCOPE.md                           # first-release scope, capability → milestone
+├── POST-RELEASE.md                    # extension points for downstream modules
 ├── CHANGELOG.md
-├── LICENSE                         # Apache-2.0
-└── README.md                       # this file
+├── LICENSE                            # Apache-2.0
+└── README.md                          # this file
 ```
 
+`cap-governance/DESIGN.md` and `cap-auctions/DESIGN.md` carry the tier-2 designs.
 
 ## Building
 
-Concordia builds with [`dpm`](https://docs.daml.com) (the Daml Project
-Manager, SDK 3.4+). From the repository root:
+Concordia builds with [`dpm`](https://docs.daml.com) (the Daml Project Manager),
+**SDK 3.4.11**. From the repository root:
 
 ```bash
-dpm build --all      # build every package in dependency order
-dpm test             # run the Daml Script tests
+dpm build --all      # every package in dependency order, per multi-package.yaml
 ```
 
-`multi-package.yaml` lists the packages that currently build and their order;
-some tier-2 tests and the auctions example are held back pending the tier-2
-rework noted there.
+## Running the slices
 
-## Running the demos
-
-The **BabyDso** example reproduces Splice's DSO governance twice — once in
-plain Daml (`original/`) and once on the cap interfaces (`cap-version/`) — and
-runs the same demo scripts in both, so the diff is exactly what the cap
-standard adds. The full catalogue (five demos, what each proves) is in
-[`examples/BabyDso/DEMOS.md`](examples/BabyDso/DEMOS.md).
-
-Prerequisite: **Daml SDK 3.4.11** via `dpm`. Build the DARs first:
+**Quick check** — the in-memory script runner, no sandbox. Each package is run
+from the repo root with `--package-root`:
 
 ```bash
-dpm build --all        # from the repo root (uses multi-package.yaml)
+# M2 — majority vote, 3 scripts ok
+dpm test --package-root examples/governance/private-majority-vote/test
+
+# M2 — sealed-bid first price, 9 scripts ok
+dpm test --package-root examples/auctions/sealed-bid-first-price/test
+
+# M1 — BabyDso on cap, 4 scripts ok
+dpm test --package-root examples/governance/baby-dso/cap/test
 ```
 
-**Quick check** — the in-memory script runner, no sandbox. Run each Test
-package from the repo root with `--package-root`:
+Each `DEMOS.md` says what its scripts assert, and what they deliberately do not.
+
+### On a Canton sandbox
+
+The same scripts run against a real ledger. `scripts/sandbox-test.sh` boots a
+sim-clock sandbox, uploads the test DARs and runs every script in each:
 
 ```bash
-# cap version — expect a Test Summary of 6 scripts `ok`
-# (setup + demo_voting, demo_confirmation, demo_median,
-#  demo_two_organizations, demo_extension)
-dpm test --package-root examples/BabyDso/cap-version/Test
-
-# plain-Daml reference — expect 5 scripts `ok`
-# (same demos minus the cap-only demo_extension)
-dpm test --package-root examples/BabyDso/original/Test
+dpm build --all
+./scripts/sandbox-test.sh
 ```
 
-**On a Canton sandbox** (the Milestone 1 deliverable) — two terminals. The
-scripts drive time, so `--static-time` is required on both sides. DAR paths are
-given in full from the repo root:
+To drive one DAR by hand instead, start the sandbox yourself and point
+`dpm script` at it — the scripts drive time, so `--static-time` is required on
+both sides:
 
 ```bash
-# terminal 1 — a FRESH sandbox (restart between runs; party allocations persist)
+# terminal 1
 dpm sandbox --static-time
 
-# terminal 2 — the cap version
+# terminal 2
 dpm script --all --ledger-host localhost --ledger-port 6865 \
   --static-time --upload-dar true \
-  --dar examples/BabyDso/cap-version/Test/.daml/dist/cap-version-test-0.1.0.dar
-
-# the plain-Daml reference, same shape
-dpm script --all --ledger-host localhost --ledger-port 6865 \
-  --static-time --upload-dar true \
-  --dar examples/BabyDso/original/Test/.daml/dist/baby-dso-test-0.1.0.dar
+  --dar examples/governance/private-majority-vote/test/.daml/dist/cap-example-majority-vote-test-0.1.0.dar
 ```
 
-Expected: every script reports `SUCCESS` — 6 for the cap version, 5 for the
-reference (the same counts `dpm test` reports as `ok`).
+The other test DARs, same shape:
+
+```
+examples/auctions/sealed-bid-first-price/test/.daml/dist/cap-example-sealed-first-price-test-0.1.0.dar
+examples/governance/baby-dso/cap/test/.daml/dist/cap-example-babydso-test-0.1.0.dar
+```
+
+Expected: every script reports `SUCCESS`, in the same counts `dpm test` reports
+as `ok`.
 
 ## Contributing
 

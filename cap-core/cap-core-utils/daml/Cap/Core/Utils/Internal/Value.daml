@@ -1,0 +1,74 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Core.Utils.Internal.Value
+  ( IsAnyValue (..)
+  ) where
+
+import DA.TextMap (TextMap)
+import DA.Time (RelTime)
+import qualified DA.Traversable as Traversable
+
+import Splice.Api.Token.MetadataV1
+
+class IsAnyValue a where
+  toAnyValue : a -> AnyValue
+  fromAnyValue : AnyValue -> Optional a
+
+instance IsAnyValue AnyValue where
+  toAnyValue v = v
+  fromAnyValue v = Some v
+
+instance IsAnyValue Int where
+  toAnyValue = AV_Int
+  fromAnyValue (AV_Int v) = Some v
+  fromAnyValue _ = None
+
+instance IsAnyValue Decimal where
+  toAnyValue = AV_Decimal
+  fromAnyValue (AV_Decimal v) = Some v
+  fromAnyValue _ = None
+
+instance IsAnyValue Text where
+  toAnyValue = AV_Text
+  fromAnyValue (AV_Text v) = Some v
+  fromAnyValue _ = None
+
+instance IsAnyValue Bool where
+  toAnyValue = AV_Bool
+  fromAnyValue (AV_Bool v) = Some v
+  fromAnyValue _ = None
+
+instance IsAnyValue Party where
+  toAnyValue = AV_Party
+  fromAnyValue (AV_Party v) = Some v
+  fromAnyValue _ = None
+
+instance IsAnyValue Time where
+  toAnyValue = AV_Time
+  fromAnyValue (AV_Time v) = Some v
+  fromAnyValue _ = None
+
+instance IsAnyValue RelTime where
+  toAnyValue = AV_RelTime
+  fromAnyValue (AV_RelTime v) = Some v
+  fromAnyValue _ = None
+
+instance IsAnyValue Date where
+  toAnyValue = AV_Date
+  fromAnyValue (AV_Date v) = Some v
+  fromAnyValue _ = None
+
+instance IsAnyValue AnyContractId where
+  toAnyValue = AV_ContractId
+  fromAnyValue (AV_ContractId v) = Some v
+  fromAnyValue _ = None
+
+instance IsAnyValue a => IsAnyValue [a] where
+  toAnyValue vs = AV_List (map toAnyValue vs)
+  fromAnyValue (AV_List vs) = mapA fromAnyValue vs
+  fromAnyValue _ = None
+
+instance IsAnyValue a => IsAnyValue (TextMap a) where
+  toAnyValue vs = AV_Map (fmap toAnyValue vs)
+  fromAnyValue (AV_Map vs) = Traversable.mapA fromAnyValue vs
+  fromAnyValue _ = None

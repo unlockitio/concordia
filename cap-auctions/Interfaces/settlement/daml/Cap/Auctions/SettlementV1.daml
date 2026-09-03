@@ -1,0 +1,70 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Auctions.SettlementV1 where
+
+import Splice.Api.Token.MetadataV1
+import qualified Splice.Api.Token.AllocationV2 as Alloc
+import Splice.Util (require)
+import Cap.Core.Utils (admitActors, ExecutionCore, requireExpired, requireOpen)
+
+data SettlementView = SettlementView
+  with
+    core : ExecutionCore
+    settlement : Alloc.SettlementInfo
+    legs : [Alloc.TransferLeg]
+    allocations : [ContractId Alloc.Allocation]
+    meta : Metadata
+  deriving (Eq, Show)
+
+data Settlement_SettleResult = Settlement_SettleResult
+  with
+    batches : [Alloc.SettlementFactory_SettleBatchResult]
+    meta : Metadata
+  deriving (Eq, Show)
+
+data Settlement_CancelResult = Settlement_CancelResult
+  with
+    meta : Metadata
+  deriving (Eq, Show)
+
+data Settlement_ExpireResult = Settlement_ExpireResult
+  with
+    meta : Metadata
+  deriving (Eq, Show)
+
+interface Settlement where
+  viewtype SettlementView
+
+  settlement_settleImpl : Settlement_Settle -> Update Settlement_SettleResult
+
+  settlement_cancelImpl : Settlement_Cancel -> Update Settlement_CancelResult
+
+  choice Settlement_Settle : Settlement_SettleResult
+    with
+      actors : [Party]
+      extraArgs : ExtraArgs
+    controller actors
+    do
+      let v = view this
+      now <- getTime
+      requireOpen "the settlement window is open" now v.core.opensAt v.core.expiresAt
+      require "the actors are an executor set of this settlement"
+        (admitActors v.core.executors actors)
+      settlement_settleImpl this (Settlement_Settle with ..)
+
+  choice Settlement_Cancel : Settlement_CancelResult
+    with
+      actors : [Party]
+      extraArgs : ExtraArgs
+    controller actors
+    do
+      settlement_cancelImpl this (Settlement_Cancel with actors; extraArgs)
+
+  choice Settlement_Expire : Settlement_ExpireResult
+    with
+      actor : Party
+    controller actor
+    do
+      now <- getTime
+      requireExpired "the settlement has expired" now (view this).core.expiresAt
+      pure Settlement_ExpireResult with meta = emptyMetadata

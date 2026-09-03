@@ -1,0 +1,51 @@
+# SPDX-License-Identifier: Apache-2.0
+
+# Example — a sealed-bid first-price auction over a fixed set of invited
+# bidders, settling in Canton Coin through the Token Standard V2 allocation and
+# settlement doors.
+#
+# The invited bidders are named on the resolver before the lot locks. Three
+# properties bound what the operator is trusted for:
+#
+#   * the resolver names its invited bidders and observes them, so each is an
+#     informee of `Resolver_Resolve` and reads the presentation;
+#   * a seat is bound to that resolver by a typed fetch at accept time, so the
+#     bidder signs against code rather than against a self-asserted view;
+#   * the first-price rule and the completeness of the presentation are checked in
+#     `AuctionSellerAuth_Award`, where the seller's delegation is spent, not in
+#     the procedure that calls it.
+#
+# What is left of the operator's discretion is breaking exact ties, seeing every
+# quote, and declining to resolve at all.
+#
+# Nothing here is core. The core supplies the resolver, the submittable doors
+# (including the commit-reveal window), the admission discipline and the
+# execution shape; this package supplies the procedure, the payload encodings
+# and the settlement leg.
+#
+# It compiles against the Token Standard *interfaces* only, so no Amulet DAR is
+# needed: at runtime the factory contract ids come from the registry API and
+# the same code drives Canton Coin.
+sdk-version: 3.4.11
+name: cap-example-firstprice
+version: 0.1.0
+source: daml
+dependencies:
+- daml-prim
+- daml-stdlib
+data-dependencies:
+- ../../../../lib/splice-api-token-metadata-v1-1.0.0.dar
+- ../../../../lib/splice-util-0.1.7.dar
+- ../../../../lib/splice-api-token-holding-v2-1.0.0.dar
+- ../../../../lib/splice-api-token-allocation-v2-1.0.0.dar
+- ../../../../lib/splice-api-token-allocation-instruction-v2-1.0.0.dar
+- ../../../../cap-core/cap-core-utils/.daml/dist/cap-core-utils-0.1.0.dar
+- ../../../../cap-core/Interfaces/submittable/.daml/dist/cap-core-submittable-v1-0.1.0.dar
+- ../../../../cap-core/Interfaces/resolver/.daml/dist/cap-core-resolver-v1-0.1.0.dar
+- ../../../../lib/splice-token-standard-utils-2.0.0.dar
+- ../../../../cap-auctions/Interfaces/bid/.daml/dist/cap-auctions-bid-v1-0.1.0.dar
+- ../../../../cap-auctions/Interfaces/settlement/.daml/dist/cap-auctions-settlement-v1-0.1.0.dar
+- ../../../../cap-auctions/cap-auctions-registry/.daml/dist/cap-auctions-registry-0.1.0.dar
+- ../../../../cap-auctions/cap-auctions-utils/.daml/dist/cap-auctions-utils-0.1.0.dar
+build-options:
+  - --target=2.1

@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: Apache-2.0
+
+# cap-core — the utilities every cap-core view and door is built on, collected
+# behind one public module the way the Token Standard collects its own
+# (`Splice.TokenStandard.Utils`): `Cap.Core.Utils` re-exports, the
+# `Cap.Core.Utils.Internal.*` modules implement.
+#
+#   Internal.CheckedFetch — the binding discipline and the admission predicates.
+#   Internal.Time         — the half-open window convention.
+#   Internal.Execution    — `ExecutionCore`, the shape every domain execution
+#                           view carries.
+#
+# All three sit below every view in the workspace, so the merge closes no cycle.
+sdk-version: 3.4.11
+name: cap-core-utils
+version: 0.1.0
+source: daml
+dependencies:
+- daml-prim
+- daml-stdlib
+data-dependencies:
+- ../../lib/splice-api-token-metadata-v1-1.0.0.dar
+- ../../lib/splice-util-0.1.7.dar
+build-options:
+  - --target=2.1

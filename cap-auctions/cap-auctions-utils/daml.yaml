@@ -1,0 +1,34 @@
+# SPDX-License-Identifier: Apache-2.0
+
+# cap-auctions — the helpers an auction format runs against a Token Standard
+# registry, collected behind one public module the way the Token Standard
+# collects its own (`Splice.TokenStandard.Utils`): `Cap.Auctions.Utils`
+# re-exports, the `Cap.Auctions.Utils.Internal.*` modules implement.
+#
+#   Internal.Allocation — one-step allocate, and cancel-and-reallocate.
+#   Internal.Bid        — the one-lot encodings: settlement, legs, escrow, and
+#                         the factory-admin checks.
+#
+# Internal.Bid reads the one-lot terms off `Cap.Auctions.OneLotBidV1`, so this
+# package sits ABOVE the auction interfaces. That is why `RegistryV1` is not in
+# here: those interfaces import it, so folding it in would close a cycle. It
+# keeps its own package, `cap-auctions-registry`, the way the Token Standard
+# keeps `splice-api-token-metadata-v1` beside its utils.
+sdk-version: 3.4.11
+name: cap-auctions-utils
+version: 0.1.0
+source: daml
+dependencies:
+- daml-prim
+- daml-stdlib
+data-dependencies:
+- ../../lib/splice-api-token-metadata-v1-1.0.0.dar
+- ../../lib/splice-util-0.1.7.dar
+- ../../lib/splice-api-token-holding-v2-1.0.0.dar
+- ../../lib/splice-api-token-allocation-v2-1.0.0.dar
+- ../../lib/splice-api-token-allocation-instruction-v2-1.0.0.dar
+- ../../lib/splice-token-standard-utils-2.0.0.dar
+- ../cap-auctions-registry/.daml/dist/cap-auctions-registry-0.1.0.dar
+- ../Interfaces/bid/.daml/dist/cap-auctions-bid-v1-0.1.0.dar
+build-options:
+  - --target=2.1

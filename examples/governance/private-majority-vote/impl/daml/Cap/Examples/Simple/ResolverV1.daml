@@ -1,0 +1,116 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Examples.Simple.ResolverV1 where
+
+import Prelude hiding (Action)
+
+import DA.Foldable (forA_)
+import DA.List (unique)
+import qualified DA.Map as Map
+import DA.Set (Set)
+import qualified DA.Set as Set
+
+import Splice.Api.Token.MetadataV1
+import Splice.Util (require)
+
+import Cap.Core.ResolverV1
+import Cap.Core.SubmittableV1
+import Cap.Core.Utils (ExecutionCore (..), requireClosed)
+import Cap.Governance.ActionV1
+import Cap.Governance.BallotV1
+import Cap.Governance.ExecutableV1
+
+acceptOption : AnyValue
+acceptOption = AV_Text "accept"
+
+rejectOption : AnyValue
+rejectOption = AV_Text "reject"
+
+majorityProcedureName : Text
+majorityProcedureName = "majority"
+
+template VoteResolver
+  with
+    dso : Party
+    operator : Party
+    electorate : Set Party
+    bodyId : Text
+    expiresAt : Time
+  where
+    signatory dso
+    observer operator :: Set.toList electorate
+
+    interface instance Resolver for VoteResolver where
+      view = ResolverView with
+        authorities = Set.fromList [dso]
+        submittablesIssuers = [[operator]]
+        id = bodyId
+        expiresAt = Some expiresAt
+        meta = emptyMetadata
+
+      procedures = Map.fromList
+        [(majorityProcedureName, majority this)]
+
+majority : VoteResolver -> Procedure
+majority body = Procedure with
+  resolvers = [[body.operator]]
+  resolve = \_ presented extraArgs -> do
+    ballots <- submittableToBallot presented
+    terms <- oneProposal ballots
+    coverElectorate body.electorate ballots
+
+    let voted = [bv | (_, bv) <- ballots, not (null bv.votes)]
+        accepts = length [() | bv <- voted, acceptOption `elem` bv.votes]
+        verdict
+          | null voted = V_Lapsed None
+          | 2 * accepts > Set.size body.electorate = V_Accepted (Some acceptOption)
+          | otherwise = V_Rejected
+
+    created <- case verdict of
+      V_Accepted (Some winner) -> issue body terms winner extraArgs
+      _ -> pure []
+
+    forA_ ballots $ \(cid, _) ->
+      exercise cid Ballot_Consume with actors = [body.dso]; extraArgs
+
+    pure Resolver_ResolveResult with verdict; created; meta = emptyMetadata
+
+submittableToBallot
+  : [(ContractId Submittable, Submittable)] -> Update [(ContractId Ballot, BallotView)]
+submittableToBallot presented = do
+  now <- getTime
+  forA presented $ \(cid, submittable) -> do
+    requireClosed "every presented ballot is closed for voting"
+      now (view submittable).closesAt
+    case fromInterface @Ballot submittable of
+      Some ballot -> pure (coerceContractId cid, view ballot)
+      None -> abort "this procedure counts ballots only"
+
+oneProposal : [(ContractId Ballot, BallotView)] -> Update ProposalTerms
+oneProposal ballots = case [bv.terms | (_, bv) <- ballots] of
+  (terms :: rest) | all (== terms) rest -> pure terms
+  _ -> abort "the presented ballots vote on one proposal"
+
+coverElectorate : Set Party -> [(ContractId Ballot, BallotView)] -> Update ()
+coverElectorate electorate ballots =
+  let voters = [bv.voter | (_, bv) <- ballots]
+  in require "the presented ballots cover the electorate"
+      (unique voters && Set.fromList voters == electorate)
+
+issue : VoteResolver -> ProposalTerms -> AnyValue -> ExtraArgs -> Update [AnyContractId]
+issue body terms winner extraArgs = do
+  actionCid <- case terms.actionCid of
+    Some cid -> pure (coerceContractId cid : ContractId Action)
+    None -> abort "the proposal names no action to issue against"
+  result <- exercise actionCid Action_IssueExecution with
+    execution = ExecutableView with
+      core = ExecutionCore with
+        authorities = Set.fromList [body.dso]
+        executors = [[body.operator]]
+        opensAt = terms.votingClosesAt
+        expiresAt = Some terms.expiresAt
+        meta = emptyMetadata
+      bindings = terms.bindings
+      outcome = Some winner
+    extraArgs
+  pure (map coerceContractId result.executionCids)

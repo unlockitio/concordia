@@ -1,41 +1,46 @@
--- Copyright (c) 2026 Unlockit. All rights reserved.
 -- SPDX-License-Identifier: Apache-2.0
-
--- | The `Ballot` voting interface: a re-castable submittable carrying opaque
--- votes against a mechanism; a format may hold one vote per contract or many.
 
 module Cap.Governance.BallotV1 where
 
+import DA.Map (Map)
 import DA.Set (Set)
 import qualified DA.Set as Set
 
 import Splice.Api.Token.MetadataV1
-import Cap.Core.SubmittableV1
-import Cap.Core.MechanismV1
-import Cap.Core.CheckedFetchV1
-import Cap.Core.TimeV1 (checkWindow)
+import Splice.Util (require)
+
+import Cap.Core.Utils (admitActors, entitled, requireExpired, requireOpen)
+import Cap.Core.SubmittableV1 (Submittable)
+import Cap.Governance.BindingV1 (Bind, TargetKey)
+
+data BallotAction
+  = BA_Cast
+  | BA_Withdraw
+  | BA_Custom with
+      id : Text
+  deriving (Eq, Ord, Show)
+
+data ProposalTerms = ProposalTerms
+  with
+    authorities : Set Party
+    options : [AnyValue]
+    actionCid : Optional AnyContractId
+    bindings : [Bind]
+    entryClosesAt : Time
+    votingClosesAt : Time
+    expiresAt : Time
+  deriving (Eq, Show)
 
 data BallotView = BallotView
   with
-    governor : ContractId Mechanism
-      -- ^ Binds exactly one mechanism by cid, as its `Mechanism`
-    voters : Set Party
-      -- ^ Who may cast/withdraw here
-    expiresAt : Time
-      -- ^ When the ballot becomes archivable by anyone with visibility.
-      -- MUST NOT precede a declared close of voting on a cast ballot
+    terms : ProposalTerms
+    availableActions : Map BallotAction [[Party]]
+    voter : Party
+    votes : [AnyValue]
+    meta : Metadata
   deriving (Eq, Show)
 
-
-instance HasCheckedFetch BallotView ForMechanism where
-  contractGroupId v = ForMechanism v.governor
-
--- | A voter is eligible when named in `voters`, or when `voters` is empty — an
--- open format admits anyone, and the implementation enforces its own rule.
-isEligibleVoter : Set Party -> Party -> Bool
-isEligibleVoter voters voter = Set.null voters || voter `Set.member` voters
-
-data Ballot_ConsumeResult = Ballot_ConsumeResult
+data Ballot_WithdrawResult = Ballot_WithdrawResult
   with
     meta : Metadata
   deriving (Eq, Show)
@@ -45,73 +50,70 @@ data Ballot_ExpireResult = Ballot_ExpireResult
     meta : Metadata
   deriving (Eq, Show)
 
+data Ballot_ConsumeResult = Ballot_ConsumeResult
+  with
+    meta : Metadata
+  deriving (Eq, Show)
+
+
 interface Ballot requires Submittable where
   viewtype BallotView
 
-  ballot_castImpl : Ballot_Cast -> Update (ContractId Ballot)
-    -- ^ Builds the cast full state, recording the opaque vote as `voter`'s.
-    -- Runs with the authority's and the casting voter's signatures in scope.
-    -- The successor:
-    -- MUST preserve governor, voters, authority, and slot;
-    -- MUST be `S_Full`, authority-signed,
-    -- When `voters` is empty (open format) the implementation
-    -- MUST enforce its own eligibility rule on `voter`.
+  ballot_castImpl : ContractId Ballot -> Ballot_Cast -> Update (ContractId Ballot)
 
-  ballot_withdrawImpl : Ballot_Withdraw -> Update (ContractId Ballot)
-    -- ^ Builds the withdrawn successor. Same obligations as `ballot_castImpl`.
+  ballot_withdrawImpl : ContractId Ballot -> Ballot_Withdraw -> Update Ballot_WithdrawResult
 
-  ballot_consumeImpl : Ballot_Consume -> Update Ballot_ConsumeResult
-    -- ^ The authority's teardown effect: release escrowed weight named in
-    -- `extraArgs.context`, mirroring `ballot_withdrawImpl` on the terminal path.
+  ballot_expireImpl : ContractId Ballot -> Ballot_Expire -> Update Ballot_ExpireResult
 
+  ballot_consumeImpl : ContractId Ballot -> Ballot_Consume -> Update Ballot_ConsumeResult
 
-  -- | Cast (or re-cast) a vote — empty→full, withdrawn→full, or full→full.
-  choice Ballot_Cast : ContractId Ballot
+  nonconsuming choice Ballot_Cast : ContractId Ballot
     with
-      voter : Party
-        -- ^ The casting party, checked against `voters` unless the format is open.
-      vote : AnyValue
-        -- ^ Each format documents its encoding, and the interface never reads it.
+      actors : [Party]
+      votes : [AnyValue]
+      currentTargets : Map TargetKey AnyContractId
       extraArgs : ExtraArgs
-    controller voter
+    controller actors
     do
       let bv = view this
+      let sv = view (toInterface @Submittable this)
+      require "the actors are entitled to cast"
+        (entitled bv.availableActions BA_Cast actors)
       now <- getTime
-      assertMsg "ballot expired" (now < bv.expiresAt)
-      assertMsg "caster is not an eligible voter" (isEligibleVoter bv.voters voter)
-      -- Read the governor for its window and policy; the fetch aborts if it is
-      -- resolved or withdrawn.
-      r <- fetch bv.governor
-      let mv = view r
-      checkWindow "submissions are open" now mv.submissionOpensAt mv.submissionClosesAt
-      submittableAllowed r now
-      ballot_castImpl this (Ballot_Cast with voter; vote; extraArgs)
+      requireOpen "the voting window is open" now sv.opensAt (Some sv.closesAt)
+      ballot_castImpl this self (Ballot_Cast with ..)
 
-  -- | Withdraw — empty→withdrawn (decline) or full→withdrawn (retract)
-  choice Ballot_Withdraw : ContractId Ballot
+  nonconsuming choice Ballot_Withdraw : Ballot_WithdrawResult
     with
-      voter : Party
-        -- ^ The retracting party; checked against `voters` unless the format is open.
+      actors : [Party]
       extraArgs : ExtraArgs
-    controller voter
+    controller actors
     do
       let bv = view this
-      assertMsg "withdrawer is not an eligible voter" (isEligibleVoter bv.voters voter)
-      ballot_withdrawImpl this (Ballot_Withdraw with voter; extraArgs)
+      let sv = view (toInterface @Submittable this)
+      require "the actors are entitled to withdraw"
+        (entitled bv.availableActions BA_Withdraw actors)
+      now <- getTime
+      requireOpen "the voting window is open" now sv.opensAt (Some sv.closesAt)
+      ballot_withdrawImpl this self (Ballot_Withdraw with ..)
 
-
-  choice Ballot_Consume : Ballot_ConsumeResult
+  nonconsuming choice Ballot_Expire : Ballot_ExpireResult
     with
+      actors : [Party]
       extraArgs : ExtraArgs
-    controller (view (toInterface @Submittable this)).authorities
-    do ballot_consumeImpl this (Ballot_Consume with extraArgs)
-
-  -- | Archives an expired ballot
-  choice Ballot_Expire : Ballot_ExpireResult
-    with
-      actor : Party
-    controller actor
+    controller actors
     do
       now <- getTime
-      assertMsg "ballot not yet expired" (now >= (view this).expiresAt)
-      pure Ballot_ExpireResult with meta = emptyMetadata
+      requireExpired "the ballot has expired" now (view (toInterface @Submittable this)).expiresAt
+      ballot_expireImpl this self (Ballot_Expire with ..)
+
+  nonconsuming choice Ballot_Consume : Ballot_ConsumeResult
+    with
+      actors : [Party]
+      extraArgs : ExtraArgs
+    controller actors
+    do
+      let mechanism = (view (toInterface @Submittable this)).mechanism
+      require "the actors carry the authority of the resolver this ballot names"
+        (admitActors [Set.toList mechanism.resolver.authorities] actors)
+      ballot_consumeImpl this self (Ballot_Consume with ..)

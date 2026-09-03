@@ -1,12 +1,5 @@
-# Copyright (c) 2026 Unlockit. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-# Tier 2 (Governance) — the `Action` interface: the proposal contract of a
-# governance action, whose `Action_Issue` mints the authority-signed
-# `GovernanceOutcome`s that execute it. Opens the action set: a mechanism can
-# carry actions whose concrete templates it has never seen. No other interface
-# package imports it — governors exercise it from implementations, so the
-# dependency runs one way with no cycle.
 sdk-version: 3.4.11
 name: cap-governance-action-v1
 version: 0.1.0
@@ -16,12 +9,7 @@ dependencies:
 - daml-stdlib
 data-dependencies:
 - ../../../lib/splice-api-token-metadata-v1-1.0.0.dar
-- ../../../lib/splice-util-0.1.7.dar
-- ../../../cap-core/util/time/.daml/dist/cap-core-time-v1-0.1.0.dar
-- ../../../cap-core/util/checked-fetch/.daml/dist/cap-core-checked-fetch-v1-0.1.0.dar
-- ../../../cap-core/Interfaces/mechanism/.daml/dist/cap-core-mechanism-v1-0.1.0.dar
-- ../../../cap-core/Interfaces/outcome/.daml/dist/cap-core-outcome-v1-0.1.0.dar
-- ../target/.daml/dist/cap-governance-target-v1-0.1.0.dar
-- ../outcome/.daml/dist/cap-governance-outcome-v1-0.1.0.dar
+- ../../../cap-core/cap-core-utils/.daml/dist/cap-core-utils-0.1.0.dar
+- ../executable/.daml/dist/cap-governance-executable-v1-0.1.0.dar
 build-options:
   - --target=2.1

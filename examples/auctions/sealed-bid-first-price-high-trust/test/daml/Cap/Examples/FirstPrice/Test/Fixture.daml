@@ -1,0 +1,241 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Examples.FirstPrice.Test.Fixture where
+
+import DA.Action (unless)
+import DA.Optional (isNone, isSome)
+import qualified DA.Text as Text
+import DA.Time
+import qualified DA.Set as Set
+import qualified DA.TextMap as TextMap
+import Daml.Script
+
+import Splice.Api.Token.MetadataV1
+import qualified Splice.Api.Token.AllocationV2 as Alloc
+import qualified Splice.Api.Token.AllocationInstructionV2 as AllocInstr
+import qualified Splice.Api.Token.HoldingV2 as Holding
+import Splice.Amulet.TokenApiUtils (expireLockKey)
+import Splice.TokenStandard.Utils (basicAccount)
+
+import Splice.Testing.Utils
+import qualified Splice.Testing.Registries.AmuletRegistryV2 as AmuletRegistry
+import qualified Splice.Testing.Registries.TestTokenV2_RegistryV2 as LotRegistry
+import qualified Splice.Testing.TokenStandard.RegistryApiV2 as RegistryApi
+
+import Cap.Auctions.RegistryV1
+import Cap.Auctions.OneLotBidV1
+
+lotInstrumentName : Text
+lotInstrumentName = "Widget"
+
+lotAmount : Decimal
+lotAmount = 10.0
+
+data Fixture = Fixture with
+    operator : Party
+    seller : Party
+    alice : Party
+    bob : Party
+    carol : Party
+    dave : Party
+    amulet : AmuletRegistry.AmuletRegistry
+    lot : LotRegistry.TestTokenV2Registry
+    terms : OneLotAuctionTerms
+
+setupAs : Text -> Script Fixture
+setupAs ns = do
+  ledgerNow <- getTime
+  let party role = "auction-" <> ns <> "-" <> role
+      amuletDefaults = AmuletRegistry.defaultAmuletRegistryConfig
+  amulet <- AmuletRegistry.initialize amuletDefaults with
+    dsoPartyName = party "dso-party"
+    demoTime = max ledgerNow amuletDefaults.demoTime
+  lot <- LotRegistry.initialize LotRegistry.defaultTestTokenV2RegistryConfig with
+    adminPartyName = party "adminTT2"
+
+  operator <- allocatePartyExact (party "operator")
+  seller <- allocatePartyExact (party "seller")
+  alice <- allocatePartyExact (party "alice")
+  bob <- allocatePartyExact (party "bob")
+  carol <- allocatePartyExact (party "carol")
+  dave <- allocatePartyExact (party "dave")
+
+  opensAt <- getTime
+  let paymentInstrument = amulet.instrumentId
+      lotInstrument = Holding.InstrumentId with
+        admin = lot.admin
+        id = lotInstrumentName
+      probeSettlement = Alloc.SettlementInfo with
+        executors = [operator]
+        id = "auction-1/lot-1"
+        cid = None
+        meta = emptyMetadata
+      probeAllocate instrumentId = AllocInstr.AllocationFactory_Allocate with
+        settlement = probeSettlement
+        allocation = Alloc.AllocationSpecification with
+          admin = instrumentId.admin
+          authorizer = basicAccount seller
+          transferLegSides = []
+          settlementDeadline = Some (opensAt `addRelTime` days 3)
+          nextIterationFunding = None
+          committed = True
+          meta = emptyMetadata
+        requestedAt = opensAt
+        inputHoldingCids = []
+        actors = [seller]
+        extraArgs = emptyExtraArgs
+      probeSettle = Alloc.SettlementFactory_SettleBatch with
+        settlement = probeSettlement
+        transferLegs = []
+        allocations = []
+        actors = [operator]
+        extraArgs = emptyExtraArgs
+
+  paymentAllocationEc <- RegistryApi.getAllocationFactory amulet (probeAllocate paymentInstrument)
+  lotAllocationEc <- RegistryApi.getAllocationFactory lot (probeAllocate lotInstrument)
+  paymentSettlementEc <- RegistryApi.getSettlementFactory amulet probeSettle
+  lotSettlementEc <- RegistryApi.getSettlementFactory lot probeSettle
+
+  let terms = OneLotAuctionTerms with
+        authorities = Set.fromList [operator]
+        direction = Forward
+        sellerPaymentAccount = basicAccount seller
+        sellerLotAccount = basicAccount seller
+        saleId = "auction-1/lot-1"
+        registries = RegistryCalls with
+          paymentAllocate = AllocationFactoryCall with
+            factoryCid = paymentAllocationEc.factoryCid
+            allocateArgs = paymentAllocationEc.arg.extraArgs
+            cancelArgs = ExtraArgs with
+              context = ChoiceContext with
+                values = TextMap.fromList [(expireLockKey, AV_Bool True)]
+              meta = emptyMetadata
+          paymentSettle = SettlementFactoryCall with
+            factoryCid = paymentSettlementEc.factoryCid
+            settleBatchArgs = paymentSettlementEc.arg.extraArgs
+          lotAllocate = AllocationFactoryCall with
+            factoryCid = lotAllocationEc.factoryCid
+            allocateArgs = lotAllocationEc.arg.extraArgs
+            cancelArgs = lotAllocationEc.arg.extraArgs
+          lotSettle = SettlementFactoryCall with
+            factoryCid = lotSettlementEc.factoryCid
+            settleBatchArgs = lotSettlementEc.arg.extraArgs
+        payment = paymentInstrument
+        lot = LotSpec with
+          instrument = lotInstrument
+          amount = lotAmount
+        reserve = None
+        entryClosesAt = opensAt `addRelTime` days 1
+        biddingClosesAt = opensAt `addRelTime` days 2
+        expiresAt = opensAt `addRelTime` days 3
+
+  pure Fixture with ..
+
+fundBidder : Fixture -> Party -> Decimal -> Script (ContractId Holding.Holding)
+fundBidder f bidder amount = AmuletRegistry.tapFaucet f.amulet bidder amount
+
+fundSeller : Fixture -> Script [ContractId Holding.Holding]
+fundSeller f = do
+  LotRegistry.mint f.lot (basicAccount f.seller) lotInstrumentName lotAmount
+  holdingCids f.seller f.terms.lot.instrument
+
+holdingCids : Party -> Holding.InstrumentId -> Script [ContractId Holding.Holding]
+holdingCids owner instrumentId = do
+  holdings <- queryInterface @Holding.Holding owner
+  pure
+    [ cid
+    | (cid, Some h) <- holdings
+    , h.instrumentId == instrumentId
+    , h.account == basicAccount owner
+    ]
+
+balanceOf : Party -> Holding.InstrumentId -> Script Decimal
+balanceOf = balanceWhere (const True)
+
+lockedBalanceOf : Party -> Holding.InstrumentId -> Script Decimal
+lockedBalanceOf = balanceWhere isSome
+
+unlockedBalanceOf : Party -> Holding.InstrumentId -> Script Decimal
+unlockedBalanceOf = balanceWhere isNone
+
+balanceWhere
+  : (Optional Holding.Lock -> Bool) -> Party -> Holding.InstrumentId -> Script Decimal
+balanceWhere p owner instrumentId = do
+  holdings <- queryInterface @Holding.Holding owner
+  pure $ sum
+    [ h.amount
+    | (_, Some h) <- holdings
+    , h.instrumentId == instrumentId
+    , h.account == basicAccount owner
+    , p h.lock
+    ]
+
+representativeAllocate
+  : Fixture -> Party -> Holding.Account -> Holding.InstrumentId
+  -> AllocInstr.AllocationFactory_Allocate
+representativeAllocate f actor authorizer instrumentId =
+  AllocInstr.AllocationFactory_Allocate with
+    settlement = Alloc.SettlementInfo with
+      executors = [f.operator]
+      id = f.terms.saleId
+      cid = None
+      meta = emptyMetadata
+    allocation = Alloc.AllocationSpecification with
+      admin = instrumentId.admin
+      authorizer
+      transferLegSides = []
+      settlementDeadline = Some f.terms.expiresAt
+      nextIterationFunding = None
+      committed = True
+      meta = emptyMetadata
+    requestedAt = f.terms.entryClosesAt
+    inputHoldingCids = []
+    actors = [actor]
+    extraArgs = emptyExtraArgs
+
+paymentCallFor : Fixture -> Party -> Script Disclosures'
+paymentCallFor f actor = do
+  let arg = representativeAllocate f actor (basicAccount actor) f.terms.payment
+  ec <- RegistryApi.getAllocationFactory f.amulet arg
+  pure ec.disclosures
+
+lotCallFor : Fixture -> Party -> Script Disclosures'
+lotCallFor f actor = do
+  let arg = representativeAllocate f actor (basicAccount actor) f.terms.lot.instrument
+  ec <- RegistryApi.getAllocationFactory f.lot arg
+  pure ec.disclosures
+
+paymentSettleFor : Fixture -> Alloc.SettlementFactory_SettleBatch -> Script Disclosures'
+paymentSettleFor f arg = do
+  ec <- RegistryApi.getSettlementFactory f.amulet arg
+  pure ec.disclosures
+
+lotSettleFor : Fixture -> Alloc.SettlementFactory_SettleBatch -> Script Disclosures'
+lotSettleFor f arg = do
+  ec <- RegistryApi.getSettlementFactory f.lot arg
+  pure ec.disclosures
+
+cancelContextFor : Fixture -> ContractId Alloc.Allocation -> Script OpenApiChoiceContext
+cancelContextFor f allocationCid = do
+  Some av <- queryInterfaceContractId @Alloc.Allocation f.operator allocationCid
+  if av.allocation.admin == f.amulet.dso
+    then RegistryApi.getAllocation_CancelContext f.amulet allocationCid emptyMetadata
+    else RegistryApi.getAllocation_CancelContext f.lot allocationCid emptyMetadata
+
+allocationDisclosures : Fixture -> ContractId Alloc.Allocation -> Script Disclosures'
+allocationDisclosures f allocationCid = do
+  ctx <- cancelContextFor f allocationCid
+  pure ctx.disclosures
+
+submitMustFailContaining : Show a => Text -> SubmitOptions -> Commands a -> Script ()
+submitMustFailContaining expected options cmds = do
+  result <- trySubmit options cmds
+  case result of
+    Left (FailureStatusError status) -> requireContains status.message
+    Left (TruncatedError _ message) -> requireContains message
+    Left err -> fail ("the command failed unexpectedly: " <> show err)
+    Right value -> fail ("the command succeeded with " <> show value)
+  where
+    requireContains actual =
+      unless (expected `Text.isInfixOf` actual) $
+        fail ("expected a failure containing " <> expected <> ", got " <> actual)

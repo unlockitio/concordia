@@ -1,56 +1,29 @@
-# Copyright (c) 2026 Unlockit. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-# Concordia workspace. `dpm build --all` builds these in dependency order;
-# inter-package `data-dependencies` (the .daml/dist/*.dar paths) resolve from
-# this list. Only packages that currently build are listed: the auctions
-# example and the tier-2 tests reference packages that do not exist yet and
-# return with the tier-2 rework.
 packages:
-# --- tier 1: cap-core ---
-# Shared value types come from the Token Standard's official metadata DAR,
-# vendored as a prebuilt binary at lib/ (not built here). All packages
-# data-depend on it directly.
-# Interfaces/ holds the frozen interfaces; util/ the public toolkit
-# (checked-fetch, time, patchable, policies); internal/ the library-only checks.
-- ./cap-core/util/time
-- ./cap-core/util/checked-fetch
-- ./cap-core/Interfaces/mechanism
+- ./cap-core/cap-core-utils
 - ./cap-core/Interfaces/submittable
-- ./cap-core/internal/checks
-- ./cap-core/Interfaces/outcome
-- ./cap-core/util/patchable
-- ./cap-core/util/policies
-# --- tier 2: cap-governance ---
-# target and outcome before governor: GovernanceOutcome requires cap-core's
-# Outcome and binds Targets; Governor issues GovernanceOutcomes.
-# ballot before governor: Governor is resolved with Ballots (Governor -> Ballot).
-# action stands alone: Action_Issue returns GovernanceOutcomes; nothing imports
-# action back — governors exercise it from implementations only.
-- ./cap-governance/Interfaces/target
-- ./cap-governance/Interfaces/outcome
-- ./cap-governance/Interfaces/ballot
-- ./cap-governance/Interfaces/governor
+- ./cap-core/Interfaces/resolver
+- ./cap-governance/Interfaces/binding
+- ./cap-governance/Interfaces/executable
 - ./cap-governance/Interfaces/action
-- ./cap-governance/util
-# --- tier 2: cap-auctions ---
-- ./cap-auctions/Interfaces/types
+- ./cap-governance/Interfaces/ballot
+- ./cap-governance/cap-governance-utils
+- ./cap-auctions/cap-auctions-registry
 - ./cap-auctions/Interfaces/bid
-- ./cap-auctions/Interfaces/outcome
-- ./cap-auctions/Interfaces/auction
-# --- examples ---
-# Baby-DSO (each variant with its own -Test package so no template package
-# carries a daml-script dep):
-#   original    the plain-Daml Splice reproduction — the governance reference,
-#               no cap dependency; the behavioural baseline the cap-version
-#               demos are checked against.
-#   cap-version the submission example: Splice's three approval mechanisms
-#               (VoteRequest, Confirmation, AmuletPriceVote) on the cap
-#               standard.
-- ./examples/BabyDso/original/Impl
-- ./examples/BabyDso/original/Test
-- ./examples/BabyDso/cap-version/impl
-# The demo-5 extension: a new action in its own package (data-depends on impl,
-# never modifies it) — the deployed base DAR stays byte-identical.
-- ./examples/BabyDso/cap-version/extension
-- ./examples/BabyDso/cap-version/Test
+- ./cap-auctions/Interfaces/settlement
+- ./cap-auctions/cap-auctions-utils
+- ./examples/governance/baby-dso/plain
+- ./examples/governance/baby-dso/cap/ans
+- ./examples/governance/baby-dso/cap/config
+- ./examples/governance/baby-dso/cap/governance
+- ./examples/governance/baby-dso/cap/action
+- ./examples/governance/baby-dso/cap/test
+- ./examples/governance/private-majority-vote/impl
+- ./examples/governance/private-majority-vote/test
+- ./examples/auctions/sealed-bid-first-price/impl
+- ./examples/auctions/sealed-bid-first-price/fixtures
+- ./examples/auctions/sealed-bid-first-price/test
+- ./examples/auctions/sealed-bid-first-price-high-trust/impl
+- ./examples/auctions/sealed-bid-first-price-high-trust/fixtures
+- ./examples/auctions/sealed-bid-first-price-high-trust/test

@@ -1,0 +1,28 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Examples.FirstPrice.Fixtures.ImpostorV1 where
+
+import Splice.Api.Token.MetadataV1
+import qualified Splice.Api.Token.AllocationV2 as Alloc
+
+template ImpostorSettlementFactory
+  with
+    operator : Party
+    claimedAdmin : Party
+  where
+    signatory operator
+
+    interface instance Alloc.SettlementFactory for ImpostorSettlementFactory where
+      view = Alloc.SettlementFactoryView with
+        admin = claimedAdmin
+        meta = emptyMetadata
+
+      settlementFactory_publicFetchImpl _ _ =
+        pure (view (toInterface @Alloc.SettlementFactory this))
+
+      settlementFactory_settleBatchExtraObservers _ = []
+
+      settlementFactory_settleBatchImpl _ _ =
+        pure Alloc.SettlementFactory_SettleBatchResult with
+          allocationSettleResults = []
+          meta = emptyMetadata

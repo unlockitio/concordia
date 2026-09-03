@@ -1,0 +1,56 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Governance.ExecutableV1 where
+
+import DA.Map (Map)
+
+import Splice.Api.Token.MetadataV1
+import Splice.Util (require)
+import Cap.Core.Utils (admitActors, ExecutionCore (..), requireExpired, requireOpen)
+import Cap.Governance.BindingV1 (Bind, TargetKey)
+
+data ExecutableView = ExecutableView
+  with
+    core : ExecutionCore
+    bindings : [Bind]
+    outcome : Optional AnyValue
+  deriving (Eq, Show)
+
+data Executable_ExecuteResult = Executable_ExecuteResult
+  with
+    created : [AnyContractId]
+    meta : Metadata
+  deriving (Eq, Show)
+
+data Executable_ExpireResult = Executable_ExpireResult
+  with
+    meta : Metadata
+  deriving (Eq, Show)
+
+interface Executable where
+  viewtype ExecutableView
+
+  executable_executeImpl
+    : Map TargetKey AnyContractId -> ExtraArgs -> Update Executable_ExecuteResult
+
+  choice Executable_Execute : Executable_ExecuteResult
+    with
+      actors : [Party]
+      currentTargets : Map TargetKey AnyContractId
+      extraArgs : ExtraArgs
+    controller actors
+    do
+      let v = view this
+      now <- getTime
+      requireOpen "the execution window is open" now v.core.opensAt v.core.expiresAt
+      require "the actors are an executor set" (admitActors v.core.executors actors)
+      executable_executeImpl this currentTargets extraArgs
+
+  choice Executable_Expire : Executable_ExpireResult
+    with
+      actor : Party
+    controller actor
+    do
+      now <- getTime
+      requireExpired "the execution has expired" now (view this).core.expiresAt
+      pure Executable_ExpireResult with meta = emptyMetadata

@@ -1,0 +1,49 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Examples.SealedFirstPrice.Test.Invariants where
+
+import DA.Assert ((===))
+import Daml.Script
+
+import qualified Splice.Api.Token.AllocationV2 as Alloc
+
+import Cap.Auctions.OneLotBidV1
+
+import Cap.Examples.SealedFirstPrice.BidV1
+import Cap.Examples.SealedFirstPrice.Test.Fixture
+import Cap.Examples.SealedFirstPrice.Test.Demos
+
+bidReceiptOf : Fixture -> ContractId OneLotBid -> Script (ContractId Alloc.Allocation)
+bidReceiptOf f bidCid = do
+  Some bid <- queryContractId f.operator (fromInterfaceContractId @AuctionBid bidCid)
+  case bid.lotAllocation of
+    Some cid -> pure cid
+    None -> fail "this seat holds no receipt"
+
+aSeatLeavesNoAllocationBehind : Script ()
+aSeatLeavesNoAllocationBehind = do
+  auction <- openAuction "invariants"
+  let f = auction.fixture
+
+  aliceSeat <- seatFor auction f.alice
+  bobSeat <- seatFor auction f.bob
+  carolSeat <- seatFor auction f.carol
+  setTime f.terms.entryClosesAt
+  aliceBid <- submitBid auction f.alice aliceSeat 100.0
+  bobBid <- submitBid auction f.bob bobSeat 60.0
+
+  aliceEscrow <- bidAllocationOf f aliceBid
+  aliceReceipt <- bidReceiptOf f aliceBid
+  bobEscrow <- bidAllocationOf f bobBid
+  bobReceipt <- bidReceiptOf f bobBid
+
+  setTime f.terms.biddingClosesAt
+  _ <- runResolve auction [aliceBid, bobBid, carolSeat]
+
+  f.bob `cannotSee` bobEscrow
+  f.bob `cannotSee` bobReceipt
+  bobLocked <- lockedBalanceOf f.bob f.terms.payment
+  bobLocked === 0.0
+
+  f.alice `cannotSee` aliceEscrow
+  f.alice `cannotSee` aliceReceipt

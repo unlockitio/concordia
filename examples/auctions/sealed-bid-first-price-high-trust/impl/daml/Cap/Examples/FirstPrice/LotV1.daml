@@ -1,0 +1,114 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Examples.FirstPrice.LotV1 where
+
+import DA.List (sort, unique)
+import qualified DA.Set as Set
+
+import Splice.Api.Token.MetadataV1
+import qualified Splice.Api.Token.AllocationV2 as Alloc
+import qualified Splice.Api.Token.HoldingV2 as Holding
+
+import Splice.Util (require)
+
+import Cap.Core.Utils (requireClosed)
+import Cap.Core.SubmittableV1
+import Cap.Auctions.OneLotBidV1
+
+import Cap.Examples.FirstPrice.BidV1
+import Cap.Examples.FirstPrice.SettlementV1
+  (allocateOneStep, sellerOf, sellerLotAllocation)
+
+orAbort : Text -> Optional a -> Update a
+orAbort msg None = abort msg
+orAbort _ (Some a) = pure a
+
+template AuctionLotProposal
+  with
+    terms : OneLotAuctionTerms
+    mechanism : Mechanism
+    invited : [Party]
+  where
+    signatory Set.toList terms.authorities
+    observer sellerOf terms
+
+    ensure terms.direction == Forward
+      && not (null invited)
+      && unique invited
+      && notElem (sellerOf terms) invited
+
+    choice AuctionLotProposal_Accept : ContractId AuctionLot
+      with
+        lotHoldingCids : [ContractId Holding.Holding]
+      controller sellerOf terms
+      do
+        now <- getTime
+        require "the lot is locked before the entry window closes"
+          (now < terms.entryClosesAt)
+        sellerEscrowCid <- allocateOneStep
+          terms.registries.lotAllocate
+          (preLotSettlementOf terms)
+          (sellerLotAllocation terms)
+          lotHoldingCids
+        create AuctionLot with terms; mechanism; invited; sellerEscrowCid
+
+template AuctionLot
+  with
+    terms : OneLotAuctionTerms
+    mechanism : Mechanism
+    invited : [Party]
+    sellerEscrowCid : ContractId Alloc.Allocation
+  where
+    signatory Set.toList terms.authorities <> [sellerOf terms]
+
+    interface instance Submittable for AuctionLot where
+      view = SubmittableView with
+        mechanism
+        opensAt = terms.entryClosesAt
+        closesAt = terms.biddingClosesAt
+        expiresAt = Some terms.expiresAt
+        meta = emptyMetadata
+
+    choice AuctionLot_Award : OneLotBid_AwardResult
+      with
+        winnerCid : ContractId OneLotBid
+        presented : [ContractId OneLotBid]
+        awarded : [Quote]
+        extraArgs : ExtraArgs
+      controller Set.toList terms.authorities
+      do
+        now <- getTime
+        requireClosed "the bidding window is closed" now terms.biddingClosesAt
+        require "the presented seats are distinct" (unique presented)
+        require "the winner is among the presented seats" (winnerCid `elem` presented)
+
+        seats <- forA presented $ \cid -> do
+          b <- fetch cid
+          let bv = view b
+          require "every presented seat was opened on the seller's terms"
+            (bv.terms == terms)
+          require "every presented seat was opened on this mechanism"
+            ((view (toInterface @Submittable b)).mechanism == mechanism)
+          pure (cid, bidderOf bv.bidderPaymentAccount, bv.quotes)
+
+        require "every invited bidder is presented"
+          (sort [p | (_, p, _) <- seats] == sort invited)
+
+        award <- case awarded of
+          [a] -> pure a
+          _ -> abort "this format awards a single quote"
+
+        (_, _, winnerQuotes) <- orAbort "the winner is not among the presented seats"
+          (find (\(cid, _, _) -> cid == winnerCid) seats)
+
+        require "the award is a quote the winner made" (award `elem` winnerQuotes)
+        require "no presented bid quoted better than the award"
+          (not (any (\(_, _, qs) -> any (\q -> q.price > award.price) qs) seats))
+        require "the award meets the seller's reserve"
+          (meetsReserve terms.direction terms.reserve award.price)
+
+        exercise winnerCid OneLotBid_Award with
+          actors = Set.toList terms.authorities <> [sellerOf terms]
+          awarded
+          lotAllocationCid = sellerEscrowCid
+          extraArgs

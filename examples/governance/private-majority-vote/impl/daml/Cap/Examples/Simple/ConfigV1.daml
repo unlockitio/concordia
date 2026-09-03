@@ -1,0 +1,122 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Examples.Simple.ConfigV1 where
+
+import Prelude hiding (Action)
+
+import qualified DA.Map as Map
+import DA.Set (Set)
+import qualified DA.Set as Set
+
+import Splice.Api.Token.MetadataV1
+import Splice.Util (require)
+
+import Cap.Core.Utils (ExecutionCore, IsAnyValue (..))
+import Cap.Governance.ActionV1
+import Cap.Governance.BindingV1
+import Cap.Governance.ExecutableV1
+import Cap.Governance.Utils (DriftPolicy (..), unchanged)
+
+import Cap.Examples.Simple.ResolverV1 (acceptOption)
+
+configId : Text
+configId = "config"
+
+configTargetKey : Party -> AuthenticTargetKey
+configTargetKey dso = AuthenticTargetKey with
+  authorities = Set.fromList [dso]
+  id = configId
+
+template Config
+  with
+    dso : Party
+    operator : Party
+    electorate : Set Party
+    setting : Text
+  where
+    signatory dso
+    observer operator :: Set.toList electorate
+
+    interface instance AuthenticTarget for Config where
+      view = AuthenticTargetView with
+        authorities = Set.fromList [dso]
+        id = configId
+        state = Some (toAnyValue setting)
+        meta = emptyMetadata
+
+    choice Config_Set : ContractId Config
+      with
+        newSetting : Text
+      controller dso
+      do create this with setting = newSetting
+
+template ConfigUpdate
+  with
+    dso : Party
+    operator : Party
+    electorate : Set Party
+    newSetting : Text
+    core : ExecutionCore
+    bindings : [Bind]
+    outcome : Optional AnyValue
+  where
+    signatory dso
+    observer operator :: Set.toList electorate
+
+    interface instance Executable for ConfigUpdate where
+      view = ExecutableView with core; bindings; outcome
+
+      executable_executeImpl currentTargets _ = do
+        let key = configTargetKey dso
+        bind <- theBind bindings
+        cid <- case Map.lookup (bindKey bind) currentTargets of
+          Some cid -> pure cid
+          None -> abort "the config the bind names was not presented"
+        presented <- fetchCheckedTarget key (coerceContractId cid)
+        stillHolds unchanged key bind presented
+        updated <- exercise (coerceContractId cid : ContractId Config)
+          Config_Set with newSetting
+        pure Executable_ExecuteResult with
+          created = [coerceContractId updated]
+          meta = emptyMetadata
+
+template SetConfigAction
+  with
+    dso : Party
+    operator : Party
+    electorate : Set Party
+    newSetting : Text
+  where
+    signatory dso
+    observer operator :: Set.toList electorate
+
+    interface instance Action for SetConfigAction where
+      view = ActionView with meta = emptyMetadata
+
+      action_issueExecutionImpl _ arg = do
+        let ExecutableView with .. = arg.execution
+        require "the execution names another authority"
+          (core.authorities == Set.fromList [dso])
+        require "the outcome this action writes on is acceptance"
+          (outcome == Some acceptOption)
+        require "the execution binds this config and nothing else"
+          (map bindKey bindings == [Authentic (configTargetKey dso)])
+        cid <- create ConfigUpdate with
+          dso; operator; electorate; newSetting; core; bindings; outcome
+        pure Action_IssueExecutionResult with
+          executionCids = [toInterfaceContractId cid]
+          meta = emptyMetadata
+
+theBind : [Bind] -> Update Bind
+theBind [bind] = pure bind
+theBind _ = abort "this execution binds the config and nothing else"
+
+stillHolds : DriftPolicy -> AuthenticTargetKey -> Bind -> AuthenticTarget -> Update ()
+stillHolds policy key bind presented = case bind of
+  AuthenticBind with .. -> do
+    require "the bind names another target" (target == key)
+    case (state.seen, (view presented).state) of
+      (Some pinned, Some current) ->
+        require "the target no longer satisfies the bind" (policy.holds pinned current)
+      _ -> abort "the bind pins no state, or the target publishes none"
+  _ -> abort "this format binds authentic targets only"

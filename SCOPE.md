@@ -1,4 +1,4 @@
-<!-- Copyright (c) 2026 Unlockit. All rights reserved. -->
+<!-- Copyright (c) 2026 Unlockit -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
 # CAP first-release scope
@@ -16,19 +16,23 @@ First release builds cap-core, cap-governance and cap-auctions interface layer, 
 Each package's deliverables below, as capability → proof → milestone: the
 milestone that builds each capability and the artifact that proves it.
 
-The refernce flows are usefull to test the generability of the interfaces so the interfacs might be changed due to requirments of the different refernce flows.
-These reference flows also allow to prove that the interfaces are at least generalizable for this broad set of use cases. 
+The reference flows are how the interfaces are tested for generality: each is
+built on the same core, and a requirement a flow cannot express is grounds for
+changing an interface. Together they show that the interfaces hold across a
+broad set of use cases.
 
 ### cap-core
 
-The interface layer (`Submittable`, `Mechanism`, `Outcome`) and the opt-in
-toolkit (`time`, `policies`, `checked-fetch`, `patchable`) — completeness,
+The interface layer (`Submittable`, `Resolver`) and the opt-in toolkit
+(`cap-core-utils`: admission, execution, patch, time, value) — completeness,
 privacy, expiry, submission windows, and atomic downstream execution — all
 specified in [`DESIGN.md`](DESIGN.md).
 
 | Capability | First release contains | Proven by | Milestone |
 |---|---|---|---:|
 | Interfaces | Interface layer | [interfaces](cap-core/Interfaces) | **M1** |
+| Toolkit | Opt-in toolkit | [cap-core-utils](cap-core/cap-core-utils) | **M1** |
+| Interfaces | The same core carrying both domains | [governance slice](examples/governance/private-majority-vote) · [auction slice](examples/auctions/sealed-bid-first-price) | **M2** |
 
 **The scope for cap-core is deliberately narrow** — the interface layer is meant
 to be stable. First-release work on the core is extending the toolkit (opt-in
@@ -41,11 +45,12 @@ against the under-forcing/over-forcing asymmetry.
 | Capability | First release contains | Proven by | Milestone |
 |---|---|---|---:|
 | Interfaces | Interface layer | [Interfaces](cap-governance/Interfaces/) | **M1** |
-| Interfaces | Opt-in toolkit | [Toolkit](cap-governance/util) | **M1** |
-| Implementation | Splice-generalizable flow | [cap-version implementation](examples/BabyDso/cap-version/impl) | **M1** |
-| Demo | Splice-generalizable flow demos | [DEMOS.md](examples/BabyDso/DEMOS.md) | **M1** |
-| Implementation | Private votes reference flow | code | **M2** |
-| Demo | Private votes reference flow demo | sandbox prototype | **M2** |
+| Interfaces | Opt-in toolkit | [Toolkit](cap-governance/cap-governance-utils) | **M1** |
+| Implementation | Splice-generalizable flow | [cap implementation](examples/governance/baby-dso/cap) | **M1** |
+| Demo | Splice-generalizable flow demos | [DEMOS.md](examples/governance/baby-dso/DEMOS.md) | **M1** |
+| Implementation | Private votes reference flow | [private-majority-vote/impl](examples/governance/private-majority-vote/impl) | **M2** |
+| Demo | Private votes reference flow demo | [private-majority-vote/DEMOS.md](examples/governance/private-majority-vote/DEMOS.md) | **M2** |
+| Tests | Daml Script and sandbox integration tests | [test package](examples/governance/private-majority-vote/test) · [sandbox-test.sh](scripts/sandbox-test.sh) | **M2** |
 | Toolkit | Extend tallies with quorum/threshold rules | sandbox tests | **M3** |
 | Toolkit | Default implementations for downstream execution hooks (tbd) | sandbox tests | **M3** |
 | Interfaces | Generalized weighted ballots logic | code | **M3** |
@@ -55,9 +60,9 @@ against the under-forcing/over-forcing asymmetry.
 | Demo | A prototype frontend + backend driving the governance flow demo | end-to-end tests | **M5** |
 
 
-The interface layer is `Governor`, `Ballot`, `Outcome`, `Target`; it already
-drives a Splice-shaped flow end-to-end (the M1 BabyDso reference), and the M2
-should confirm the same interfaces hold when votes stay private through
+The interface layer is `Ballot`, `AuthenticTarget`, `Action` and `Executable`;
+it already drives a Splice-shaped flow end-to-end (the M1 BabyDso reference),
+and M2 confirms the same interfaces hold when votes stay private through
 resolution. Weighted voting *might* require new interfaces.
 
 ### cap-auctions 
@@ -65,19 +70,32 @@ resolution. Weighted voting *might* require new interfaces.
 | Capability | First release contains | Proven by | Milestone |
 |---|---|---|---:|
 | Interfaces | interface layer | [Interfaces](cap-auctions/Interfaces/) | **M1** |
-| Toolkit | opt-in toolkit | code | **M2** |
-| Implementation | sealed-bid first-price | code | **M2** |
-| Demo | sealed-bid first-price demo | sandbox protype | **M2** |
+| Toolkit | opt-in toolkit | [cap-auctions-utils](cap-auctions/cap-auctions-utils) | **M2** |
+| Implementation | sealed-bid first-price | [sealed-bid-first-price/impl](examples/auctions/sealed-bid-first-price/impl) | **M2** |
+| Demo | sealed-bid first-price demo | [DEMOS.md](examples/auctions/sealed-bid-first-price/DEMOS.md) | **M2** |
+| Tests | Daml Script and sandbox integration tests | [test package](examples/auctions/sealed-bid-first-price/test) · [sandbox-test.sh](scripts/sandbox-test.sh) | **M2** |
 | Toolkit | second-price payment rule | code | **M3** |
 | Implementation | Dutch auction (multi-round) | code | **M4** |
-| Demo | Dutch demo | sandbox protype | **M4** |
+| Demo | Dutch demo | sandbox prototype | **M4** |
 | Implementation | multi-unit | code | **M4** |
-| Demo | multi-unit demo | sandbox protype | **M4** |
+| Demo | multi-unit demo | sandbox prototype | **M4** |
 | Implementation | a prototype frontend + backend driving the auction flow | code | **M5** |
 | Demo | a prototype frontend + backend driving the auction flow | end-to-end tests | **M5** |
 
-The interface layer is `Auction`, `Bid`, `Outcome`, reusing the same skeleton.
-Settlement **composes with the Token Standard V2**.
+The interface layer is `OneLotBid` and `Settlement`, reusing the same
+skeleton. A bid names an escrow its bidder funded before casting — a Token
+Standard `Allocation`, the standard's own artifact — and records what it says,
+so a pricing rule reads the funding off the bid. One close bars casting and
+withdrawing alike, so the set of bids is fixed the moment bidding ends and each
+one is irrevocable from then. A lot is a submittable too: the seller's offer,
+admitted by the check that admits the bids, so a resolution mints the seller's
+side and nothing before it does. A sale publishes its executors before bidding
+opens, so a bidder reads who can move their funds before committing any; a
+format that names none of the parties an award moves assets to or from makes
+that award unwithholdable once a resolution has reached it. Settlement runs through
+`SettlementFactory_SettleBatch` in the fixed execute body — cap-auctions
+**composes with the Token Standard V2** rather than describing settlement of
+its own.
 
 ### Cross-cutting
 

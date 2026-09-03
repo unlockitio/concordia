@@ -1,0 +1,40 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Examples.BabyDso.Plain.AmuletRules where
+
+import Splice.Util (Patchable (..), patchScalar, patchListAsScalar)
+
+data AmuletConfig = AmuletConfig
+  with
+    activeSynchronizer : Text
+    requiredSynchronizers : [Text]
+  deriving (Eq, Show)
+
+instance Patchable AmuletConfig where
+  patch new base current = AmuletConfig with
+    activeSynchronizer =
+      patchScalar new.activeSynchronizer base.activeSynchronizer current.activeSynchronizer
+    requiredSynchronizers =
+      patchListAsScalar new.requiredSynchronizers base.requiredSynchronizers current.requiredSynchronizers
+
+validAmuletConfig : AmuletConfig -> Bool
+validAmuletConfig config =
+  config.activeSynchronizer `elem` config.requiredSynchronizers
+
+template AmuletRules
+  with
+    dso : Party
+    svs : [Party]
+    config : AmuletConfig
+  where
+    signatory dso
+    observer svs
+
+    ensure validAmuletConfig config
+
+    choice AmuletRules_SetConfig : ContractId AmuletRules
+      with
+        newConfig : AmuletConfig
+        baseConfig : AmuletConfig
+      controller dso
+      do create this with config = patch newConfig baseConfig config

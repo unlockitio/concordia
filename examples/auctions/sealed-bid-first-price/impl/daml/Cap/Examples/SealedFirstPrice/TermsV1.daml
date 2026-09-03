@@ -1,0 +1,66 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Examples.SealedFirstPrice.TermsV1 where
+
+import qualified DA.Set as Set
+import qualified DA.TextMap as TextMap
+
+import Splice.Api.Token.MetadataV1
+import qualified Splice.Api.Token.AllocationV2 as Alloc
+import Splice.TokenStandard.Utils (regularAccountOwner)
+
+import qualified Splice.Api.Token.HoldingV2 as Holding
+
+import Cap.Auctions.OneLotBidV1 (OneLotAuctionTerms, OneLotBidView, Quote)
+
+sellerOf : OneLotAuctionTerms -> Party
+sellerOf terms = regularAccountOwner terms.sellerLotAccount
+
+paymentLegId, lotLegId : Text
+paymentLegId = "payment"
+lotLegId = "lot"
+
+settlementOf : OneLotAuctionTerms -> Alloc.SettlementInfo
+settlementOf terms = Alloc.SettlementInfo with
+  executors = Set.toList terms.authorities
+  id = terms.saleId
+  cid = None
+  meta = emptyMetadata
+
+
+allocationOf
+  : Party -> Holding.Account -> Optional (TextMap.TextMap Decimal) -> Time
+  -> Alloc.AllocationSpecification
+allocationOf admin authorizer nextIterationFunding expiresAt = Alloc.AllocationSpecification with
+  admin
+  authorizer
+  transferLegSides = []
+  settlementDeadline = Some expiresAt
+  nextIterationFunding
+  committed = True
+  meta = emptyMetadata
+
+
+sellerLotAllocation : OneLotAuctionTerms -> Alloc.AllocationSpecification
+sellerLotAllocation terms =
+  allocationOf terms.lot.instrument.admin terms.sellerLotAccount
+    (funding terms.lot.instrument.id terms.lot.amount) terms.expiresAt
+
+sellerPaymentAllocation : OneLotAuctionTerms -> Alloc.AllocationSpecification
+sellerPaymentAllocation terms =
+  allocationOf terms.payment.admin terms.sellerPaymentAccount
+    (Some TextMap.empty) terms.expiresAt
+
+bidderPaymentAllocation : OneLotBidView -> [Quote] -> Alloc.AllocationSpecification
+bidderPaymentAllocation bv quotes =
+  allocationOf bv.terms.payment.admin bv.bidderPaymentAccount
+    (funding bv.terms.payment.id (foldl max 0.0 (map (.price) quotes))) bv.terms.expiresAt
+
+bidderLotAllocation : OneLotBidView -> Alloc.AllocationSpecification
+bidderLotAllocation bv =
+  allocationOf bv.terms.lot.instrument.admin bv.bidderLotAccount
+    (Some TextMap.empty) bv.terms.expiresAt
+
+
+funding : Text -> Decimal -> Optional (TextMap.TextMap Decimal)
+funding instrumentId amount = Some (TextMap.fromList [(instrumentId, amount)])

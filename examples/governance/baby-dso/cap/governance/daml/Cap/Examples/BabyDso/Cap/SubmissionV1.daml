@@ -1,0 +1,101 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Examples.BabyDso.Cap.SubmissionV1 where
+
+import qualified DA.Map as Map
+
+import Splice.Api.Token.MetadataV1
+import Splice.Util (require)
+
+import Cap.Core.SubmittableV1
+import Cap.Governance.BallotV1
+
+template SvConfirmation
+  with
+    dso : Party
+    sv : Party
+    mechanism : Mechanism
+    terms : ProposalTerms
+    confirmed : AnyValue
+  where
+    signatory dso, sv
+
+    ensure confirmed `elem` terms.options
+
+    interface instance Submittable for SvConfirmation where
+      view = SubmittableView with
+        mechanism
+        opensAt = terms.entryClosesAt
+        closesAt = terms.votingClosesAt
+        expiresAt = Some terms.expiresAt
+        meta = emptyMetadata
+
+    interface instance Ballot for SvConfirmation where
+      view = BallotView with
+        terms
+        availableActions = Map.empty
+        voter = sv
+        votes = [confirmed]
+        meta = emptyMetadata
+
+      ballot_castImpl _ _ = abort "a confirmation carries its choice from creation"
+
+      ballot_withdrawImpl _ _ = abort "a confirmation cannot be withdrawn"
+
+      ballot_expireImpl self _ = do
+        archive self
+        pure Ballot_ExpireResult with meta = emptyMetadata
+
+      ballot_consumeImpl self _ = do
+        archive self
+        pure Ballot_ConsumeResult with meta = emptyMetadata
+
+template SvBallot
+  with
+    dso : Party
+    sv : Party
+    mechanism : Mechanism
+    terms : ProposalTerms
+    votes : [AnyValue]
+  where
+    signatory dso
+    observer sv
+
+    interface instance Submittable for SvBallot where
+      view = SubmittableView with
+        mechanism
+        opensAt = terms.entryClosesAt
+        closesAt = terms.votingClosesAt
+        expiresAt = Some terms.expiresAt
+        meta = emptyMetadata
+
+    interface instance Ballot for SvBallot where
+      view = BallotView with
+        terms
+        availableActions = Map.fromList
+          [ (BA_Cast, [[sv]])
+          , (BA_Withdraw, [[sv]])
+          ]
+        voter = sv
+        votes
+        meta = emptyMetadata
+
+      ballot_castImpl self arg = do
+        require "this ballot carries no vote yet" (null votes)
+        require "this format casts a single option" (length arg.votes == 1)
+        archive self
+        toInterfaceContractId @Ballot <$> create this with votes = arg.votes
+
+      ballot_withdrawImpl self _ = do
+        require "this ballot carries a vote to withdraw" (not (null votes))
+        archive self
+        _ <- create this with votes = []
+        pure Ballot_WithdrawResult with meta = emptyMetadata
+
+      ballot_expireImpl self _ = do
+        archive self
+        pure Ballot_ExpireResult with meta = emptyMetadata
+
+      ballot_consumeImpl self _ = do
+        archive self
+        pure Ballot_ConsumeResult with meta = emptyMetadata

@@ -1,0 +1,178 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Examples.Simple.Test.Demos where
+
+import DA.Action (unless, when)
+import DA.Assert ((===))
+import DA.List (sort)
+import DA.Optional (isSome)
+import qualified DA.Set as Set
+import DA.Time (addRelTime, days)
+import Daml.Script
+
+import Splice.Api.Token.MetadataV1 (AnyValue)
+
+import Cap.Core.ResolverV1 (Verdict (..))
+import Cap.Core.SubmittableV1 (Submittable)
+
+import Cap.Examples.Simple.BallotV1
+import Cap.Examples.Simple.ConfigV1
+import Cap.Examples.Simple.ResolverV1
+
+import Cap.Examples.Simple.Test.Fixture
+
+class Visible t where
+  isVisibleTo : Party -> ContractId t -> Script Bool
+
+instance Visible PrivateBallot where
+  isVisibleTo p cid = isSome <$> queryContractId p cid
+
+instance Visible VoteResolver where
+  isVisibleTo p cid = isSome <$> queryContractId p cid
+
+instance Visible Config where
+  isVisibleTo p cid = isSome <$> queryContractId p cid
+
+instance Visible ConfigUpdate where
+  isVisibleTo p cid = isSome <$> queryContractId p cid
+
+sees : Visible t => Party -> ContractId t -> Script ()
+sees p cid = do
+  visible <- isVisibleTo p cid
+  unless visible $
+    fail (show p <> " should see " <> show cid <> " but does not")
+
+cannotSee : Visible t => Party -> ContractId t -> Script ()
+cannotSee p cid = do
+  visible <- isVisibleTo p cid
+  when visible $
+    fail (show p <> " should not see " <> show cid <> " but does")
+
+visibleTo : Party -> Script [Text]
+visibleTo p = do
+  resolvers <- query @VoteResolver p
+  ballots <- query @PrivateBallot p
+  configs <- query @Config p
+  actions <- query @SetConfigAction p
+  updates <- query @ConfigUpdate p
+  pure $ sort $ concat
+    [ map (show . fst) resolvers
+    , map (show . fst) ballots
+    , map (show . fst) configs
+    , map (show . fst) actions
+    , map (show . fst) updates
+    ]
+
+seesExactly : Party -> [Text] -> Script ()
+seesExactly p expected = do
+  actual <- visibleTo p
+  actual === sort expected
+
+public : Fixture -> [Text]
+public f = [show f.configCid, show f.actionCid, show f.resolverCid]
+
+data Round = Round with
+    fixture : Fixture
+    aliceBallot : ContractId PrivateBallot
+    bobBallot : ContractId PrivateBallot
+    carolBallot : ContractId PrivateBallot
+
+openRound : Text -> Script Round
+openRound ns = do
+  fixture <- setupAs ns
+  aliceBallot <- seat fixture fixture.mechanism fixture.alice
+  bobBallot <- seat fixture fixture.mechanism fixture.bob
+  carolBallot <- seat fixture fixture.mechanism fixture.carol
+  pure Round with ..
+
+data Cast = Cast with
+    alice : ContractId PrivateBallot
+    bob : ContractId PrivateBallot
+    carol : ContractId PrivateBallot
+
+castAll : Round -> AnyValue -> AnyValue -> AnyValue -> Script Cast
+castAll round aliceOption bobOption carolOption = do
+  let f = round.fixture
+  alice <- cast f f.alice round.aliceBallot aliceOption
+  bob <- cast f f.bob round.bobBallot bobOption
+  carol <- cast f f.carol round.carolBallot carolOption
+  pure Cast with ..
+
+allPresented : Cast -> [ContractId Submittable]
+allPresented c = map presented [c.alice, c.bob, c.carol]
+
+settingNow : Fixture -> Script Text
+settingNow f = do
+  [(_, config)] <- query @Config f.dso
+  pure config.setting
+
+whoSeesWhat : Script ()
+whoSeesWhat = do
+  round <- openRound "sees"
+  let f = round.fixture
+      pub = public f
+
+  f.dso `seesExactly` pub
+  f.alice `seesExactly` (show round.aliceBallot :: pub)
+  f.bob `seesExactly` (show round.bobBallot :: pub)
+  f.carol `seesExactly` (show round.carolBallot :: pub)
+  f.operator `seesExactly`
+    (map show [round.aliceBallot, round.bobBallot, round.carolBallot] <> pub)
+
+  setTime f.terms.entryClosesAt
+  votes <- castAll round acceptOption acceptOption rejectOption
+
+  f.bob `cannotSee` votes.alice
+  f.carol `cannotSee` votes.alice
+  f.dso `cannotSee` votes.alice
+  f.operator `sees` votes.alice
+  f.dso `seesExactly` pub
+
+  setTime f.terms.votingClosesAt
+  result <- runResolve f (allPresented votes)
+  let executionCid = executionOf result
+
+  f.dso `seesExactly` (show executionCid :: pub)
+  f.alice `seesExactly` (show executionCid :: pub)
+  f.operator `seesExactly` (show executionCid :: pub)
+
+  runExecute f f.configCid executionCid
+  [(configCid, config)] <- query @Config f.dso
+  config.setting === proposedSetting
+
+  let published = [show configCid, show f.actionCid, show f.resolverCid]
+  f.dso `seesExactly` published
+  f.alice `seesExactly` published
+  f.operator `seesExactly` published
+
+theCountCoversTheElectorate : Script ()
+theCountCoversTheElectorate = do
+  round <- openRound "cover"
+  let f = round.fixture
+
+  setTime f.terms.entryClosesAt
+  votes <- castAll round acceptOption acceptOption rejectOption
+
+  setTime f.terms.votingClosesAt
+  runResolveMustFail f (map presented [votes.alice, votes.carol])
+  runResolveMustFail f (map presented [votes.alice, votes.bob])
+
+  result <- runResolve f (allPresented votes)
+  result.verdict === V_Accepted (Some acceptOption)
+
+theOperatorCannotSkipTheCount : Script ()
+theOperatorCannotSkipTheCount = do
+  f <- setupAs "skip"
+  now <- getTime
+
+  runIssueMustFail f f.operator (forgedExecution f)
+
+  submitMustFail f.operator $ createCmd VoteResolver with
+    dso = f.dso
+    operator = f.operator
+    electorate = Set.fromList [f.alice]
+    bodyId = bodyName
+    expiresAt = now `addRelTime` days 10
+
+  setting <- settingNow f
+  setting === openingSetting

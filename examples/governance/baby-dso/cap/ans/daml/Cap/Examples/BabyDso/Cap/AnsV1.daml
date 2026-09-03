@@ -1,0 +1,16 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Examples.BabyDso.Cap.AnsV1 where
+
+template AnsRules
+  with
+    dso : Party
+    entryFee : Decimal
+  where
+    signatory dso
+
+    choice AnsRules_SetFee : ContractId AnsRules
+      with
+        newEntryFee : Decimal
+      controller dso
+      do create this with entryFee = newEntryFee

@@ -1,0 +1,41 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | Utilities to implement cap-core resolvers, submittables and the doors
+-- built on them. Domain-agnostic: nothing here names a target, an action, an
+-- allocation or a vote.
+module Cap.Core.Utils (
+
+  -- * Binding discipline
+
+  -- ** Checked and authentic fetches
+  HasCheckedFetch (..),
+
+  -- ** Admission predicates
+  admitActors,
+  entitled,
+
+  -- * Windows
+
+  -- ** Half-open window convention (inclusive floor, exclusive ceiling)
+  isOpen,
+  requireOpen,
+  requireClosed,
+  requireBeforeOpen,
+  requireExpired,
+
+  -- * Execution
+  ExecutionCore (..),
+
+  -- * Values
+  IsAnyValue (..),
+
+) where
+
+
+import Splice.Util (HasCheckedFetch (..))
+
+import Cap.Core.Utils.Internal.Admission
+import Cap.Core.Utils.Internal.Time
+import Cap.Core.Utils.Internal.Execution
+import Cap.Core.Utils.Internal.Value
+import Cap.Core.Utils.Internal.Patch ()

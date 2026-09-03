@@ -1,0 +1,113 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Examples.SealedFirstPrice.BidV1 where
+
+import qualified DA.Map as Map
+import qualified DA.Set as Set
+
+import Splice.Api.Token.MetadataV1
+import qualified Splice.Api.Token.AllocationV2 as Alloc
+import qualified Splice.Api.Token.HoldingV2 as Holding
+
+import Splice.Util (require)
+import Splice.TokenStandard.Utils (regularAccountOwner)
+
+import Cap.Core.SubmittableV1
+import Cap.Auctions.OneLotBidV1
+import Cap.Examples.SealedFirstPrice.TermsV1
+
+bidderOf : Holding.Account -> Party
+bidderOf = regularAccountOwner
+
+template AuctionBid
+  with
+    terms : OneLotAuctionTerms
+    bidderPaymentAccount : Holding.Account
+    bidderLotAccount : Holding.Account
+    mechanism : Mechanism
+    quotes : [Quote]
+    paymentAllocation : Optional (ContractId Alloc.Allocation)
+    lotAllocation : Optional (ContractId Alloc.Allocation)
+  where
+    signatory Set.toList terms.authorities
+           <> [bidderOf bidderPaymentAccount | not (null quotes)]
+    observer bidderOf bidderPaymentAccount
+
+    ensure terms.direction == Forward
+
+    choice AuctionBid_Close : ()
+      controller Set.toList terms.authorities
+      do pure ()
+
+    interface instance Submittable for AuctionBid where
+      view = SubmittableView with
+        mechanism
+        opensAt = terms.entryClosesAt
+        closesAt = terms.biddingClosesAt
+        expiresAt = Some terms.expiresAt
+        meta = emptyMetadata
+
+    interface instance OneLotBid for AuctionBid where
+      view = OneLotBidView with
+        terms
+        availableActions = Map.fromList $
+          (BA_Release, [Set.toList terms.authorities])
+            :: [(BA_Submit, [[bidderOf bidderPaymentAccount]]) | null quotes]
+        bidderPaymentAccount
+        bidderLotAccount
+        quotes
+        paymentAllocation
+        lotAllocation
+        meta = emptyMetadata
+
+      oneLotBid_submitImpl self arg = do
+        require "this seat holds no bid yet" (null quotes)
+        paymentCid <- case arg.paymentAllocation of
+          Some cid -> pure cid
+          None -> abort "a bid names the allocation it pays from"
+        lotCid <- case arg.lotAllocation of
+          Some cid -> pure cid
+          None -> abort "a bid names the allocation its lot is taken into"
+        let bv = view (toInterface @OneLotBid this)
+        paymentView <- view <$> fetch paymentCid
+        require "the payment allocation is the one this bid implies"
+          (paymentView.allocation == bidderPaymentAllocation bv arg.quotes)
+        require "the payment allocation is scoped to this auction"
+          (paymentView.settlement == settlementOf terms)
+        lotView <- view <$> fetch lotCid
+        require "the lot allocation is the one this bid implies"
+          (lotView.allocation == bidderLotAllocation bv)
+        require "the lot allocation is scoped to this auction"
+          (lotView.settlement == settlementOf terms)
+        archive self
+        toInterfaceContractId <$>
+          create this with
+            quotes = arg.quotes
+            paymentAllocation = arg.paymentAllocation
+            lotAllocation = arg.lotAllocation
+
+      oneLotBid_releaseImpl self _ = do
+        archive self
+        released <- case (paymentAllocation, lotAllocation) of
+          (Some paymentCid, Some lotCid) -> do
+            let actors = (settlementOf terms).executors
+            _ <- exercise paymentCid Alloc.Allocation_Cancel with
+              actors
+              extraArgs = terms.registries.paymentAllocate.cancelArgs
+            _ <- exercise lotCid Alloc.Allocation_Cancel with
+              actors
+              extraArgs = terms.registries.lotAllocate.cancelArgs
+            pure [paymentCid, lotCid]
+          (None, None) -> pure []
+          _ -> abort "this seat holds one of its two allocations"
+        pure OneLotBid_ReleaseResult with released; meta = emptyMetadata
+
+      oneLotBid_expireImpl self _ = do
+        archive self
+        pure OneLotBid_ExpireResult with released = []; meta = emptyMetadata
+      
+      oneLotBid_withdrawImpl _ _ =
+        abort "a bid cannot be withdrawn after seeing the field quotes"
+
+      oneLotBid_awardImpl _ _ =
+        abort "this format does not require bidder's authority for settlement"

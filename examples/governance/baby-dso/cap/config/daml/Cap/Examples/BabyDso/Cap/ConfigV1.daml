@@ -1,0 +1,54 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Examples.BabyDso.Cap.ConfigV1 where
+
+import DA.Set (Set)
+import qualified DA.Set as Set
+import qualified DA.TextMap as TextMap
+
+import Splice.Api.Token.MetadataV1
+
+import Cap.Governance.BindingV1
+
+
+template AmuletConfig
+  with
+    dso : Party
+    svs : Set Party
+    transferFee : Decimal
+    epoch : Int
+  where
+    signatory dso
+    observer Set.toList svs
+
+    interface instance AuthenticTarget for AmuletConfig where
+      view = AuthenticTargetView with
+        authorities = Set.fromList [dso]
+        id = configId
+        state = Some (configState transferFee epoch)
+        meta = emptyMetadata
+
+    choice AmuletConfig_SetFee : ContractId AmuletConfig
+      with
+        newTransferFee : Decimal
+      controller dso
+      do create this with transferFee = newTransferFee; epoch = epoch + 1
+
+
+
+configId : Text
+configId = "amulet-config"
+
+transferFeeField : Text
+transferFeeField = "transferFee"
+
+configTargetKey : Party -> AuthenticTargetKey
+configTargetKey dso = AuthenticTargetKey with
+  authorities = Set.fromList [dso]
+  id = configId
+
+configState : Decimal -> Int -> AnyValue
+configState transferFee epoch = AV_Map (TextMap.fromList
+  [ (transferFeeField, AV_Decimal transferFee)
+  , ("epoch", AV_Int epoch)
+  ])

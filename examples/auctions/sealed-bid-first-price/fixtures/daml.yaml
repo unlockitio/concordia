@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: Apache-2.0
+
+# Templates used only by the demos. They live outside the test package because
+# a package that defines templates and depends on daml-script drags daml-script
+# onto any ledger the DAR is uploaded to.
+sdk-version: 3.4.11
+name: cap-example-sealed-first-price-fixtures
+version: 0.1.0
+source: daml
+dependencies:
+- daml-prim
+- daml-stdlib
+data-dependencies:
+- ../../../../lib/splice-api-token-metadata-v1-1.0.0.dar
+- ../../../../lib/splice-api-token-holding-v2-1.0.0.dar
+- ../../../../lib/splice-api-token-allocation-v2-1.0.0.dar
+build-options:
+  - --target=2.1

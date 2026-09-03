@@ -1,46 +1,52 @@
--- Copyright (c) 2026 Unlockit. All rights reserved.
 -- SPDX-License-Identifier: Apache-2.0
 
--- A submittable records which mechanism and which slot.
--- The submission itself can be read by downcasting a full
--- submittable to the implementation's own template.
 module Cap.Core.SubmittableV1 where
 
 import DA.Set (Set)
 
 import Splice.Api.Token.MetadataV1
-import Cap.Core.CheckedFetchV1 (HasCheckedFetch (..))
-import Cap.Core.MechanismV1 (Mechanism, ForMechanism (..))
+import DA.List (unique)
 
+import Splice.Util (require, fetchCheckedInterface)
+import Cap.Core.Utils (HasCheckedFetch (..), admitActors)
 
-data SubmittableState
-  = S_Empty
-      -- ^ The slot is registered; nothing has been submitted.
-  | S_Full
-      -- ^ Holds the submission that resolution counts.
-  | S_Withdrawn
-      -- ^ A submission that was retracted.
-  | ExtSubmittableState with dummyUnitField : ()
+-- Split in Bid/Ballot
+
+data ResolverKey = ResolverKey
+  with
+    authorities : Set Party
+    id : Text
+  deriving (Eq, Show, Ord)
+
+data Mechanism = Mechanism
+  with
+    resolver : ResolverKey
+    resolverCid : Optional AnyContractId
+    procedure : Text
+    id : Text
   deriving (Eq, Show)
 
 data SubmittableView = SubmittableView
   with
-    mechanism : ContractId Mechanism
-      -- ^ The mechanism this submittable belongs to. To be compared,
-      -- may already be archived.
-    authorities : Set Party
-      -- ^ The authority whose signature admission requires.
-    slot : Optional Int
-      -- ^ The slot this submittable covers. `Some` under
-      -- completeness, `None` otherwise.
-    state : SubmittableState
-      -- ^ The implementation MUST have `S_Full` exactly when the contract
-      -- carries a submission — the fixed bodies filter on it.
+    mechanism : Mechanism
+    opensAt : Time
+    closesAt : Time
+    expiresAt : Optional Time
     meta : Metadata
   deriving (Eq, Show)
 
-instance HasCheckedFetch SubmittableView ForMechanism where
-  contractGroupId v = ForMechanism v.mechanism
+instance HasCheckedFetch SubmittableView Mechanism where
+  contractGroupId v = v.mechanism
 
 interface Submittable where
   viewtype SubmittableView
+
+fetchSubmittables
+  : [[Party]] -> Mechanism -> [ContractId Submittable] -> Update [(ContractId Submittable, Submittable)]
+fetchSubmittables _ _ [] = fail "a presentation holds at least one submittable"
+fetchSubmittables issuers mechanism cids = do
+  require "the presented submittables are distinct" (unique cids)
+  forA cids $ \cid -> do
+    s <- fetchCheckedInterface mechanism cid
+    require "the submittable is signed by its issuers" (admitActors issuers (signatory s))
+    pure (cid, s)

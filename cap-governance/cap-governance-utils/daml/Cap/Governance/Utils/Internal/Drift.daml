@@ -1,0 +1,84 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Governance.Utils.Internal.Drift
+  ( DriftPolicy (..)
+  , anyDrift
+  , unchanged
+  , typed
+  , withinVersions
+  , withinRatio
+  , notAfter
+  , atSlice
+  , unchangedAt
+  ) where
+
+import qualified DA.TextMap as TextMap
+import DA.Time (RelTime, addRelTime)
+
+import Splice.Api.Token.MetadataV1
+
+import Cap.Core.Utils (IsAnyValue (..))
+
+-- | Whether a target still carries state an approval may act on.
+data DriftPolicy = DriftPolicy
+  with
+    holds : AnyValue -> AnyValue -> Bool
+
+instance Semigroup DriftPolicy where
+  a <> b = DriftPolicy with
+    holds = \pinned current -> a.holds pinned current && b.holds pinned current
+
+instance Monoid DriftPolicy where
+  mempty = anyDrift
+
+-- | Admits any drift at all
+anyDrift : DriftPolicy
+anyDrift = DriftPolicy with holds = \_ _ -> True
+
+-- | Admits only state identical to what was pinned.
+unchanged : DriftPolicy
+unchanged = DriftPolicy with holds = (==)
+
+-- | Admits a counter that has advanced by at most k and never gone backwards.
+withinVersions : Int -> DriftPolicy
+withinVersions k = typed within
+  where
+    within : Int -> Int -> Bool
+    within pinned current = current >= pinned && current - pinned <= k
+
+-- | Admits a quantity that has grown to at most r times what was pinned.
+withinRatio : Decimal -> DriftPolicy
+withinRatio r = typed within
+  where
+    within : Int -> Int -> Bool
+    within pinned current =
+      intToDecimal current <= r * intToDecimal pinned
+
+-- | Admits a timestamp no later than d past what was pinned.
+notAfter : RelTime -> DriftPolicy
+notAfter d = typed within
+  where
+    within : Time -> Time -> Bool
+    within pinned current = current <= addRelTime pinned d
+
+-- | Lifts a comparison on a decoded value, refusing anything it cannot decode.
+typed : IsAnyValue a => (a -> a -> Bool) -> DriftPolicy
+typed p = DriftPolicy with
+  holds = \pinned current -> case (fromAnyValue pinned, fromAnyValue current) of
+    (Some a, Some b) -> p a b
+    _ -> False
+
+-- | Narrows a policy to one key of a map state, refusing if either side lacks it.
+atSlice : Text -> DriftPolicy -> DriftPolicy
+atSlice key policy = DriftPolicy with
+  holds = \pinned current -> case (slice key pinned, slice key current) of
+    (Some a, Some b) -> policy.holds a b
+    _ -> False
+
+-- | Admits drift anywhere but the named keys, so a write cannot land on a moved field.
+unchangedAt : [Text] -> DriftPolicy
+unchangedAt keys = mconcat (map (\key -> atSlice key unchanged) keys)
+
+slice : Text -> AnyValue -> Optional AnyValue
+slice key (AV_Map values) = TextMap.lookup key values
+slice _ _ = None

@@ -1,0 +1,28 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Core.Utils.Internal.Patch () where
+
+import DA.Map (Map)
+import qualified DA.Map as Map
+import DA.TextMap (TextMap)
+import qualified DA.TextMap as TextMap
+
+import Splice.Api.Token.MetadataV1
+import Splice.Util (Patchable (..))
+
+asMap : TextMap a -> Map Text a
+asMap values = Map.fromList (TextMap.toList values)
+
+asTextMap : Map Text a -> TextMap a
+asTextMap values = TextMap.fromList (Map.toList values)
+
+instance Patchable a => Patchable (TextMap a) where
+  patch new base current =
+    asTextMap (patch (asMap new) (asMap base) (asMap current))
+
+instance Patchable AnyValue where
+  patch new base current
+    | new == base = current
+    | otherwise = case (new, base, current) of
+        (AV_Map n, AV_Map b, AV_Map c) -> AV_Map (patch n b c)
+        _ -> new

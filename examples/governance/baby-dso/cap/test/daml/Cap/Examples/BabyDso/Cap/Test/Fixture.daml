@@ -1,0 +1,144 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Examples.BabyDso.Cap.Test.Fixture where
+
+import DA.Map (Map)
+import qualified DA.Map as Map
+import DA.Set (Set)
+import qualified DA.Set as Set
+import qualified DA.TextMap as TextMap
+import DA.Time
+import Daml.Script hiding (AnyContractId)
+
+import Splice.Api.Token.MetadataV1
+
+import Cap.Core.ResolverV1
+import Cap.Core.SubmittableV1
+import Cap.Governance.BallotV1
+import Cap.Governance.BindingV1
+import Cap.Governance.ExecutableV1
+
+import Cap.Examples.BabyDso.Cap.ActionV1
+import Cap.Examples.BabyDso.Cap.AnsV1
+import Cap.Examples.BabyDso.Cap.ConfigV1
+import Cap.Examples.BabyDso.Cap.ResolverV1
+
+openingTransferFee : Decimal
+openingTransferFee = 0.03
+
+openingEntryFee : Decimal
+openingEntryFee = 2.0
+
+openingEpoch : Int
+openingEpoch = 3
+
+bodyId : Text
+bodyId = "baby-dso"
+
+data Fixture = Fixture with
+    dso : Party
+    svs : [Party]
+    electorate : Set Party
+    configCid : ContractId AmuletConfig
+    ansCid : ContractId AnsRules
+    actionCid : ContractId SetFeesAction
+    resolverCid : ContractId DsoResolver
+    start : Time
+
+fees : Decimal -> Decimal -> AnyValue
+fees transferFee entryFee = AV_Map (TextMap.fromList
+  [ (transferFeeField, AV_Decimal transferFee)
+  , (entryFeeField, AV_Decimal entryFee)
+  ])
+
+configBind : Party -> Decimal -> Int -> Bind
+configBind dso transferFee epoch = AuthenticBind with
+  target = configTargetKey dso
+  state = AsOf with stage = Submission; seen = Some (configState transferFee epoch)
+  cid = AsOf with stage = Execution; seen = None
+
+ansBind : ContractId AnsRules -> Bind
+ansBind ansRulesCid = OpaqueBind with
+  opaqueTarget = ansTargetKey
+  opaqueCid = coerceContractId ansRulesCid
+
+setupAs : Text -> Script Fixture
+setupAs ns = do
+  let party role = "baby-" <> ns <> "-" <> role
+  dso <- allocateParty (party "dso")
+  sv1 <- allocateParty (party "sv1")
+  sv2 <- allocateParty (party "sv2")
+  sv3 <- allocateParty (party "sv3")
+  let svs = [sv1, sv2, sv3]
+      electorate = Set.fromList svs
+  start <- getTime
+
+  configCid <- submit dso $ createCmd AmuletConfig with
+    dso; svs = electorate
+    transferFee = openingTransferFee
+    epoch = openingEpoch
+  ansCid <- submit dso $ createCmd AnsRules with dso; entryFee = openingEntryFee
+  actionCid <- submit dso $ createCmd SetFeesAction with dso; svs = electorate
+  resolverCid <- submit dso $ createCmd DsoResolver with
+    dso
+    svs = electorate
+    resolverId = bodyId
+    executionDelay = hours 2
+    executionWindow = days 1
+    expiresAt = start `addRelTime` days 30
+
+  pure Fixture with ..
+
+openingBindings : Fixture -> [Bind]
+openingBindings f =
+  [configBind f.dso openingTransferFee openingEpoch, ansBind f.ansCid]
+
+termsFor : Fixture -> Time -> [AnyValue] -> [Bind] -> ProposalTerms
+termsFor f opensAt options bindings = ProposalTerms with
+  authorities = Set.fromList [f.dso]
+  options
+  actionCid = Some (coerceContractId f.actionCid)
+  bindings
+  entryClosesAt = opensAt `addRelTime` minutes 10
+  votingClosesAt = opensAt `addRelTime` hours 1
+  expiresAt = opensAt `addRelTime` days 2
+
+mechanismFor : Fixture -> Text -> Text -> Mechanism
+mechanismFor f procedure proposalId = Mechanism with
+  resolver = ResolverKey with
+    authorities = Set.fromList [f.dso]
+    id = bodyId
+  resolverCid = Some (coerceContractId f.resolverCid)
+  procedure
+  id = proposalId
+
+currentTargetsOf : Fixture -> ContractId AmuletConfig -> Map TargetKey AnyContractId
+currentTargetsOf f configCid = Map.fromList
+  [(Authentic (configTargetKey f.dso), coerceContractId configCid)]
+
+resolveAs
+  : Fixture -> Party -> Mechanism -> [ContractId Submittable]
+  -> Script Resolver_ResolveResult
+resolveAs f sv mechanism submittables =
+  submit (actAs sv <> readAs f.dso) $ exerciseCmd (toInterfaceContractId @Resolver f.resolverCid)
+    Resolver_Resolve with
+      actors = [sv]
+      mechanism
+      submittables
+      extraArgs = ExtraArgs with context = emptyChoiceContext; meta = emptyMetadata
+
+executeAs
+  : Fixture -> Party -> AnyContractId -> ContractId AmuletConfig
+  -> Script Executable_ExecuteResult
+executeAs f sv executionCid configCid =
+  submit (actAs sv <> readAs f.dso) $ exerciseCmd (coerceContractId executionCid : ContractId Executable)
+    Executable_Execute with
+      actors = [sv]
+      currentTargets = currentTargetsOf f configCid
+      extraArgs = ExtraArgs with context = emptyChoiceContext; meta = emptyMetadata
+
+feesNow : Fixture -> Script (Decimal, Decimal)
+feesNow f = do
+  [(_, config)] <- query @AmuletConfig f.dso
+  [(_, ans)] <- query @AnsRules f.dso
+  pure (config.transferFee, ans.entryFee)

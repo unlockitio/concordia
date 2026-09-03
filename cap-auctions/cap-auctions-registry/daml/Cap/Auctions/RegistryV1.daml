@@ -1,0 +1,28 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Auctions.RegistryV1 where
+
+import Splice.Api.Token.MetadataV1
+import qualified Splice.Api.Token.AllocationV2 as Alloc
+import qualified Splice.Api.Token.AllocationInstructionV2 as AllocInstr
+
+data AllocationFactoryCall = AllocationFactoryCall
+  with
+    factoryCid : ContractId AllocInstr.AllocationFactory
+    allocateArgs : ExtraArgs
+    cancelArgs : ExtraArgs
+  deriving (Eq, Show)
+
+data SettlementFactoryCall = SettlementFactoryCall
+  with
+    factoryCid : ContractId Alloc.SettlementFactory
+    settleBatchArgs : ExtraArgs
+  deriving (Eq, Show)
+
+data RegistryCalls = RegistryCalls
+  with
+    paymentAllocate : AllocationFactoryCall
+    paymentSettle : SettlementFactoryCall
+    lotAllocate : AllocationFactoryCall
+    lotSettle : SettlementFactoryCall
+  deriving (Eq, Show)

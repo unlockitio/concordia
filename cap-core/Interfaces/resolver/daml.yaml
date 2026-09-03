@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: Apache-2.0
+
+# Tier 1 — `Resolver`: the one contract a mechanism's submittables bind to and
+# resolve against. Merges what used to be a separate frame contract (authority
+# set, window, timing hooks) with the resolving face; every door runs here.
+# The INTERFACE only: everything here mentions `Submittable`, and Resolver ->
+# Submittable is the edge that fixes the layering. Its `viewtype ResolverView`,
+# its cgid `ResolverKey`, and the `Mechanism` built on them come back from
+# `mechanism`, one package below — nothing there mentions `Submittable`, so
+# it can sit under every package that names a resolver.
+sdk-version: 3.4.11
+name: cap-core-resolver-v1
+version: 0.1.0
+source: daml
+dependencies:
+- daml-prim
+- daml-stdlib
+data-dependencies:
+- ../../../lib/splice-api-token-metadata-v1-1.0.0.dar
+- ../../../lib/splice-util-0.1.7.dar
+- ../../cap-core-utils/.daml/dist/cap-core-utils-0.1.0.dar
+- ../../Interfaces/submittable/.daml/dist/cap-core-submittable-v1-0.1.0.dar
+build-options:
+  - --target=2.1

@@ -1,0 +1,20 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+
+
+module Cap.Core.Utils.Internal.Execution
+  ( ExecutionCore (..)
+  ) where
+
+import DA.Set (Set)
+
+import Splice.Api.Token.MetadataV1
+
+data ExecutionCore = ExecutionCore
+  with
+    authorities : Set Party
+    executors : [[Party]]
+    opensAt : Time
+    expiresAt : Optional Time
+    meta : Metadata
+  deriving (Eq, Show)

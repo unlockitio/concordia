@@ -1,0 +1,143 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Examples.BabyDso.Cap.Test.Demos where
+
+import DA.Assert ((===))
+import DA.Optional (isSome)
+import DA.Time
+import Daml.Script hiding (AnyContractId)
+
+import Splice.Api.Token.MetadataV1
+
+import Cap.Core.ResolverV1 (Resolver_ResolveResult (..), Verdict (..))
+import Cap.Core.SubmittableV1 (Mechanism, Submittable)
+import Cap.Governance.BallotV1
+import Cap.Governance.BindingV1 (Bind)
+import Cap.Governance.ExecutableV1 (Executable, Executable_Execute (..))
+
+import Cap.Examples.BabyDso.Cap.ActionV1 (entryFeeField)
+import Cap.Examples.BabyDso.Cap.ConfigV1
+import Cap.Examples.BabyDso.Cap.ResolverV1
+import Cap.Examples.BabyDso.Cap.SubmissionV1
+
+import Cap.Examples.BabyDso.Cap.Test.Fixture
+
+fieldsVoted : [AnyValue]
+fieldsVoted = [AV_Text transferFeeField, AV_Text entryFeeField]
+
+emptyArgs : ExtraArgs
+emptyArgs = ExtraArgs with context = emptyChoiceContext; meta = emptyMetadata
+
+castBallots
+  : Fixture -> ProposalTerms -> Mechanism -> [(Party, AnyValue)]
+  -> Script [ContractId Submittable]
+castBallots f terms mechanism choices = do
+  seated <- forA choices $ \(sv, _) ->
+    submit f.dso $ createCmd SvBallot with
+      dso = f.dso; sv; mechanism; terms; votes = []
+  passTime (minutes 20)
+  cast <- forA (zip seated choices) $ \(ballotCid, (sv, choice)) ->
+    submit sv $ exerciseCmd (toInterfaceContractId @Ballot ballotCid) Ballot_Cast with
+      actors = [sv]
+      votes = [choice]
+      currentTargets = currentTargetsOf f f.configCid
+      extraArgs = emptyArgs
+  passTime (hours 1)
+  pure (map coerceContractId cast)
+
+voteOn
+  : Fixture -> Time -> Text -> [Bind] -> [AnyValue] -> Script Resolver_ResolveResult
+voteOn f opensAt proposalId bindings choices = do
+  let [sv1, sv2, sv3] = f.svs
+      terms = termsFor f opensAt fieldsVoted bindings
+      mechanism = mechanismFor f voteProcedureName proposalId
+  submittables <- castBallots f terms mechanism (zip [sv1, sv2, sv3] choices)
+  resolveAs f sv1 mechanism submittables
+
+theUsualVote : Fixture -> Script Resolver_ResolveResult
+theUsualVote f =
+  voteOn f f.start "fees-vote" (openingBindings f)
+    [fees 0.05 2.0, fees 0.06 2.5, fees 0.09 4.0]
+
+bothFeesMoveTogether : Script ()
+bothFeesMoveTogether = do
+  f <- setupAs "both"
+  let [_, sv2, _] = f.svs
+  result <- theUsualVote f
+  result.verdict === V_Accepted (Some (fees 0.06 2.5))
+  [execution] <- pure result.created
+
+  passTime (hours 3)
+  executed <- executeAs f sv2 execution f.configCid
+  length executed.created === 2
+
+  feesNow f >>= (=== (0.06, 2.5))
+
+aDriftedFeeStopsBoth : Script ()
+aDriftedFeeStopsBoth = do
+  f <- setupAs "drift"
+  let [_, sv2, _] = f.svs
+  result <- theUsualVote f
+  [execution] <- pure result.created
+
+  drifted <- submit f.dso $ exerciseCmd f.configCid
+    AmuletConfig_SetFee with newTransferFee = 0.07
+
+  passTime (hours 3)
+  submitMustFail (actAs sv2 <> readAs f.dso) $
+    exerciseCmd (coerceContractId execution : ContractId Executable)
+      Executable_Execute with
+        actors = [sv2]
+        currentTargets = currentTargetsOf f drifted
+        extraArgs = emptyArgs
+
+  feesNow f >>= (=== (0.07, openingEntryFee))
+
+anUnrelatedChangeIsAdmitted : Script ()
+anUnrelatedChangeIsAdmitted = do
+  f <- setupAs "unrelated"
+  let [_, sv2, _] = f.svs
+  result <- theUsualVote f
+  [execution] <- pure result.created
+
+  bumped <- submit f.dso $ exerciseCmd f.configCid
+    AmuletConfig_SetFee with newTransferFee = openingTransferFee
+
+  passTime (hours 3)
+  _ <- executeAs f sv2 execution bumped
+
+  feesNow f >>= (=== (0.06, 2.5))
+
+twoPathsOneAction : Script ()
+twoPathsOneAction = do
+  f <- setupAs "twopaths"
+  let [sv1, sv2, _] = f.svs
+      confirmed = fees 0.04 1.5
+      confirmTerms = termsFor f f.start [confirmed] (openingBindings f)
+      confirmMechanism = mechanismFor f confirmationProcedureName "fees-confirm"
+
+  confirmations <- forA [sv1, sv2] $ \sv ->
+    submit (actAs f.dso <> actAs sv) $ createCmd SvConfirmation with
+      dso = f.dso; sv; mechanism = confirmMechanism; terms = confirmTerms; confirmed
+  passTime (hours 2)
+  confirmed' <- resolveAs f sv1 confirmMechanism (map coerceContractId confirmations)
+  confirmed'.verdict === V_Accepted (Some confirmed)
+  [confirmExecution] <- pure confirmed'.created
+
+  executed <- executeAs f sv1 confirmExecution f.configCid
+  [newConfig, newAns] <- pure executed.created
+  feesNow f >>= (=== (0.04, 1.5))
+
+  stillActive <- queryContractId f.dso f.actionCid
+  assertMsg "the action survives issuing an execution" (isSome stillActive)
+
+  now <- getTime
+  voteResult <- voteOn f now "fees-vote"
+    [configBind f.dso 0.04 (openingEpoch + 1), ansBind (coerceContractId newAns)]
+    [fees 0.05 2.0, fees 0.06 2.5, fees 0.09 4.0]
+  voteResult.verdict === V_Accepted (Some (fees 0.06 2.5))
+  [voteExecution] <- pure voteResult.created
+
+  passTime (hours 3)
+  _ <- executeAs f sv2 voteExecution (coerceContractId newConfig)
+  feesNow f >>= (=== (0.06, 2.5))

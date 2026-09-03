@@ -1,0 +1,189 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Examples.SealedFirstPrice.LotV1 where
+
+import DA.List (sort, unique)
+import qualified DA.Set as Set
+
+import Splice.Api.Token.MetadataV1
+import qualified Splice.Api.Token.AllocationV2 as Alloc
+import qualified Splice.Api.Token.AllocationInstructionV2 as AllocInstr
+import qualified Splice.Api.Token.HoldingV2 as Holding
+
+import Splice.Util (require)
+import Splice.TokenStandard.Utils (receiverSide, regularAccountParties, senderSide)
+
+import Cap.Core.Utils (requireClosed)
+import Cap.Core.SubmittableV1
+import Cap.Auctions.OneLotBidV1
+import Cap.Auctions.RegistryV1 (AllocationFactoryCall)
+import Cap.Auctions.Utils
+  ( lotLeg
+  , paymentLeg
+  )
+
+import Cap.Examples.SealedFirstPrice.BidV1
+import Cap.Examples.SealedFirstPrice.TermsV1
+
+allocateOneStep
+  : AllocationFactoryCall
+  -> Alloc.SettlementInfo
+  -> Alloc.AllocationSpecification
+  -> [ContractId Holding.Holding]
+  -> Update (ContractId Alloc.Allocation)
+allocateOneStep factory settlement allocation inputHoldingCids = do
+  now <- getTime
+  result <- exercise factory.factoryCid AllocInstr.AllocationFactory_Allocate with
+    settlement
+    allocation
+    requestedAt = now
+    inputHoldingCids
+    extraArgs = factory.allocateArgs
+    actors = regularAccountParties allocation.authorizer
+  case result.output of
+    AllocInstr.AllocationInstructionResult_Completed cid -> pure cid
+    AllocInstr.AllocationInstructionResult_Pending _ ->
+      abort "the registry returned a pending allocation instruction; this format needs a one-step allocation"
+    AllocInstr.AllocationInstructionResult_Failed ->
+      abort "the registry failed to create the allocation"
+
+orAbort : Text -> Optional a -> Update a
+orAbort msg None = abort msg
+orAbort _ (Some a) = pure a
+
+template AuctionLotProposal
+  with
+    terms : OneLotAuctionTerms
+    mechanism : Mechanism
+    invited : [Party]
+  where
+    signatory Set.toList terms.authorities
+    observer sellerOf terms
+
+    ensure terms.direction == Forward
+      && not (null invited)
+      && unique invited
+      && notElem (sellerOf terms) invited
+
+    choice AuctionLotProposal_Accept : ContractId AuctionLot
+      with
+        lotHoldingCids : [ContractId Holding.Holding]
+      controller sellerOf terms
+      do
+        now <- getTime
+        require "the lot is locked before the entry window closes"
+          (now < terms.entryClosesAt)
+        escrowFactory <- exercise terms.registries.lotAllocate.factoryCid
+          AllocInstr.AllocationFactory_PublicFetch with
+            actors = regularAccountParties terms.sellerLotAccount
+        require "the escrow's factory is administered by its instrument's admin"
+          (escrowFactory.admin == (sellerLotAllocation terms).admin)
+        receiptFactory <- exercise terms.registries.paymentAllocate.factoryCid
+          AllocInstr.AllocationFactory_PublicFetch with
+            actors = regularAccountParties terms.sellerPaymentAccount
+        require "the receipt's factory is administered by its instrument's admin"
+          (receiptFactory.admin == (sellerPaymentAllocation terms).admin)
+        sellerSenderCid <- allocateOneStep
+          terms.registries.lotAllocate
+          (settlementOf terms)
+          (sellerLotAllocation terms)
+          lotHoldingCids
+        sellerReceiverCid <- allocateOneStep
+          terms.registries.paymentAllocate
+          (settlementOf terms)
+          (sellerPaymentAllocation terms)
+          []
+        create AuctionLot with
+          terms; mechanism; invited
+          sellerLotAllocationCid = sellerSenderCid
+          sellerPaymentAllocationCid = sellerReceiverCid
+
+template AuctionLot
+  with
+    terms : OneLotAuctionTerms
+    mechanism : Mechanism
+    invited : [Party]
+    sellerLotAllocationCid : ContractId Alloc.Allocation
+    sellerPaymentAllocationCid : ContractId Alloc.Allocation
+  where
+    signatory Set.toList terms.authorities <> [sellerOf terms]
+
+    interface instance Submittable for AuctionLot where
+      view = SubmittableView with
+        mechanism
+        opensAt = terms.entryClosesAt
+        closesAt = terms.biddingClosesAt
+        expiresAt = Some terms.expiresAt
+        meta = emptyMetadata
+
+    choice AuctionLot_Settle : ()
+      with
+        winnerCid : ContractId OneLotBid
+        presented : [ContractId OneLotBid]
+        awarded : [Quote]
+      controller Set.toList terms.authorities
+      do
+        now <- getTime
+        requireClosed "the bidding window is closed" now terms.biddingClosesAt
+        require "the presented seats are distinct" (unique presented)
+        require "the winner is among the presented seats" (winnerCid `elem` presented)
+
+        seats <- forA presented $ \cid -> do
+          b <- fetch cid
+          let bv = view b
+          require "every presented seat was opened on the seller's terms"
+            (bv.terms == terms)
+          require "every presented seat was opened on this mechanism"
+            ((view (toInterface @Submittable b)).mechanism == mechanism)
+          pure (bidderOf bv.bidderPaymentAccount, bv.quotes)
+
+        require "every invited bidder is presented" (sort (map fst seats) == sort invited)
+
+        award <- case awarded of
+          [a] -> pure a
+          _ -> abort "this format awards a single quote"
+
+        winner <- view <$> fetch winnerCid
+        require "the award is a quote the winner made" (award `elem` winner.quotes)
+        require "no presented bid quoted better than the award"
+          (not (any (\(_, qs) -> any (\q -> q.price > award.price) qs) seats))
+        require "the award meets the seller's reserve"
+          (meetsReserve terms.direction terms.reserve award.price)
+
+        settleAward terms winner award
+          sellerLotAllocationCid sellerPaymentAllocationCid
+        exercise (fromInterfaceContractId @AuctionBid winnerCid) AuctionBid_Close
+
+settleAward
+  : OneLotAuctionTerms -> OneLotBidView -> Quote
+  -> ContractId Alloc.Allocation -> ContractId Alloc.Allocation -> Update ()
+settleAward terms winner award sellerLotCid sellerPaymentCid = do
+  bidderPaymentCid <-
+    orAbort "the winning seat holds no payment allocation" winner.paymentAllocation
+  bidderLotCid <- orAbort "the winning seat holds no lot allocation" winner.lotAllocation
+
+  let settlement = settlementOf terms
+      pLeg = paymentLeg terms paymentLegId winner.bidderPaymentAccount award.price
+      lLeg = lotLeg terms lotLegId winner.bidderLotAccount award.quantity
+      on cid side = Alloc.FinalizedAllocation with
+        allocationCid = cid
+        extraTransferLegSides = [side]
+        nextIterationFunding = None
+
+  _ <- exercise terms.registries.paymentSettle.factoryCid
+    Alloc.SettlementFactory_SettleBatch with
+      settlement
+      transferLegs = [pLeg]
+      allocations = [on bidderPaymentCid (senderSide pLeg), on sellerPaymentCid (receiverSide pLeg)]
+      actors = settlement.executors
+      extraArgs = terms.registries.paymentSettle.settleBatchArgs
+
+  _ <- exercise terms.registries.lotSettle.factoryCid
+    Alloc.SettlementFactory_SettleBatch with
+      settlement
+      transferLegs = [lLeg]
+      allocations = [on sellerLotCid (senderSide lLeg), on bidderLotCid (receiverSide lLeg)]
+      actors = settlement.executors
+      extraArgs = terms.registries.lotSettle.settleBatchArgs
+
+  pure ()

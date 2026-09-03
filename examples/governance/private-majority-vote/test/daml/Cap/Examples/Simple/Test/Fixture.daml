@@ -1,0 +1,181 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Examples.Simple.Test.Fixture where
+
+import Prelude hiding (Action)
+
+import DA.Map (Map)
+import qualified DA.Map as Map
+import DA.Set (Set)
+import qualified DA.Set as Set
+import DA.Time
+import Daml.Script
+
+import Splice.Api.Token.MetadataV1
+import qualified Splice.Api.Token.MetadataV1 as Meta
+
+import Cap.Core.ResolverV1
+import Cap.Core.SubmittableV1
+import Cap.Core.Utils (ExecutionCore (..), IsAnyValue (..))
+import Cap.Governance.ActionV1 (Action, Action_IssueExecution (..))
+import Cap.Governance.BallotV1
+import Cap.Governance.BindingV1
+import Cap.Governance.ExecutableV1
+
+import Cap.Examples.Simple.BallotV1
+import Cap.Examples.Simple.ConfigV1
+import Cap.Examples.Simple.ResolverV1
+
+bodyName : Text
+bodyName = "body-1"
+
+proposalName : Text
+proposalName = "proposal-1"
+
+openingSetting : Text
+openingSetting = "sync-a"
+
+proposedSetting : Text
+proposedSetting = "sync-b"
+
+majorityOptions : [AnyValue]
+majorityOptions = [acceptOption, rejectOption]
+
+noArgs : ExtraArgs
+noArgs = ExtraArgs with context = emptyChoiceContext; meta = emptyMetadata
+
+data Fixture = Fixture with
+    dso : Party
+    operator : Party
+    alice : Party
+    bob : Party
+    carol : Party
+    electorate : Set Party
+    resolverCid : ContractId VoteResolver
+    mechanism : Mechanism
+    configCid : ContractId Config
+    actionCid : ContractId SetConfigAction
+    terms : ProposalTerms
+
+voteMechanism : Party -> Text -> ContractId VoteResolver -> Mechanism
+voteMechanism dso proposalId resolverCid = Mechanism with
+  resolver = ResolverKey with
+    authorities = Set.fromList [dso]
+    id = bodyName
+  resolverCid = Some (coerceContractId resolverCid)
+  procedure = majorityProcedureName
+  id = proposalId
+
+configBind : Party -> Text -> Bind
+configBind dso setting = AuthenticBind with
+  target = configTargetKey dso
+  state = AsOf with stage = Submission; seen = Some (toAnyValue setting)
+  cid = AsOf with stage = Execution; seen = None
+
+setupAs : Text -> Script Fixture
+setupAs ns = do
+  let party role = "vote-" <> ns <> "-" <> role
+  dso <- allocatePartyByHint (PartyIdHint (party "dso"))
+  operator <- allocatePartyByHint (PartyIdHint (party "operator"))
+  alice <- allocatePartyByHint (PartyIdHint (party "alice"))
+  bob <- allocatePartyByHint (PartyIdHint (party "bob"))
+  carol <- allocatePartyByHint (PartyIdHint (party "carol"))
+  let electorate = Set.fromList [alice, bob, carol]
+
+  now <- getTime
+  configCid <- submit dso $ createCmd Config with
+    dso; operator; electorate; setting = openingSetting
+  actionCid <- submit dso $ createCmd SetConfigAction with
+    dso; operator; electorate; newSetting = proposedSetting
+  resolverCid <- submit dso $ createCmd VoteResolver with
+    dso; operator; electorate
+    bodyId = bodyName
+    expiresAt = now `addRelTime` days 10
+
+  let mechanism = voteMechanism dso proposalName resolverCid
+      terms = ProposalTerms with
+        authorities = Set.fromList [dso]
+        options = majorityOptions
+        actionCid = Some (coerceContractId actionCid)
+        bindings = [configBind dso openingSetting]
+        entryClosesAt = now `addRelTime` days 1
+        votingClosesAt = now `addRelTime` days 2
+        expiresAt = now `addRelTime` days 3
+
+  pure Fixture with ..
+
+presentedTargets : Fixture -> ContractId Config -> Map TargetKey Meta.AnyContractId
+presentedTargets f configCid = Map.fromList
+  [(Authentic (configTargetKey f.dso), coerceContractId configCid)]
+
+presented : ContractId PrivateBallot -> ContractId Submittable
+presented = toInterfaceContractId @Submittable
+
+seat : Fixture -> Mechanism -> Party -> Script (ContractId PrivateBallot)
+seat f mechanism voter = submit f.operator $ createCmd PrivateBallot with
+  operator = f.operator; voter; mechanism; terms = f.terms; votes = []
+
+cast
+  : Fixture -> Party -> ContractId PrivateBallot -> AnyValue
+  -> Script (ContractId PrivateBallot)
+cast f voter ballotCid option = do
+  cid <- submit voter $
+    exerciseCmd (toInterfaceContractId @Ballot ballotCid) Ballot_Cast with
+      actors = [voter]
+      votes = [option]
+      currentTargets = presentedTargets f f.configCid
+      extraArgs = noArgs
+  pure (fromInterfaceContractId cid)
+
+runResolveOn
+  : Fixture -> ContractId VoteResolver -> Mechanism -> [ContractId Submittable]
+  -> Script Resolver_ResolveResult
+runResolveOn f resolverCid mechanism submittables = submit f.operator $
+  exerciseCmd (toInterfaceContractId @Resolver resolverCid) Resolver_Resolve with
+    actors = [f.operator]
+    mechanism
+    submittables
+    extraArgs = noArgs
+
+runResolve : Fixture -> [ContractId Submittable] -> Script Resolver_ResolveResult
+runResolve f = runResolveOn f f.resolverCid f.mechanism
+
+runResolveMustFail : Fixture -> [ContractId Submittable] -> Script ()
+runResolveMustFail f submittables = submitMustFail f.operator $
+  exerciseCmd (toInterfaceContractId @Resolver f.resolverCid) Resolver_Resolve with
+    actors = [f.operator]
+    mechanism = f.mechanism
+    submittables
+    extraArgs = noArgs
+
+executionOf : Resolver_ResolveResult -> ContractId Executable
+executionOf result = case result.created of
+  [cid] -> coerceContractId cid
+  _ -> error "the resolve minted no single execution"
+
+runExecute : Fixture -> ContractId Config -> ContractId Executable -> Script ()
+runExecute f configCid executionCid = do
+  _ <- submit f.operator $
+    exerciseCmd executionCid Executable_Execute with
+      actors = [f.operator]
+      currentTargets = presentedTargets f configCid
+      extraArgs = noArgs
+  pure ()
+
+forgedExecution : Fixture -> ExecutableView
+forgedExecution f = ExecutableView with
+  core = ExecutionCore with
+    authorities = Set.fromList [f.dso]
+    executors = [[f.operator]]
+    opensAt = f.terms.votingClosesAt
+    expiresAt = Some f.terms.expiresAt
+    meta = emptyMetadata
+  bindings = f.terms.bindings
+  outcome = Some acceptOption
+
+runIssueMustFail : Fixture -> Party -> ExecutableView -> Script ()
+runIssueMustFail f actor execution =
+  submitMustFail actor $
+    exerciseCmd (toInterfaceContractId @Action f.actionCid) Action_IssueExecution with
+      execution
+      extraArgs = noArgs

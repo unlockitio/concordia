@@ -18,6 +18,7 @@ Thumbs.db
 
 # Logs / temp
 *.log
+log/
 *.tmp
 tmp.md
 
@@ -39,4 +40,5 @@ MISSING.md
 tools
 
 M1-DELIVERY-COMMENT.md
+M2-DELIVERY-COMMENT.md
 DESIGN_old.md

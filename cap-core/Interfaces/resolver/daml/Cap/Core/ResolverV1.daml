@@ -1,0 +1,86 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+-- A resolver is an authority-scoped, long-lived "host". A mechanism is the unit that varies.
+
+module Cap.Core.ResolverV1 where
+
+import DA.Set (Set)
+import DA.Map (Map)
+import qualified DA.Map as Map
+
+import Splice.Api.Token.MetadataV1
+import Cap.Core.Utils (HasCheckedFetch (..), admitActors, requireExpired)
+import Cap.Core.SubmittableV1
+
+
+data ResolverView = ResolverView
+  with
+    authorities : Set Party
+    submittablesIssuers : [[Party]] -- must sign submittable for them to be valid
+    id : Text
+    expiresAt : Optional Time
+    meta : Metadata
+  deriving (Eq, Show)
+
+instance HasCheckedFetch ResolverView ResolverKey where
+  contractGroupId v = ResolverKey with authorities = v.authorities; id = v.id
+
+data Verdict
+  = V_Accepted (Optional AnyValue)
+  | V_Rejected
+  | V_Lapsed (Optional AnyValue)
+  deriving (Eq, Show)
+
+data Resolver_ResolveResult = Resolver_ResolveResult
+  with
+    verdict : Verdict
+    created : [AnyContractId]
+    meta : Metadata
+  deriving (Eq, Show)
+
+data Resolver_ExpireResult = Resolver_ExpireResult
+  with
+    meta : Metadata
+  deriving (Eq, Show)
+
+data Procedure = Procedure with
+  resolvers : [[Party]]
+  resolve : ContractId Resolver -> [(ContractId Submittable, Submittable)] -> ExtraArgs -> Update Resolver_ResolveResult
+
+interface Resolver where
+  viewtype ResolverView
+
+  procedures : Map Text Procedure
+
+  nonconsuming choice Resolver_Resolve : Resolver_ResolveResult
+    with
+      actors : [Party]
+      mechanism : Mechanism
+      submittables : [ContractId Submittable]
+      extraArgs : ExtraArgs
+    controller actors
+    do
+      let rv = view this
+      assertMsg "the declared mechanism names another resolver"
+        (mechanism.resolver == contractGroupId rv)
+
+      assertMsg "the declared mechanism is binded to another resolver contract"
+        (optional True (== coerceContractId self) mechanism.resolverCid)
+
+      submitted <- fetchSubmittables rv.submittablesIssuers mechanism submittables -- might be tier-2
+
+      p <- case Map.lookup mechanism.procedure (procedures this) of
+        Some proc -> pure proc
+        None -> abort "the mechanism names a procedure this resolver does not have"
+      assertMsg "not authorised to resolve" (admitActors p.resolvers actors)
+
+      p.resolve self submitted extraArgs
+
+  choice Resolver_Expire : Resolver_ExpireResult
+    with
+      actor : Party
+    controller actor
+    do
+      now <- getTime
+      requireExpired "the resolver has expired" now (view this).expiresAt
+      pure Resolver_ExpireResult with meta = emptyMetadata

@@ -1,0 +1,180 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Examples.FirstPrice.SettlementV1 where
+
+import qualified DA.Set as Set
+import qualified DA.TextMap as TextMap
+
+import qualified Splice.Api.Token.AllocationV2 as Alloc
+import qualified Splice.Api.Token.AllocationInstructionV2 as AllocInstr
+import qualified Splice.Api.Token.HoldingV2 as Holding
+
+import Splice.Api.Token.MetadataV1
+import Splice.Util (require)
+import Splice.TokenStandard.Utils
+  (nonIteratedAllocation, regularAccountOwner, regularAccountParties, textMapValues)
+
+import Cap.Core.Utils (ExecutionCore (..))
+import Cap.Auctions.OneLotBidV1 (OneLotAuctionTerms, OneLotBidView, Quote)
+import Cap.Auctions.SettlementV1
+import Cap.Auctions.RegistryV1 (AllocationFactoryCall, SettlementFactoryCall)
+import Cap.Auctions.Utils (lotLeg, paymentLeg, settlementOf)
+
+allocateOneStep
+  : AllocationFactoryCall
+  -> Alloc.SettlementInfo
+  -> Alloc.AllocationSpecification
+  -> [ContractId Holding.Holding]
+  -> Update (ContractId Alloc.Allocation)
+allocateOneStep factory settlement allocation inputHoldingCids = do
+  now <- getTime
+  result <- exercise factory.factoryCid AllocInstr.AllocationFactory_Allocate with
+    settlement
+    allocation
+    requestedAt = now
+    inputHoldingCids
+    extraArgs = factory.allocateArgs
+    actors = regularAccountParties allocation.authorizer
+  case result.output of
+    AllocInstr.AllocationInstructionResult_Completed cid -> pure cid
+    AllocInstr.AllocationInstructionResult_Pending _ ->
+      abort "the registry returned a pending allocation instruction; this format needs a one-step allocation"
+    AllocInstr.AllocationInstructionResult_Failed ->
+      abort "the registry failed to create the allocation"
+
+reallocate
+  : AllocationFactoryCall
+  -> ContractId Alloc.Allocation
+  -> Alloc.AllocationView
+  -> Alloc.SettlementInfo
+  -> [Alloc.TransferLegSide]
+  -> Optional (TextMap.TextMap Decimal)
+  -> Update (ContractId Alloc.Allocation)
+reallocate
+  factory allocationCid current settlement transferLegSides nextIterationFunding = do
+    let allocation = current.allocation with
+          transferLegSides = transferLegSides
+          nextIterationFunding = nextIterationFunding
+    result <- exercise allocationCid Alloc.Allocation_Cancel with
+      actors = current.settlement.executors
+      extraArgs = factory.cancelArgs
+    let released = concat (textMapValues result.authorizerHoldingCids)
+    if null released
+      then abort "the cancelled allocation released no holdings to reallocate"
+      else allocateOneStep factory settlement allocation released
+
+allocationOf
+  : Party -> Holding.Account -> Optional (TextMap.TextMap Decimal) -> Time
+  -> Alloc.AllocationSpecification
+allocationOf admin authorizer nextIterationFunding expiresAt = Alloc.AllocationSpecification with
+  admin
+  authorizer
+  transferLegSides = []
+  settlementDeadline = Some expiresAt
+  nextIterationFunding
+  committed = True
+  meta = emptyMetadata
+
+funding : Text -> Decimal -> Optional (TextMap.TextMap Decimal)
+funding instrumentId amount = Some (TextMap.fromList [(instrumentId, amount)])
+
+sellerLotAllocation : OneLotAuctionTerms -> Alloc.AllocationSpecification
+sellerLotAllocation terms =
+  allocationOf terms.lot.instrument.admin terms.sellerLotAccount
+    (funding terms.lot.instrument.id terms.lot.amount) terms.expiresAt
+
+bidderPaymentAllocation : OneLotBidView -> [Quote] -> Alloc.AllocationSpecification
+bidderPaymentAllocation bv quotes =
+  allocationOf bv.terms.payment.admin bv.bidderPaymentAccount
+    (funding bv.terms.payment.id (foldl max 0.0 (map (.price) quotes))) bv.terms.expiresAt
+
+sellerOf : OneLotAuctionTerms -> Party
+sellerOf terms = regularAccountOwner terms.sellerLotAccount
+
+paymentLegId, lotLegId : Text
+paymentLegId = "payment"
+lotLegId = "lot"
+
+checkedSettleCalls
+  : OneLotAuctionTerms -> Update (SettlementFactoryCall, SettlementFactoryCall)
+checkedSettleCalls terms = do
+  let payment = terms.registries.paymentSettle
+      lot = terms.registries.lotSettle
+  paymentFactory <- exercise payment.factoryCid Alloc.SettlementFactory_PublicFetch with
+    actors = regularAccountParties terms.sellerPaymentAccount
+  require "the payment settlement factory is administered by the payment admin"
+    (paymentFactory.admin == terms.payment.admin)
+  lotFactory <- exercise lot.factoryCid Alloc.SettlementFactory_PublicFetch with
+    actors = regularAccountParties terms.sellerLotAccount
+  require "the lot settlement factory is administered by the lot admin"
+    (lotFactory.admin == terms.lot.instrument.admin)
+  pure (payment, lot)
+
+template AuctionSettlement
+  with
+    terms : OneLotAuctionTerms
+    winnerPaymentAccount : Holding.Account
+    winnerLotAccount : Holding.Account
+    award : Quote
+    lotAllocationCid : ContractId Alloc.Allocation
+    paymentAllocationCid : ContractId Alloc.Allocation
+    sellerReceiptCid : ContractId Alloc.Allocation
+    winnerReceiptCid : ContractId Alloc.Allocation
+    opensAt : Time
+    closesAt : Time
+  where
+    signatory
+      Set.toList terms.authorities
+        <> [sellerOf terms, regularAccountOwner winnerPaymentAccount]
+
+    interface instance Settlement for AuctionSettlement where
+      view = SettlementView with
+        core = ExecutionCore with
+          authorities = Set.insert (sellerOf terms)
+            (Set.insert (regularAccountOwner winnerPaymentAccount) terms.authorities)
+          executors = [Set.toList terms.authorities]
+          opensAt
+          expiresAt = Some closesAt
+          meta = emptyMetadata
+        settlement = settlementOf terms [regularAccountOwner winnerPaymentAccount]
+        legs =
+          [ paymentLeg terms paymentLegId winnerPaymentAccount award.price
+          , lotLeg terms lotLegId winnerLotAccount award.quantity
+          ]
+        allocations =
+          [paymentAllocationCid, lotAllocationCid, sellerReceiptCid, winnerReceiptCid]
+        meta = emptyMetadata
+
+      settlement_cancelImpl _ =
+        abort "this auction cannot be cancelled"
+
+      settlement_settleImpl _ = do
+        let v = view (toInterface @Settlement this)
+        [pLeg, lLeg] <- pure v.legs
+        (paymentSettle, lotSettle) <- checkedSettleCalls terms
+
+        paymentResult <- exercise paymentSettle.factoryCid
+          Alloc.SettlementFactory_SettleBatch with
+          settlement = v.settlement
+          transferLegs = [pLeg]
+          allocations =
+            [ nonIteratedAllocation paymentAllocationCid
+            , nonIteratedAllocation sellerReceiptCid
+            ]
+          actors = v.settlement.executors
+          extraArgs = paymentSettle.settleBatchArgs
+
+        lotResult <- exercise lotSettle.factoryCid
+          Alloc.SettlementFactory_SettleBatch with
+          settlement = v.settlement
+          transferLegs = [lLeg]
+          allocations =
+            [ nonIteratedAllocation lotAllocationCid
+            , nonIteratedAllocation winnerReceiptCid
+            ]
+          actors = v.settlement.executors
+          extraArgs = lotSettle.settleBatchArgs
+
+        pure Settlement_SettleResult with
+          batches = [paymentResult, lotResult]
+          meta = emptyMetadata

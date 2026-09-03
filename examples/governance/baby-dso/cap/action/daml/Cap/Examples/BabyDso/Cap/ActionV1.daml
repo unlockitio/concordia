@@ -1,0 +1,130 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Examples.BabyDso.Cap.ActionV1 where
+
+import Prelude hiding (Action)
+
+import DA.Map (Map)
+import qualified DA.Map as Map
+import DA.Set (Set)
+import qualified DA.Set as Set
+import DA.TextMap (TextMap)
+import qualified DA.TextMap as TextMap
+
+import Splice.Api.Token.MetadataV1
+import Splice.Util (require)
+
+import Cap.Core.Utils (ExecutionCore (..))
+import Cap.Governance.ActionV1
+import Cap.Governance.BindingV1
+import Cap.Governance.ExecutableV1
+import Cap.Governance.Utils (DriftPolicy, unchangedAt)
+
+import Cap.Examples.BabyDso.Cap.AnsV1
+import Cap.Examples.BabyDso.Cap.ConfigV1
+
+
+template FeeUpdate
+  with
+    dso : Party
+    svs : Set Party
+    transferFee : Decimal
+    entryFee : Decimal
+    core : ExecutionCore
+    bindings : [Bind]
+    outcome : Optional AnyValue
+  where
+    signatory dso
+    observer Set.toList svs ++ concat core.executors
+
+    interface instance Executable for FeeUpdate where
+      view = ExecutableView with core; bindings; outcome
+
+      executable_executeImpl currentTargets _ = do
+        configCid <- boundAuthentic (configTargetKey dso)
+          (unchangedAt [transferFeeField]) currentTargets bindings
+        ansCid <- boundOpaque ansTargetKey bindings
+        updatedConfig <- exercise (coerceContractId configCid : ContractId AmuletConfig)
+          AmuletConfig_SetFee with newTransferFee = transferFee
+        updatedAns <- exercise (coerceContractId ansCid : ContractId AnsRules)
+          AnsRules_SetFee with newEntryFee = entryFee
+        pure Executable_ExecuteResult with
+          created = [coerceContractId updatedConfig, coerceContractId updatedAns]
+          meta = emptyMetadata
+
+template SetFeesAction
+  with
+    dso : Party
+    svs : Set Party
+  where
+    signatory dso
+    observer Set.toList svs
+
+    interface instance Action for SetFeesAction where
+      view = ActionView with meta = emptyMetadata
+
+      action_issueExecutionImpl _ arg = do
+        let ExecutableView with .. = arg.execution
+        require "the execution names another authority"
+          (core.authorities == Set.fromList [dso])
+        (transferFee, entryFee) <- case outcome >>= feesOf of
+          Some fees -> pure fees
+          None -> abort "the execution carries no fees this action can apply"
+        cid <- create FeeUpdate with
+          dso; svs; transferFee; entryFee; core; bindings; outcome
+        pure Action_IssueExecutionResult with
+          executionCids = [toInterfaceContractId cid]
+          meta = emptyMetadata
+
+
+
+
+entryFeeField : Text
+entryFeeField = "entryFee"
+
+ansTargetKey : OpaqueTargetKey
+ansTargetKey = OpaqueTargetKey "ans-rules"
+
+decimalAt : Text -> TextMap AnyValue -> Optional Decimal
+decimalAt field fields = case TextMap.lookup field fields of
+  Some (AV_Decimal value) -> Some value
+  _ -> None
+
+feesOf : AnyValue -> Optional (Decimal, Decimal)
+feesOf (AV_Map fields) =
+  case (decimalAt transferFeeField fields, decimalAt entryFeeField fields) of
+    (Some transferFee, Some entryFee) -> Some (transferFee, entryFee)
+    _ -> None
+feesOf _ = None
+
+theBindFor : TargetKey -> [Bind] -> Update Bind
+theBindFor key bindings = case filter (\bind -> bindKey bind == key) bindings of
+  [bind] -> pure bind
+  _ -> abort "the execution binds this target exactly once"
+
+requireSatisfied : DriftPolicy -> Bind -> AuthenticTarget -> Update ()
+requireSatisfied policy bind presented = case bind of
+  AuthenticBind with .. -> case (state.seen, (view presented).state) of
+    (Some pinned, Some current) ->
+      require "the target no longer satisfies the bind" (policy.holds pinned current)
+    _ -> abort "the bind pins no state, or the target publishes none"
+  _ -> abort "an authentic target is bound authentically"
+
+boundAuthentic
+  : AuthenticTargetKey -> DriftPolicy -> Map TargetKey AnyContractId -> [Bind]
+  -> Update AnyContractId
+boundAuthentic key policy currentTargets bindings = do
+  bind <- theBindFor (Authentic key) bindings
+  cid <- case Map.lookup (Authentic key) currentTargets of
+    Some cid -> pure cid
+    None -> abort "the bound target was not presented"
+  presented <- fetchCheckedTarget key (coerceContractId cid)
+  requireSatisfied policy bind presented
+  pure cid
+
+boundOpaque : OpaqueTargetKey -> [Bind] -> Update AnyContractId
+boundOpaque key bindings = do
+  bind <- theBindFor (Opaque key) bindings
+  case bind of
+    OpaqueBind with .. -> pure opaqueCid
+    _ -> abort "an opaque target is bound opaquely"

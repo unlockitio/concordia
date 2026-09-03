@@ -1,4 +1,4 @@
-<!-- Copyright (c) 2026 Unlockit. All rights reserved. -->
+<!-- Copyright (c) 2026 Unlockit -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
 # Post-release extension points
@@ -48,8 +48,25 @@ Interfaces supporting vote delegation can also be implemented in the future.
 
 ## New auction formats
 
-New auction formats that include a single seller can be easily extended by cap-auctions.
-New auction formats such as Combinatorial Auctions and Continuous Auctions can be implemented might need extending cap-core.
+The released interfaces sell **one lot from one seller**: `OneLotAuctionTerms`
+names a single `lot : LotSpec` and a single pair of seller accounts, and a bid
+is a set of quotes over that one lot. Formats that keep that shape — a
+second-price payment rule, a Dutch clock, multiple units of that lot's
+quantity — are new templates implementing `OneLotBid` and `Settlement`,
+deployed beside the released DARs. cap-auctions extends to them without
+changing.
+
+**Several lots and several sellers** is the natural next surface, and it is
+additive rather than a break: a multi-lot bid interface ships beside
+`OneLotBid` instead of re-opening it, because what grows is the terms — a list
+of lots, a seller per lot — and the award rule that reads them. What does not
+grow is the core underneath: one submittable per bid, funds allocated before
+casting, one close fixing the set of bids, and settlement through the Token
+Standard all carry over unchanged, so a multi-seller sale is a cap-auctions
+addition and not a cap-core one.
+
+Combinatorial and continuous double auctions are the formats that may reach
+further, into cap-core itself.
 
 ## New domains on cap-core
 

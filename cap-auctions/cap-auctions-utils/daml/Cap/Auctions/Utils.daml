@@ -1,0 +1,17 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | Utilities to implement cap-auctions bids and settlements against a Token
+-- Standard registry.
+module Cap.Auctions.Utils (
+
+  -- * One-lot auctions
+
+  -- ** Settlement and its legs
+  settlementOf,
+  paymentLeg,
+  lotLeg,
+
+) where
+
+
+import Cap.Auctions.Utils.Internal.Bid

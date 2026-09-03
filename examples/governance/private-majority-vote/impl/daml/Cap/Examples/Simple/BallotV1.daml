@@ -1,0 +1,83 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Examples.Simple.BallotV1 where
+
+import DA.Foldable (forA_)
+import DA.Map (Map)
+import qualified DA.Map as Map
+
+import Splice.Api.Token.MetadataV1
+import Splice.Util (require)
+
+import Cap.Core.SubmittableV1
+import Cap.Governance.BallotV1
+import Cap.Governance.BindingV1
+
+fetchBound
+  : Map TargetKey AnyContractId -> Bind -> Update (AuthenticTargetKey, AuthenticTarget)
+fetchBound currentTargets bind = case Map.lookup (bindKey bind) currentTargets of
+  Some cid -> fetchAuthenticTarget (coerceContractId cid)
+  None -> abort "the ballot was cast without the target it binds"
+
+requireAsSeen : Bind -> AuthenticTargetKey -> AuthenticTarget -> Update ()
+requireAsSeen bind key presented = case bind of
+  AuthenticBind with .. -> do
+    require "the presented target is the one the proposal binds" (target == key)
+    case state.seen of
+      None -> pure ()
+      Some pinned -> require "the target still reads as the proposal pinned it"
+        ((view presented).state == Some pinned)
+  _ -> abort "this format binds authentic targets only"
+
+template PrivateBallot
+  with
+    operator : Party
+    voter : Party
+    mechanism : Mechanism
+    terms : ProposalTerms
+    votes : [AnyValue]
+  where
+    signatory if null votes then [operator] else [operator, voter]
+    observer voter
+
+    interface instance Submittable for PrivateBallot where
+      view = SubmittableView with
+        mechanism
+        opensAt = terms.entryClosesAt
+        closesAt = terms.votingClosesAt
+        expiresAt = Some terms.expiresAt
+        meta = emptyMetadata
+
+    interface instance Ballot for PrivateBallot where
+      view = BallotView with
+        terms
+        availableActions = Map.fromList
+          [ (BA_Cast, [[voter]])
+          , (BA_Withdraw, [[voter]])
+          ]
+        voter
+        votes
+        meta = emptyMetadata
+
+      ballot_castImpl self arg = do
+        require "this ballot carries no vote yet" (null votes)
+        require "this format casts a single option" (length arg.votes == 1)
+        forA_ terms.bindings $ \bind -> do
+          (key, presented) <- fetchBound arg.currentTargets bind
+          requireAsSeen bind key presented
+        archive self
+        toInterfaceContractId @Ballot <$> create this with votes = arg.votes
+
+      ballot_withdrawImpl self _ = do
+        require "this ballot carries a vote to withdraw" (not (null votes))
+        archive self
+        _ <- create this with votes = []
+        pure Ballot_WithdrawResult with meta = emptyMetadata
+
+      ballot_expireImpl self _ = do
+        archive self
+        pure Ballot_ExpireResult with meta = emptyMetadata
+
+      ballot_consumeImpl self _ = do
+        archive self
+        pure Ballot_ConsumeResult with meta = emptyMetadata

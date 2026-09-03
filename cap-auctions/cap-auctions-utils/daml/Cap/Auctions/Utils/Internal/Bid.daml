@@ -1,0 +1,59 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | Internal module carrying the one-lot auction encodings: the settlement a
+-- set of terms implies, its payment and lot legs, the seller's escrow, and the
+-- factory-admin checks a bid runs before it allocates.
+--
+-- Import 'Cap.Auctions.Utils' to get access to the public ones.
+module Cap.Auctions.Utils.Internal.Bid
+  ( settlementOf
+  , paymentLeg
+  , lotLeg
+  ) where
+
+import qualified DA.Set as Set
+
+import Splice.Api.Token.MetadataV1
+import qualified Splice.Api.Token.AllocationV2 as Alloc
+import qualified Splice.Api.Token.HoldingV2 as Holding
+import Splice.TokenStandard.Utils (regularAccountOwner)
+
+import Cap.Auctions.OneLotBidV1 (Direction (..), OneLotAuctionTerms)
+
+
+------------------  ONE LOT AUCTION UTILITIES ------------------
+
+
+settlementOf : OneLotAuctionTerms -> [Party] -> Alloc.SettlementInfo
+settlementOf terms counterparties = Alloc.SettlementInfo with
+  executors =
+    Set.toList terms.authorities <> (regularAccountOwner terms.sellerLotAccount :: counterparties)
+  id = terms.saleId
+  cid = None
+  meta = emptyMetadata
+
+paymentLeg : OneLotAuctionTerms -> Text -> Holding.Account -> Decimal -> Alloc.TransferLeg
+paymentLeg terms legId bidderPaymentAccount amount =
+  let (payer, payee) = case terms.direction of
+        Forward -> (bidderPaymentAccount, terms.sellerPaymentAccount)
+        Reverse -> (terms.sellerPaymentAccount, bidderPaymentAccount)
+  in Alloc.TransferLeg with
+    transferLegId = legId
+    sender = payer
+    receiver = payee
+    amount
+    instrumentId = terms.payment.id
+    meta = emptyMetadata
+
+lotLeg : OneLotAuctionTerms -> Text -> Holding.Account -> Decimal -> Alloc.TransferLeg
+lotLeg terms legId bidderLotAccount units =
+  let (deliverer, recipient) = case terms.direction of
+        Forward -> (terms.sellerLotAccount, bidderLotAccount)
+        Reverse -> (bidderLotAccount, terms.sellerLotAccount)
+  in Alloc.TransferLeg with
+    transferLegId = legId
+    sender = deliverer
+    receiver = recipient
+    amount = units
+    instrumentId = terms.lot.instrument.id
+    meta = emptyMetadata
