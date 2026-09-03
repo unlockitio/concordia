@@ -27,7 +27,7 @@
 # needed: at runtime the factory contract ids come from the registry API and
 # the same code drives Canton Coin.
 sdk-version: 3.4.11
-name: cap-example-firstprice
+name: cap-example-sealed-first-price-high-trust
 version: 0.1.0
 source: daml
 dependencies:

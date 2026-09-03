@@ -62,7 +62,7 @@ sequenceDiagram
 
     Note over S,C: Phase 1 — the invited bidders, then the lot
     O->>O: AuctionResolver — invited = A, B, C
-    Note over A,C: each observes the resolver; the seller does not
+    Note over A,C: each observes the resolver — the seller does not
     O->>S: AuctionSellerAuthProposal
     S->>S: Accept — checks the pinned resolver, then locks the lot in escrow
     O->>A: AuctionInvitation
@@ -70,7 +70,7 @@ sequenceDiagram
     O->>C: AuctionInvitation
     A->>A: Accept — a typed fetch pins the resolver, takes a seat
     B->>B: Accept — takes a seat
-    Note over C: never accepts; her invitation stays live
+    Note over C: never accepts — her invitation stays live
     Note over S: sees its own lot escrow, and nothing else
 
     Note over S,C: Phase 2 — bidding, after entryClosesAt
@@ -311,7 +311,7 @@ sequenceDiagram
     participant D as Dave
     participant C as Carol
 
-    Note over O,C: Dave was never invited; Carol was invited and never seated
+    Note over O,C: Dave was never invited, Carol was invited and never seated
     O->>O: create AuctionBid for Dave
     Note over O: ✗ a bid carries its bidder's signature
     O->>O: create AuctionBid for Carol

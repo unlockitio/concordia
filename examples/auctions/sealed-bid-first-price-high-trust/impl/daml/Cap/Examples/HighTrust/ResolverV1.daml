@@ -1,6 +1,6 @@
 -- SPDX-License-Identifier: Apache-2.0
 
-module Cap.Examples.FirstPrice.ResolverV1 where
+module Cap.Examples.HighTrust.ResolverV1 where
 
 import DA.Foldable (forA_)
 import DA.List (maximumOn, sort, unique)
@@ -17,7 +17,7 @@ import Cap.Core.ResolverV1
 import Cap.Core.SubmittableV1
 import Cap.Auctions.OneLotBidV1
 
-import Cap.Examples.FirstPrice.LotV1
+import Cap.Examples.HighTrust.LotV1
 
 firstPriceProcedureName : Text
 firstPriceProcedureName = ""

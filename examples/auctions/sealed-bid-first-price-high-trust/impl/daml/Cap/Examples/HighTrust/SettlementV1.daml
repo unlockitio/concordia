@@ -1,6 +1,6 @@
 -- SPDX-License-Identifier: Apache-2.0
 
-module Cap.Examples.FirstPrice.SettlementV1 where
+module Cap.Examples.HighTrust.SettlementV1 where
 
 import qualified DA.Set as Set
 import qualified DA.TextMap as TextMap

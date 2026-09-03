@@ -4,7 +4,7 @@
 # a package that defines templates and depends on daml-script drags daml-script
 # onto any ledger the DAR is uploaded to.
 sdk-version: 3.4.11
-name: cap-example-firstprice-fixtures
+name: cap-example-sealed-first-price-high-trust-fixtures
 version: 0.1.0
 source: daml
 dependencies:

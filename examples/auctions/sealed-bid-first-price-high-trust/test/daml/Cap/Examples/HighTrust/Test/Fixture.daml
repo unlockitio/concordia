@@ -1,6 +1,6 @@
 -- SPDX-License-Identifier: Apache-2.0
 
-module Cap.Examples.FirstPrice.Test.Fixture where
+module Cap.Examples.HighTrust.Test.Fixture where
 
 import DA.Action (unless)
 import DA.Optional (isNone, isSome)

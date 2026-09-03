@@ -55,7 +55,7 @@ by `id`, and a target co-signed by several bodies is expressible; the contract i
 the action as [`ARC_AnsEntryContext`](https://github.com/canton-network/splice/blob/a4ea43aa55db83a028a30e95ace45e1350edde9a/daml/splice-dso-governance/daml/Splice/DsoRules.daml#L73) does.
 - CAP: a `DriftPolicy` compares what the ballots/resolve saw against target's current state.
 
-**What happens on drift.** 
+**What happens on state drift.** 
 - Splice: [`patch`](https://github.com/canton-network/splice/blob/a4ea43aa55db83a028a30e95ace45e1350edde9a/daml/splice-util/daml/Splice/Util.daml#L177)
 writes the proposal's value where it differs from the base and keeps the current one
 otherwise, it never refuses. 
@@ -93,8 +93,3 @@ examples/governance/
 
 lib/                         vendored Token Standard and Splice DARs
 ```
-
-The load-bearing fact is a `daml.yaml`, not a script: `cap/impl` lists neither
-`registry` nor `legacy` in its `data-dependencies`. The dependency arrow points the
-other way. Adding a fourth governed app requires no change to `cap/impl` and no new DSO
-release.

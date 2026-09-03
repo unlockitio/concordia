@@ -1,6 +1,6 @@
 -- SPDX-License-Identifier: Apache-2.0
 
-module Cap.Examples.Simple.Test.Fixture where
+module Cap.Examples.MajorityVote.Test.Fixture where
 
 import Prelude hiding (Action)
 
@@ -22,9 +22,9 @@ import Cap.Governance.BallotV1
 import Cap.Governance.BindingV1
 import Cap.Governance.ExecutableV1
 
-import Cap.Examples.Simple.BallotV1
-import Cap.Examples.Simple.ConfigV1
-import Cap.Examples.Simple.ResolverV1
+import Cap.Examples.MajorityVote.BallotV1
+import Cap.Examples.MajorityVote.ConfigV1
+import Cap.Examples.MajorityVote.ResolverV1
 
 bodyName : Text
 bodyName = "body-1"

@@ -30,7 +30,7 @@ a Canton sandbox.
 | Sealed-bid auction reference slice on `cap-core` | [`examples/auctions/sealed-bid-first-price`](examples/auctions/sealed-bid-first-price) — [demos](examples/auctions/sealed-bid-first-price/DEMOS.md) |
 | Private ballot handling demonstrated | `whoSeesWhat` — [governance demos](examples/governance/private-majority-vote/DEMOS.md) |
 | Private bid handling demonstrated | `whoSeesWhat` — [auction demos](examples/auctions/sealed-bid-first-price/DEMOS.md) |
-| Daml Script tests for both slices | `.../private-majority-vote/test`, `.../sealed-bid-first-price/test` — [how to run](#running-the-slices) |
+| Daml Script tests for both slices | `.../private-majority-vote/test`, `.../sealed-bid-first-price/test` — [how to run](#running-the-demos) |
 | Sandbox integration tests for both slices | [`scripts/sandbox-test.sh`](scripts/sandbox-test.sh) — [how to run](#on-a-canton-sandbox) |
 
 
@@ -108,7 +108,7 @@ Concordia builds with [`dpm`](https://docs.daml.com) (the Daml Project Manager),
 dpm build --all      # every package in dependency order, per multi-package.yaml
 ```
 
-## Running the slices
+## Running the demos
 
 **Quick check** — the in-memory script runner, no sandbox. Each package is run
 from the repo root with `--package-root`:

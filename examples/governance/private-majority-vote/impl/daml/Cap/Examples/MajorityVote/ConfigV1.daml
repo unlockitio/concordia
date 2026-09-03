@@ -1,6 +1,6 @@
 -- SPDX-License-Identifier: Apache-2.0
 
-module Cap.Examples.Simple.ConfigV1 where
+module Cap.Examples.MajorityVote.ConfigV1 where
 
 import Prelude hiding (Action)
 
@@ -17,7 +17,7 @@ import Cap.Governance.BindingV1
 import Cap.Governance.ExecutableV1
 import Cap.Governance.Utils (DriftPolicy (..), unchanged)
 
-import Cap.Examples.Simple.ResolverV1 (acceptOption)
+import Cap.Examples.MajorityVote.ResolverV1 (acceptOption)
 
 configId : Text
 configId = "config"

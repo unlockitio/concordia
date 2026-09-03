@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 sdk-version: 3.4.11
-name: cap-example-firstprice-test
+name: cap-example-sealed-first-price-high-trust-test
 version: 0.1.0
 source: daml
 dependencies:
@@ -25,7 +25,7 @@ data-dependencies:
 - ../../../../cap-auctions/cap-auctions-utils/.daml/dist/cap-auctions-utils-0.1.0.dar
 - ../../../../cap-auctions/Interfaces/bid/.daml/dist/cap-auctions-bid-v1-0.1.0.dar
 - ../../../../cap-auctions/Interfaces/settlement/.daml/dist/cap-auctions-settlement-v1-0.1.0.dar
-- ../impl/.daml/dist/cap-example-firstprice-0.1.0.dar
-- ../fixtures/.daml/dist/cap-example-firstprice-fixtures-0.1.0.dar
+- ../impl/.daml/dist/cap-example-sealed-first-price-high-trust-0.1.0.dar
+- ../fixtures/.daml/dist/cap-example-sealed-first-price-high-trust-fixtures-0.1.0.dar
 build-options:
   - --target=2.1

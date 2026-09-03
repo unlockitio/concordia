@@ -1,6 +1,6 @@
 -- SPDX-License-Identifier: Apache-2.0
 
-module Cap.Examples.Simple.Test.Demos where
+module Cap.Examples.MajorityVote.Test.Demos where
 
 import DA.Action (unless, when)
 import DA.Assert ((===))
@@ -15,11 +15,11 @@ import Splice.Api.Token.MetadataV1 (AnyValue)
 import Cap.Core.ResolverV1 (Verdict (..))
 import Cap.Core.SubmittableV1 (Submittable)
 
-import Cap.Examples.Simple.BallotV1
-import Cap.Examples.Simple.ConfigV1
-import Cap.Examples.Simple.ResolverV1
+import Cap.Examples.MajorityVote.BallotV1
+import Cap.Examples.MajorityVote.ConfigV1
+import Cap.Examples.MajorityVote.ResolverV1
 
-import Cap.Examples.Simple.Test.Fixture
+import Cap.Examples.MajorityVote.Test.Fixture
 
 class Visible t where
   isVisibleTo : Party -> ContractId t -> Script Bool

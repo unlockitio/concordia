@@ -10,48 +10,33 @@ only a count if it covers everyone entitled to vote. Demo 3 states that the
 operator, who drives every transaction here, cannot reach the outcome without
 going through the count.
 
+## Security claims
+
+Each demo carries one claim. This table is the dispatcher: what is claimed, and
+the script that states it.
+
+| Test | Security claim |
+| --- | --- |
+| [`whoSeesWhat`](#1-whoseeswhat) | No voter learns another voter's vote before resolution. Asserted as each party's complete visible set after every phase, so an unanticipated leak fails it |
+| [`theCountCoversTheElectorate`](#2-thecountcoverstheelectorate) | The resolution cannot omits an entitled voter |
+| [`theOperatorCannotSkipTheCount`](#3-theoperatorcannotskipthecount) | The operator cannot create the outcome without resolution |
+
+
 ## The format
 
-Three pieces, none of which the core knows anything about.
-
-**`PrivateBallot`** (`impl/.../BallotV1.daml`) implements `Submittable` and
-`Ballot`. Its signatory list is the whole privacy mechanism:
-
-```daml
-signatory if null votes then [operator] else [operator, voter]
-observer voter
-```
 
 The operator seats every voter with an empty ballot it signs alone. Casting
 archives that ballot and creates one carrying the option, now signed by the
-voter too — so the stakeholders of a cast ballot are exactly the operator and
-the one voter who cast it. The DSO is not among them, and neither is any other
-voter. `ballot_castImpl` also re-reads every `Bind` in the terms against the
-target presented with the vote, so an option is cast against a config state the
-voter actually saw, not one it is told about later.
+voter too. 
 
-**`VoteResolver`** (`impl/.../ResolverV1.daml`) is signed by the `dso` and
+`VoteResolver` is signed by the `dso` and
 observed by the operator and the electorate. It publishes one procedure,
 `"majority"`, resolvable by `[[operator]]`. The procedure fetches the presented
-submittables as ballots and requires, in order: every one closed for voting
-(`requireClosed` against `closesAt`), one and the same `ProposalTerms` across
-all of them (`oneProposal`), and a presented voter list that is duplicate-free
-and equal to the electorate (`coverElectorate`). Only then does it count:
+submittables as ballots and requires a presented voter list that is duplicate-free
+and equal to the electorate. On acceptance the procedure exercises
+`Action_IssueExecution` on the action the terms name.
 
-```daml
-verdict
-  | null voted = V_Lapsed None
-  | 2 * accepts > Set.size body.electorate = V_Accepted (Some acceptOption)
-  | otherwise = V_Rejected
-```
-
-The denominator is the whole electorate, not the turnout, so an abstention
-counts against the majority. On acceptance the procedure exercises
-`Action_IssueExecution` on the action the terms name; either way it finishes by
-consuming every ballot with `Ballot_Consume with actors = [dso]`. Count, issue
-and consume are one exercise node.
-
-**`Config`, `SetConfigAction`, `ConfigUpdate`** (`impl/.../ConfigV1.daml`) are
+`Config`, `SetConfigAction`, `ConfigUpdate` are
 the governed target and its action. `Config` is signed by the `dso` and
 publishes its `setting` as `AuthenticTarget` state, opening at `"sync-a"`.
 `SetConfigAction` mints the execution, checking that it names `{dso}` as
@@ -60,10 +45,7 @@ bindings are exactly this config and nothing else. `ConfigUpdate` re-checks that
 bind under the `unchanged` drift policy before exercising `Config_Set`
 to `"sync-b"`.
 
-The timeline is three instants on the terms every ballot is signed against:
-seating happens before `entryClosesAt`, voting is open on
-`[entryClosesAt, votingClosesAt]`, and the whole proposal expires at
-`expiresAt`.
+
 
 ## Method
 
@@ -76,7 +58,9 @@ predicates over a party and one contract, so each note in the diagrams below is
 one line of test code. Stronger claims — that a party learned *nothing* across a
 phase — are `seesExactly`, an equality between the complete set of contracts
 visible to that party and an expected list. Those fail on any leak, anticipated
-or not, and they are what demo 1 is built out of.
+or not, and they are what demo 1 is built out of. Either read them in the
+test output, or open the scripts in Daml Studio and step through the same
+per-party views interactively.
 
 One limit, stated plainly. Daml Script reads the ACS, not transaction trees, so
 these demos assert what a party can *read* after a phase, not the informee
@@ -130,7 +114,7 @@ sequenceDiagram
 
     Note over D,C: Phase 4 — execute
     O->>D: Executable_Execute → Config_Set sync-b
-    Note over D,C: ✓ everyone sees the new Config; nobody ever saw a vote
+    Note over D,C: ✓ everyone sees the new Config — nobody ever saw a vote
 ```
 
 The assertions are exact sets, not memberships. Before voting, `alice` sees her
@@ -238,11 +222,3 @@ claim in concrete form — the only path from votes to a changed config runs
 through `Resolver_Resolve` on a DSO-signed resolver, where the count, the issue
 and the consume are one exercise, and the DSO's authority is spent once.
 
-## Not covered
-
-Three pieces of the format carry no script. `ballot_withdrawImpl` supports
-withdrawing and re-casting while voting is open; the `V_Rejected` and
-`V_Lapsed None` branches of the count are reachable but unexercised; and
-`ConfigUpdate` re-checks its bind under the `unchanged` drift policy at execute
-time, which no demo drives to failure. They are live surface in `impl/`, tested
-only by the happy path that runs past them.

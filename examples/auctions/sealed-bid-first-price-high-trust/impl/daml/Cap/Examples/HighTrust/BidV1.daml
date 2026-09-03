@@ -1,6 +1,6 @@
 -- SPDX-License-Identifier: Apache-2.0
 
-module Cap.Examples.FirstPrice.BidV1 where
+module Cap.Examples.HighTrust.BidV1 where
 
 import qualified DA.Map as Map
 import DA.Optional (optionalToList)
@@ -23,7 +23,7 @@ import Cap.Auctions.Utils
   , settlementOf
   )
 
-import Cap.Examples.FirstPrice.SettlementV1
+import Cap.Examples.HighTrust.SettlementV1
 
 
 

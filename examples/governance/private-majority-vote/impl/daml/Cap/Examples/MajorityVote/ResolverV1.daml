@@ -1,6 +1,6 @@
 -- SPDX-License-Identifier: Apache-2.0
 
-module Cap.Examples.Simple.ResolverV1 where
+module Cap.Examples.MajorityVote.ResolverV1 where
 
 import Prelude hiding (Action)
 

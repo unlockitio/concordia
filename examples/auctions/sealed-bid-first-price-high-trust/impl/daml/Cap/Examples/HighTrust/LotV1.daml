@@ -1,6 +1,6 @@
 -- SPDX-License-Identifier: Apache-2.0
 
-module Cap.Examples.FirstPrice.LotV1 where
+module Cap.Examples.HighTrust.LotV1 where
 
 import DA.List (sort, unique)
 import qualified DA.Set as Set
@@ -15,8 +15,8 @@ import Cap.Core.Utils (requireClosed)
 import Cap.Core.SubmittableV1
 import Cap.Auctions.OneLotBidV1
 
-import Cap.Examples.FirstPrice.BidV1
-import Cap.Examples.FirstPrice.SettlementV1
+import Cap.Examples.HighTrust.BidV1
+import Cap.Examples.HighTrust.SettlementV1
   (allocateOneStep, sellerOf, sellerLotAllocation)
 
 orAbort : Text -> Optional a -> Update a

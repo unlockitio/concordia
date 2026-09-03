@@ -11,6 +11,23 @@ require that every invited bidder appears in it. Privacy after the outcome is
 computed is kept: a loser reads the presentation and still reads no quote in it.
 
 
+## Security claims
+
+Each demo carries one claim. This table is the dispatcher: what is claimed, and
+the script that states it.
+
+| Test | Security claim |
+| --- | --- |
+| [`whoSeesWhat`](#1-whoseeswhat) | A losing bidder reads the presentation and still reads no quote in it — bid privacy survives the outcome |
+| [`theOperatorCannotDropABidder`](#2-theoperatorcannotdropabidder) | An invited bidder cannot be omitted from the award: one entry per invited bidder, and neither a bid nor an empty seat can be forged |
+| [`lotGoesToTheHighestPresentedBid`](#3-lotgoestothehighestpresentedbid) | The lot goes to the highest presented bid at that bidder's own quoted price, and every loser is made whole in the same transaction |
+| [`theOperatorCannotAddABidder`](#4-theoperatorcannotaddabidder) | A party who was never invited cannot be made to appear in the award |
+| [`whatTheOperatorIsTrustedWith`](#5-whattheoperatoristrustedwith) | The residual trust in the operator, stated as a test rather than as prose: sole executor, so it can cancel any allocation |
+| [`noPaymentWithoutTheLot`](#6-nopaymentwithoutthelot) | The winner pays only in the transaction that delivers the lot — across two independent registries |
+| [`theOperatorCannotSwapTheRegistry`](#7-theoperatorcannotswaptheregistry) | Settlement cannot be redirected: the registry calls are pinned in the terms when the auction is constituted, not chosen at settlement |
+| [`theBidderCannotBlockTheSale`](#8-thebiddercannotblockthesale) | Neither the winner nor a loser holds a veto at settlement time |
+| [`aSeatLeavesNoAllocationBehind`](test/daml/Cap/Examples/SealedFirstPrice/Test/Invariants.daml) | A seat that never bids leaves no allocation locked behind it |
+
 ## Method
 
 The demos are Daml Script tests exercised against two independent token
@@ -72,7 +89,7 @@ sequenceDiagram
     Note over S: unchanged — no quote, no bidder, no amount
     Note over A,B: neither can see the other's seal or quote
     Note over O: sees both quotes in full — the one party trusted for confidentiality
-    Note over C: never seats; her empty seat stays live
+    Note over C: never seats — her empty seat stays live
 
     Note over S,C: Phase 3 — resolve, after biddingClosesAt
     O->>O: presents A's bid, B's bid, and C's empty seat
@@ -203,7 +220,7 @@ sequenceDiagram
     participant D as Dave
     participant C as Carol
 
-    Note over O,C: Dave was never invited; Carol was invited and never seated
+    Note over O,C: Dave was never invited, Carol was invited and never seated
     O->>O: create AuctionBid for Dave, with a quote
     Note over O: ✗ a bid carries its bidder's signature
     O->>O: create AuctionBid for Carol, with a quote
