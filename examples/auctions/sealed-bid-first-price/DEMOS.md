@@ -1,53 +1,29 @@
 # Demos — `examples/auctions/sealed-bid-first-price`
 
-8 demos showing the security and privacy guarantees of a sealed-bid first-price
+Demos showing the security and privacy guarantees of a sealed-bid first-price
 auction with ex-post bid privacy using CAP, where the operator is trusted to
-execute the sale.
+correctly spend the allocations.
 
 The auction runs over a fixed set of invited bidders, named on the resolver
-before the lot locks. Those bidders observe the resolver, so each is an informee
-of `Resolver_Resolve` and reads the presentation — which is what lets the award
-require that every invited bidder appears in it. Privacy after the outcome is
-computed is kept: a loser reads the presentation and still reads no quote in it.
-
-
-## Security claims
-
-Each demo carries one claim. This table is the dispatcher: what is claimed, and
-the script that states it.
-
-| Test | Security claim |
-| --- | --- |
-| [`whoSeesWhat`](#1-whoseeswhat) | A losing bidder reads the presentation and still reads no quote in it — bid privacy survives the outcome |
-| [`theOperatorCannotDropABidder`](#2-theoperatorcannotdropabidder) | An invited bidder cannot be omitted from the award: one entry per invited bidder, and neither a bid nor an empty seat can be forged |
-| [`lotGoesToTheHighestPresentedBid`](#3-lotgoestothehighestpresentedbid) | The lot goes to the highest presented bid at that bidder's own quoted price, and every loser is made whole in the same transaction |
-| [`theOperatorCannotAddABidder`](#4-theoperatorcannotaddabidder) | A party who was never invited cannot be made to appear in the award |
-| [`whatTheOperatorIsTrustedWith`](#5-whattheoperatoristrustedwith) | The residual trust in the operator, stated as a test rather than as prose: sole executor, so it can cancel any allocation |
-| [`noPaymentWithoutTheLot`](#6-nopaymentwithoutthelot) | The winner pays only in the transaction that delivers the lot — across two independent registries |
-| [`theOperatorCannotSwapTheRegistry`](#7-theoperatorcannotswaptheregistry) | Settlement cannot be redirected: the registry calls are pinned in the terms when the auction is constituted, not chosen at settlement |
-| [`theBidderCannotBlockTheSale`](#8-thebiddercannotblockthesale) | Neither the winner nor a loser holds a veto at settlement time |
-| [`aSeatLeavesNoAllocationBehind`](test/daml/Cap/Examples/SealedFirstPrice/Test/Invariants.daml) | A seat that never bids leaves no allocation locked behind it |
+contract before the lot locks. Those bidders observe the resolver, so each is an informee
+of `Resolver_Resolve` and reads the bid presentation. Bid privacy among bidders, after the outcome is
+computed is kept: a loser reads the bid presentation but cannot read the quote in it.
 
 ## Method
 
 The demos are Daml Script tests exercised against two independent token
 registries: Canton Coin (Amulet) settles the payment leg, and a simulated
 registry built on `TestTokenV2` issues the lot. A single registry administering
-both instruments would leave the cross-registry atomicity of demo 6 untested.
+both instruments would leave the cross-registry atomicity of the resolve untested.
 
 Assertions take two forms. Visibility claims are stated per contract, as
 `sees` / `cannotSee` predicates over a party and a contract identifier, so that
 each note in the diagrams below corresponds to one line of test code. The same
 per-party views can be inspected interactively in Daml Studio. Stronger claims —
 that a party learned *nothing* across a phase — are stated as an equality
-between the complete set of contracts visible to that party before and after,
-and so fail on any leak, anticipated or not.
-
-One limit worth stating plainly. Daml Script reads the ACS, not transaction
-trees, so a script can assert that an invited bidder **observes the resolver** —
-the structural fact the informee relation follows from — but cannot assert the
-informee relation itself. What it does assert directly is the other half: that
-reading the presentation buys a loser nothing about the amounts in it.
+between the complete set of contracts visible to that party before and after.
+That catches any contract the party becomes a **stakeholder** of, anticipated
+or not. It does not catch divulgence that can be checked by inspecting Daml studio.
 
 The invited bidders are `alice`, `bob` and `carol`. Carol is invited and never
 takes her seat; `dave` is never invited.
@@ -61,6 +37,42 @@ copied verbatim; `Registries.AmuletRegistryV2` and
 `Registries.TestTokenV2_RegistryV2` are reduced to their V2 surface, removing
 a dependency on the wallet client and on the V1 API.
 
+## Fixture
+
+`setupAs` allocates the six parties, stands up both registries, and builds one
+`OneLotAuctionTerms`: the operator as sole authority, `basicAccount seller` for
+both seller legs, 10 Widgets as the lot, no reserve, the four registry calls
+pinned, and a three-day timeline — `entryClosesAt` at day 1, `biddingClosesAt`
+at day 2, `expiresAt` at day 3. Demos
+do not ledger contracts.
+
+`openAuction` then opens one auction on those terms. The seller mints and
+allocates the lot escrow and its payment receipt, the operator proposes
+`AuctionLotProposal`, and the seller accepts it into an `AuctionLot` — which is
+the resolver, so the mechanism is pinned to that contract id. The operator
+then creates one empty `AuctionBid` seat per invited bidder. Nothing has been
+bid yet; the demos take it from there, opening bidding with
+`setTime f.terms.entryClosesAt` and resolving after
+`setTime f.terms.biddingClosesAt`. `openAuctionWith` is the same, with a hook to
+rewrite the terms first — `theOperatorCannotSwapTheRegistry` uses it to name a
+hostile factory.
+
+## Security claims
+
+Each demo carries one claim. Dispatched here:
+
+| Test | Security claim |
+| --- | --- |
+| [`whoSeesWhat`](#1-whoseeswhat) | A losing bidder reads the bid presentation but cannot read the quote in it — bid privacy survives the outcome |
+| [`theOperatorCannotDropABidder`](#2-theoperatorcannotdropabidder) | An invited bidder cannot be omitted from the award: one entry per invited bidder, and neither a bid nor an empty seat can be forged |
+| [`lotGoesToTheHighestPresentedBid`](#3-lotgoestothehighestpresentedbid) | The lot goes to the highest presented bid at that bidder's own quoted price, and every loser is made whole in the same transaction |
+| [`theOperatorCannotAddABidder`](#4-theoperatorcannotaddabidder) | A party who was never invited cannot be made to appear in the award |
+| [`theOperatorCannotSwapTheRegistry`](#5-theoperatorcannotswaptheregistry) | Settlement cannot be redirected: the registry calls are pinned in the terms when the auction is constituted, not chosen at settlement |
+| [`theBidderCannotBlockTheSale`](#6-thebiddercannotblockthesale) | Neither the winner nor a loser holds a veto at settlement time |
+| [`aSeatLeavesNoAllocationBehind`](test/daml/Cap/Examples/SealedFirstPrice/Test/Invariants.daml) | A seat that never bids leaves no allocation locked  |
+
+
+
 ## 1. `whoSeesWhat`
 
 One happy-path auction over three invited bidders, two of whom bid. After every
@@ -72,8 +84,8 @@ resolve.
 sequenceDiagram
     participant S as Seller
     participant O as Operator
-    participant A as Bidder A
-    participant B as Bidder B
+    participant A as Alice
+    participant B as Bob
     participant C as Carol
 
     Note over S,C: Phase 1 — the invited bidders, then the lot
@@ -88,8 +100,8 @@ sequenceDiagram
     B->>O: locks 60 against the same settlement, submits 60
     Note over S: unchanged — no quote, no bidder, no amount
     Note over A,B: neither can see the other's seal or quote
-    Note over O: sees both quotes in full — the one party trusted for confidentiality
-    Note over C: never seats — her empty seat stays live
+    Note over O: sees both quotes in full 
+    Note over C: her empty seat stays live
 
     Note over S,C: Phase 3 — resolve, after biddingClosesAt
     O->>O: presents A's bid, B's bid, and C's empty seat
@@ -104,20 +116,9 @@ sequenceDiagram
 ```
 
 The demo asserts, immediately after the resolve, that the seller holds 100 and
-no lot, that A holds the lot and no locked funds, that B is whole again, and
-that the operator holds neither instrument. It also asserts that B's entire
-visible set is now one contract: his own refunded money.
+no lot, that A holds the lot and no locked funds, that B is whole again.
+It also asserts that B's entire visible set is now one contract: his own refunded money.
 
-The one observer outside this picture is the registry admin, who sees each
-locked amount. Privacy here is structural, not bought with uniform allocations.
-
-Quote privacy survives observation because projection in Daml is **per node**,
-not inherited: the prices are reached by `fetch` on contracts whose only
-stakeholders are the operator and one bidder, so an informee of the parent
-exercise sees no part of those nodes. It holds only while the verdict stays
-value-free — `V_Accepted (Optional AnyValue)` sits in the exercise *result*,
-which every informee reads. `resolveFirstPrice` returns `V_Accepted None`, and
-in this format that is a rule, not an incidental.
 
 ## 2. `theOperatorCannotDropABidder`
 
@@ -128,15 +129,14 @@ bid that bidder signed, or the empty seat it never used. Neither can be forged:
 the bid carries the bidder's signature, and the seat is checked against these
 terms and this mechanism.
 
-Trusting the operator to execute buys it nothing here. The check is in the body
-of `AuctionLot_Award`, where the seller's delegation is spent, not in who may
+The check is in the body of `AuctionLot_Award`, where the seller's delegation is spent, not in who may
 call it.
 
 ```mermaid
 sequenceDiagram
     participant O as Operator
-    participant A as Bidder A
-    participant B as Bidder B
+    participant A as Alice
+    participant B as Bob
     participant C as Carol
 
     A->>O: submits 100
@@ -188,8 +188,8 @@ procedure that calls it — so they hold however the award is reached.
 sequenceDiagram
     participant S as Seller
     participant O as Operator
-    participant A as Bidder A
-    participant B as Bidder B
+    participant A as Alice
+    participant B as Bob
 
     A->>O: submits 100
     B->>O: submits 60
@@ -243,86 +243,7 @@ The invited set itself is fixed before the lot locks and pinned by contract id
 in the mechanism every seat is signed against, so it cannot be widened after
 bidding opens without invalidating every seat already taken.
 
-## 5. `whatTheOperatorIsTrustedWith`
-
-The demo that exists because of the trust assumption, rather than in spite of
-it. The operator is the sole executor of every allocation in the auction, so
-Token Standard V2 lets it cancel any of them on its own — the seller's lot and
-any bidder's funds alike. In the lower-trust variant the seller is an executor
-too and the same cancel needs both signatures.
-
-```mermaid
-sequenceDiagram
-    participant S as Seller
-    participant O as Operator
-    participant A as Bidder A
-
-    S->>S: lot locked — executors = [O]
-    A->>A: 100 locked — executors = [O]
-
-    S->>S: cancel the lot escrow alone
-    Note over S: ✗ the seller is not an executor
-
-    O->>O: cancel the lot escrow alone
-    Note over S,O: ✓ the lot returns to the seller
-    O->>O: cancel A's seal alone
-    Note over O,A: ✓ the 100 returns to A
-
-    Note over S,A: the operator holds nothing of either instrument
-```
-
-This is the whole of what the trust buys, and it buys the operator nothing: an
-allocation's cancel returns holdings to the party who funded it, never to the
-executor. The operator can deny the sale until `expiresAt`; it cannot take from
-it. The demo asserts both — the assets are back with the seller and the bidder,
-unlocked, and the operator's balance in both instruments is zero.
-
-The guarantee that remains is Token Standard V2's, not CAP's: a committed
-allocation is only as unabortable as its executor set is hard to assemble. This
-format chose an executor set of one. The variant under `experiments/` chose one
-that needs the seller too, and pays for it in the machinery demos 1 and 6 no
-longer need.
-
-## 6. `noPaymentWithoutTheLot`
-
-The winner pays only in the transaction that delivers the lot. Two separate
-things carry that, and the demo exercises both.
-
-```mermaid
-sequenceDiagram
-    participant S as Seller
-    participant O as Operator
-    participant A as Bidder A
-
-    Note over S,A: outside the resolve there is nothing to settle
-    A->>A: 100 locked, naming no transfer leg at all
-    O->>S: assemble a payment batch out of A's seal
-    Note over O: ✗ missing authorizations — the seal authorizes no leg side
-    Note over S,A: nothing moved
-
-    Note over S,A: inside the resolve, both registries are one transaction
-    O->>O: cancel the lot escrow first
-    O->>O: Resolver_Resolve
-    Note over O: ✗ the lot leg has nothing to settle
-    Note over S,A: ✗ so the payment leg did not settle either — A still owes nothing
-```
-
-The first half is the shape of the escrows. Both the seller's lot and every
-bidder's funds are committed with `transferLegSides = []`: until the envelopes
-are opened, neither the price nor the winner's account is known, so there is no
-leg to name. The registry rejects any batch assembled out of them, because the
-allocations authorize none of the leg sides the batch claims — the demo pins
-that failure by message. The award supplies exactly those missing leg sides
-through `extraTransferLegSides`, which is the one thing an escrow cannot be made
-to settle without.
-
-The second half is Daml's. Both `SettlementFactory_SettleBatch` calls sit in the
-same transaction as the award, so a failure on either moves nothing. The demo
-removes the lot leg (the operator cancels the escrow, which demo 5 established
-it can do alone) and shows the resolve failing whole: the seller has its lot
-back, unlocked, and A's 100 is untouched.
-
-## 7. `theOperatorCannotSwapTheRegistry`
+## 5. `theOperatorCannotSwapTheRegistry`
 
 Which registry contracts may touch the assets is fixed in
 `OneLotAuctionTerms.registries` when the auction is constituted, not chosen by
@@ -345,7 +266,7 @@ it.
 sequenceDiagram
     participant S as Seller
     participant O as Operator
-    participant A as Bidder A
+    participant A as Alice
 
     Note over S,A: an impostor factory claims the lot admin
     O->>O: create ImpostorSettlementFactory, view.admin = lot admin
@@ -377,7 +298,7 @@ returns success, so the payment leg commits beside a lot leg that did nothing.
 Atomicity is a property of the transaction, not a substitute for knowing whose
 registry you are settling through.
 
-## 8. `theBidderCannotBlockTheSale`
+## 6. `theBidderCannotBlockTheSale`
 
 A bidder is a signatory of its own `AuctionBid`, and both its escrow and the
 seller's are unwound at the award. It is worth showing that none of that gives
@@ -392,7 +313,7 @@ demo's `runResolve` acts as the operator and nobody else.
 ```mermaid
 sequenceDiagram
     participant O as Operator
-    participant A as Bidder A
+    participant A as Alice
 
     A->>A: bid submitted — A signs AuctionBid, 100 committed
     Note over A: bidding is closed

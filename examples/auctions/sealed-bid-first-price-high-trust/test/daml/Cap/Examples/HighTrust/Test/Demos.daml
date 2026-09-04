@@ -25,7 +25,6 @@ import Cap.Auctions.SettlementV1
 import Cap.Auctions.Utils (lotLeg, paymentLeg, settlementOf)
 
 import Cap.Examples.HighTrust.BidV1
-import Cap.Examples.HighTrust.ResolverV1
 import Cap.Examples.HighTrust.LotV1
 import Cap.Examples.HighTrust.SettlementV1
 import Cap.Examples.HighTrust.Fixtures.ImpostorV1
@@ -34,7 +33,6 @@ import Cap.Examples.HighTrust.Test.Fixture
 
 data OpenAuction = OpenAuction with
     fixture : Fixture
-    resolverCid : ContractId AuctionResolver
     mechanism : Mechanism
     lotCid : ContractId AuctionLot
     seats : [(Party, ContractId AuctionBid)]
@@ -43,12 +41,12 @@ data OpenAuction = OpenAuction with
 invitedBidders : Fixture -> [Party]
 invitedBidders f = [f.alice, f.bob, f.carol]
 
-auctionMechanism : Party -> Text -> Text -> ContractId AuctionResolver -> Mechanism
-auctionMechanism operator auctionId lotId resolverCid = Mechanism with
+auctionMechanism : OneLotAuctionTerms -> Text -> ContractId AuctionLot -> Mechanism
+auctionMechanism terms lotId lotCid = Mechanism with
   resolver = ResolverKey with
-    authorities = Set.fromList [operator]
-    id = auctionId
-  resolverCid = Some (coerceContractId resolverCid)
+    authorities = terms.authorities
+    id = terms.saleId
+  resolverCid = Some (coerceContractId lotCid)
   procedure = firstPriceProcedureName
   id = lotId
 
@@ -73,20 +71,26 @@ openAuctionWith ns retermsFor = do
   lotD <- lotCallFor f f.seller
   let disclosures = paymentD <> lotD
 
-  resolverCid <- submit f.operator $ createCmd AuctionResolver with
-    operator = f.operator
-    auctionId = "auction-1"
-    invited = invitedBidders f
-  let mechanism = auctionMechanism f.operator "auction-1" "lot-1" resolverCid
-
   lotHoldingCids <- fundSeller f
+  now <- getTime
+  escrowResult <- submitWithDisclosures' f.seller disclosures $
+    exerciseCmd f.terms.registries.lotAllocate.factoryCid AllocInstr.AllocationFactory_Allocate with
+      settlement = preLotSettlementOf f.terms
+      allocation = sellerLotAllocation f.terms
+      requestedAt = now
+      inputHoldingCids = lotHoldingCids
+      extraArgs = f.terms.registries.lotAllocate.allocateArgs
+      actors = [f.seller]
+  AllocInstr.AllocationInstructionResult_Completed sellerEscrowCid <-
+    pure escrowResult.output
+
   proposalCid <- submit f.operator $ createCmd AuctionLotProposal with
     terms = f.terms
-    mechanism
     invited = invitedBidders f
   lotCid <- submitWithDisclosures' f.seller disclosures $
     exerciseCmd proposalCid AuctionLotProposal_Accept with
-      lotHoldingCids
+      sellerEscrowCid
+  let mechanism = auctionMechanism f.terms "lot-1" lotCid
 
   seats <- forA (invitedBidders f) $ \p -> do
     cid <- submit f.operator $ createCmd AuctionBid with
@@ -99,7 +103,7 @@ openAuctionWith ns retermsFor = do
     pure (p, cid)
 
   pure OpenAuction with
-    fixture; resolverCid; mechanism; lotCid; seats; disclosures
+    fixture; mechanism; lotCid; seats; disclosures
 
 seatFor : OpenAuction -> Party -> Script (ContractId OneLotBid)
 seatFor auction p = case lookup p auction.seats of
@@ -137,13 +141,11 @@ submitBid auction bidder seatCid price = do
       extraArgs = emptyExtraArgs
 
 presentationOf : OpenAuction -> [ContractId OneLotBid] -> [ContractId Submittable]
-presentationOf auction entries =
-  toInterfaceContractId @Submittable auction.lotCid
-    :: map coerceContractId entries
+presentationOf _ entries = map coerceContractId entries
 
 resolveCmd : OpenAuction -> [ContractId OneLotBid] -> Commands Resolver_ResolveResult
 resolveCmd auction entries =
-  exerciseCmd (toInterfaceContractId @Resolver auction.resolverCid) Resolver_Resolve with
+  exerciseCmd (toInterfaceContractId @Resolver auction.lotCid) Resolver_Resolve with
     actors = [auction.fixture.operator]
     mechanism = auction.mechanism
     submittables = presentationOf auction entries
@@ -225,9 +227,6 @@ runSettle auction settlementCid sale = do
 class Visible t where
   isVisibleTo : Party -> ContractId t -> Script Bool
 
-instance Visible AuctionResolver where
-  isVisibleTo p cid = isSome <$> queryContractId p cid
-
 instance Visible OneLotBid where
   isVisibleTo p cid = isSome <$> queryInterfaceContractId @OneLotBid p cid
 
@@ -260,7 +259,6 @@ cannotSee p cid = do
 
 visibleTo : Party -> Script [Text]
 visibleTo p = do
-  resolvers <- query @AuctionResolver p
   proposals <- query @AuctionLotProposal p
   auths <- query @AuctionLot p
   bids <- query @AuctionBid p
@@ -268,8 +266,7 @@ visibleTo p = do
   holdings <- queryInterface @Holding.Holding p
   allocations <- queryInterface @Alloc.Allocation p
   pure $ sort $ concat
-    [ map (show . fst) resolvers
-    , map (show . fst) proposals
+    [ map (show . fst) proposals
     , map (show . fst) auths
     , map (show . fst) bids
     , map (show . fst) settlements
@@ -327,11 +324,11 @@ whoSeesWhat = do
   auction <- openAuction "ht-sees"
   let f = auction.fixture
 
-  f.alice `sees` auction.resolverCid
-  f.bob `sees` auction.resolverCid
-  f.carol `sees` auction.resolverCid
-  f.seller `cannotSee` auction.resolverCid
-  f.dave `cannotSee` auction.resolverCid
+  f.alice `sees` auction.lotCid
+  f.bob `sees` auction.lotCid
+  f.carol `sees` auction.lotCid
+  f.seller `sees` auction.lotCid
+  f.dave `cannotSee` auction.lotCid
 
   aliceSeat <- seatFor auction f.alice
   bobSeat <- seatFor auction f.bob
@@ -342,8 +339,6 @@ whoSeesWhat = do
   f.seller `cannotSee` aliceSeat
   f.operator `sees` aliceSeat
 
-  f.seller `sees` auction.lotCid
-  f.alice `cannotSee` auction.lotCid
 
   sellerBeforeBidding <- visibleTo f.seller
 
@@ -393,10 +388,26 @@ whoSeesWhat = do
   bobAfterSettlement <- visibleTo f.bob
   bobAfterSettlement === bobAfterResolve
 
-theOperatorCannotDropABidder : Script ()
-theOperatorCannotDropABidder = do
-  auction <- openAuction "ht-nodrop"
+theAuctionResolvesOnTheInvitedSetAlone : Script ()
+theAuctionResolvesOnTheInvitedSetAlone = do
+  auction <- openAuction "ht-invited"
   let f = auction.fixture
+      seatOn mechanism p quotes = createCmd AuctionBid with
+        terms = f.terms
+        bidderPaymentAccount = basicAccount p
+        bidderLotAccount = basicAccount p
+        mechanism
+        quotes
+        paymentAllocation = None
+      seat = seatOn auction.mechanism
+      topQuote = [Quote with price = 200.0; quantity = lotAmount]
+
+  submitMustFail f.operator $ seat f.dave topQuote
+  submitMustFail f.operator $ seat f.carol topQuote
+
+  daveSeat <- toInterfaceContractId @OneLotBid <$> submit f.operator (seat f.dave [])
+  foreignSeat <- toInterfaceContractId @OneLotBid <$>
+    submit f.operator (seatOn (auction.mechanism with id = "lot-2") f.alice [])
 
   aliceSeat <- seatFor auction f.alice
   bobSeat <- seatFor auction f.bob
@@ -408,21 +419,29 @@ theOperatorCannotDropABidder = do
 
   setTime f.terms.biddingClosesAt
 
-  let everyBidderPresented = "every invited bidder is presented"
-  runResolveMustFailContaining auction everyBidderPresented [aliceBid, carolSeat]
-  runResolveMustFailContaining auction everyBidderPresented [aliceBid, bobBid]
-  runResolveMustFailContaining auction everyBidderPresented [aliceBid]
+  let onTheInvitedSet = "every invited bidder is presented"
+  runResolveMustFailContaining auction onTheInvitedSet [aliceBid, carolSeat]
+  runResolveMustFailContaining auction onTheInvitedSet [aliceBid, bobBid]
+  runResolveMustFailContaining auction onTheInvitedSet [aliceBid]
+  runResolveMustFailContaining auction onTheInvitedSet [carolSeat]
+  runResolveMustFailContaining auction onTheInvitedSet [daveSeat]
+  runResolveMustFailContaining auction onTheInvitedSet
+    [aliceBid, bobBid, carolSeat, daveSeat]
   runResolveMustFailContaining auction "the presented submittables are distinct"
     [aliceBid, aliceBid, bobBid, carolSeat]
+  runResolveMustFailContaining auction "Contract group identifier mismatch"
+    [aliceBid, bobBid, carolSeat, foreignSeat]
 
   ds <- resolveDisclosures auction
-  submitMustFailContaining everyBidderPresented
+  submitMustFailContaining "the declared mechanism is binded to another resolver contract"
     (actAs f.operator <> discloseMany' ds)
-    (exerciseCmd auction.lotCid AuctionLot_Award with
-      winnerCid = bobBid
-      presented = [bobBid, carolSeat]
-      awarded = [Quote with price = 60.0; quantity = lotAmount]
+    (exerciseCmd (toInterfaceContractId @Resolver auction.lotCid) Resolver_Resolve with
+      actors = [f.operator]
+      mechanism = auction.mechanism with resolverCid = Some (coerceContractId daveSeat)
+      submittables = presentationOf auction [aliceBid, bobBid, carolSeat]
       extraArgs = emptyExtraArgs)
+
+  nothingMoved f
 
   result <- runResolve auction [aliceBid, bobBid, carolSeat]
   result.verdict === V_Accepted None
@@ -482,61 +501,11 @@ lotGoesToTheHighestPresentedBid = do
         context = ctx.choiceContext
         meta = emptyMetadata)
 
-  f.operator `cannotSee` auction.resolverCid
   f.operator `cannotSee` auction.lotCid
   runResolveMustFail auction [bobBid, carolSeat]
 
   sellerPaid <- balanceOf f.seller f.terms.payment
   sellerPaid === 0.0
-
-theOperatorCannotAddABidder : Script ()
-theOperatorCannotAddABidder = do
-  auction <- openAuction "ht-noadd"
-  let f = auction.fixture
-
-  submitMustFail f.operator $ createCmd AuctionBid with
-    terms = f.terms
-    bidderPaymentAccount = basicAccount f.dave
-    bidderLotAccount = basicAccount f.dave
-    mechanism = auction.mechanism
-    quotes = [Quote with price = 200.0; quantity = lotAmount]
-    paymentAllocation = None
-
-  submitMustFail f.operator $ createCmd AuctionBid with
-    terms = f.terms
-    bidderPaymentAccount = basicAccount f.carol
-    bidderLotAccount = basicAccount f.carol
-    mechanism = auction.mechanism
-    quotes = [Quote with price = 200.0; quantity = lotAmount]
-    paymentAllocation = None
-
-  daveSeat <- submit f.operator $ createCmd AuctionBid with
-    terms = f.terms
-    bidderPaymentAccount = basicAccount f.dave
-    bidderLotAccount = basicAccount f.dave
-    mechanism = auction.mechanism
-    quotes = []
-    paymentAllocation = None
-
-  aliceSeat <- seatFor auction f.alice
-  bobSeat <- seatFor auction f.bob
-  carolSeat <- seatFor auction f.carol
-
-  setTime f.terms.entryClosesAt
-  aliceBid <- submitBid auction f.alice aliceSeat 100.0
-  bobBid <- submitBid auction f.bob bobSeat 60.0
-
-  setTime f.terms.biddingClosesAt
-
-  runResolveMustFailContaining auction "every invited bidder is presented"
-    [aliceBid, bobBid, carolSeat, toInterfaceContractId @OneLotBid daveSeat]
-
-  result <- runResolve auction [aliceBid, bobBid, carolSeat]
-  result.verdict === V_Accepted None
-
-  [(_, sale)] <- query @AuctionSettlement f.operator
-  sale.award === Quote with price = 100.0; quantity = lotAmount
-  sale.winnerPaymentAccount === basicAccount f.alice
 
 lotCanOnlyBeReleasedBySellerAndOperatorJointly : Script ()
 lotCanOnlyBeReleasedBySellerAndOperatorJointly = do

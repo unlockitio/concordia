@@ -4,10 +4,12 @@ module Cap.Examples.MajorityVote.Test.Fixture where
 
 import Prelude hiding (Action)
 
+import DA.Action (unless)
 import DA.Map (Map)
 import qualified DA.Map as Map
 import DA.Set (Set)
 import qualified DA.Set as Set
+import qualified DA.Text as Text
 import DA.Time
 import Daml.Script
 
@@ -127,26 +129,44 @@ cast f voter ballotCid option = do
       extraArgs = noArgs
   pure (fromInterfaceContractId cid)
 
-runResolveOn
+runResolve : Fixture -> [ContractId Submittable] -> Script Resolver_ResolveResult
+runResolve f submittables = submit f.operator $
+  resolveOnCmd f f.resolverCid f.mechanism submittables
+
+submitMustFailContaining : Show a => Text -> Party -> Commands a -> Script ()
+submitMustFailContaining expected actor cmds = do
+  result <- trySubmit (actAs actor) cmds
+  case result of
+    Left (FailureStatusError status) -> requireContains status.message
+    Left (TruncatedError _ message) -> requireContains message
+    Left err -> fail ("the command failed unexpectedly: " <> show err)
+    Right value -> fail ("the command succeeded with " <> show value)
+  where
+    requireContains actual =
+      unless (expected `Text.isInfixOf` actual) $
+        fail ("expected a failure containing " <> expected <> ", got " <> actual)
+
+resolveOnCmd
   : Fixture -> ContractId VoteResolver -> Mechanism -> [ContractId Submittable]
-  -> Script Resolver_ResolveResult
-runResolveOn f resolverCid mechanism submittables = submit f.operator $
+  -> Commands Resolver_ResolveResult
+resolveOnCmd f resolverCid mechanism submittables =
   exerciseCmd (toInterfaceContractId @Resolver resolverCid) Resolver_Resolve with
     actors = [f.operator]
     mechanism
     submittables
     extraArgs = noArgs
 
-runResolve : Fixture -> [ContractId Submittable] -> Script Resolver_ResolveResult
-runResolve f = runResolveOn f f.resolverCid f.mechanism
+runResolveMustFailContaining : Fixture -> Text -> [ContractId Submittable] -> Script ()
+runResolveMustFailContaining f expected submittables =
+  submitMustFailContaining expected f.operator
+    (resolveOnCmd f f.resolverCid f.mechanism submittables)
 
-runResolveMustFail : Fixture -> [ContractId Submittable] -> Script ()
-runResolveMustFail f submittables = submitMustFail f.operator $
-  exerciseCmd (toInterfaceContractId @Resolver f.resolverCid) Resolver_Resolve with
-    actors = [f.operator]
-    mechanism = f.mechanism
-    submittables
-    extraArgs = noArgs
+runResolveOnMustFailContaining
+  : Fixture -> ContractId VoteResolver -> Mechanism -> Text -> [ContractId Submittable]
+  -> Script ()
+runResolveOnMustFailContaining f resolverCid mechanism expected submittables =
+  submitMustFailContaining expected f.operator
+    (resolveOnCmd f resolverCid mechanism submittables)
 
 executionOf : Resolver_ResolveResult -> ContractId Executable
 executionOf result = case result.created of

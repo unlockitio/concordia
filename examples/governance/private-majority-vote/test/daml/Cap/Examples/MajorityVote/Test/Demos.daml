@@ -154,8 +154,23 @@ theCountCoversTheElectorate = do
   votes <- castAll round acceptOption acceptOption rejectOption
 
   setTime f.terms.votingClosesAt
-  runResolveMustFail f (map presented [votes.alice, votes.carol])
-  runResolveMustFail f (map presented [votes.alice, votes.bob])
+  let coversTheElectorate = "the presented ballots cover the electorate"
+  runResolveMustFailContaining f coversTheElectorate
+    (map presented [votes.alice, votes.carol])
+  runResolveMustFailContaining f coversTheElectorate
+    (map presented [votes.alice, votes.bob])
+
+  narrowCid <- submit f.dso $ createCmd VoteResolver with
+    dso = f.dso
+    operator = f.operator
+    electorate = Set.fromList [f.alice, f.bob]
+    bodyId = bodyName
+    expiresAt = f.terms.expiresAt
+  let narrowed = map presented [votes.alice, votes.bob]
+  runResolveOnMustFailContaining f narrowCid f.mechanism
+    "the declared mechanism is binded to another resolver contract" narrowed
+  runResolveOnMustFailContaining f narrowCid (voteMechanism f.dso proposalName narrowCid)
+    "Contract group identifier mismatch" narrowed
 
   result <- runResolve f (allPresented votes)
   result.verdict === V_Accepted (Some acceptOption)

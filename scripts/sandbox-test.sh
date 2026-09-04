@@ -71,10 +71,8 @@ port_holder() {
 
 start_sandbox() {
   echo "starting sandbox, log at $SANDBOX_LOG"
-  set -m   # give the sandbox its own process group so cleanup can kill the tree
-  dpm sandbox \
-    -C canton.parameters.clock.type=sim-clock \
-    -C canton.participants.sandbox.testing-time.type=monotonic-time \
+  set -m   
+  dpm sandbox --static-time \
     --no-tty </dev/null >"$SANDBOX_LOG" 2>&1 &
   SANDBOX_PID=$!
   set +m
@@ -111,7 +109,7 @@ elif port_in_use; then
     exit 1
   fi
   echo "reusing the sandbox already on $LEDGER_HOST:$LEDGER_PORT"
-  echo "  it must have been started with sim-clock and monotonic-time, or --static-time will fail"
+  echo "  it must have been started with --static-time, or the scripts that set time will fail"
   echo "  ledger state carries over between runs; set FRESH_SANDBOX=1 to refuse reuse"
 else
   start_sandbox

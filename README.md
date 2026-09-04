@@ -114,13 +114,13 @@ dpm build --all      # every package in dependency order, per multi-package.yaml
 from the repo root with `--package-root`:
 
 ```bash
-# M2 — majority vote, 3 scripts ok
+# M2 — majority vote, all scripts ok
 dpm test --package-root examples/governance/private-majority-vote/test
 
-# M2 — sealed-bid first price, 9 scripts ok
+# M2 — sealed-bid first price, all scripts ok
 dpm test --package-root examples/auctions/sealed-bid-first-price/test
 
-# M1 — BabyDso on cap, 4 scripts ok
+# M1 — BabyDso on cap, all scripts ok
 dpm test --package-root examples/governance/baby-dso/cap/test
 ```
 
@@ -129,7 +129,7 @@ Each `DEMOS.md` says what its scripts assert, and what they deliberately do not.
 ### On a Canton sandbox
 
 The same scripts run against a real ledger. `scripts/sandbox-test.sh` boots a
-sim-clock sandbox, uploads the test DARs and runs every script in each:
+static-time sandbox, uploads the test DARs and runs every script in each:
 
 ```bash
 dpm build --all

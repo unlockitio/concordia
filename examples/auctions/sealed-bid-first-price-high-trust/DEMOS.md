@@ -25,8 +25,11 @@ Assertions take two forms. Visibility claims are stated per contract, as
 each note in the diagrams below corresponds to one line of test code. The same
 per-party views can be inspected interactively in Daml Studio. Stronger claims —
 that a party learned *nothing* across a phase — are stated as an equality
-between the complete set of contracts visible to that party before and after,
-and so fail on any leak, anticipated or not.
+between the complete set of contracts visible to that party before and after.
+That catches any contract the party becomes a **stakeholder** of, anticipated
+or not. It does not catch divulgence: a payload a party's participant received
+as a witness of someone else's node never enters that party's ACS, so no
+`query` returns it and no script can assert its absence.
 
 One limit worth stating plainly. Daml Script reads the ACS, not transaction
 trees, so a script can assert that an invited bidder **observes the resolver** —
@@ -56,8 +59,8 @@ the whole privacy guarantee at once.
 sequenceDiagram
     participant S as Seller
     participant O as Operator
-    participant A as Bidder A
-    participant B as Bidder B
+    participant A as Alice
+    participant B as Bob
     participant C as Carol
 
     Note over S,C: Phase 1 — the invited bidders, then the lot
@@ -145,8 +148,8 @@ so they hold however the award is reached.
 sequenceDiagram
     participant S as Seller
     participant O as Operator
-    participant A as Bidder A
-    participant B as Bidder B
+    participant A as Alice
+    participant B as Bob
 
     A->>O: submits 100
     B->>O: submits 60
@@ -171,7 +174,7 @@ The winner pays only in the transaction that delivers the lot.
 sequenceDiagram
     participant S as Seller
     participant O as Operator
-    participant A as Bidder A
+    participant A as Alice
 
     Note over S,A: after the award — two legs, one settlement
     O->>O: Settlement_Settle
@@ -205,7 +208,7 @@ and `Settlement_Settle` takes no registry argument at all.
 sequenceDiagram
     participant S as Seller
     participant O as Operator
-    participant A as Bidder A
+    participant A as Alice
 
     Note over S,A: an impostor factory claims the lot admin
     O->>O: create ImpostorSettlementFactory, view.admin = lot admin
@@ -259,8 +262,8 @@ checked against these terms.
 ```mermaid
 sequenceDiagram
     participant O as Operator
-    participant A as Bidder A
-    participant B as Bidder B
+    participant A as Alice
+    participant B as Bob
     participant C as Carol
 
     A->>O: submits 100

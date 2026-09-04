@@ -1,6 +1,6 @@
 # Demos — `examples/governance/private-majority-vote`
 
-3 demos showing a majority vote where **no voter ever learns another voter's
+Demos showing a majority vote where **no voter ever learns another voter's
 vote**, the count covers the whole electorate, and the decentralized party's
 authority is spent on exactly one node.
 
@@ -18,7 +18,7 @@ the script that states it.
 | Test | Security claim |
 | --- | --- |
 | [`whoSeesWhat`](#1-whoseeswhat) | No voter learns another voter's vote before resolution. Asserted as each party's complete visible set after every phase, so an unanticipated leak fails it |
-| [`theCountCoversTheElectorate`](#2-thecountcoverstheelectorate) | The resolution cannot omits an entitled voter |
+| [`theCountCoversTheElectorate`](#2-thecountcoverstheelectorate) | The resolution cannot omit an entitled voter, by presenting a subset or by counting on a narrower resolver |
 | [`theOperatorCannotSkipTheCount`](#3-theoperatorcannotskipthecount) | The operator cannot create the outcome without resolution |
 
 
@@ -57,8 +57,11 @@ Visibility claims take two forms. Single claims are `sees` / `cannotSee`
 predicates over a party and one contract, so each note in the diagrams below is
 one line of test code. Stronger claims — that a party learned *nothing* across a
 phase — are `seesExactly`, an equality between the complete set of contracts
-visible to that party and an expected list. Those fail on any leak, anticipated
-or not, and they are what demo 1 is built out of. Either read them in the
+visible to that party and an expected list. Those catch any contract the party
+becomes a **stakeholder** of, anticipated or not, and they are what demo 1 is
+built out of. What they cannot catch is divulgence — a payload a participant
+received as a witness of someone else's node, which never enters that party's
+ACS and so is invisible to `query`. Either read them in the
 test output, or open the scripts in Daml Studio and step through the same
 per-party views interactively.
 
@@ -71,6 +74,24 @@ still read no vote.
 ```bash
 dpm test --package-root examples/governance/private-majority-vote/test
 ```
+
+## Fixture
+
+`setupAs` allocates the five parties and creates three contracts as the `dso`: a
+`Config` opening at `"sync-a"`, a `SetConfigAction` proposing `"sync-b"`, and a
+`VoteResolver` for body `"body-1"` that expires in ten days. It then builds the
+`ProposalTerms` every ballot carries — `{dso}` as authority, accept and reject as
+the options, that action, one binding pinning the config's setting as seen at
+submission, and a three-day timeline: `entryClosesAt` at day 1,
+`votingClosesAt` at day 2, `expiresAt` at day 3. The `mechanism` names proposal
+`"proposal-1"` under the `"majority"` procedure and pins the resolver by
+contract id.
+
+No ballot exists yet. A demo calls `seat` for each voter it wants seated, `cast`
+to record an option, and `runResolve` to count; `executionOf` takes the single
+`Executable` the resolve mints, and `runExecute` applies it to the config.
+`forgedExecution` and `runIssueMustFail` are demo 3's, for reaching the outcome
+without a count.
 
 ## 1. `whoSeesWhat`
 
@@ -162,6 +183,8 @@ sequenceDiagram
     Note over O: ✗ the presented ballots cover the electorate
     O->>O: present Alice + Bob — drop the reject, keep a clean 2–0
     Note over O: ✗ the presented ballots cover the electorate
+    O->>O: recount Alice + Bob on a resolver over {Alice, Bob}
+    Note over O: ✗ the ballots name another resolver contract
 
     O->>O: present all three
     Note over O: ✓ V_Accepted — 2 accepts against an electorate of 3
@@ -175,9 +198,14 @@ over a duplicate-free list, so it rejects an extra or repeated entry as well —
 the demo exercises the dropping direction only.
 
 The electorate it compares against is on the `VoteResolver`, which the DSO
-signs and every ballot names by contract id through its `Mechanism`. Widening it
-after seating means a different resolver contract, which every seat already
-taken would fail to name.
+signs and every ballot names by contract id through its `Mechanism`. Narrowing
+it after seating means a different resolver contract, and the demo builds one:
+an electorate of `{alice, bob}` under the same `bodyId`, so its `ResolverKey` is
+identical to the real one and only the contract id separates them. Counting the
+two ballots there is refused twice over — presenting the ballots' own mechanism
+fails the resolver's contract-id pin, and presenting one that names the new
+resolver fails the checked fetch on every ballot. Standing that resolver up
+needs the DSO's signature, so it is not a door the operator holds alone.
 
 ## 3. `theOperatorCannotSkipTheCount`
 
