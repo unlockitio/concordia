@@ -27,7 +27,6 @@ import Cap.Examples.BabyDso.Cap.ConfigV1
 template FeeUpdate
   with
     dso : Party
-    svs : Set Party
     transferFee : Decimal
     entryFee : Decimal
     core : ExecutionCore
@@ -35,7 +34,7 @@ template FeeUpdate
     outcome : Optional AnyValue
   where
     signatory dso
-    observer Set.toList svs ++ concat core.executors
+    observer concat core.executors
 
     interface instance Executable for FeeUpdate where
       view = ExecutableView with core; bindings; outcome
@@ -61,17 +60,17 @@ template SetFeesAction
     observer Set.toList svs
 
     interface instance Action for SetFeesAction where
-      view = ActionView with meta = emptyMetadata
+      view = ActionView with
+        authorities = Set.fromList [dso]
+        meta = emptyMetadata
 
       action_issueExecutionImpl _ arg = do
         let ExecutableView with .. = arg.execution
-        require "the execution names another authority"
-          (core.authorities == Set.fromList [dso])
         (transferFee, entryFee) <- case outcome >>= feesOf of
           Some fees -> pure fees
           None -> abort "the execution carries no fees this action can apply"
         cid <- create FeeUpdate with
-          dso; svs; transferFee; entryFee; core; bindings; outcome
+          dso; transferFee; entryFee; core; bindings; outcome
         pure Action_IssueExecutionResult with
           executionCids = [toInterfaceContractId cid]
           meta = emptyMetadata

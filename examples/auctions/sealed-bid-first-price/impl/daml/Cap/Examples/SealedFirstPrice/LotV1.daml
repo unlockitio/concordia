@@ -14,59 +14,19 @@ import qualified Splice.Api.Token.AllocationV2 as Alloc
 import Splice.Util (require)
 import Splice.TokenStandard.Utils (receiverSide, senderSide)
 
-import Cap.Core.Utils (requireClosed)
+import Cap.Core.Utils (orAbort, requireClosed)
 import Cap.Core.ResolverV1
 import Cap.Core.SubmittableV1
 import Cap.Auctions.OneLotBidV1
-import Cap.Auctions.Utils
-  ( lotLeg
-  , paymentLeg
-  )
+import Cap.Auctions.SettlementV1 (SettlementBatch (..))
+import Cap.Auctions.Utils (lotLeg, paymentLeg)
 
 import Cap.Examples.SealedFirstPrice.BidV1
+import Cap.Examples.SealedFirstPrice.SettlementV1
 import Cap.Examples.SealedFirstPrice.TermsV1
 
 firstPriceProcedureName : Text
 firstPriceProcedureName = ""
-
-orAbort : Text -> Optional a -> Update a
-orAbort msg None = abort msg
-orAbort _ (Some a) = pure a
-
-template AuctionLotProposal
-  with
-    terms : OneLotAuctionTerms
-    invited : [Party]
-  where
-    signatory Set.toList terms.authorities
-    observer sellerOf terms
-
-    ensure terms.direction == Forward
-      && not (null invited)
-      && unique invited
-      && notElem (sellerOf terms) invited
-
-    choice AuctionLotProposal_Accept : ContractId AuctionLot
-      with
-        sellerLotAllocationCid : ContractId Alloc.Allocation
-        sellerPaymentAllocationCid : ContractId Alloc.Allocation
-      controller sellerOf terms
-      do
-        now <- getTime
-        require "the lot is locked before the entry window closes"
-          (now < terms.entryClosesAt)
-        escrow <- view <$> fetch sellerLotAllocationCid
-        require "the escrow is the one these terms imply"
-          (escrow.allocation == sellerLotAllocation terms)
-        require "the escrow is scoped to this auction"
-          (escrow.settlement == settlementOf terms)
-        receipt <- view <$> fetch sellerPaymentAllocationCid
-        require "the receipt is the one these terms imply"
-          (receipt.allocation == sellerPaymentAllocation terms)
-        require "the receipt is scoped to this auction"
-          (receipt.settlement == settlementOf terms)
-        create AuctionLot with
-          terms; invited; sellerLotAllocationCid; sellerPaymentAllocationCid
 
 template AuctionLot
   with
@@ -81,7 +41,6 @@ template AuctionLot
     interface instance Resolver for AuctionLot where
       view = ResolverView with
         authorities = terms.authorities
-        submittablesIssuers = [Set.toList terms.authorities]
         id = terms.saleId
         expiresAt = Some terms.expiresAt
         meta = emptyMetadata
@@ -111,6 +70,8 @@ resolveFirstPrice lot self cast _ = do
     let bv = view b
     require "every presented seat was opened on the seller's terms"
       (bv.terms == terms)
+    require "every presented bid is signed by the bidder it names"
+      (null bv.quotes || bidderOf bv.bidderPaymentAccount `elem` signatory s)
     pure (coerceContractId cid : ContractId OneLotBid, bv)
 
   require "every invited bidder is presented"
@@ -121,15 +82,39 @@ resolveFirstPrice lot self cast _ = do
       winning = Total.maximumOn (\(_, _, q) -> q.price) quoted
       awardedCid = fmap (\(cid, _, _) -> cid) winning
 
-  verdict <- case winning of
-    None -> pure (V_Lapsed None)
+  (verdict, created) <- case winning of
+    None -> pure (V_Lapsed None, [])
     Some (winnerCid, winner, award) -> do
       require "the award meets the seller's reserve"
         (meetsReserve terms.direction terms.reserve award.price)
-      settleAward terms winner award
-        lot.sellerLotAllocationCid lot.sellerPaymentAllocationCid
+      winnerPaymentAllocationCid <-
+        orAbort "the winning seat holds no payment allocation" winner.paymentAllocation
+      winnerLotAllocationCid <-
+        orAbort "the winning seat holds no lot allocation" winner.lotAllocation
+      let pLeg = paymentLeg terms winner.bidderPaymentAccount award.price
+          lLeg = lotLeg terms winner.bidderLotAccount award.quantity
+          finalized cid side = Alloc.FinalizedAllocation with
+            allocationCid = cid
+            extraTransferLegSides = [side]
+            nextIterationFunding = None
+      settlementCid <- create AuctionSettlement with
+        terms
+        winner = bidderOf winner.bidderPaymentAccount
+        opensAt = now
+        batches =
+          [ SettlementBatch with
+              leg = pLeg
+              sender = finalized winnerPaymentAllocationCid (senderSide pLeg)
+              receiver = finalized lot.sellerPaymentAllocationCid (receiverSide pLeg)
+              factory = terms.registries.paymentSettle
+          , SettlementBatch with
+              leg = lLeg
+              sender = finalized lot.sellerLotAllocationCid (senderSide lLeg)
+              receiver = finalized winnerLotAllocationCid (receiverSide lLeg)
+              factory = terms.registries.lotSettle
+          ]
       exercise (fromInterfaceContractId @AuctionBid winnerCid) AuctionBid_Close
-      pure (V_Accepted None)
+      pure (V_Accepted None, [coerceContractId settlementCid])
 
   -- release the rest
   forA_ [cid | (cid, _) <- seats, Some cid /= awardedCid] $ \cid ->
@@ -140,39 +125,40 @@ resolveFirstPrice lot self cast _ = do
   archive self
   pure Resolver_ResolveResult with
     verdict
-    created = []
+    created
     meta = emptyMetadata
 
-settleAward
-  : OneLotAuctionTerms -> OneLotBidView -> Quote
-  -> ContractId Alloc.Allocation -> ContractId Alloc.Allocation -> Update ()
-settleAward terms winner award sellerLotCid sellerPaymentCid = do
-  bidderPaymentCid <-
-    orAbort "the winning seat holds no payment allocation" winner.paymentAllocation
-  bidderLotCid <- orAbort "the winning seat holds no lot allocation" winner.lotAllocation
+template AuctionLotProposal
+  with
+    terms : OneLotAuctionTerms
+    invited : [Party]
+  where
+    signatory Set.toList terms.authorities
+    observer sellerOf terms
 
-  let settlement = settlementOf terms
-      pLeg = paymentLeg terms paymentLegId winner.bidderPaymentAccount award.price
-      lLeg = lotLeg terms lotLegId winner.bidderLotAccount award.quantity
-      on cid side = Alloc.FinalizedAllocation with
-        allocationCid = cid
-        extraTransferLegSides = [side]
-        nextIterationFunding = None
+    ensure terms.direction == Forward
+      && not (null invited)
+      && unique invited
+      && notElem (sellerOf terms) invited
 
-  _ <- exercise terms.registries.paymentSettle.factoryCid
-    Alloc.SettlementFactory_SettleBatch with
-      settlement
-      transferLegs = [pLeg]
-      allocations = [on bidderPaymentCid (senderSide pLeg), on sellerPaymentCid (receiverSide pLeg)]
-      actors = settlement.executors
-      extraArgs = terms.registries.paymentSettle.settleBatchArgs
-
-  _ <- exercise terms.registries.lotSettle.factoryCid
-    Alloc.SettlementFactory_SettleBatch with
-      settlement
-      transferLegs = [lLeg]
-      allocations = [on sellerLotCid (senderSide lLeg), on bidderLotCid (receiverSide lLeg)]
-      actors = settlement.executors
-      extraArgs = terms.registries.lotSettle.settleBatchArgs
-
-  pure ()
+    choice AuctionLotProposal_Accept : ContractId AuctionLot
+      with
+        sellerLotAllocationCid : ContractId Alloc.Allocation
+        sellerPaymentAllocationCid : ContractId Alloc.Allocation
+      controller sellerOf terms
+      do
+        now <- getTime
+        require "the lot is locked before the entry window closes"
+          (now < terms.entryClosesAt)
+        lotView <- view <$> fetch sellerLotAllocationCid
+        require "the lot allocation is the one these terms imply"
+          (lotView.allocation == sellerLotAllocation terms)
+        require "the lot allocation is scoped to this auction"
+          (lotView.settlement == settlementOf terms)
+        paymentView <- view <$> fetch sellerPaymentAllocationCid
+        require "the payment allocation is the one these terms imply"
+          (paymentView.allocation == sellerPaymentAllocation terms)
+        require "the payment allocation is scoped to this auction"
+          (paymentView.settlement == settlementOf terms)
+        create AuctionLot with
+          terms; invited; sellerLotAllocationCid; sellerPaymentAllocationCid

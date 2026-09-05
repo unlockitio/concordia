@@ -29,6 +29,9 @@ module Cap.Core.Utils (
   -- * Values
   IsAnyValue (..),
 
+  -- * Optionals
+  orAbort,
+
 ) where
 
 
@@ -39,3 +42,8 @@ import Cap.Core.Utils.Internal.Time
 import Cap.Core.Utils.Internal.Execution
 import Cap.Core.Utils.Internal.Value
 import Cap.Core.Utils.Internal.Patch ()
+
+-- | Unwrap an 'Optional', aborting with the given message when it is 'None'.
+orAbort : Text -> Optional a -> Update a
+orAbort msg None = abort msg
+orAbort _ (Some a) = pure a

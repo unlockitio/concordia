@@ -19,6 +19,7 @@ import Cap.Examples.MajorityVote.BallotV1
 import Cap.Examples.MajorityVote.ConfigV1
 import Cap.Examples.MajorityVote.ResolverV1
 
+import Cap.Examples.MajorityVote.Fixtures.ImpostorV1
 import Cap.Examples.MajorityVote.Test.Fixture
 
 class Visible t where
@@ -51,12 +52,14 @@ cannotSee p cid = do
 visibleTo : Party -> Script [Text]
 visibleTo p = do
   resolvers <- query @VoteResolver p
+  proposals <- query @Proposal p
   ballots <- query @PrivateBallot p
   configs <- query @Config p
   actions <- query @SetConfigAction p
   updates <- query @ConfigUpdate p
   pure $ sort $ concat
     [ map (show . fst) resolvers
+    , map (show . fst) proposals
     , map (show . fst) ballots
     , map (show . fst) configs
     , map (show . fst) actions
@@ -71,6 +74,10 @@ seesExactly p expected = do
 public : Fixture -> [Text]
 public f = [show f.configCid, show f.actionCid, show f.resolverCid]
 
+
+publicToOperator : Fixture -> [Text]
+publicToOperator f = [show f.actionCid, show f.resolverCid]
+
 data Round = Round with
     fixture : Fixture
     aliceBallot : ContractId PrivateBallot
@@ -79,10 +86,13 @@ data Round = Round with
 
 openRound : Text -> Script Round
 openRound ns = do
-  fixture <- setupAs ns
-  aliceBallot <- seat fixture fixture.mechanism fixture.alice
-  bobBallot <- seat fixture fixture.mechanism fixture.bob
-  carolBallot <- seat fixture fixture.mechanism fixture.carol
+  base <- setupAs ns
+  aliceBallot <- seat base base.alice
+  bobBallot <- seat base base.bob
+  carolBallot <- seat base base.carol
+
+  proposalCid <- liveProposal base
+  let fixture = base with proposalCid
   pure Round with ..
 
 data Cast = Cast with
@@ -111,13 +121,15 @@ whoSeesWhat = do
   round <- openRound "sees"
   let f = round.fixture
       pub = public f
+      open = show f.proposalCid :: pub
+      openToOperator = show f.proposalCid :: publicToOperator f
 
-  f.dso `seesExactly` pub
-  f.alice `seesExactly` (show round.aliceBallot :: pub)
-  f.bob `seesExactly` (show round.bobBallot :: pub)
-  f.carol `seesExactly` (show round.carolBallot :: pub)
+  f.dso `seesExactly` open
+  f.alice `seesExactly` (show round.aliceBallot :: open)
+  f.bob `seesExactly` (show round.bobBallot :: open)
+  f.carol `seesExactly` (show round.carolBallot :: open)
   f.operator `seesExactly`
-    (map show [round.aliceBallot, round.bobBallot, round.carolBallot] <> pub)
+    (map show [round.aliceBallot, round.bobBallot, round.carolBallot] <> openToOperator)
 
   setTime f.terms.entryClosesAt
   votes <- castAll round acceptOption acceptOption rejectOption
@@ -126,7 +138,7 @@ whoSeesWhat = do
   f.carol `cannotSee` votes.alice
   f.dso `cannotSee` votes.alice
   f.operator `sees` votes.alice
-  f.dso `seesExactly` pub
+  f.dso `seesExactly` open
 
   setTime f.terms.votingClosesAt
   result <- runResolve f (allPresented votes)
@@ -134,7 +146,8 @@ whoSeesWhat = do
 
   f.dso `seesExactly` (show executionCid :: pub)
   f.alice `seesExactly` (show executionCid :: pub)
-  f.operator `seesExactly` (show executionCid :: pub)
+
+  f.operator `seesExactly` publicToOperator f
 
   runExecute f f.configCid executionCid
   [(configCid, config)] <- query @Config f.dso
@@ -143,7 +156,7 @@ whoSeesWhat = do
   let published = [show configCid, show f.actionCid, show f.resolverCid]
   f.dso `seesExactly` published
   f.alice `seesExactly` published
-  f.operator `seesExactly` published
+  f.operator `seesExactly` publicToOperator f
 
 theCountCoversTheElectorate : Script ()
 theCountCoversTheElectorate = do
@@ -154,23 +167,35 @@ theCountCoversTheElectorate = do
   votes <- castAll round acceptOption acceptOption rejectOption
 
   setTime f.terms.votingClosesAt
-  let coversTheElectorate = "the presented ballots cover the electorate"
-  runResolveMustFailContaining f coversTheElectorate
+  let coversTheRoll = "the presented ballots cover the roll"
+  runResolveMustFailContaining f coversTheRoll
     (map presented [votes.alice, votes.carol])
-  runResolveMustFailContaining f coversTheElectorate
+  runResolveMustFailContaining f coversTheRoll
     (map presented [votes.alice, votes.bob])
 
-  narrowCid <- submit f.dso $ createCmd VoteResolver with
-    dso = f.dso
+  submitMustFail f.operator $ createCmd PrivateBallot with
     operator = f.operator
-    electorate = Set.fromList [f.alice, f.bob]
-    bodyId = bodyName
-    expiresAt = f.terms.expiresAt
-  let narrowed = map presented [votes.alice, votes.bob]
-  runResolveOnMustFailContaining f narrowCid f.mechanism
-    "the declared mechanism is binded to another resolver contract" narrowed
-  runResolveOnMustFailContaining f narrowCid (voteMechanism f.dso proposalName narrowCid)
-    "Contract group identifier mismatch" narrowed
+    voter = f.alice
+    mechanism = f.mechanism
+    terms = f.terms
+    votes = []
+  submitMustFail (actAs f.dso <> actAs f.operator) $ createCmd PrivateBallot with
+    operator = f.operator
+    voter = f.alice
+    mechanism = f.mechanism
+    terms = f.terms
+    votes = []
+
+
+  fake <- submit f.operator $ createCmd ImpostorBallot with
+    operator = f.operator
+    voter = f.alice
+    mechanism = f.mechanism
+    terms = f.terms
+    votes = [rejectOption]
+  runResolveMustFailContaining f "every ballot is signed by the voter it names"
+    (map presented [votes.bob, votes.carol]
+      <> [toInterfaceContractId @Submittable fake])
 
   result <- runResolve f (allPresented votes)
   result.verdict === V_Accepted (Some acceptOption)
@@ -182,11 +207,12 @@ theOperatorCannotSkipTheCount = do
 
   runIssueMustFail f f.operator (forgedExecution f)
 
+
   submitMustFail f.operator $ createCmd VoteResolver with
     dso = f.dso
     operator = f.operator
     electorate = Set.fromList [f.alice]
-    bodyId = bodyName
+    resolverId = bodyName
     expiresAt = now `addRelTime` days 10
 
   setting <- settingNow f

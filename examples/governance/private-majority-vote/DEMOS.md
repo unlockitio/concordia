@@ -1,14 +1,56 @@
 # Demos — `examples/governance/private-majority-vote`
 
-Demos showing a majority vote where **no voter ever learns another voter's
-vote**, the count covers the whole electorate, and the decentralized party's
-authority is spent on exactly one node.
+Demos showing a majority vote where votes remain private until 
+the end of resolution. The action is authorized by a decentrlized party, hosted by all voters.
+An operator is trusted with confidentiality of the votes. 
 
-One demo per clause. Demo 1 states the privacy guarantee, as the complete
-visible set of every party after every phase. Demo 2 states that a count is
-only a count if it covers everyone entitled to vote. Demo 3 states that the
-operator, who drives every transaction here, cannot reach the outcome without
-going through the count.
+
+## The format
+
+
+`VoteResolver` is signed by the `dso`,
+observed by the operator and the electorate, publishing one
+procedure, `"majority"`, resolvable by `[[operator]]`. Any member raises a proposal
+on it with `VoteResolver_Propose`. A`Proposal` is `dso`-signed, observed by the operator and the whole
+electorate, it carries the `ProposalTerms` it decides under, the `electorate`, and
+the `roll` of voters taking part. 
+
+The `dso` and the operator jointly issue one `BallotInvitation` per entitled voter. 
+The voter commits against the live proposal, wiht a
+transaction that puts them on the roll, through `Proposal_Join`, and creates
+their empty `PrivateBallot`, signed by the operator and themselves. 
+
+Ballots name the body by its `ResolverKey` — `{dso, resolverId}` — not by
+contract id. Only the `dso` can create a `VoteResolver`, so the key identifies
+the body on its own.
+The `dso`is not a signatory of an empty ballot or of a cast one, so it never reads a vote.
+
+The presented ballots must cover the roll, so the
+operator has to produce every ballot that exists and cannot mint a replacement
+for one becasue it needs the voter's signature binded to this proposal. 
+The outcome is issued against the action pinned in the `dso`-signed terms, and every
+ballot must carry those same terms.
+
+`Config`, `SetConfigAction`, `ConfigUpdate` are
+the governed target and its action. `Config` is signed by the `dso` and
+publishes its `setting` as `AuthenticTarget` state, opening at `"sync-a"`.
+`SetConfigAction` mints the execution. `ConfigUpdate` re-checks that
+bind under the `unchanged` drift policy before exercising `Config_Set`
+to `"sync-b"`.
+
+### The flow
+
+1. A member raises a `Proposal` on the Resolver's contract (signed by the dso), fixing the terms and the
+   action to be decided.
+2. The `dso` and the operator jointly invite each entitled voter.
+3. Each voter accepts their invitation, which in one transaction joins them to
+   the proposal's **roll** and hands them an empty ballot signed by operator and voter (dso is not an observer). 
+4. When voting opens. Each voter casts an option on their own ballot; only the
+   operator can read it.
+5. After `votingClosesAt` the operator resolves, presenting the proposal and
+   every ballot on its roll. The resolve goes through only if every ballot carries that proposal's mechanism and its terms and the voters presented must be exactly the same that joined Proposal.
+6. The execution applies the action, moving the config to `sync-b`.
+
 
 ## Security claims
 
@@ -18,33 +60,8 @@ the script that states it.
 | Test | Security claim |
 | --- | --- |
 | [`whoSeesWhat`](#1-whoseeswhat) | No voter learns another voter's vote before resolution. Asserted as each party's complete visible set after every phase, so an unanticipated leak fails it |
-| [`theCountCoversTheElectorate`](#2-thecountcoverstheelectorate) | The resolution cannot omit an entitled voter, by presenting a subset or by counting on a narrower resolver |
-| [`theOperatorCannotSkipTheCount`](#3-theoperatorcannotskipthecount) | The operator cannot create the outcome without resolution |
-
-
-## The format
-
-
-The operator seats every voter with an empty ballot it signs alone. Casting
-archives that ballot and creates one carrying the option, now signed by the
-voter too. 
-
-`VoteResolver` is signed by the `dso` and
-observed by the operator and the electorate. It publishes one procedure,
-`"majority"`, resolvable by `[[operator]]`. The procedure fetches the presented
-submittables as ballots and requires a presented voter list that is duplicate-free
-and equal to the electorate. On acceptance the procedure exercises
-`Action_IssueExecution` on the action the terms name.
-
-`Config`, `SetConfigAction`, `ConfigUpdate` are
-the governed target and its action. `Config` is signed by the `dso` and
-publishes its `setting` as `AuthenticTarget` state, opening at `"sync-a"`.
-`SetConfigAction` mints the execution, checking that it names `{dso}` as
-authorities, that the outcome written on it is `acceptOption`, and that its
-bindings are exactly this config and nothing else. `ConfigUpdate` re-checks that
-bind under the `unchanged` drift policy before exercising `Config_Set`
-to `"sync-b"`.
-
+| [`theCountCoversTheElectorate`](#2-thecountcoverstheelectorate) | The resolution cannot omit a voter who took a ballot — not by presenting a subset, and not by fabricating a ballot to stand in for one that was cast |
+| [`theOperatorCannotSkipResolve`](#3-theoperatorcannotskipresolve) | The operator cannot create the outcome without resolution |
 
 
 ## Method
@@ -55,21 +72,9 @@ party namespace through `setupAs`, so no state crosses between scripts.
 
 Visibility claims take two forms. Single claims are `sees` / `cannotSee`
 predicates over a party and one contract, so each note in the diagrams below is
-one line of test code. Stronger claims — that a party learned *nothing* across a
-phase — are `seesExactly`, an equality between the complete set of contracts
-visible to that party and an expected list. Those catch any contract the party
-becomes a **stakeholder** of, anticipated or not, and they are what demo 1 is
-built out of. What they cannot catch is divulgence — a payload a participant
-received as a witness of someone else's node, which never enters that party's
-ACS and so is invisible to `query`. Either read them in the
-test output, or open the scripts in Daml Studio and step through the same
-per-party views interactively.
+one line of test code. These checks cannot catch is divulgence. 
+That can be checked in Daml Studio. The other two claims are proved with assertions.
 
-One limit, stated plainly. Daml Script reads the ACS, not transaction trees, so
-these demos assert what a party can *read* after a phase, not the informee
-relation itself. What they assert directly is the half that matters here: the
-DSO and the other voters observe the resolver, take part in the outcome, and
-still read no vote.
 
 ```bash
 dpm test --package-root examples/governance/private-majority-vote/test
@@ -83,22 +88,22 @@ dpm test --package-root examples/governance/private-majority-vote/test
 `ProposalTerms` every ballot carries — `{dso}` as authority, accept and reject as
 the options, that action, one binding pinning the config's setting as seen at
 submission, and a three-day timeline: `entryClosesAt` at day 1,
-`votingClosesAt` at day 2, `expiresAt` at day 3. The `mechanism` names proposal
-`"proposal-1"` under the `"majority"` procedure and pins the resolver by
-contract id.
+`votingClosesAt` at day 2, `expiresAt` at day 3. Alice then raises the round on
+those terms with `VoteResolver_Propose`, and the `dso` and the operator together
+issue one `BallotInvitation` per entitled voter. The `mechanism` names proposal
+`"proposal-1"` under the `"majority"` procedure and names the body by key.
 
-No ballot exists yet. A demo calls `seat` for each voter it wants seated, `cast`
-to record an option, and `runResolve` to count; `executionOf` takes the single
+No ballot exists yet, only the proposal and the invitations. `seat` is a voter
+accepting their invitation, which joins them to the roll and hands them an empty ballot in
+one transaction. A demo calls `cast` to record an option and `runResolve` to resolve,
+which presents the proposal beside the ballots; `executionOf` takes the single
 `Executable` the resolve mints, and `runExecute` applies it to the config.
-`forgedExecution` and `runIssueMustFail` are demo 3's, for reaching the outcome
-without a count.
+
 
 ## 1. `whoSeesWhat`
 
-One proposal carried end to end — three seats, two accepts and one reject, an
-execution, and the config moved from `sync-a` to `sync-b`. After every phase the
-demo asserts each party's **complete** visible set, which is what makes it the
-whole privacy guarantee rather than a sample of it.
+One proposal carried end to end, three seats, two accepts and one reject, an
+execution, and the config moved from `sync-a` to `sync-b`. 
 
 ```mermaid
 sequenceDiagram
@@ -110,26 +115,27 @@ sequenceDiagram
 
     Note over D,C: Phase 1 — the body, the target, the action, then the seats
     D->>D: Config (sync-a), SetConfigAction (→ sync-b), VoteResolver
-    O->>A: PrivateBallot — empty, operator-signed
-    O->>B: PrivateBallot — empty
-    O->>C: PrivateBallot — empty
-    Note over D: sees exactly the three public contracts — not one seat
-    Note over A,C: each sees exactly its own seat, and the three public contracts
-    Note over O: sees all three seats
+    A->>A: VoteResolver_Propose — a Proposal on the body's terms
+    D->>A: BallotInvitation — dso and operator together
+    A->>A: Accept — joins the roll and takes an empty ballot, signed with the operator
+    Note over B,C: the same for Bob and Carol
+    Note over D: the invitations are spent — sees the proposal and the public contracts
+    Note over A,C: each sees exactly its own seat, the proposal, and the public contracts
+    Note over O: sees all three seats, the proposal, and the public contracts
 
     Note over D,C: Phase 2 — voting, after entryClosesAt
-    A->>O: Ballot_Cast accept — re-created with Alice signing
+    A->>O: Ballot_Cast accept — Alice already signed the blank, this records the option
     B->>O: Ballot_Cast accept
     C->>O: Ballot_Cast reject
     Note over B,C: neither can see Alice's cast ballot
     Note over D: ✗ nor can the DSO — it is not a stakeholder of it
-    Note over O: sees it — the one party trusted with confidentiality
+    Note over O: sees ballots
     Note over D: visible set unchanged by the entire voting phase
 
     Note over D,C: Phase 3 — resolve, after votingClosesAt
-    O->>O: Resolver_Resolve — presents all three ballots
+    O->>O: Resolver_Resolve — presents the proposal and all three ballots
     O->>D: Action_IssueExecution → one ConfigUpdate
-    O-->>A: every ballot consumed, votes archived with them
+    O-->>A: every ballot consumed with its vote, and the proposal with them
     Note over D,C: ✓ one execution, visible to all
     Note over D: sees the execution, never the tally that produced it
 
@@ -138,33 +144,11 @@ sequenceDiagram
     Note over D,C: ✓ everyone sees the new Config — nobody ever saw a vote
 ```
 
-The assertions are exact sets, not memberships. Before voting, `alice` sees her
-own seat plus the config, the action and the resolver — and nothing else; the
-`dso` sees those three public contracts and no seat at all. After the casts,
-`bob`, `carol` and the `dso` are each checked against Alice's ballot with
-`cannotSee`, the operator with `sees`, and the DSO's whole visible set is
-re-asserted unchanged. After the resolve, all three of `dso`, `alice` and
-`operator` see the same thing: the execution and the three public contracts.
-After the execute, the same three see the new `Config`, and the demo reads
-`setting === proposedSetting` off the DSO's own view.
 
-The privacy survives the count because projection in Daml is per node. The
-options are reached by `fetch` on ballots whose only stakeholders are the
-operator and one voter, so an informee of the parent `Resolver_Resolve` sees no
-part of those nodes. It holds only while the verdict stays free of anything
-identifying — `V_Accepted (Some acceptOption)` carries the winning option, which
-is public by construction, and never a breakdown.
-
-What the operator learns is the whole of the trust assumption: it is a
-stakeholder of every cast ballot and so reads every vote. It cannot alter one —
-a cast ballot carries its voter's signature — and demos 2 and 3 close what it
-could otherwise do with what it reads.
 
 ## 2. `theCountCoversTheElectorate`
 
-A count over a subset is the cheapest attack in a private vote, because the
-parties who could contradict it cannot see each other's ballots. The demo drops
-one voter at a time and shows the resolve failing, then presents everyone and
+The demo drops one voter at a time and shows the resolve failing, then presents everyone and
 shows it passing.
 
 ```mermaid
@@ -183,35 +167,22 @@ sequenceDiagram
     Note over O: ✗ the presented ballots cover the electorate
     O->>O: present Alice + Bob — drop the reject, keep a clean 2–0
     Note over O: ✗ the presented ballots cover the electorate
-    O->>O: recount Alice + Bob on a resolver over {Alice, Bob}
-    Note over O: ✗ the ballots name another resolver contract
+    O->>O: mint a blank ballot for Alice, to hide her accept
+    Note over O: ✗ a ballot carries its voter's signature
+    O->>O: the same, with the dso co-signing
+    Note over O: ✗ still — the voter signs, and neither of them is Alice
+    Note over O,C: and there is no roll to shape — each voter joined it themselves
 
     O->>O: present all three
     Note over O: ✓ V_Accepted — 2 accepts against an electorate of 3
 ```
 
-Both omissions are refused by the same line, and the two directions are chosen
-to show it is not a threshold check: dropping a vote that would have *helped*
-the proposal fails exactly as dropping one that opposed it does. The check
-(`coverElectorate`, in `ResolverV1.daml`) is an equality against the electorate
-over a duplicate-free list, so it rejects an extra or repeated entry as well —
-the demo exercises the dropping direction only.
 
-The electorate it compares against is on the `VoteResolver`, which the DSO
-signs and every ballot names by contract id through its `Mechanism`. Narrowing
-it after seating means a different resolver contract, and the demo builds one:
-an electorate of `{alice, bob}` under the same `bodyId`, so its `ResolverKey` is
-identical to the real one and only the contract id separates them. Counting the
-two ballots there is refused twice over — presenting the ballots' own mechanism
-fails the resolver's contract-id pin, and presenting one that names the new
-resolver fails the checked fetch on every ballot. Standing that resolver up
-needs the DSO's signature, so it is not a door the operator holds alone.
+## 3. `theOperatorCannotSkipResolve`
 
-## 3. `theOperatorCannotSkipTheCount`
-
-The operator submits every transaction in this format — it seats the voters, it
-resolves, it executes. The demo shows the two ways it could reach the outcome
-without a vote, and that both are closed by signature rather than by convention.
+The operator submits every transaction in this format. It seats the voters, it
+resolves, and tries to executes. The demo shows the two ways it could reach the outcome
+without a vote, and that both are closed by the Daml Ledger Model.
 
 ```mermaid
 sequenceDiagram
@@ -229,24 +200,3 @@ sequenceDiagram
 
     Note over D,A: the config still reads sync-a
 ```
-
-The first branch forges the outcome: an `ExecutableView` naming the real
-bindings and `acceptOption`, handed straight to the action that mints
-`ConfigUpdate`. `Action_IssueExecution` is controlled by
-`execution.core.authorities`, so the operator is submitting a choice it does not
-control. Renaming itself as the authority would make it the controller and buy
-nothing — `action_issueExecutionImpl` requires `core.authorities == {dso}` and
-rejects with *"the execution names another authority"*. The controller check and
-the body check close each other's gap; the demo exercises the first, and the
-second is why the alternative is not worth a script.
-
-The second branch forges the body instead: a `VoteResolver` with an electorate
-of one, which would make Alice alone a majority. `VoteResolver` is signed by the
-`dso`, so the operator cannot bring one into existence. The count it must go
-through is fixed by whoever signs the body, not by whoever runs the vote.
-
-The demo closes by reading the config: still `sync-a`. That is the "one node"
-claim in concrete form — the only path from votes to a changed config runs
-through `Resolver_Resolve` on a DSO-signed resolver, where the count, the issue
-and the consume are one exercise, and the DSO's authority is spent once.
-

@@ -1,26 +1,24 @@
 -- SPDX-License-Identifier: Apache-2.0
 
-module Cap.Examples.SealedFirstPrice.TermsV1 where
+module Cap.Examples.HighTrust.TermsV1 where
 
-import qualified DA.Set as Set
 import qualified DA.TextMap as TextMap
 
 import Splice.Api.Token.MetadataV1
 import qualified Splice.Api.Token.AllocationV2 as Alloc
+import qualified Splice.Api.Token.HoldingV2 as Holding
+
 import Splice.TokenStandard.Utils (regularAccountOwner)
 
 import Cap.Auctions.OneLotBidV1 (OneLotAuctionTerms, OneLotBidView, Quote)
+import Cap.Auctions.Utils (settlementOf)
 
 sellerOf : OneLotAuctionTerms -> Party
 sellerOf terms = regularAccountOwner terms.sellerLotAccount
 
 
-settlementOf : OneLotAuctionTerms -> Alloc.SettlementInfo
-settlementOf terms = Alloc.SettlementInfo with
-  executors = Set.toList terms.authorities
-  id = terms.saleId
-  cid = None
-  meta = emptyMetadata
+preLotSettlementOf : OneLotAuctionTerms -> Alloc.SettlementInfo
+preLotSettlementOf terms = (settlementOf terms []) with id = terms.saleId <> "/pre-lot"
 
 
 sellerLotAllocation : OneLotAuctionTerms -> Alloc.AllocationSpecification
@@ -30,16 +28,6 @@ sellerLotAllocation terms = Alloc.AllocationSpecification with
   transferLegSides = []
   settlementDeadline = Some terms.expiresAt
   nextIterationFunding = funding terms.lot.instrument.id terms.lot.amount
-  committed = True
-  meta = emptyMetadata
-
-sellerPaymentAllocation : OneLotAuctionTerms -> Alloc.AllocationSpecification
-sellerPaymentAllocation terms = Alloc.AllocationSpecification with
-  admin = terms.payment.admin
-  authorizer = terms.sellerPaymentAccount
-  transferLegSides = []
-  settlementDeadline = Some terms.expiresAt
-  nextIterationFunding = Some TextMap.empty
   committed = True
   meta = emptyMetadata
 
@@ -53,13 +41,14 @@ bidderPaymentAllocation bv quotes = Alloc.AllocationSpecification with
   committed = True
   meta = emptyMetadata
 
-bidderLotAllocation : OneLotBidView -> Alloc.AllocationSpecification
-bidderLotAllocation bv = Alloc.AllocationSpecification with
-  admin = bv.terms.lot.instrument.admin
-  authorizer = bv.bidderLotAccount
-  transferLegSides = []
-  settlementDeadline = Some bv.terms.expiresAt
-  nextIterationFunding = Some TextMap.empty
+receiverAllocation
+  : Party -> Holding.Account -> Time -> [Alloc.TransferLegSide] -> Alloc.AllocationSpecification
+receiverAllocation admin receiver deadline sides = Alloc.AllocationSpecification with
+  admin
+  authorizer = receiver
+  transferLegSides = sides
+  settlementDeadline = Some deadline
+  nextIterationFunding = None
   committed = True
   meta = emptyMetadata
 

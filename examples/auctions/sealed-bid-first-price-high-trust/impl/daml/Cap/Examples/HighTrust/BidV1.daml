@@ -5,6 +5,7 @@ module Cap.Examples.HighTrust.BidV1 where
 import qualified DA.Map as Map
 import DA.Optional (optionalToList)
 import qualified DA.Set as Set
+import qualified DA.TextMap as TextMap
 
 import Splice.Api.Token.MetadataV1
 import qualified Splice.Api.Token.AllocationV2 as Alloc
@@ -13,10 +14,19 @@ import qualified Splice.Api.Token.HoldingV2 as Holding
 
 import Splice.Util (require)
 import Splice.TokenStandard.Utils
-  (receiverSide, regularAccountOwner, regularAccountParties, senderSide)
+  ( nonIteratedAllocation
+  , receiverSide
+  , regularAccountOwner
+  , regularAccountParties
+  , senderSide
+  , textMapValues
+  )
 
+import Cap.Core.Utils (orAbort)
 import Cap.Core.SubmittableV1
 import Cap.Auctions.OneLotBidV1
+import Cap.Auctions.RegistryV1 (AllocationFactoryCall)
+import Cap.Auctions.SettlementV1 (SettlementBatch (..))
 import Cap.Auctions.Utils
   ( lotLeg
   , paymentLeg
@@ -24,8 +34,32 @@ import Cap.Auctions.Utils
   )
 
 import Cap.Examples.HighTrust.SettlementV1
+import Cap.Examples.HighTrust.TermsV1
 
 
+
+template AuctionInvitation
+  with
+    terms : OneLotAuctionTerms
+    bidderPaymentAccount : Holding.Account
+    bidderLotAccount : Holding.Account
+    mechanism : Mechanism
+  where
+    signatory Set.toList terms.authorities <> [sellerOf terms]
+    observer bidderOf bidderPaymentAccount
+
+    ensure terms.direction == Forward
+
+    choice AuctionInvitation_Accept : ContractId AuctionBid
+      controller bidderOf bidderPaymentAccount
+      do
+        now <- getTime
+        require "the seat is taken before the seating window closes"
+          (now < terms.entryClosesAt)
+        create AuctionBid with
+          terms; bidderPaymentAccount; bidderLotAccount; mechanism
+          quotes = []
+          paymentAllocation = None
 
 template AuctionBid
   with
@@ -36,11 +70,23 @@ template AuctionBid
     quotes : [Quote]
     paymentAllocation : Optional (ContractId Alloc.Allocation)
   where
-    signatory Set.toList terms.authorities
-           <> [bidderOf bidderPaymentAccount | not (null quotes)]
-    observer bidderOf bidderPaymentAccount
+    signatory Set.toList terms.authorities <> [bidderOf bidderPaymentAccount]
 
     ensure terms.direction == Forward
+      && case (quotes, paymentAllocation) of
+        ([], None) -> True
+        ([q], Some _) -> q.quantity == 1.0
+        _ -> False
+
+    choice AuctionBid_Restamp : ContractId AuctionBid
+      with
+        newMechanism : Mechanism
+      controller Set.toList terms.authorities
+      do
+        now <- getTime
+        require "a seat is restamped before bidding opens"
+          (now < terms.entryClosesAt)
+        create this with mechanism = newMechanism
 
     interface instance Submittable for AuctionBid where
       view = SubmittableView with
@@ -86,9 +132,9 @@ template AuctionBid
       oneLotBid_releaseImpl self _ = do
         archive self
         released <- forA (optionalToList paymentAllocation) $ \cid -> do
-          escrow <- view <$> fetch cid
+          paymentView <- view <$> fetch cid
           _ <- exercise cid Alloc.Allocation_Cancel with
-            actors = escrow.settlement.executors
+            actors = paymentView.settlement.executors
             extraArgs = terms.registries.paymentAllocate.cancelArgs
           pure cid
         pure OneLotBid_ReleaseResult with released; meta = emptyMetadata
@@ -114,46 +160,45 @@ template AuctionBid
         require "the lot allocation factory is administered by the lot admin"
           (lotFactory.admin == terms.lot.instrument.admin)
 
-        sellerEscrowView <- view <$> fetch arg.lotAllocationCid
+        sellerLotView <- view <$> fetch arg.lotAllocationCid
         require "the lot allocation matches the auction terms"
-          (sellerEscrowView.allocation == sellerLotAllocation terms)
+          (sellerLotView.allocation == sellerLotAllocation terms)
 
-        bidderEscrowCid <- case paymentAllocation of
-          Some cid -> pure cid
-          None -> abort "this seat holds no committed payment allocation"
+        bidderPaymentCid <- orAbort "this seat holds no committed payment allocation"
+          paymentAllocation
 
         let settlement = settlementOf terms [bidderOf bidderPaymentAccount]
-            pLeg = paymentLeg terms paymentLegId bidderPaymentAccount award.price
-            lLeg = lotLeg terms lotLegId bidderLotAccount award.quantity
+            pLeg = paymentLeg terms bidderPaymentAccount award.price
+            lLeg = lotLeg terms bidderLotAccount award.quantity
 
         lotAllocationCid <- reallocate
           terms.registries.lotAllocate
           arg.lotAllocationCid
-          sellerEscrowView
+          sellerLotView
           settlement
           [senderSide lLeg]
           None
 
-        bidderEscrowView <- view <$> fetch bidderEscrowCid
+        bidderPaymentView <- view <$> fetch bidderPaymentCid
         paymentAllocationCid <- reallocate
           terms.registries.paymentAllocate
-          bidderEscrowCid
-          bidderEscrowView
+          bidderPaymentCid
+          bidderPaymentView
           settlement
           [senderSide pLeg]
           None
       
-        sellerReceiptCid <- allocateOneStep
+        sellerPaymentCid <- allocateOneStep
           terms.registries.paymentAllocate
           settlement
-          (receiptAllocation terms.payment.admin terms.sellerPaymentAccount
+          (receiverAllocation terms.payment.admin terms.sellerPaymentAccount
             terms.expiresAt [receiverSide pLeg])
           []
 
-        winnerReceiptCid <- allocateOneStep
+        winnerLotCid <- allocateOneStep
           terms.registries.lotAllocate
           settlement
-          (receiptAllocation terms.lot.instrument.admin bidderLotAccount
+          (receiverAllocation terms.lot.instrument.admin bidderLotAccount
             terms.expiresAt [receiverSide lLeg])
           []
 
@@ -161,35 +206,70 @@ template AuctionBid
 
         settlementCid <- create AuctionSettlement with
           terms
-          winnerPaymentAccount = bidderPaymentAccount
-          winnerLotAccount = bidderLotAccount
-          award
-          lotAllocationCid
-          paymentAllocationCid
-          sellerReceiptCid
-          winnerReceiptCid
+          winner = bidderOf bidderPaymentAccount
           opensAt = now
           closesAt = terms.expiresAt
+          batches =
+            [ SettlementBatch with
+                leg = pLeg
+                sender = nonIteratedAllocation paymentAllocationCid
+                receiver = nonIteratedAllocation sellerPaymentCid
+                factory = terms.registries.paymentSettle
+            , SettlementBatch with
+                leg = lLeg
+                sender = nonIteratedAllocation lotAllocationCid
+                receiver = nonIteratedAllocation winnerLotCid
+                factory = terms.registries.lotSettle
+            ]
 
         pure OneLotBid_AwardResult with
           allocation =
-            [lotAllocationCid, paymentAllocationCid, sellerReceiptCid, winnerReceiptCid]
+            [lotAllocationCid, paymentAllocationCid, sellerPaymentCid, winnerLotCid]
           created = [coerceContractId settlementCid]
           meta = emptyMetadata
 
 bidderOf : Holding.Account -> Party
 bidderOf = regularAccountOwner
 
-preLotSettlementOf : OneLotAuctionTerms -> Alloc.SettlementInfo
-preLotSettlementOf terms = (settlementOf terms []) with id = terms.saleId <> "/pre-lot"
+allocateOneStep
+  : AllocationFactoryCall
+  -> Alloc.SettlementInfo
+  -> Alloc.AllocationSpecification
+  -> [ContractId Holding.Holding]
+  -> Update (ContractId Alloc.Allocation)
+allocateOneStep factory settlement allocation inputHoldingCids = do
+  now <- getTime
+  result <- exercise factory.factoryCid AllocInstr.AllocationFactory_Allocate with
+    settlement
+    allocation
+    requestedAt = now
+    inputHoldingCids
+    extraArgs = factory.allocateArgs
+    actors = regularAccountParties allocation.authorizer
+  case result.output of
+    AllocInstr.AllocationInstructionResult_Completed cid -> pure cid
+    AllocInstr.AllocationInstructionResult_Pending _ ->
+      abort "the registry returned a pending allocation instruction; this format needs a one-step allocation"
+    AllocInstr.AllocationInstructionResult_Failed ->
+      abort "the registry failed to create the allocation"
 
-receiptAllocation
-  : Party -> Holding.Account -> Time -> [Alloc.TransferLegSide] -> Alloc.AllocationSpecification
-receiptAllocation admin receiver deadline sides = Alloc.AllocationSpecification with
-  admin
-  authorizer = receiver
-  transferLegSides = sides
-  settlementDeadline = Some deadline
-  nextIterationFunding = None
-  committed = True
-  meta = emptyMetadata
+reallocate
+  : AllocationFactoryCall
+  -> ContractId Alloc.Allocation
+  -> Alloc.AllocationView
+  -> Alloc.SettlementInfo
+  -> [Alloc.TransferLegSide]
+  -> Optional (TextMap.TextMap Decimal)
+  -> Update (ContractId Alloc.Allocation)
+reallocate
+  factory allocationCid current settlement transferLegSides nextIterationFunding = do
+    let allocation = current.allocation with
+          transferLegSides = transferLegSides
+          nextIterationFunding = nextIterationFunding
+    result <- exercise allocationCid Alloc.Allocation_Cancel with
+      actors = current.settlement.executors
+      extraArgs = factory.cancelArgs
+    let released = concat (textMapValues result.authorizerHoldingCids)
+    if null released
+      then abort "the cancelled allocation released no holdings to reallocate"
+      else allocateOneStep factory settlement allocation released

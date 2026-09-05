@@ -6,11 +6,12 @@ Four interface packages and a utils package, for approving effects on live state
 
 A proposal is resolved by a `Resolver` from `cap-core`: it collects `Submittable`s and
 runs a named `Procedure` over them to reach a `Verdict`. Ballots are those submittables.
-`ProposalTerms` carries the options voters choose between and a `[Bind]` — the contracts
-the decision will act on, each pinning what was seen of it at submission. A proposal may
+`ProposalTerms` carries the options voters choose between and a `[Bind]`: the contracts
+the decision will act on with a pin of itd state. A proposal may
 bind several targets across several packages, and `Executable_Execute` checks and writes
-them in one transaction, so either all move or none do. A bind pins by
-state, by contract id, or both and it can be pinned at different stages (Submission, Resolution, Execution). 
+them in one transaction. A bind pins by
+state, by contract id, and it can be pinned at different stages (Submission, Resolution, Execution). 
+For example, pin a contract by state at submission and then pin by cid at resolution is possible.
 State is what the target says about itself, so it forces
 trusting the target's authorities (similar to amulet-rules in splice), and admit detailed drift policies. A
 contract id is a ledger fact and needs no such trust, but it is all-or-nothing: any
@@ -72,23 +73,24 @@ a rule.
 ```
 cap-governance/
 ├── Interfaces/
-│   ├── binding/             Bind, AsOf, TargetKey, AuthenticTarget
+│   ├── binding/             Bind, AsOf, Stage, TargetKey, AuthenticTarget
 │   ├── executable/          Executable, ExecutableView
 │   ├── action/              Action, Action_IssueExecution
 │   └── ballot/              Ballot, ProposalTerms
-└── cap-governance-utils/    StatePolicies
+└── cap-governance-utils/    DriftPolicy and its combinators
 
 examples/governance/
 ├── private-majority-vote/
-│   └── {impl,test}      a private-ballot majority vote
+│   └── {impl,test}          a private-ballot majority vote
 └── baby-dso/
     ├── plain/               the reduced DsoRules/AmuletRules — the shape argued against
     └── cap/
-        ├── impl/            the DSO: resolver, ballot, its own DsoConfig
-        ├── registry/        a CAP-aware app: AuthenticTarget + Action + Executable for
-        │                    itself, plus the bridge that governs legacy/. Never
-        │                    imported by impl/.
-        ├── legacy/          a template that implements nothing and knows nothing about CAP
+        ├── ans/             AnsRules — implements nothing, knows nothing about CAP
+        ├── config/          AmuletConfig, the DSO's own AuthenticTarget
+        ├── governance/      the DSO body: DsoResolver, SvBallot, SvConfirmation.
+        │                    Imports no app package — neither ans/, config/ nor action/.
+        ├── action/          a CAP-aware app: Action + Executable over config/,
+        │                    plus the bridge that governs ans/
         └── test/            the demos
 
 lib/                         vendored Token Standard and Splice DARs

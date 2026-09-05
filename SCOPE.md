@@ -83,7 +83,7 @@ resolution. Weighted voting *might* require new interfaces.
 | Demo | a prototype frontend + backend driving the auction flow | end-to-end tests | **M5** |
 
 The interface layer is `OneLotBid` and `Settlement`, reusing the same
-skeleton. A bid names an escrow its bidder funded before casting — a Token
+skeleton. A bid names the payment its bidder funded before casting — a Token
 Standard `Allocation`, the standard's own artifact — and records what it says,
 so a pricing rule reads the funding off the bid. One close bars casting and
 withdrawing alike, so the set of bids is fixed the moment bidding ends and each

@@ -1,0 +1,50 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Examples.HighTrust.Fixtures.ImpostorBidV1 where
+
+import qualified DA.Map as Map
+import qualified DA.Set as Set
+
+import Splice.Api.Token.MetadataV1
+import qualified Splice.Api.Token.HoldingV2 as Holding
+
+import Cap.Core.SubmittableV1
+import Cap.Auctions.OneLotBidV1
+
+template ImpostorBid
+  with
+    operator : Party
+    terms : OneLotAuctionTerms
+    bidderPaymentAccount : Holding.Account
+    bidderLotAccount : Holding.Account
+    mechanism : Mechanism
+    quotes : [Quote]
+  where
+    signatory operator
+
+    interface instance Submittable for ImpostorBid where
+      view = SubmittableView with
+        mechanism
+        opensAt = terms.entryClosesAt
+        closesAt = terms.biddingClosesAt
+        expiresAt = Some terms.expiresAt
+        meta = emptyMetadata
+
+    interface instance OneLotBid for ImpostorBid where
+      view = OneLotBidView with
+        terms
+        availableActions = Map.fromList [(BA_Release, [Set.toList terms.authorities])]
+        bidderPaymentAccount
+        bidderLotAccount
+        quotes
+        paymentAllocation = None
+        lotAllocation = None
+        meta = emptyMetadata
+
+      oneLotBid_submitImpl _ _ = abort "this seat is an impostor"
+      oneLotBid_withdrawImpl _ _ = abort "this seat is an impostor"
+      oneLotBid_awardImpl _ _ = abort "this seat is an impostor"
+      oneLotBid_expireImpl _ _ = abort "this seat is an impostor"
+      oneLotBid_releaseImpl self _ = do
+        archive self
+        pure OneLotBid_ReleaseResult with released = []; meta = emptyMetadata

@@ -10,23 +10,29 @@ import qualified DA.Set as Set
 
 import Splice.Api.Token.MetadataV1
 import qualified Splice.Api.Token.AllocationV2 as Alloc
+import qualified Splice.Api.Token.HoldingV2 as Holding
 
 import Splice.Util (require)
 
-import Cap.Core.Utils (requireClosed)
+import Cap.Core.Utils (orAbort, requireClosed)
 import Cap.Core.ResolverV1
 import Cap.Core.SubmittableV1
 import Cap.Auctions.OneLotBidV1
 
 import Cap.Examples.HighTrust.BidV1
-import Cap.Examples.HighTrust.SettlementV1 (sellerOf, sellerLotAllocation)
+import Cap.Examples.HighTrust.TermsV1 (preLotSettlementOf, sellerLotAllocation, sellerOf)
 
 firstPriceProcedureName : Text
 firstPriceProcedureName = ""
 
-orAbort : Text -> Optional a -> Update a
-orAbort msg None = abort msg
-orAbort _ (Some a) = pure a
+auctionMechanism : OneLotAuctionTerms -> ContractId AuctionLot -> Mechanism
+auctionMechanism terms lotCid = Mechanism with
+  resolver = ResolverKey with
+    authorities = terms.authorities
+    id = terms.saleId
+  resolverCid = Some (coerceContractId lotCid)
+  procedure = firstPriceProcedureName
+  id = terms.saleId
 
 template AuctionLotProposal
   with
@@ -37,38 +43,75 @@ template AuctionLotProposal
     observer sellerOf terms
 
     ensure terms.direction == Forward
+      && terms.lot.amount == 1.0
       && not (null invited)
       && unique invited
       && notElem (sellerOf terms) invited
 
     choice AuctionLotProposal_Accept : ContractId AuctionLot
       with
-        sellerEscrowCid : ContractId Alloc.Allocation
+        sellerLotAllocationCid : ContractId Alloc.Allocation
+        bidderPaymentAccounts : [Holding.Account]
+        bidderLotAccounts : [Holding.Account]
       controller sellerOf terms
       do
         now <- getTime
         require "the lot is locked before the entry window closes"
           (now < terms.entryClosesAt)
-        escrow <- view <$> fetch sellerEscrowCid
-        require "the escrow is the one these terms imply"
-          (escrow.allocation == sellerLotAllocation terms)
-        require "the escrow is scoped to this auction"
-          (escrow.settlement == preLotSettlementOf terms)
-        create AuctionLot with terms; invited; sellerEscrowCid
+        lotView <- view <$> fetch sellerLotAllocationCid
+        require "the lot allocation is the one these terms imply"
+          (lotView.allocation == sellerLotAllocation terms)
+        require "the lot allocation is scoped to this auction"
+          (lotView.settlement == preLotSettlementOf terms)
+        require "each seat's two accounts name one bidder"
+          (map bidderOf bidderPaymentAccounts == map bidderOf bidderLotAccounts)
+        require "the bidder accounts name exactly the invited bidders"
+          (sort (map bidderOf bidderPaymentAccounts) == sort invited)
+        lotCid <- create AuctionLot with terms; invited = []; sellerLotAllocationCid
+        let mechanism = auctionMechanism terms lotCid
+        forA_ (zip bidderPaymentAccounts bidderLotAccounts) $ \(payment, lot) ->
+          create AuctionInvitation with
+            terms; mechanism
+            bidderPaymentAccount = payment
+            bidderLotAccount = lot
+        pure lotCid
 
 template AuctionLot
   with
     terms : OneLotAuctionTerms
     invited : [Party]
-    sellerEscrowCid : ContractId Alloc.Allocation
+    sellerLotAllocationCid : ContractId Alloc.Allocation
   where
     signatory Set.toList terms.authorities <> [sellerOf terms]
     observer invited
 
+    choice AuctionLot_FinalizeInvitation : ContractId AuctionLot
+      with
+        seatCids : [ContractId AuctionBid]
+      controller Set.toList terms.authorities
+      do
+        now <- getTime
+        require "the seating is finalized before bidding opens"
+          (now < terms.entryClosesAt)
+        require "the presented seats are distinct" (unique seatCids)
+        require "at least one bidder took a seat" (not (null seatCids))
+        seated <- forA seatCids $ \cid -> do
+          seat <- fetch cid
+          require "every seat was opened on the seller's terms" (seat.terms == terms)
+          require "every seat was opened on this auction"
+            (seat.mechanism == auctionMechanism terms self)
+          require "every seat is still unbid" (null seat.quotes)
+          pure (bidderOf seat.bidderPaymentAccount)
+        require "the seated bidders are distinct" (unique seated)
+        newLotCid <- create this with invited = seated
+        let newMechanism = auctionMechanism terms newLotCid
+        forA_ seatCids $ \cid ->
+          exercise cid AuctionBid_Restamp with newMechanism
+        pure newLotCid
+
     interface instance Resolver for AuctionLot where
       view = ResolverView with
         authorities = terms.authorities
-        submittablesIssuers = [Set.toList terms.authorities]
         id = terms.saleId
         expiresAt = Some terms.expiresAt
         meta = emptyMetadata
@@ -97,6 +140,8 @@ resolveFirstPrice lot self cast extraArgs = do
     let bv = view b
     require "every presented seat was opened on the seller's terms"
       (bv.terms == terms)
+    require "every presented seat is signed by the bidder it names"
+      (bidderOf bv.bidderPaymentAccount `elem` signatory s)
     pure (coerceContractId cid : ContractId OneLotBid, bv)
 
   require "every invited bidder is presented"
@@ -114,7 +159,7 @@ resolveFirstPrice lot self cast extraArgs = do
       awardResult <- exercise winnerCid OneLotBid_Award with
         actors = Set.toList terms.authorities <> [sellerOf terms]
         awarded = [award]
-        lotAllocationCid = lot.sellerEscrowCid
+        lotAllocationCid = lot.sellerLotAllocationCid
         extraArgs
       pure (V_Accepted None, awardResult.created)
 

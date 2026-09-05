@@ -4,6 +4,7 @@ module Cap.Governance.ActionV1 where
 
 import Prelude hiding (Action)
 
+import DA.Set (Set)
 import qualified DA.Set as Set
 
 import Splice.Api.Token.MetadataV1
@@ -11,6 +12,8 @@ import Cap.Governance.ExecutableV1 (Executable, ExecutableView (..))
 
 data ActionView = ActionView
   with
+    authorities : Set Party
+      -- ^ Whose authority governs this action. 
     meta : Metadata
   deriving (Eq, Show)
 
@@ -29,5 +32,5 @@ interface Action where
     with
       execution : ExecutableView
       extraArgs : ExtraArgs
-    controller Set.toList execution.core.authorities
+    controller Set.toList (view this).authorities
     do action_issueExecutionImpl this self (Action_IssueExecution with ..)

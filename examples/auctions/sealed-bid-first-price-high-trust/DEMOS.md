@@ -1,7 +1,11 @@
-# Demos — `examples/experiments/first-price-high-trust`
+# Demos — `examples/auctions/sealed-bid-first-price-high-trust`
 
-7 demos showing the security and privacy guarantees of a sealed-bid first-price
+6 demos showing the security and privacy guarantees of a sealed-bid first-price
 auction with ex-post bid privacy using CAP.
+
+This is the stronger of the two auction examples. The smaller one,
+[`../sealed-bid-first-price`](../sealed-bid-first-price/DEMOS.md), trusts the
+operator with the assets and with the presentation; this one does not.
 
 The auction runs over a fixed set of invited bidders, named on the resolver
 before the lot locks. Those bidders observe the resolver, so each is an informee
@@ -18,27 +22,14 @@ is bounded by `expiresAt`; it cannot rig the outcome.
 The demos are Daml Script tests exercised against two independent token
 registries: Canton Coin (Amulet) settles the payment leg, and a simulated
 registry built on `TestTokenV2` issues the lot. A single registry administering
-both instruments would leave the cross-registry atomicity of demo 4 untested.
+both instruments would leave the cross-registry atomicity of demo 4 untested —
+the payment and lot batches move through different registries in one
+`Settlement_Settle`.
 
-Assertions take two forms. Visibility claims are stated per contract, as
-`sees` / `cannotSee` predicates over a party and a contract identifier, so that
-each note in the diagrams below corresponds to one line of test code. The same
-per-party views can be inspected interactively in Daml Studio. Stronger claims —
-that a party learned *nothing* across a phase — are stated as an equality
-between the complete set of contracts visible to that party before and after.
-That catches any contract the party becomes a **stakeholder** of, anticipated
-or not. It does not catch divulgence: a payload a party's participant received
-as a witness of someone else's node never enters that party's ACS, so no
-`query` returns it and no script can assert its absence.
-
-One limit worth stating plainly. Daml Script reads the ACS, not transaction
-trees, so a script can assert that an invited bidder **observes the resolver** —
-the structural fact the informee relation follows from — but cannot assert the
-informee relation itself. What it does assert directly is the other half: that
-reading the presentation buys a loser nothing about the amounts in it.
-
-The invited bidders are `alice`, `bob` and `carol`. Carol is invited and never
-takes her seat; `dave` is never invited.
+Visibility claims take two forms. Single claims are `sees` / `cannotSee`
+predicates over a party and one contract, so each note in the diagrams below is
+one line of test code. These checks cannot catch is divulgence. 
+That can be checked in Daml Studio. 
 
 The test harness is taken from the Splice repository
 (`github.com/canton-network/splice`, under `token-standard/`). Since Daml Script
@@ -49,7 +40,21 @@ copied verbatim; `Registries.AmuletRegistryV2` and
 `Registries.TestTokenV2_RegistryV2` are reduced to their V2 surface, removing
 a dependency on the wallet client and on the V1 API.
 
-## 1. `WhoSeesWhat`
+## Security claims
+
+Each demo carries one claim. Dispatched here:
+
+| Test | Security claim |
+| --- | --- |
+| [`whoSeesWhat`](#1-whoseeswhat) | No party learns a quote it is not entitled to: the seller learns nothing while bidding is open, and a loser reads the presentation without reading a quote in it |
+| [`lotCanOnlyBeReleasedBySellerAndOperatorJointly`](#2-lotcanonlybereleasedbysellerandoperatorjointly) | The locked lot is released by the seller and the operator together or not at all — neither holds it alone |
+| [`lotGoesToTheHighestPresentedBid`](#3-lotgoestothehighestpresentedbid) | The winner is computed from the presented quotes, not supplied: the lot goes to the highest bid at that bidder's own price, and every loser is made whole |
+| [`noPaymentWithoutTheLot`](#4-nopaymentwithoutthelot) | The winner pays only in the transaction that delivers the lot — the two legs cannot be prised apart, across two independent registries |
+| [`theOperatorCannotSwapTheRegistry`](#5-theoperatorcannotswaptheregistry) | Settlement cannot be redirected or repriced: the registry calls are pinned in the countersigned terms, and `Settlement_Settle` settles from the settlement's own view, ignoring whatever the caller passes |
+| [`theAuctionResolvesOnTheInvitedSetAlone`](#6-theauctionresolvesontheinvitedsetalone) | The auction resolves only on the set of bidders who took their seats — none dropped, none added — and no entry in that set can be forged, by the operator alone or with the seller |
+
+
+## 1. `whoSeesWhat`
 
 One happy-path auction over three invited bidders, two of whom bid. After every
 phase the demo asserts each party's **complete** visible set. This demo covers
@@ -64,17 +69,17 @@ sequenceDiagram
     participant C as Carol
 
     Note over S,C: Phase 1 — the invited bidders, then the lot
-    O->>O: AuctionResolver — invited = A, B, C
+    O->>O: AuctionLot — the resolver, invited set still empty
     Note over A,C: each observes the resolver — the seller does not
-    O->>S: AuctionSellerAuthProposal
-    S->>S: Accept — checks the pinned resolver, then locks the lot in escrow
+    O->>S: AuctionLotProposal
+    S->>S: Accept — checks the pinned resolver, then locks the lot in an allocation
     O->>A: AuctionInvitation
     O->>B: AuctionInvitation
     O->>C: AuctionInvitation
     A->>A: Accept — a typed fetch pins the resolver, takes a seat
     B->>B: Accept — takes a seat
     Note over C: never accepts — her invitation stays live
-    Note over S: sees its own lot escrow, and nothing else
+    Note over S: sees its own lot allocation, and nothing else
 
     Note over S,C: Phase 2 — bidding, after entryClosesAt
     A->>O: locks a seal, submits 100
@@ -109,7 +114,7 @@ value-free — `V_Accepted (Optional AnyValue)` sits in the exercise *result*,
 which every informee reads. `resolveFirstPrice` returns `V_Accepted None`, and
 in this format that is a rule, not an incidental.
 
-## 2. `LotCanOnlyBeReleasedBySellerAndOperatorJointly`
+## 2. `lotCanOnlyBeReleasedBySellerAndOperatorJointly`
 
 The lot sits in a committed Token Standard V2 allocation whose executors are
 the seller and the operator. V2 requires the **full** executor set to cancel,
@@ -137,12 +142,12 @@ The guarantee is Token Standard V2's, not CAP's: a committed allocation is
 only as unabortable as its executor set is hard to assemble.
 Either the seller or the operator must want the resolution to happen.
 
-## 3. `LotGoesToTheHighestPresentedBid`
+## 3. `lotGoesToTheHighestPresentedBid`
 
 Once the operator resolves, the lot goes to the highest bid presented, at that
-bidder's own quoted price. Both halves are checked in `AuctionSellerAuth_Award`,
-where the seller's delegation is spent — not in the procedure that calls it —
-so they hold however the award is reached.
+bidder's own quoted price. The winner is **computed** in the resolve as the
+maximum of the presented quotes rather than supplied by the operator, so there
+is no proposed answer for the checks to disagree with.
 
 ```mermaid
 sequenceDiagram
@@ -158,15 +163,15 @@ sequenceDiagram
     O->>O: Resolver_Resolve — presents both bids
     O->>A: award at 100, the highest presented
     O-->>B: seal released, B pays nothing
-    Note over S,B: the escrow's executors are now the seller, the operator and A
+    Note over S,B: the lot allocation's executors are now the seller, the operator and A
 
-    O->>S: cancel the escrow together
+    O->>S: cancel the lot allocation together
     Note over S,O: ✗ the winner is an executor now too
     O->>B: award to B instead
     Note over O: ✗ nothing is left to award
 ```
 
-## 4. `NoPaymentWithoutTheLot`
+## 4. `noPaymentWithoutTheLot`
 
 The winner pays only in the transaction that delivers the lot.
 
@@ -193,7 +198,7 @@ sequenceDiagram
 Atomicity is Daml's: both settle-batch calls sit in one transaction, so a
 failure in either moves nothing. The operator holds only the liveness role.
 
-## 5. `TheOperatorCannotSwapTheRegistry`
+## 5. `theOperatorCannotSwapTheRegistry`
 
 Which registry contracts may touch the assets is fixed in
 `OneLotAuctionTerms.registries` when the auction is constituted, not chosen by
@@ -229,7 +234,7 @@ sequenceDiagram
     Note over S,A: ✓ both legs move, 100 to S, lot to A
 
     Note over S,A: an auction whose TERMS name the impostor
-    S->>S: signs AuctionSellerAuth over those terms
+    S->>S: signs AuctionLot over those terms
     A->>A: signs AuctionBid over those terms
     O->>O: Settlement_Settle
     Note over S,A: ✗ payment moves, lot does not — A pays for nothing
@@ -244,20 +249,26 @@ own it settles no allocation, so it moves nothing.
 The last branch is the residual trust, stated rather than hidden. Binding the
 calls does not make a hostile registry harmless; it moves the decision to a
 document the seller and every bidder sign before anything locks, and off the
-operator's settle-time call. The demo asserts that both `AuctionSellerAuth` and
-`AuctionBid` carry the terms naming it, so nobody reached that state without
-countersigning it.
+operator's settle-time call — `Settlement_Settle` reads the factories off the
+settlement's own view, so a repriced or redirected batch handed to it is simply
+ignored. The demo asserts that both `AuctionLot` and `AuctionBid` carry the
+terms naming the impostor, so nobody reached that state without countersigning
+it.
 
-## 6. `TheOperatorCannotDropABidder`
+## 6. `theAuctionResolvesOnTheInvitedSetAlone`
 
-Omitting a bid is what a first-price operator would otherwise be free to do, and
-it is the cheapest attack to hide: an absence looks like a bidder who simply did
-not turn up. The award closes it by re-deriving the invited set from the pinned
-resolver and requiring one entry per invited bidder — a bid that bidder signed,
-or the invitation it never took up. `AuctionInvitation` is a `Submittable` for
-exactly this reason, so an unused invitation is presented the way a bid is.
-Neither can be forged: the bid carries the bidder's signature, the invitation is
-checked against these terms.
+The count is an equality against the set of bidders who seated, so one line
+refuses a missing entry and an extra one alike. Dropping is the cheaper attack —
+an absence looks like a bidder who did not turn up — but both are the same
+check, and the demo walks them together before showing that on the right set the
+lot goes to the highest bid.
+
+Every entry is unforgeable. A quoted `AuctionBid` carries its bidder's
+signature; so does the unquoted seat, because a seat is only reachable by the
+bidder accepting an `AuctionInvitation`, which the operator cannot mint alone —
+it is signed by the operator *and* the seller. And the invited set itself is
+frozen by `AuctionLot_FinalizeInvitation` **before bidding opens**, derived from
+the seats it restamps rather than supplied alongside them.
 
 ```mermaid
 sequenceDiagram
@@ -265,75 +276,57 @@ sequenceDiagram
     participant A as Alice
     participant B as Bob
     participant C as Carol
+    participant D as Dave
+
+    Note over O,D: A, B and C seated — Dave never was
+    O->>O: create a seat for Alice
+    Note over O: ✗ a seat carries its bidder's signature
+    O->>O: create a seat for Alice, with the seller co-signing
+    Note over O: ✗ still — the bidder signs, and neither of them is Alice
+    O->>O: create an AuctionInvitation for Dave
+    Note over O: ✗ an invitation carries the seller's signature
+    O->>O: create a quoted bid for Alice
+    Note over O: ✗ a bid carries its bidder's signature
 
     A->>O: submits 100
     B->>O: submits 60
-    Note over C: invited, never seated
+    Note over C: seated, never bid
 
     O->>O: present A + C — drop the losing bid
-    Note over O: ✗ not every invited bidder is presented
-    O->>O: present A + B — drop the bidder who never seated
-    Note over O: ✗ not every invited bidder is presented
+    Note over O: ✗ not every seated bidder is presented
+    O->>O: present A + B — drop the bidder who never bid
+    Note over O: ✗ not every seated bidder is presented
     O->>O: present A alone
-    Note over O: ✗ not every invited bidder is presented
+    Note over O: ✗ not every seated bidder is presented
+    O->>O: present C alone — lapse the sale, hiding both bids
+    Note over O: ✗ not every seated bidder is presented
+    O->>D: a seat Dave really signs, added to the full slate
+    Note over O: ✗ Dave is not in the frozen set
     O->>O: present A twice, to pad the count
     Note over O: ✗ the presented submittables are not distinct
+    O->>O: present a seat opened on another mechanism
+    Note over O: ✗ contract group identifier mismatch
+    O->>O: resolve under a mechanism naming another resolver
+    Note over O: ✗ the declared mechanism is binded to another resolver contract
+    O->>O: restamp a seat onto another mechanism, after bidding closed
+    Note over O: ✗ a seat is restamped before bidding opens
 
-    Note over O: the same check off the resolver
-    O->>O: AuctionSellerAuth_Award directly — award B, hiding A
-    Note over O: ✗ not every invited bidder is presented
-
+    Note over O,D: nothing moved through any of it
     O->>O: present A + B + C
-    Note over O: ✓ A wins at 100
+    Note over O: ✓ A wins at 100 — the highest of the three
 ```
 
-The last two branches are the point. `AuctionSellerAuth` is signed by the
-operator and the seller and its award is controlled by the operator alone — the
-seller must not be able to abort after price discovery, so that cannot change.
-The operator can therefore always reach the award without going through
-`Resolver_Resolve`. Because the check lives in the body of the choice rather
-than in who may call it, the direct call is not a bypass: it either produces the
-outcome the procedure would have produced, or produces nothing.
+The Dave branch is the sharp one. His seat is genuine — the operator, the seller
+and Dave himself all signed it — and it still cannot be added, because `invited`
+was derived from the seats present at finalization and Dave's was not among
+them. Adding a bidder after the fact is not a matter of forging a signature; the
+set is simply closed.
 
-The check is an equality against the invited set, not a subset test, so it
-rejects an extra entry as well as a missing one. Demo 7 covers that direction.
-
-What remains is that the operator may put a shill on the invited list *before*
-anything locks — visible to the seller and to every bidder who signs those
-terms. In a first-price auction it buys nothing: a shill that loses does
-nothing, and a shill that wins has to pay its own quote.
-
-## 7. `TheOperatorCannotAddABidder`
-
-The mirror of demo 6. Adding a bidder is stopped twice over, and the first layer
-means the second is never reached.
-
-```mermaid
-sequenceDiagram
-    participant O as Operator
-    participant D as Dave
-    participant C as Carol
-
-    Note over O,C: Dave was never invited, Carol was invited and never seated
-    O->>O: create AuctionBid for Dave
-    Note over O: ✗ a bid carries its bidder's signature
-    O->>O: create AuctionBid for Carol
-    Note over O: ✗ invited is not the same as seated
-
-    O->>D: AuctionInvitation on the real mechanism
-    D->>D: Accept
-    Note over D: ✗ the invitation names a bidder the resolver invited
-
-    Note over O,C: so no fabricated entry ever exists to present
-    O->>O: Resolver_Resolve with the three real entries
-    Note over O: ✓ A wins at 100
-```
-
-A bid is signed by the authorities **and** its bidder, so the operator — an
-authority on every bid in the auction — still cannot bring one into existence
-alone. That holds for Carol too: being invited is not being seated, and her
-unused invitation is the only thing the operator may present for her.
-
-The invited set itself is fixed before the lot locks and pinned by contract id
-in the mechanism every seat is signed against, so it cannot be widened after
-bidding opens without invalidating every seat already taken.
+What remains is that the operator chooses which seats to finalize, so it can
+leave a seated bidder out. That happens before bidding opens — no quote exists
+yet — so the exclusion is blind, and the excluded bidder can see their seat was
+never restamped. It reduces to refusing to seat someone, which no on-ledger rule
+can prevent. The operator may also put a shill on the invited list before
+anything locks, visible to the seller and to every bidder who signs those terms;
+in a first-price auction it buys nothing, since a shill that wins pays its own
+quote.

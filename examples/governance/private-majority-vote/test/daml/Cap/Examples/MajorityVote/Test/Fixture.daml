@@ -54,19 +54,11 @@ data Fixture = Fixture with
     carol : Party
     electorate : Set Party
     resolverCid : ContractId VoteResolver
+    proposalCid : ContractId Proposal
     mechanism : Mechanism
     configCid : ContractId Config
     actionCid : ContractId SetConfigAction
     terms : ProposalTerms
-
-voteMechanism : Party -> Text -> ContractId VoteResolver -> Mechanism
-voteMechanism dso proposalId resolverCid = Mechanism with
-  resolver = ResolverKey with
-    authorities = Set.fromList [dso]
-    id = bodyName
-  resolverCid = Some (coerceContractId resolverCid)
-  procedure = majorityProcedureName
-  id = proposalId
 
 configBind : Party -> Text -> Bind
 configBind dso setting = AuthenticBind with
@@ -86,15 +78,16 @@ setupAs ns = do
 
   now <- getTime
   configCid <- submit dso $ createCmd Config with
-    dso; operator; electorate; setting = openingSetting
+    dso; electorate; setting = openingSetting
   actionCid <- submit dso $ createCmd SetConfigAction with
     dso; operator; electorate; newSetting = proposedSetting
-  resolverCid <- submit dso $ createCmd VoteResolver with
-    dso; operator; electorate
-    bodyId = bodyName
-    expiresAt = now `addRelTime` days 10
+  let body = VoteResolver with
+        dso; operator; electorate
+        resolverId = bodyName
+        expiresAt = now `addRelTime` days 10
+  resolverCid <- submit dso $ createCmd body
 
-  let mechanism = voteMechanism dso proposalName resolverCid
+  let mechanism = voteMechanism dso bodyName proposalName
       terms = ProposalTerms with
         authorities = Set.fromList [dso]
         options = majorityOptions
@@ -103,6 +96,13 @@ setupAs ns = do
         entryClosesAt = now `addRelTime` days 1
         votingClosesAt = now `addRelTime` days 2
         expiresAt = now `addRelTime` days 3
+
+  proposalCid <- submit alice $ exerciseCmd resolverCid VoteResolver_Propose with
+    proposer = alice
+    proposalId = proposalName
+    terms
+
+  _ <- submit operator $ exerciseCmd proposalCid Proposal_Invite
 
   pure Fixture with ..
 
@@ -113,9 +113,25 @@ presentedTargets f configCid = Map.fromList
 presented : ContractId PrivateBallot -> ContractId Submittable
 presented = toInterfaceContractId @Submittable
 
-seat : Fixture -> Mechanism -> Party -> Script (ContractId PrivateBallot)
-seat f mechanism voter = submit f.operator $ createCmd PrivateBallot with
-  operator = f.operator; voter; mechanism; terms = f.terms; votes = []
+
+withProposal : Fixture -> [ContractId Submittable] -> [ContractId Submittable]
+withProposal f ballots = toInterfaceContractId @Submittable f.proposalCid :: ballots
+
+
+liveProposal : Fixture -> Script (ContractId Proposal)
+liveProposal f = do
+  proposals <- query @Proposal f.operator
+  case [cid | (cid, p) <- proposals, p.mechanism == f.mechanism] of
+    [cid] -> pure cid
+    _ -> fail "no live proposal on this body"
+
+seat : Fixture -> Party -> Script (ContractId PrivateBallot)
+seat f voter = do
+  proposalCid <- liveProposal f
+  invitations <- query @BallotInvitation voter
+  case [cid | (cid, iv) <- invitations, iv.voter == voter, iv.mechanism == f.mechanism] of
+    [cid] -> submit voter (exerciseCmd cid BallotInvitation_Accept with proposalCid)
+    _ -> fail "that voter holds no invitation on this proposal"
 
 cast
   : Fixture -> Party -> ContractId PrivateBallot -> AnyValue
@@ -153,20 +169,13 @@ resolveOnCmd f resolverCid mechanism submittables =
   exerciseCmd (toInterfaceContractId @Resolver resolverCid) Resolver_Resolve with
     actors = [f.operator]
     mechanism
-    submittables
+    submittables = withProposal f submittables
     extraArgs = noArgs
 
 runResolveMustFailContaining : Fixture -> Text -> [ContractId Submittable] -> Script ()
 runResolveMustFailContaining f expected submittables =
   submitMustFailContaining expected f.operator
     (resolveOnCmd f f.resolverCid f.mechanism submittables)
-
-runResolveOnMustFailContaining
-  : Fixture -> ContractId VoteResolver -> Mechanism -> Text -> [ContractId Submittable]
-  -> Script ()
-runResolveOnMustFailContaining f resolverCid mechanism expected submittables =
-  submitMustFailContaining expected f.operator
-    (resolveOnCmd f resolverCid mechanism submittables)
 
 executionOf : Resolver_ResolveResult -> ContractId Executable
 executionOf result = case result.created of
@@ -175,9 +184,9 @@ executionOf result = case result.created of
 
 runExecute : Fixture -> ContractId Config -> ContractId Executable -> Script ()
 runExecute f configCid executionCid = do
-  _ <- submit f.operator $
+  _ <- submit f.alice $
     exerciseCmd executionCid Executable_Execute with
-      actors = [f.operator]
+      actors = [f.alice]
       currentTargets = presentedTargets f configCid
       extraArgs = noArgs
   pure ()

@@ -21,9 +21,13 @@ import Cap.Core.ResolverV1
 import Cap.Core.SubmittableV1
 import Cap.Auctions.OneLotBidV1
 
+import Cap.Auctions.SettlementV1
+
 import Cap.Examples.SealedFirstPrice.BidV1
+import Cap.Examples.SealedFirstPrice.SettlementV1
 import Cap.Examples.SealedFirstPrice.LotV1
 import Cap.Examples.SealedFirstPrice.TermsV1
+import Cap.Examples.SealedFirstPrice.Fixtures.ImpostorBidV1
 import Cap.Examples.SealedFirstPrice.Fixtures.ImpostorV1
 
 import Cap.Examples.SealedFirstPrice.Test.Fixture
@@ -64,7 +68,7 @@ openAuctionWith ns retermsFor = do
 
   lotHoldingCids <- fundSeller f
   now <- getTime
-  escrowResult <- submitWithDisclosures' f.seller disclosures $
+  lotResult <- submitWithDisclosures' f.seller disclosures $
     exerciseCmd f.terms.registries.lotAllocate.factoryCid AllocInstr.AllocationFactory_Allocate with
       settlement = settlementOf f.terms
       allocation = sellerLotAllocation f.terms
@@ -73,8 +77,8 @@ openAuctionWith ns retermsFor = do
       extraArgs = f.terms.registries.lotAllocate.allocateArgs
       actors = [f.seller]
   AllocInstr.AllocationInstructionResult_Completed sellerLotAllocationCid <-
-    pure escrowResult.output
-  receiptResult <- submitWithDisclosures' f.seller disclosures $
+    pure lotResult.output
+  paymentResult <- submitWithDisclosures' f.seller disclosures $
     exerciseCmd f.terms.registries.paymentAllocate.factoryCid AllocInstr.AllocationFactory_Allocate with
       settlement = settlementOf f.terms
       allocation = sellerPaymentAllocation f.terms
@@ -83,7 +87,7 @@ openAuctionWith ns retermsFor = do
       extraArgs = f.terms.registries.paymentAllocate.allocateArgs
       actors = [f.seller]
   AllocInstr.AllocationInstructionResult_Completed sellerPaymentAllocationCid <-
-    pure receiptResult.output
+    pure paymentResult.output
 
   proposalCid <- submit f.operator $ createCmd AuctionLotProposal with
     terms = f.terms
@@ -134,10 +138,10 @@ submitBid auction bidder seatCid price = do
       inputHoldingCids = fundedCids
       extraArgs = f.terms.registries.paymentAllocate.allocateArgs
       actors = [bidder]
-  AllocInstr.AllocationInstructionResult_Completed escrow <- pure result.output
+  AllocInstr.AllocationInstructionResult_Completed paymentCid <- pure result.output
 
   lotD <- lotCallFor f bidder
-  receiptResult <- submitWithDisclosures' bidder (auction.disclosures <> lotD) $
+  lotResult <- submitWithDisclosures' bidder (auction.disclosures <> lotD) $
     exerciseCmd f.terms.registries.lotAllocate.factoryCid AllocInstr.AllocationFactory_Allocate with
       settlement = settlementOf f.terms
       allocation = Alloc.AllocationSpecification with
@@ -152,14 +156,14 @@ submitBid auction bidder seatCid price = do
       inputHoldingCids = []
       extraArgs = f.terms.registries.lotAllocate.allocateArgs
       actors = [bidder]
-  AllocInstr.AllocationInstructionResult_Completed receipt <- pure receiptResult.output
+  AllocInstr.AllocationInstructionResult_Completed lotCid <- pure lotResult.output
 
   submit bidder $
     exerciseCmd seatCid OneLotBid_Submit with
       actors = [bidder]
       quotes = [Quote with price; quantity = lotAmount]
-      paymentAllocation = Some escrow
-      lotAllocation = Some receipt
+      paymentAllocation = Some paymentCid
+      lotAllocation = Some lotCid
       extraArgs = emptyExtraArgs
 
 presentationOf : OpenAuction -> [ContractId OneLotBid] -> [ContractId Submittable]
@@ -191,6 +195,25 @@ runResolveMustFail auction entries = do
   submitMustFail (actAs auction.fixture.operator <> discloseMany' ds)
     (resolveCmd auction entries)
 
+settlementOf' : Resolver_ResolveResult -> ContractId AuctionSettlement
+settlementOf' result = case result.created of
+  [cid] -> coerceContractId cid
+  _ -> error "the resolve minted no single settlement"
+
+runSettle : OpenAuction -> ContractId AuctionSettlement -> Script Settlement_SettleResult
+runSettle auction settlementCid = do
+  ds <- resolveDisclosures auction
+  submitWithDisclosures' auction.fixture.operator ds $
+    exerciseCmd (toInterfaceContractId @Settlement settlementCid) Settlement_Settle with
+      actors = [auction.fixture.operator]
+      extraArgs = emptyExtraArgs
+
+resolveAndSettle : OpenAuction -> [ContractId OneLotBid] -> Script Resolver_ResolveResult
+resolveAndSettle auction entries = do
+  result <- runResolve auction entries
+  _ <- runSettle auction (settlementOf' result)
+  pure result
+
 runResolveMustFailContaining : OpenAuction -> Text -> [ContractId OneLotBid] -> Script ()
 runResolveMustFailContaining auction expected entries = do
   ds <- resolveDisclosures auction
@@ -205,6 +228,9 @@ instance Visible OneLotBid where
   isVisibleTo p cid = isSome <$> queryInterfaceContractId @OneLotBid p cid
 
 instance Visible AuctionLot where
+  isVisibleTo p cid = isSome <$> queryContractId p cid
+
+instance Visible AuctionSettlement where
   isVisibleTo p cid = isSome <$> queryContractId p cid
 
 instance Visible AuctionBid where
@@ -233,18 +259,20 @@ visibleTo p = do
   proposals <- query @AuctionLotProposal p
   lots <- query @AuctionLot p
   bids <- query @AuctionBid p
+  sales <- query @AuctionSettlement p
   holdings <- queryInterface @Holding.Holding p
   allocations <- queryInterface @Alloc.Allocation p
   pure $ sort $ concat
     [ map (show . fst) proposals
     , map (show . fst) lots
     , map (show . fst) bids
+    , map (show . fst) sales
     , map (show . fst) holdings
     , map (show . fst) allocations
     ]
 
-lotEscrowOf : OpenAuction -> Script (ContractId Alloc.Allocation)
-lotEscrowOf auction = do
+lotAllocationOf : OpenAuction -> Script (ContractId Alloc.Allocation)
+lotAllocationOf auction = do
   Some lot <- queryContractId auction.fixture.seller auction.lotCid
   pure lot.sellerLotAllocationCid
 
@@ -253,7 +281,7 @@ bidAllocationOf f bidCid = do
   Some bid <- queryContractId f.operator (fromInterfaceContractId @AuctionBid bidCid)
   case bid.paymentAllocation of
     Some cid -> pure cid
-    None -> fail "this seat holds no escrow"
+    None -> fail "this seat holds no payment allocation"
 
 impostorFactoryFor : Fixture -> Script (ContractId Alloc.SettlementFactory)
 impostorFactoryFor f =
@@ -309,7 +337,7 @@ whoSeesWhat = do
   f.seller `cannotSee` aliceAllocation
 
   setTime f.terms.biddingClosesAt
-  result <- runResolve auction [aliceBid, bobBid, carolSeat]
+  result <- resolveAndSettle auction [aliceBid, bobBid, carolSeat]
   result.verdict === V_Accepted None
 
   sellerPaid <- balanceOf f.seller f.terms.payment
@@ -374,6 +402,18 @@ theAuctionResolvesOnTheInvitedSetAlone = do
   runResolveMustFailContaining auction "Contract group identifier mismatch"
     [aliceBid, bobBid, carolSeat, foreignSeat]
 
+  fakeBid <- toInterfaceContractId @OneLotBid <$>
+    submit f.operator (createCmd ImpostorBid with
+      operator = f.operator
+      terms = f.terms
+      bidderPaymentAccount = basicAccount f.alice
+      bidderLotAccount = basicAccount f.alice
+      mechanism = auction.mechanism
+      quotes = [Quote with price = 200.0; quantity = lotAmount])
+  runResolveMustFailContaining auction
+    "every presented bid is signed by the bidder it names"
+    [fakeBid, bobBid, carolSeat]
+
   ds <- resolveDisclosures auction
   submitMustFailContaining "the declared mechanism is binded to another resolver contract"
     (actAs f.operator <> discloseMany' ds)
@@ -385,7 +425,7 @@ theAuctionResolvesOnTheInvitedSetAlone = do
 
   nothingMoved f 100.0
 
-  result <- runResolve auction [aliceBid, bobBid, carolSeat]
+  result <- resolveAndSettle auction [aliceBid, bobBid, carolSeat]
   result.verdict === V_Accepted None
 
   sellerPaid <- balanceOf f.seller f.terms.payment
@@ -401,7 +441,7 @@ lotGoesToTheHighestPresentedBid = do
   aliceSeat <- seatFor auction f.alice
   bobSeat <- seatFor auction f.bob
   carolSeat <- seatFor auction f.carol
-  escrowCid <- lotEscrowOf auction
+  lotAllocationCid <- lotAllocationOf auction
 
   setTime f.terms.entryClosesAt
   aliceBid <- submitBid auction f.alice aliceSeat 100.0
@@ -412,7 +452,7 @@ lotGoesToTheHighestPresentedBid = do
   lockedLot === lotAmount
 
   setTime f.terms.biddingClosesAt
-  result <- runResolve auction [aliceBid, bobBid, carolSeat]
+  result <- resolveAndSettle auction [aliceBid, bobBid, carolSeat]
   result.verdict === V_Accepted None
 
   alicePaid <- balanceOf f.alice f.terms.payment
@@ -430,12 +470,13 @@ lotGoesToTheHighestPresentedBid = do
   bobLot <- balanceOf f.bob f.terms.lot.instrument
   bobLot === 0.0
 
-  f.seller `cannotSee` escrowCid
+  f.seller `cannotSee` lotAllocationCid
   f.operator `cannotSee` auction.lotCid
   runResolveMustFail auction [bobBid, carolSeat]
 
 theOperatorCannotSwapTheRegistry : Script ()
 theOperatorCannotSwapTheRegistry = do
+  -- terms naming the real lot settlement factory
   honest <- openAuction "registry"
   let hf = honest.fixture
   impostorCid <- impostorFactoryFor hf
@@ -453,13 +494,14 @@ theOperatorCannotSwapTheRegistry = do
   aliceBid <- submitBid honest hf.alice aliceSeat 100.0
   setTime hf.terms.biddingClosesAt
 
-  honestResult <- runResolve honest [aliceBid, bobSeat, carolSeat]
+  honestResult <- resolveAndSettle honest [aliceBid, bobSeat, carolSeat]
   honestResult.verdict === V_Accepted None
   honestSellerPaid <- balanceOf hf.seller hf.terms.payment
   honestSellerPaid === 100.0
   honestWinnerLot <- balanceOf hf.alice hf.terms.lot.instrument
   honestWinnerLot === lotAmount
 
+  -- the same auction on terms naming the impostor
   hostile <- openAuctionWith "hostile" $ \f -> do
     cid <- impostorFactoryFor f
     pure f.terms with
@@ -481,7 +523,7 @@ theOperatorCannotSwapTheRegistry = do
   signedBid.terms === xf.terms
 
   setTime xf.terms.biddingClosesAt
-  xResult <- runResolve hostile [xBid, xBobSeat, xCarolSeat]
+  xResult <- resolveAndSettle hostile [xBid, xBobSeat, xCarolSeat]
   xResult.verdict === V_Accepted None
 
   xSellerPaid <- balanceOf xf.seller xf.terms.payment
@@ -527,7 +569,7 @@ theBidderCannotBlockTheSale = do
       actors = [f.alice]
       extraArgs = ExtraArgs with context = ctx.choiceContext; meta = emptyMetadata)
 
-  result <- runResolve auction [aliceBid, bobSeat, carolSeat]
+  result <- resolveAndSettle auction [aliceBid, bobSeat, carolSeat]
   result.verdict === V_Accepted None
   sellerPaid <- balanceOf f.seller f.terms.payment
   sellerPaid === 100.0

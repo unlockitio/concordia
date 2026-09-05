@@ -29,7 +29,7 @@ lotInstrumentName : Text
 lotInstrumentName = "Widget"
 
 lotAmount : Decimal
-lotAmount = 10.0
+lotAmount = 1.0
 
 data Fixture = Fixture with
     operator : Party

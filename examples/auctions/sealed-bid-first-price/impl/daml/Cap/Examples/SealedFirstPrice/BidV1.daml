@@ -12,6 +12,7 @@ import qualified Splice.Api.Token.HoldingV2 as Holding
 import Splice.Util (require)
 import Splice.TokenStandard.Utils (regularAccountOwner)
 
+import Cap.Core.Utils (orAbort)
 import Cap.Core.SubmittableV1
 import Cap.Auctions.OneLotBidV1
 import Cap.Examples.SealedFirstPrice.TermsV1
@@ -34,6 +35,10 @@ template AuctionBid
     observer bidderOf bidderPaymentAccount
 
     ensure terms.direction == Forward
+      && case quotes of
+        [] -> True
+        [q] -> q.quantity == 1.0
+        _ -> False
 
     choice AuctionBid_Close : ()
       controller Set.toList terms.authorities
@@ -62,12 +67,10 @@ template AuctionBid
 
       oneLotBid_submitImpl self arg = do
         require "this seat holds no bid yet" (null quotes)
-        paymentCid <- case arg.paymentAllocation of
-          Some cid -> pure cid
-          None -> abort "a bid names the allocation it pays from"
-        lotCid <- case arg.lotAllocation of
-          Some cid -> pure cid
-          None -> abort "a bid names the allocation its lot is taken into"
+        paymentCid <- orAbort "a bid names the allocation it pays from"
+          arg.paymentAllocation
+        lotCid <- orAbort "a bid names the allocation its lot is taken into"
+          arg.lotAllocation
         let bv = view (toInterface @OneLotBid this)
         paymentView <- view <$> fetch paymentCid
         require "the payment allocation is the one this bid implies"
@@ -105,7 +108,7 @@ template AuctionBid
       oneLotBid_expireImpl self _ = do
         archive self
         pure OneLotBid_ExpireResult with released = []; meta = emptyMetadata
-      
+
       oneLotBid_withdrawImpl _ _ =
         abort "a bid cannot be withdrawn after seeing the field quotes"
 

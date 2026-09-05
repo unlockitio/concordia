@@ -20,6 +20,7 @@ packages:
 - ./examples/governance/baby-dso/cap/action
 - ./examples/governance/baby-dso/cap/test
 - ./examples/governance/private-majority-vote/impl
+- ./examples/governance/private-majority-vote/fixtures
 - ./examples/governance/private-majority-vote/test
 - ./examples/auctions/sealed-bid-first-price/impl
 - ./examples/auctions/sealed-bid-first-price/fixtures

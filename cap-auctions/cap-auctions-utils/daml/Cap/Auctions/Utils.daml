@@ -8,6 +8,8 @@ module Cap.Auctions.Utils (
 
   -- ** Settlement and its legs
   settlementOf,
+  paymentLegId,
+  lotLegId,
   paymentLeg,
   lotLeg,
 

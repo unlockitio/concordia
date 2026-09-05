@@ -16,9 +16,7 @@ the script that states it.
 ## Method
 
 The demos are Daml Script tests. Each states its claim as assertions on the final
-contracts, not on the transcript. Where a demo claims *nothing moved*, it asserts
-the complete final state of every target, so a partial application fails the demo
-rather than passing quietly.
+contracts, not on the transcript. 
 
 The electorate is three SVs and the quorum is two. All five demos run one proposal through one
 `Resolver_Resolve`, so what differs between them is only the bindings and the
@@ -28,19 +26,20 @@ state the targets are in at execution.
 
 ```
 baby-dso/
-├── plain/     the reduced DsoRules/AmuletRules — the shape being argued against
+├── plain/           the reduced DsoRules/AmuletRules — the shape being argued against
 └── cap/
-    ├── impl/     the DSO: resolver, ballot, its own DsoConfig
-    ├── registry/ a CAP-aware app: AuthenticTarget + Action + Executable for itself,
-    │             plus the bridge that governs `legacy/`. Never imported by impl/.
-    ├── legacy/   a template that implements nothing and knows nothing about CAP
-    └── test/     the demos below
+    ├── ans/         AnsRules — implements nothing, knows nothing about CAP
+    ├── config/      AmuletConfig — the DSO's own config, as an AuthenticTarget
+    ├── governance/  the DSO: DsoResolver, SvBallot, SvConfirmation
+    ├── action/      a CAP-aware app: Action + Executable over `config/`, plus the
+    │                bridge that governs `ans/`. Never imported by `governance/`.
+    └── test/        the demos below
 ```
 
-The load-bearing fact is a `daml.yaml`, not a script: **`cap/impl` lists neither
-`registry` nor `legacy` in its `data-dependencies`.** The dependency arrow points
-the other way. Adding a fourth governed app requires no change to `cap/impl` and
-no new DSO release.
+The load-bearing fact is a `daml.yaml`, not a script: **`cap/governance` lists
+none of `ans`, `config` or `action` in its `data-dependencies`.** The dependency
+arrow points the other way. Adding another governed app requires no change to
+`cap/governance` and no new DSO release.
 
 ## Demo Use Case
 

@@ -1,0 +1,43 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Examples.MajorityVote.Fixtures.ImpostorV1 where
+
+import qualified DA.Map as Map
+
+import Splice.Api.Token.MetadataV1
+
+import Cap.Core.SubmittableV1
+import Cap.Governance.BallotV1
+
+template ImpostorBallot
+  with
+    operator : Party
+    voter : Party
+    mechanism : Mechanism
+    terms : ProposalTerms
+    votes : [AnyValue]
+  where
+    signatory operator
+
+    interface instance Submittable for ImpostorBallot where
+      view = SubmittableView with
+        mechanism
+        opensAt = terms.entryClosesAt
+        closesAt = terms.votingClosesAt
+        expiresAt = Some terms.expiresAt
+        meta = emptyMetadata
+
+    interface instance Ballot for ImpostorBallot where
+      view = BallotView with
+        terms
+        availableActions = Map.empty
+        voter
+        votes
+        meta = emptyMetadata
+
+      ballot_castImpl _ _ = abort "this ballot is an impostor"
+      ballot_withdrawImpl _ _ = abort "this ballot is an impostor"
+      ballot_expireImpl _ _ = abort "this ballot is an impostor"
+      ballot_consumeImpl self _ = do
+        archive self
+        pure Ballot_ConsumeResult with meta = emptyMetadata

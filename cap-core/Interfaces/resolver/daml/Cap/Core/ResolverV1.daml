@@ -16,7 +16,6 @@ import Cap.Core.SubmittableV1
 data ResolverView = ResolverView
   with
     authorities : Set Party
-    submittablesIssuers : [[Party]] -- must sign submittable for them to be valid
     id : Text
     expiresAt : Optional Time
     meta : Metadata
@@ -67,7 +66,7 @@ interface Resolver where
       assertMsg "the declared mechanism is binded to another resolver contract"
         (optional True (== coerceContractId self) mechanism.resolverCid)
 
-      submitted <- fetchSubmittables rv.submittablesIssuers mechanism submittables -- might be tier-2
+      submitted <- fetchSubmittables mechanism submittables
 
       p <- case Map.lookup mechanism.procedure (procedures this) of
         Some proc -> pure proc

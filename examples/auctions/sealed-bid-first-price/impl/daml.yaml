@@ -18,6 +18,7 @@ data-dependencies:
 - ../../../../cap-core/Interfaces/resolver/.daml/dist/cap-core-resolver-v1-0.1.0.dar
 - ../../../../lib/splice-token-standard-utils-2.0.0.dar
 - ../../../../cap-auctions/Interfaces/bid/.daml/dist/cap-auctions-bid-v1-0.1.0.dar
+- ../../../../cap-auctions/Interfaces/settlement/.daml/dist/cap-auctions-settlement-v1-0.1.0.dar
 - ../../../../cap-auctions/cap-auctions-registry/.daml/dist/cap-auctions-registry-0.1.0.dar
 - ../../../../cap-auctions/cap-auctions-utils/.daml/dist/cap-auctions-utils-0.1.0.dar
 build-options:

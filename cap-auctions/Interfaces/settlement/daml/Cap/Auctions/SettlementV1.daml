@@ -6,13 +6,21 @@ import Splice.Api.Token.MetadataV1
 import qualified Splice.Api.Token.AllocationV2 as Alloc
 import Splice.Util (require)
 import Cap.Core.Utils (admitActors, ExecutionCore, requireExpired, requireOpen)
+import Cap.Auctions.RegistryV1 (SettlementFactoryCall)
+
+data SettlementBatch = SettlementBatch
+  with
+    leg : Alloc.TransferLeg
+    sender : Alloc.FinalizedAllocation
+    receiver : Alloc.FinalizedAllocation
+    factory : SettlementFactoryCall
+  deriving (Eq, Show)
 
 data SettlementView = SettlementView
   with
     core : ExecutionCore
     settlement : Alloc.SettlementInfo
-    legs : [Alloc.TransferLeg]
-    allocations : [ContractId Alloc.Allocation]
+    batches : [SettlementBatch]
     meta : Metadata
   deriving (Eq, Show)
 
@@ -24,6 +32,7 @@ data Settlement_SettleResult = Settlement_SettleResult
 
 data Settlement_CancelResult = Settlement_CancelResult
   with
+    released : [ContractId Alloc.Allocation]
     meta : Metadata
   deriving (Eq, Show)
 
@@ -32,10 +41,10 @@ data Settlement_ExpireResult = Settlement_ExpireResult
     meta : Metadata
   deriving (Eq, Show)
 
+
+
 interface Settlement where
   viewtype SettlementView
-
-  settlement_settleImpl : Settlement_Settle -> Update Settlement_SettleResult
 
   settlement_cancelImpl : Settlement_Cancel -> Update Settlement_CancelResult
 
@@ -50,7 +59,15 @@ interface Settlement where
       requireOpen "the settlement window is open" now v.core.opensAt v.core.expiresAt
       require "the actors are an executor set of this settlement"
         (admitActors v.core.executors actors)
-      settlement_settleImpl this (Settlement_Settle with ..)
+      require "the settlement moves at least one leg" (not (null v.batches))
+      results <- forA v.batches $ \b ->
+        exercise b.factory.factoryCid Alloc.SettlementFactory_SettleBatch with
+          settlement = v.settlement
+          transferLegs = [b.leg]
+          allocations = [b.sender, b.receiver]
+          actors = v.settlement.executors
+          extraArgs = b.factory.settleBatchArgs
+      pure Settlement_SettleResult with batches = results; meta = emptyMetadata
 
   choice Settlement_Cancel : Settlement_CancelResult
     with
@@ -58,6 +75,8 @@ interface Settlement where
       extraArgs : ExtraArgs
     controller actors
     do
+      require "the actors are an executor set of this settlement"
+        (admitActors (view this).core.executors actors)
       settlement_cancelImpl this (Settlement_Cancel with actors; extraArgs)
 
   choice Settlement_Expire : Settlement_ExpireResult
@@ -68,3 +87,8 @@ interface Settlement where
       now <- getTime
       requireExpired "the settlement has expired" now (view this).core.expiresAt
       pure Settlement_ExpireResult with meta = emptyMetadata
+
+
+allocationsOf : SettlementView -> [ContractId Alloc.Allocation]
+allocationsOf v =
+  concat [[b.sender.allocationCid, b.receiver.allocationCid] | b <- v.batches]

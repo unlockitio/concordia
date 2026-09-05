@@ -55,7 +55,6 @@ template DsoResolver
     interface instance Resolver for DsoResolver where
       view = ResolverView with
         authorities = Set.fromList [dso]
-        submittablesIssuers = [[dso]]
         id = resolverId
         expiresAt = Some expiresAt
         meta = emptyMetadata

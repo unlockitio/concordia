@@ -1,6 +1,6 @@
 -- SPDX-License-Identifier: Apache-2.0
 
-module Cap.Examples.HighTrust.SettlementV1 where
+module Cap.Examples.SealedFirstPrice.SettlementV1 where
 
 import qualified DA.Set as Set
 
@@ -9,9 +9,8 @@ import Splice.Api.Token.MetadataV1
 import Cap.Core.Utils (ExecutionCore (..))
 import Cap.Auctions.OneLotBidV1 (OneLotAuctionTerms)
 import Cap.Auctions.SettlementV1
-import Cap.Auctions.Utils (settlementOf)
 
-import Cap.Examples.HighTrust.TermsV1 (sellerOf)
+import Cap.Examples.SealedFirstPrice.TermsV1
 
 template AuctionSettlement
   with
@@ -19,21 +18,21 @@ template AuctionSettlement
     winner : Party
     batches : [SettlementBatch]
     opensAt : Time
-    closesAt : Time
   where
-    signatory Set.toList terms.authorities <> [sellerOf terms, winner]
+    signatory Set.toList terms.authorities <> [sellerOf terms]
+    observer winner
 
     ensure not (null batches)
 
     interface instance Settlement for AuctionSettlement where
       view = SettlementView with
         core = ExecutionCore with
-          authorities = Set.insert (sellerOf terms) (Set.insert winner terms.authorities)
+          authorities = terms.authorities
           executors = [Set.toList terms.authorities]
           opensAt
-          expiresAt = Some closesAt
+          expiresAt = Some terms.expiresAt
           meta = emptyMetadata
-        settlement = settlementOf terms [winner]
+        settlement = settlementOf terms
         batches
         meta = emptyMetadata
 

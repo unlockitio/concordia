@@ -6,6 +6,7 @@ import DA.Foldable (forA_)
 import DA.Map (Map)
 import qualified DA.Map as Map
 
+
 import Splice.Api.Token.MetadataV1
 import Splice.Util (require)
 
@@ -37,7 +38,7 @@ template PrivateBallot
     terms : ProposalTerms
     votes : [AnyValue]
   where
-    signatory if null votes then [operator] else [operator, voter]
+    signatory [operator, voter]
     observer voter
 
     interface instance Submittable for PrivateBallot where
@@ -63,8 +64,8 @@ template PrivateBallot
         require "this ballot carries no vote yet" (null votes)
         require "this format casts a single option" (length arg.votes == 1)
         forA_ terms.bindings $ \bind -> do
-          (key, presented) <- fetchBound arg.currentTargets bind
-          requireAsSeen bind key presented
+          (tk, presented) <- fetchBound arg.currentTargets bind
+          requireAsSeen bind tk presented
         archive self
         toInterfaceContractId @Ballot <$> create this with votes = arg.votes
 

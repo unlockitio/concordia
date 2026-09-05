@@ -8,10 +8,9 @@ import Splice.Api.Token.MetadataV1
 import DA.List (unique)
 
 import Splice.Util (require, fetchCheckedInterface)
-import Cap.Core.Utils (HasCheckedFetch (..), admitActors)
+import Cap.Core.Utils (HasCheckedFetch (..))
 
 -- Split in Bid/Ballot
-
 data ResolverKey = ResolverKey
   with
     authorities : Set Party
@@ -41,12 +40,12 @@ instance HasCheckedFetch SubmittableView Mechanism where
 interface Submittable where
   viewtype SubmittableView
 
+-- will be up to each domain
 fetchSubmittables
-  : [[Party]] -> Mechanism -> [ContractId Submittable] -> Update [(ContractId Submittable, Submittable)]
-fetchSubmittables _ _ [] = fail "a presentation holds at least one submittable"
-fetchSubmittables issuers mechanism cids = do
+  : Mechanism -> [ContractId Submittable] -> Update [(ContractId Submittable, Submittable)]
+fetchSubmittables _ [] = fail "a presentation holds at least one submittable"
+fetchSubmittables mechanism cids = do
   require "the presented submittables are distinct" (unique cids)
   forA cids $ \cid -> do
     s <- fetchCheckedInterface mechanism cid
-    require "the submittable is signed by its issuers" (admitActors issuers (signatory s))
     pure (cid, s)
