@@ -4,20 +4,20 @@ module Cap.Governance.ActionV1 where
 
 import Prelude hiding (Action)
 
-import DA.Set (Set)
-import qualified DA.Set as Set
-
 import Splice.Api.Token.MetadataV1
+import Splice.Util (require)
+import Cap.Core.Utils (admitActors)
 import Cap.Governance.ExecutableV1 (Executable, ExecutableView (..))
 
 data ActionView = ActionView
   with
-    authorities : Set Party
-      -- ^ Whose authority governs this action. 
+    authorizers : [[Party]]
+      -- ^ Who may authorize an execution against this action: any one group,
+      --   all of its members
     meta : Metadata
   deriving (Eq, Show)
 
-data Action_IssueExecutionResult = Action_IssueExecutionResult
+data Action_AuthorizeExecutionResult = Action_AuthorizeExecutionResult
   with
     executionCids : [ContractId Executable]
     meta : Metadata
@@ -26,11 +26,15 @@ data Action_IssueExecutionResult = Action_IssueExecutionResult
 interface Action where
   viewtype ActionView
 
-  action_issueExecutionImpl : ContractId Action -> Action_IssueExecution -> Update Action_IssueExecutionResult
+  action_authorizeExecutionImpl : ContractId Action -> Action_AuthorizeExecution -> Update Action_AuthorizeExecutionResult
 
-  nonconsuming choice Action_IssueExecution : Action_IssueExecutionResult
+  nonconsuming choice Action_AuthorizeExecution : Action_AuthorizeExecutionResult
     with
+      actors : [Party]
       execution : ExecutableView
       extraArgs : ExtraArgs
-    controller Set.toList (view this).authorities
-    do action_issueExecutionImpl this self (Action_IssueExecution with ..)
+    controller actors
+    do
+      require "the actors are an authorizer set of this action"
+        (admitActors (view this).authorizers actors)
+      action_authorizeExecutionImpl this self (Action_AuthorizeExecution with ..)

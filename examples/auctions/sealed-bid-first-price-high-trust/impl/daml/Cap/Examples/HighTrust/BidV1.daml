@@ -30,7 +30,6 @@ import Cap.Auctions.SettlementV1 (SettlementBatch (..))
 import Cap.Auctions.Utils
   ( lotLeg
   , paymentLeg
-  , settlementOf
   )
 
 import Cap.Examples.HighTrust.SettlementV1
@@ -113,9 +112,8 @@ template AuctionBid
 
       oneLotBid_submitImpl self arg = do
         require "this seat holds no bid yet" (null quotes)
-        paymentCid <- case arg.paymentAllocation of
-          Some cid -> pure cid
-          None -> abort "a bid names the allocation it pays from"
+        paymentCid <- orAbort "a bid names the allocation it pays from"
+          arg.paymentAllocation
         let bv = view (toInterface @OneLotBid this)
         paymentView <- view <$> fetch paymentCid
         require "the payment allocation is the one this bid implies"
@@ -208,17 +206,16 @@ template AuctionBid
           terms
           winner = bidderOf bidderPaymentAccount
           opensAt = now
-          closesAt = terms.expiresAt
           batches =
             [ SettlementBatch with
-                leg = pLeg
-                sender = nonIteratedAllocation paymentAllocationCid
-                receiver = nonIteratedAllocation sellerPaymentCid
+                legs = [pLeg]
+                allocations = map nonIteratedAllocation
+                  [paymentAllocationCid, sellerPaymentCid]
                 factory = terms.registries.paymentSettle
             , SettlementBatch with
-                leg = lLeg
-                sender = nonIteratedAllocation lotAllocationCid
-                receiver = nonIteratedAllocation winnerLotCid
+                legs = [lLeg]
+                allocations = map nonIteratedAllocation
+                  [lotAllocationCid, winnerLotCid]
                 factory = terms.registries.lotSettle
             ]
 

@@ -10,17 +10,14 @@ import qualified Splice.Api.Token.AllocationV2 as Alloc
 import Splice.TokenStandard.Utils (regularAccountOwner)
 
 import Cap.Auctions.OneLotBidV1 (OneLotAuctionTerms, OneLotBidView, Quote)
+import Cap.Auctions.Utils (saleSettlement)
 
 sellerOf : OneLotAuctionTerms -> Party
 sellerOf terms = regularAccountOwner terms.sellerLotAccount
 
 
 settlementOf : OneLotAuctionTerms -> Alloc.SettlementInfo
-settlementOf terms = Alloc.SettlementInfo with
-  executors = Set.toList terms.authorities
-  id = terms.saleId
-  cid = None
-  meta = emptyMetadata
+settlementOf terms = saleSettlement terms (Set.toList terms.authorities)
 
 
 sellerLotAllocation : OneLotAuctionTerms -> Alloc.AllocationSpecification

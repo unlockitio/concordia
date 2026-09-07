@@ -5,30 +5,25 @@
 --
 -- Import 'Cap.Auctions.Utils' to get access to the public ones.
 module Cap.Auctions.Utils.Internal.Bid
-  ( settlementOf
+  ( saleSettlement
   , paymentLegId
   , lotLegId
   , paymentLeg
   , lotLeg
   ) where
 
-import qualified DA.Set as Set
-
 import Splice.Api.Token.MetadataV1
 import qualified Splice.Api.Token.AllocationV2 as Alloc
 import qualified Splice.Api.Token.HoldingV2 as Holding
-import Splice.TokenStandard.Utils (regularAccountOwner)
 
 import Cap.Auctions.OneLotBidV1 (Direction (..), OneLotAuctionTerms)
 
 
 ------------------  ONE LOT AUCTION UTILITIES ------------------
 
-
-settlementOf : OneLotAuctionTerms -> [Party] -> Alloc.SettlementInfo
-settlementOf terms counterparties = Alloc.SettlementInfo with
-  executors =
-    Set.toList terms.authorities <> (regularAccountOwner terms.sellerLotAccount :: counterparties)
+saleSettlement : OneLotAuctionTerms -> [Party] -> Alloc.SettlementInfo
+saleSettlement terms executors = Alloc.SettlementInfo with
+  executors
   id = terms.saleId
   cid = None
   meta = emptyMetadata

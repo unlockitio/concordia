@@ -103,14 +103,18 @@ resolveFirstPrice lot self cast _ = do
         opensAt = now
         batches =
           [ SettlementBatch with
-              leg = pLeg
-              sender = finalized winnerPaymentAllocationCid (senderSide pLeg)
-              receiver = finalized lot.sellerPaymentAllocationCid (receiverSide pLeg)
+              legs = [pLeg]
+              allocations =
+                [ finalized winnerPaymentAllocationCid (senderSide pLeg)
+                , finalized lot.sellerPaymentAllocationCid (receiverSide pLeg)
+                ]
               factory = terms.registries.paymentSettle
           , SettlementBatch with
-              leg = lLeg
-              sender = finalized lot.sellerLotAllocationCid (senderSide lLeg)
-              receiver = finalized winnerLotAllocationCid (receiverSide lLeg)
+              legs = [lLeg]
+              allocations =
+                [ finalized lot.sellerLotAllocationCid (senderSide lLeg)
+                , finalized winnerLotAllocationCid (receiverSide lLeg)
+                ]
               factory = terms.registries.lotSettle
           ]
       exercise (fromInterfaceContractId @AuctionBid winnerCid) AuctionBid_Close

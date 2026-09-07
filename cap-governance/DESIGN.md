@@ -7,34 +7,111 @@ Four interface packages and a utils package, for approving effects on live state
 A proposal is resolved by a `Resolver` from `cap-core`: it collects `Submittable`s and
 runs a named `Procedure` over them to reach a `Verdict`. Ballots are those submittables.
 `ProposalTerms` carries the options voters choose between and a `[Bind]`: the contracts
-the decision will act on with a pin of itd state. A proposal may
+the decision will act on, each with a pin of what must still be true of it. A proposal may
 bind several targets across several packages, and `Executable_Execute` checks and writes
-them in one transaction. A bind pins by
-state, by contract id, and it can be pinned at different stages (Submission, Resolution, Execution). 
-For example, pin a contract by state at submission and then pin by cid at resolution is possible.
-State is what the target says about itself, so it forces
-trusting the target's authorities (similar to amulet-rules in splice), and admit detailed drift policies. A
-contract id is a ledger fact and needs no such trust, but it is all-or-nothing: any
-change to the contract breaks the bind.
+them in one transaction. The pins are set out in [State Awerness](#state-awerness) below.
 
-On acceptance the resolver exercises `Action_IssueExecution` on the action the proposal
-names. The action reads the
-decision from the resolution's `outcome` and mints an `Executable`, which carries pre-committed
-authority and the bindings. The effect happens at `Executable_Execute`, presenting the bound contracts as
-`currentTargets`. Its fixed body checks only the window and the executor set — checking
-the bindings and writing the targets are the format's own,
-`cap-governance-utils` has helpers for it.
-
-A target participates by implementing `AuthenticTarget`, publishing
-`{ authorities, id, state }` with its state type-erased as `AnyValue`. A `DriftPolicy`
-decides wheather to continue the process or finish it there based on state differences. A target that implements
-nothing can still be governed through an `OpaqueBind`, pinned by contract id alone.
-
-**Governance does not depend on the governance targets. Governance and targets both depend on cap-governance and not on each other. Similar to Token standard, Amulet does not depend on every wallet and no
+On acceptance an `Executable` is created, carrying pre-committed authority and the
+bindings. `Action_AuthorizeExecution` is one way to create it: the action reads the decision
+from the resolution's `outcome` and returns the executables, so the effect can live in a
+package deployed after the governance body. It is also a way to delegate authority, some examples where this is useful can be found
+in [Governance flows examples](#governance-flows-examples). 
+The executable is created under the action's signatures, with no
+signature from that authority at resolution or at execution. 
+A resolver may also create the `Executable` itself. 
+The effect happens at `Executable_Execute`, which can also be exercised inside Resolve. 
+**Governance does not necessarly depend on the governance targets. Governance and targets both depend on cap-governance and not on each other. Similar to Token standard, Amulet does not depend on every wallet and no
 wallet depends on Amulet, both depend on the Token Standard interfaces.**
 
 
-## How it differs from Splice
+## State Awerness
+
+The governance packages name no governable type. A decision reaches the contract
+it acts on through a `Bind`, so a kind of target that has never been governed
+before is a deploy, not a change in the governance logic.
+
+A bind is data, not a check. It is written into `ProposalTerms` when the proposal
+is made and travels onto `ExecutableView` when the executable is created,
+and it stays a record at every step. This data exists in cap-governance only to for implementations to use. 
+Nothing is checked in the interfaces fixed bodies, the reason is that different implementations 
+might need to do different comparations at different stages. 
+`cap-governance-utils` does supply some common `DriftPolicy` cases.
+
+A bind *pins* targets i.e. records what was true of the target at a certain
+stage, and any later stage can be the one that checks the claim still holds.
+There are two things to pin. Pinning the **state** records what the target
+published about itself, so a check compares the current state against it under a
+`DriftPolicy`. Pinning the **contract id** records the exact contract, so a check
+admits that contract and no other.
+
+A target can be: 
+- an instance of the `AuthenticTarget` interface, publishing
+`{ authorities, id, state }` with its state type-erased as `AnyValue`. That state
+is the target's own claim about itself, so it is worth the trust placed in the
+target's signatories.
+- Only a contract id in that case there is no state to compare, so no drift policy applies, and any change to the
+contract breaks the bind.
+
+`AuthenticBind` carries `state` and `cid` independently, each as an `AsOf` with
+its own stage, so a bind is a choice of when each half binds — or that it does
+not. `OpaqueBind` carries a contract id and nothing else. Every cell below is
+expressible; these are the combinations worth writing.
+
+| Submission | Resolution | Execution | What the bind says |
+|:---:|:---:|:---:|---|
+| state | | cid | the voters agreed about a state; the executor names the contract carrying it at execution |
+| state | cid | | the voters agreed about a state, and the resolution fixed which contract carries it |
+| | state | cid | the resolution pinned the state it saw; the executor names the contract at execution |
+| cid | | | the proposal named the exact contract, and nothing about its content |
+| | cid | | the resolution fixed the contract, and nothing the voters saw is pinned |
+| | | | nothing pinned: the bind names the target key and constrains nothing |
+| cid | cid | cid | `OpaqueBind`: this contract and no other, on nothing but the ledger |
+
+Splice's `AmuletRules` is row one: `AmuletRules_SetConfig` carries a `baseConfig`
+pinned when the action was proposed, and `DsoRules_ExecuteConfirmedAction` takes
+the `amuletRulesCid` at execution. What differs is the comparison. `patch`
+writes the proposal's value where it differs from the base and never refuses,
+where a `DriftPolicy` may.
+
+State binds strictly earlier than cid or not at all, and that is the
+gap the drift policy defined. The wider it is, the more the target may
+legitimately move between resolution and execution.
+
+Reading the rows: a state pin without a cid pin follows the target through
+re-creation — the decision acts on whatever contract now carries the key,
+provided its state still passes the drift policy. A cid pin without a state pin
+is all-or-nothing on identity: that contract or nothing, whatever it now says.
+
+No fixed body reads `stage`. It declares the intent the format enforces.
+
+## Governance flows examples
+
+- **A target under another authority.** A provider holds contracts a decentralized party's
+  votes should be able to change. It signs one action naming that party in `authorizers`;
+  from then on its resolutions produce executables carrying the provider's signature, and
+  the provider signs nothing per decision.
+- **Several bodies, each able to act alone.** A caller is admitted if it covers any one
+  group, so `authorizers = [[bodyA], [bodyB]]` lets either body authorize an execution by
+  itself, from a single action. A flat set would have required both to sign together, and
+  two separate actions to avoid it. A group with more than one member is the joint case:
+  `[[bodyA], [x, y]]` means bodyA alone, or x and y together.
+- **A final approval before execution.** The resolution runs as usual and creates the
+  executable, and `core.availableActions` names the approving party alone under
+  `EA_Execute`. Giving that party `EA_Cancel` as well lets it end the decision early
+  through `Executable_Cancel`; without it, refusing is not executing, and the executable is
+  cleared by `Executable_Expire` once `core.expiresAt` has passed.
+- **A timelock.** `core.opensAt` is set ahead of the resolution, so no executor can write
+  before it. 
+- **Casting by a delegate.** `Ballot_Cast` is entitled through `availableActions`, not
+  through `voter`, so a ballot mapping `BA_Cast` to `[[voter], [delegate]]`. The map is per action:
+  leaving `BA_Withdraw` at `[[voter]]` means the delegate casts and only the principal
+  takes it back.
+- **An emergency path.** One resolver publishes two procedures over the same action. The
+  ordinary one opens execution after `executionDelay`; the emergency one opens it at once
+  and asks for example a higher quorum. 
+
+
+## How it generalizes from Splice
 
 **What can be governed without changing the governance package.** 
 - Splice: only the
@@ -75,7 +152,7 @@ cap-governance/
 ├── Interfaces/
 │   ├── binding/             Bind, AsOf, Stage, TargetKey, AuthenticTarget
 │   ├── executable/          Executable, ExecutableView
-│   ├── action/              Action, Action_IssueExecution
+│   ├── action/              Action, Action_AuthorizeExecution
 │   └── ballot/              Ballot, ProposalTerms
 └── cap-governance-utils/    DriftPolicy and its combinators
 
@@ -95,3 +172,5 @@ examples/governance/
 
 lib/                         vendored Token Standard and Splice DARs
 ```
+
+Why these shapes and not the alternatives: [`RATIONALE.md`](RATIONALE.md).

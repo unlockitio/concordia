@@ -6,12 +6,13 @@ import qualified DA.Set as Set
 
 import Splice.Api.Token.MetadataV1
 
-import Cap.Core.Utils (ExecutionCore (..))
+import qualified DA.Map as Map
+
+import Cap.Core.Utils (ExecutionAction (..), ExecutionCore (..))
 import Cap.Auctions.OneLotBidV1 (OneLotAuctionTerms)
 import Cap.Auctions.SettlementV1
-import Cap.Auctions.Utils (settlementOf)
 
-import Cap.Examples.HighTrust.TermsV1 (sellerOf)
+import Cap.Examples.HighTrust.TermsV1 (sellerOf, settlementOf)
 
 template AuctionSettlement
   with
@@ -19,7 +20,6 @@ template AuctionSettlement
     winner : Party
     batches : [SettlementBatch]
     opensAt : Time
-    closesAt : Time
   where
     signatory Set.toList terms.authorities <> [sellerOf terms, winner]
 
@@ -29,9 +29,9 @@ template AuctionSettlement
       view = SettlementView with
         core = ExecutionCore with
           authorities = Set.insert (sellerOf terms) (Set.insert winner terms.authorities)
-          executors = [Set.toList terms.authorities]
+          availableActions = Map.fromList [(EA_Execute, [Set.toList terms.authorities])]
           opensAt
-          expiresAt = Some closesAt
+          expiresAt = Some terms.expiresAt
           meta = emptyMetadata
         settlement = settlementOf terms [winner]
         batches

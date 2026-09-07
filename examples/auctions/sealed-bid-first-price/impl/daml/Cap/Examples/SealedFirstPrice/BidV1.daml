@@ -35,9 +35,9 @@ template AuctionBid
     observer bidderOf bidderPaymentAccount
 
     ensure terms.direction == Forward
-      && case quotes of
-        [] -> True
-        [q] -> q.quantity == 1.0
+      && case (quotes, paymentAllocation, lotAllocation) of
+        ([], None, None) -> True
+        ([q], Some _, Some _) -> q.quantity == 1.0
         _ -> False
 
     choice AuctionBid_Close : ()
@@ -101,8 +101,7 @@ template AuctionBid
               actors
               extraArgs = terms.registries.lotAllocate.cancelArgs
             pure [paymentCid, lotCid]
-          (None, None) -> pure []
-          _ -> abort "this seat holds one of its two allocations"
+          _ -> pure []
         pure OneLotBid_ReleaseResult with released; meta = emptyMetadata
 
       oneLotBid_expireImpl self _ = do

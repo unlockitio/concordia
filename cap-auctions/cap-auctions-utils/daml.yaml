@@ -5,9 +5,8 @@
 # collects its own (`Splice.TokenStandard.Utils`): `Cap.Auctions.Utils`
 # re-exports, the `Cap.Auctions.Utils.Internal.*` modules implement.
 #
-#   Internal.Allocation — one-step allocate, and cancel-and-reallocate.
-#   Internal.Bid        — the one-lot encodings: settlement, legs, escrow, and
-#                         the factory-admin checks.
+#   Internal.Bid — the one-lot encodings: the sale's settlement identity and
+#                  its payment and lot legs.
 #
 # Internal.Bid reads the one-lot terms off `Cap.Auctions.OneLotBidV1`, so this
 # package sits ABOVE the auction interfaces. That is why `RegistryV1` is not in
@@ -27,7 +26,6 @@ data-dependencies:
 - ../../lib/splice-api-token-holding-v2-1.0.0.dar
 - ../../lib/splice-api-token-allocation-v2-1.0.0.dar
 - ../../lib/splice-api-token-allocation-instruction-v2-1.0.0.dar
-- ../../lib/splice-token-standard-utils-2.0.0.dar
 - ../cap-auctions-registry/.daml/dist/cap-auctions-registry-0.1.0.dar
 - ../Interfaces/bid/.daml/dist/cap-auctions-bid-v1-0.1.0.dar
 build-options:

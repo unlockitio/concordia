@@ -1,4 +1,3 @@
-<!-- Copyright (c) 2026 Unlockit -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
 # Post-release extension points
@@ -56,17 +55,36 @@ quantity — are new templates implementing `OneLotBid` and `Settlement`,
 deployed beside the released DARs. cap-auctions extends to them without
 changing.
 
-**Several lots and several sellers** is the natural next surface, and it is
-additive rather than a break: a multi-lot bid interface ships beside
-`OneLotBid` instead of re-opening it, because what grows is the terms — a list
-of lots, a seller per lot — and the award rule that reads them. What does not
-grow is the core underneath: one submittable per bid, funds allocated before
-casting, one close fixing the set of bids, and settlement through the Token
-Standard all carry over unchanged, so a multi-seller sale is a cap-auctions
-addition and not a cap-core one.
+**Several lots and several sellers** needs no new interface, provided the format
+models a bid as one `OneLotBid` contract per lot, all naming the same
+`Mechanism`. Nothing ties a resolution to a single set of terms, so each bid
+carries its own `lot`, `reserve`, seller accounts and `RegistryCalls`, and the
+procedure groups the presented bids by lot. A shared `saleId` settles them
+together. This is a deployment pattern on the released interfaces, not an
+addition to them; `cap-auctions/RATIONALE.md` sets out how it works and what it
+leaves out.
 
-Combinatorial and continuous double auctions are the formats that may reach
-further, into cap-core itself.
+Two things require a new bid interface, and only one of them is about bundles.
+
+**Bids that span lots** — a bundle priced all-or-nothing, a substitute
+constraint, or a budget across lots — cannot be said, because separate bids are
+won independently. The obstacle is the escrow rather than the lot count: a bundle
+bidder's exposure is the largest bundle it might win, not the sum of its bids,
+while `paymentAllocation` holds one allocation covering one bid.
+
+**One contract covering several lots** is also outside `OneLotBid`, even for
+separable bids: `OneLotBidView` carries a single `terms.lot` and `Quote` has no
+lot reference. A format may want it for fewer contracts, one allocation instead
+of one per lot, or a single unit for withdrawal and expiry. This is a packaging
+change, and every check survives in a per-lot form.
+
+Either interface ships beside `OneLotBid` rather than re-opening it, and the core
+underneath is unchanged — one submittable per bid, funds allocated before
+casting, one close fixing the set of bids, and settlement through the Token
+Standard all carry over.
+
+Continuous double auctions are the format that may reach further, into cap-core
+itself, because a submittable declares its mechanism when it is submitted.
 
 ## New domains on cap-core
 

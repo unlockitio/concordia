@@ -1,19 +1,26 @@
 -- SPDX-License-Identifier: Apache-2.0
 
-
-
 module Cap.Core.Utils.Internal.Execution
-  ( ExecutionCore (..)
+  ( ExecutionAction (..)
+  , ExecutionCore (..)
   ) where
 
+import DA.Map (Map)
 import DA.Set (Set)
 
 import Splice.Api.Token.MetadataV1
 
+data ExecutionAction
+  = EA_Execute
+  | EA_Cancel
+  | EA_Custom with
+      id : Text
+  deriving (Eq, Ord, Show)
+
 data ExecutionCore = ExecutionCore
   with
     authorities : Set Party
-    executors : [[Party]]
+    availableActions : Map ExecutionAction [[Party]]
     opensAt : Time
     expiresAt : Optional Time
     meta : Metadata

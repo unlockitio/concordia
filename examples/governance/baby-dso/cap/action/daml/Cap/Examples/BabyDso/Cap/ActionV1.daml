@@ -14,7 +14,7 @@ import qualified DA.TextMap as TextMap
 import Splice.Api.Token.MetadataV1
 import Splice.Util (require)
 
-import Cap.Core.Utils (ExecutionCore (..))
+import Cap.Core.Utils (ExecutionCore (..), orAbort)
 import Cap.Governance.ActionV1
 import Cap.Governance.BindingV1
 import Cap.Governance.ExecutableV1
@@ -34,10 +34,12 @@ template FeeUpdate
     outcome : Optional AnyValue
   where
     signatory dso
-    observer concat core.executors
+    observer concat (concat (Map.values core.availableActions))
 
     interface instance Executable for FeeUpdate where
       view = ExecutableView with core; bindings; outcome
+
+      executable_cancelImpl _ = abort "this execution cannot be cancelled"
 
       executable_executeImpl currentTargets _ = do
         configCid <- boundAuthentic (configTargetKey dso)
@@ -61,17 +63,16 @@ template SetFeesAction
 
     interface instance Action for SetFeesAction where
       view = ActionView with
-        authorities = Set.fromList [dso]
+        authorizers = [[dso]]
         meta = emptyMetadata
 
-      action_issueExecutionImpl _ arg = do
+      action_authorizeExecutionImpl _ arg = do
         let ExecutableView with .. = arg.execution
-        (transferFee, entryFee) <- case outcome >>= feesOf of
-          Some fees -> pure fees
-          None -> abort "the execution carries no fees this action can apply"
+        (transferFee, entryFee) <-
+          orAbort "the execution carries no fees this action can apply" (outcome >>= feesOf)
         cid <- create FeeUpdate with
           dso; transferFee; entryFee; core; bindings; outcome
-        pure Action_IssueExecutionResult with
+        pure Action_AuthorizeExecutionResult with
           executionCids = [toInterfaceContractId cid]
           meta = emptyMetadata
 
@@ -114,9 +115,8 @@ boundAuthentic
   -> Update AnyContractId
 boundAuthentic key policy currentTargets bindings = do
   bind <- theBindFor (Authentic key) bindings
-  cid <- case Map.lookup (Authentic key) currentTargets of
-    Some cid -> pure cid
-    None -> abort "the bound target was not presented"
+  cid <- orAbort "the bound target was not presented"
+    (Map.lookup (Authentic key) currentTargets)
   presented <- fetchCheckedTarget key (coerceContractId cid)
   requireSatisfied policy bind presented
   pure cid

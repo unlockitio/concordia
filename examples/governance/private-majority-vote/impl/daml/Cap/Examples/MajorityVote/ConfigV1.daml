@@ -11,7 +11,7 @@ import qualified DA.Set as Set
 import Splice.Api.Token.MetadataV1
 import Splice.Util (require)
 
-import Cap.Core.Utils (ExecutionCore, IsAnyValue (..))
+import Cap.Core.Utils (ExecutionCore, IsAnyValue (..), orAbort)
 import Cap.Governance.ActionV1
 import Cap.Governance.BindingV1
 import Cap.Governance.ExecutableV1
@@ -59,17 +59,18 @@ template ConfigUpdate
     outcome : Optional AnyValue
   where
     signatory dso
-    observer concat core.executors
+    observer concat (concat (Map.values core.availableActions))
 
     interface instance Executable for ConfigUpdate where
       view = ExecutableView with core; bindings; outcome
 
+      executable_cancelImpl _ = abort "this execution cannot be cancelled"
+
       executable_executeImpl currentTargets _ = do
         let ctk = configTargetKey dso
         bind <- singleBind bindings
-        cid <- case Map.lookup (bindKey bind) currentTargets of
-          Some cid -> pure cid
-          None -> abort "the config the bind names was not presented"
+        cid <- orAbort "the config the bind names was not presented"
+          (Map.lookup (bindKey bind) currentTargets)
         presented <- fetchCheckedTarget ctk (coerceContractId cid)
         stillHolds unchanged ctk bind presented
         updated <- exercise (coerceContractId cid : ContractId Config)
@@ -90,14 +91,14 @@ template SetConfigAction
 
     interface instance Action for SetConfigAction where
       view = ActionView with
-        authorities = Set.fromList [dso]
+        authorizers = [[dso]]
         meta = emptyMetadata
 
-      action_issueExecutionImpl _ arg = do
+      action_authorizeExecutionImpl _ arg = do
         let ExecutableView with .. = arg.execution
         cid <- create ConfigUpdate with
           dso; newSetting; core; bindings; outcome
-        pure Action_IssueExecutionResult with
+        pure Action_AuthorizeExecutionResult with
           executionCids = [toInterfaceContractId cid]
           meta = emptyMetadata
 

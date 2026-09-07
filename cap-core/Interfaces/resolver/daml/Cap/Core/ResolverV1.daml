@@ -9,7 +9,7 @@ import DA.Map (Map)
 import qualified DA.Map as Map
 
 import Splice.Api.Token.MetadataV1
-import Cap.Core.Utils (HasCheckedFetch (..), admitActors, requireExpired)
+import Cap.Core.Utils (HasCheckedFetch (..), admitActors, orAbort, requireExpired)
 import Cap.Core.SubmittableV1
 
 
@@ -68,9 +68,8 @@ interface Resolver where
 
       submitted <- fetchSubmittables mechanism submittables
 
-      p <- case Map.lookup mechanism.procedure (procedures this) of
-        Some proc -> pure proc
-        None -> abort "the mechanism names a procedure this resolver does not have"
+      p <- orAbort "the mechanism names a procedure this resolver does not have"
+        (Map.lookup mechanism.procedure (procedures this))
       assertMsg "not authorised to resolve" (admitActors p.resolvers actors)
 
       p.resolve self submitted extraArgs

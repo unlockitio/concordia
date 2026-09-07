@@ -6,7 +6,9 @@ import qualified DA.Set as Set
 
 import Splice.Api.Token.MetadataV1
 
-import Cap.Core.Utils (ExecutionCore (..))
+import qualified DA.Map as Map
+
+import Cap.Core.Utils (ExecutionAction (..), ExecutionCore (..))
 import Cap.Auctions.OneLotBidV1 (OneLotAuctionTerms)
 import Cap.Auctions.SettlementV1
 
@@ -28,7 +30,7 @@ template AuctionSettlement
       view = SettlementView with
         core = ExecutionCore with
           authorities = terms.authorities
-          executors = [Set.toList terms.authorities]
+          availableActions = Map.fromList [(EA_Execute, [Set.toList terms.authorities])]
           opensAt
           expiresAt = Some terms.expiresAt
           meta = emptyMetadata

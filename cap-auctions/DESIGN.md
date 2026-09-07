@@ -26,7 +26,7 @@ cap-auctions/
 │   ├── bid/                 OneLotBid (requires Submittable), OneLotAuctionTerms,
 │   │                        Direction, LotSpec, Quote
 │   └── settlement/          Settlement, SettlementBatch, SettlementView
-└── cap-auctions-utils/      settlementOf, paymentLeg, lotLeg, paymentLegId, lotLegId
+└── cap-auctions-utils/      saleSettlement, paymentLeg, lotLeg, paymentLegId, lotLegId
 
 examples/auctions/
 ├── sealed-bid-first-price/            the operator holds the assets and the
@@ -40,3 +40,4 @@ examples/auctions/
 lib/                         vendored Token Standard and Splice DARs
 ```
 
+Why these shapes and not the alternatives: [`RATIONALE.md`](RATIONALE.md).

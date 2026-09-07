@@ -11,3 +11,5 @@ lib/               vendored Token Standard and Splice DARs
 
 - [`cap-governance/DESIGN.md`](cap-governance/DESIGN.md)
 - [`cap-auctions/DESIGN.md`](cap-auctions/DESIGN.md)
+
+Why the design is not something else: [`RATIONALE.md`](RATIONALE.md).

@@ -16,7 +16,7 @@ import Splice.Util (require)
 
 import Cap.Core.ResolverV1
 import Cap.Core.SubmittableV1
-import Cap.Core.Utils (ExecutionCore (..), orAbort, requireClosed)
+import Cap.Core.Utils (ExecutionAction (..), ExecutionCore (..), orAbort, requireClosed)
 import Cap.Governance.ActionV1
 import Cap.Governance.BallotV1
 import Cap.Governance.ExecutableV1
@@ -189,11 +189,13 @@ majority body = Procedure with
 
     created <- case verdict of
       V_Accepted (Some winner) -> do
-        result <- exercise actionCid Action_IssueExecution with
+        result <- exercise actionCid Action_AuthorizeExecution with
+          actors = [body.dso]
           execution = ExecutableView with
             core = ExecutionCore with
               authorities = Set.fromList [body.dso]
-              executors = map (\voter -> [voter]) (Set.toList body.electorate)
+              availableActions = Map.fromList
+                [(EA_Execute, map (\voter -> [voter]) (Set.toList body.electorate))]
               opensAt = terms.votingClosesAt
               expiresAt = Some terms.expiresAt
               meta = emptyMetadata

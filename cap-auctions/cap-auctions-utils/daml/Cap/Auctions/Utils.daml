@@ -7,7 +7,7 @@ module Cap.Auctions.Utils (
   -- * One-lot auctions
 
   -- ** Settlement and its legs
-  settlementOf,
+  saleSettlement,
   paymentLegId,
   lotLegId,
   paymentLeg,

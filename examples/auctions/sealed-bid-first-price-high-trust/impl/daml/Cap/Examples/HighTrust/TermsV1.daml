@@ -2,6 +2,7 @@
 
 module Cap.Examples.HighTrust.TermsV1 where
 
+import qualified DA.Set as Set
 import qualified DA.TextMap as TextMap
 
 import Splice.Api.Token.MetadataV1
@@ -11,10 +12,15 @@ import qualified Splice.Api.Token.HoldingV2 as Holding
 import Splice.TokenStandard.Utils (regularAccountOwner)
 
 import Cap.Auctions.OneLotBidV1 (OneLotAuctionTerms, OneLotBidView, Quote)
-import Cap.Auctions.Utils (settlementOf)
+import Cap.Auctions.Utils (saleSettlement)
 
 sellerOf : OneLotAuctionTerms -> Party
 sellerOf terms = regularAccountOwner terms.sellerLotAccount
+
+
+settlementOf : OneLotAuctionTerms -> [Party] -> Alloc.SettlementInfo
+settlementOf terms extras =
+  saleSettlement terms (Set.toList terms.authorities <> (sellerOf terms :: extras))
 
 
 preLotSettlementOf : OneLotAuctionTerms -> Alloc.SettlementInfo

@@ -16,7 +16,7 @@ import DA.Time (RelTime, addRelTime, seconds)
 import Splice.Api.Token.MetadataV1
 import Splice.Util (require)
 
-import Cap.Core.Utils (ExecutionCore (..), requireClosed)
+import Cap.Core.Utils (ExecutionAction (..), ExecutionCore (..), orAbort, requireClosed)
 import Cap.Core.ResolverV1
 import Cap.Core.SubmittableV1
 import Cap.Governance.ActionV1
@@ -75,9 +75,8 @@ voteProcedure rules = Procedure with
     terms <- oneProposal now ballots
     let counted = [bv | (_, bv) <- ballots, bv.voter `Set.member` rules.svs]
     require "the counted ballots come from distinct svs" (unique (map (.voter) counted))
-    verdict <- case verdictOf (Set.size rules.svs) terms.options (map (.votes) counted) of
-      Some verdict -> pure verdict
-      None -> abort "no definite outcome: the ballots decide no value for every field"
+    verdict <- orAbort "no definite outcome: the ballots decide no value for every field"
+      (verdictOf (Set.size rules.svs) terms.options (map (.votes) counted))
     created <- onAcceptance rules now rules.executionDelay terms verdict extraArgs
     consume [rules.dso] (map fst ballots) extraArgs
     pure Resolver_ResolveResult with verdict; created; meta = emptyMetadata
@@ -107,10 +106,9 @@ confirmationProcedure rules = Procedure with
 submittableToBallot
   : [(ContractId Submittable, Submittable)]
   -> Update [(ContractId Ballot, BallotView)]
-submittableToBallot presented = forA presented $ \(cid, s) ->
-  case fromInterface @Ballot s of
-    None -> abort "every presented submission is a ballot"
-    Some ballot -> pure (coerceContractId cid, view ballot)
+submittableToBallot presented = forA presented $ \(cid, s) -> do
+  ballot <- orAbort "every presented submission is a ballot" (fromInterface @Ballot s)
+  pure (coerceContractId cid, view ballot)
 
 oneProposal : Time -> [(ContractId Ballot, BallotView)] -> Update ProposalTerms
 oneProposal now ballots = do
@@ -161,19 +159,20 @@ executableFor rules now delay bindings winner =
   in pure ExecutableView with
     core = ExecutionCore with
       authorities = Set.fromList [rules.dso]
-      executors = [[sv] | sv <- Set.toList rules.svs]
+      availableActions = Map.fromList [(EA_Execute, [[sv] | sv <- Set.toList rules.svs])]
       opensAt
       expiresAt = Some (opensAt `addRelTime` rules.executionWindow)
       meta = emptyMetadata
     bindings
     outcome = Some winner
 
-issue : Optional AnyContractId -> ExecutableView -> ExtraArgs -> Update [AnyContractId]
-issue actionCid execution extraArgs = do
-  cid <- case actionCid of
-    Some cid -> pure (coerceContractId cid : ContractId Action)
-    None -> abort "the proposal names no action to issue against"
-  result <- exercise cid Action_IssueExecution with execution; extraArgs
+issue
+  : [Party] -> Optional AnyContractId -> ExecutableView -> ExtraArgs
+  -> Update [AnyContractId]
+issue actors actionCid execution extraArgs = do
+  anyCid <- orAbort "the proposal names no action to issue against" actionCid
+  let cid = coerceContractId anyCid : ContractId Action
+  result <- exercise cid Action_AuthorizeExecution with actors; execution; extraArgs
   pure (map coerceContractId result.executionCids)
 
 onAcceptance
@@ -182,7 +181,7 @@ onAcceptance
 onAcceptance rules now delay terms verdict extraArgs = case verdict of
   V_Accepted (Some winner) -> do
     execution <- executableFor rules now delay terms.bindings winner
-    issue terms.actionCid execution extraArgs
+    issue [rules.dso] terms.actionCid execution extraArgs
   _ -> pure []
 
 consume : [Party] -> [ContractId Ballot] -> ExtraArgs -> Update ()

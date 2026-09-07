@@ -6,7 +6,7 @@ import DA.Map (Map)
 
 import Splice.Api.Token.MetadataV1
 import Splice.Util (require)
-import Cap.Core.Utils (admitActors, ExecutionCore (..), requireExpired, requireOpen)
+import Cap.Core.Utils (entitled, ExecutionAction (..), ExecutionCore (..), requireExpired, requireOpen)
 import Cap.Governance.BindingV1 (Bind, TargetKey)
 
 data ExecutableView = ExecutableView
@@ -22,6 +22,11 @@ data Executable_ExecuteResult = Executable_ExecuteResult
     meta : Metadata
   deriving (Eq, Show)
 
+data Executable_CancelResult = Executable_CancelResult
+  with
+    meta : Metadata
+  deriving (Eq, Show)
+
 data Executable_ExpireResult = Executable_ExpireResult
   with
     meta : Metadata
@@ -33,6 +38,8 @@ interface Executable where
   executable_executeImpl
     : Map TargetKey AnyContractId -> ExtraArgs -> Update Executable_ExecuteResult
 
+  executable_cancelImpl : Executable_Cancel -> Update Executable_CancelResult
+
   choice Executable_Execute : Executable_ExecuteResult
     with
       actors : [Party]
@@ -43,8 +50,19 @@ interface Executable where
       let v = view this
       now <- getTime
       requireOpen "the execution window is open" now v.core.opensAt v.core.expiresAt
-      require "the actors are an executor set" (admitActors v.core.executors actors)
+      require "the actors are entitled to execute"
+        (entitled v.core.availableActions EA_Execute actors)
       executable_executeImpl this currentTargets extraArgs
+
+  choice Executable_Cancel : Executable_CancelResult
+    with
+      actors : [Party]
+      extraArgs : ExtraArgs
+    controller actors
+    do
+      require "the actors are entitled to cancel"
+        (entitled (view this).core.availableActions EA_Cancel actors)
+      executable_cancelImpl this (Executable_Cancel with ..)
 
   choice Executable_Expire : Executable_ExpireResult
     with

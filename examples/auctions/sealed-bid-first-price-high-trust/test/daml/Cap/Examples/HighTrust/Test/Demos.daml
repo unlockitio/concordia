@@ -22,7 +22,6 @@ import Cap.Core.ResolverV1
 import Cap.Core.SubmittableV1
 import Cap.Auctions.OneLotBidV1
 import Cap.Auctions.SettlementV1
-import Cap.Auctions.Utils (settlementOf)
 
 import Cap.Examples.HighTrust.BidV1
 import Cap.Examples.HighTrust.LotV1
@@ -185,8 +184,8 @@ settleBatchesFor f sale = case sale.batches of
     settlement = settlementOf f.terms [sale.winner]
     argFor b = Alloc.SettlementFactory_SettleBatch with
       settlement
-      transferLegs = [b.leg]
-      allocations = [b.sender, b.receiver]
+      transferLegs = b.legs
+      allocations = b.allocations
       actors = settlement.executors
       extraArgs = emptyExtraArgs
 
@@ -198,18 +197,25 @@ repriced arg amount = arg with
 
 paymentLegOf : AuctionSettlement -> Alloc.TransferLeg
 paymentLegOf sale = case sale.batches of
-  (payment :: _) -> payment.leg
+  (payment :: _) -> onlyLegOf payment
   _ -> error "a one-lot sale has a payment batch"
 
 lotLegOf : AuctionSettlement -> Alloc.TransferLeg
 lotLegOf sale = case sale.batches of
-  [_, lot] -> lot.leg
+  [_, lot] -> onlyLegOf lot
   _ -> error "a one-lot sale has a lot batch"
 
 lotSenderOf : AuctionSettlement -> ContractId Alloc.Allocation
 lotSenderOf sale = case sale.batches of
-  [_, lot] -> lot.sender.allocationCid
+  [_, lot] -> case lot.allocations of
+    (sender :: _) -> sender.allocationCid
+    _ -> error "a lot batch names its sender allocation first"
   _ -> error "a one-lot sale settles two batches"
+
+onlyLegOf : SettlementBatch -> Alloc.TransferLeg
+onlyLegOf batch = case batch.legs of
+  [leg] -> leg
+  _ -> error "a one-lot sale settles one leg per batch"
 
 runSettleWith
   : OpenAuction -> ContractId AuctionSettlement

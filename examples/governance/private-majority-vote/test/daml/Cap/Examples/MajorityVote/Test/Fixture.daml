@@ -18,8 +18,8 @@ import qualified Splice.Api.Token.MetadataV1 as Meta
 
 import Cap.Core.ResolverV1
 import Cap.Core.SubmittableV1
-import Cap.Core.Utils (ExecutionCore (..), IsAnyValue (..))
-import Cap.Governance.ActionV1 (Action, Action_IssueExecution (..))
+import Cap.Core.Utils (ExecutionAction (..), ExecutionCore (..), IsAnyValue (..))
+import Cap.Governance.ActionV1 (Action, Action_AuthorizeExecution (..))
 import Cap.Governance.BallotV1
 import Cap.Governance.BindingV1
 import Cap.Governance.ExecutableV1
@@ -195,7 +195,7 @@ forgedExecution : Fixture -> ExecutableView
 forgedExecution f = ExecutableView with
   core = ExecutionCore with
     authorities = Set.fromList [f.dso]
-    executors = [[f.operator]]
+    availableActions = Map.fromList [(EA_Execute, [[f.operator]])]
     opensAt = f.terms.votingClosesAt
     expiresAt = Some f.terms.expiresAt
     meta = emptyMetadata
@@ -205,6 +205,7 @@ forgedExecution f = ExecutableView with
 runIssueMustFail : Fixture -> Party -> ExecutableView -> Script ()
 runIssueMustFail f actor execution =
   submitMustFail actor $
-    exerciseCmd (toInterfaceContractId @Action f.actionCid) Action_IssueExecution with
+    exerciseCmd (toInterfaceContractId @Action f.actionCid) Action_AuthorizeExecution with
+      actors = [actor]
       execution
       extraArgs = noArgs

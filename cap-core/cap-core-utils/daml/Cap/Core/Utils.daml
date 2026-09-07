@@ -24,6 +24,7 @@ module Cap.Core.Utils (
   requireExpired,
 
   -- * Execution
+  ExecutionAction (..),
   ExecutionCore (..),
 
   -- * Values

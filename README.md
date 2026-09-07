@@ -1,4 +1,3 @@
-<!-- Copyright (c) 2026 Unlockit -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
 # Concordia — Canton Allocation Primitives (CAP)
@@ -90,6 +89,7 @@ concordia/
 ├── scripts/sandbox-test.sh            # sandbox integration run
 ├── multi-package.yaml                 # dpm workspace (build order)
 ├── DESIGN.md                          # cap-core design (threat models inline)
+├── RATIONALE.md                       # why the design is not something else
 ├── SCOPE.md                           # first-release scope, capability → milestone
 ├── POST-RELEASE.md                    # extension points for downstream modules
 ├── CHANGELOG.md
@@ -98,6 +98,10 @@ concordia/
 ```
 
 `cap-governance/DESIGN.md` and `cap-auctions/DESIGN.md` carry the tier-2 designs.
+[`RATIONALE.md`](RATIONALE.md) records why each of these shapes was chosen over
+the alternative, with the per-domain decisions in
+[`cap-governance/RATIONALE.md`](cap-governance/RATIONALE.md) and
+[`cap-auctions/RATIONALE.md`](cap-auctions/RATIONALE.md).
 
 ## Building
 

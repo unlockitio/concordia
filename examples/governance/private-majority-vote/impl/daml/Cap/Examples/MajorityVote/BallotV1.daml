@@ -10,15 +10,17 @@ import qualified DA.Map as Map
 import Splice.Api.Token.MetadataV1
 import Splice.Util (require)
 
+import Cap.Core.Utils (orAbort)
 import Cap.Core.SubmittableV1
 import Cap.Governance.BallotV1
 import Cap.Governance.BindingV1
 
 fetchBound
   : Map TargetKey AnyContractId -> Bind -> Update (AuthenticTargetKey, AuthenticTarget)
-fetchBound currentTargets bind = case Map.lookup (bindKey bind) currentTargets of
-  Some cid -> fetchAuthenticTarget (coerceContractId cid)
-  None -> abort "the ballot was cast without the target it binds"
+fetchBound currentTargets bind = do
+  cid <- orAbort "the ballot was cast without the target it binds"
+    (Map.lookup (bindKey bind) currentTargets)
+  fetchAuthenticTarget (coerceContractId cid)
 
 requireAsSeen : Bind -> AuthenticTargetKey -> AuthenticTarget -> Update ()
 requireAsSeen bind key presented = case bind of

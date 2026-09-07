@@ -1,4 +1,3 @@
-<!-- Copyright (c) 2026 Unlockit -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
 # CAP first-release scope
