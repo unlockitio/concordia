@@ -6,6 +6,7 @@ import Prelude hiding (Action)
 
 import DA.Map (Map)
 import qualified DA.Map as Map
+import DA.Optional (whenSome)
 import DA.Set (Set)
 import qualified DA.Set as Set
 import DA.TextMap (TextMap)
@@ -18,7 +19,7 @@ import Cap.Core.Utils (ExecutionCore (..), orAbort)
 import Cap.Governance.ActionV1
 import Cap.Governance.BindingV1
 import Cap.Governance.ExecutableV1
-import Cap.Governance.Utils (DriftPolicy, unchangedAt)
+import Cap.Governance.Utils (DriftPolicy, holds, typed)
 
 import Cap.Examples.BabyDso.Cap.AnsV1
 import Cap.Examples.BabyDso.Cap.ConfigV1
@@ -30,7 +31,7 @@ template FeeUpdate
     transferFee : Decimal
     entryFee : Decimal
     core : ExecutionCore
-    bindings : [Bind]
+    bindings : Map TargetKey Bind
     outcome : Optional AnyValue
   where
     signatory dso
@@ -41,10 +42,10 @@ template FeeUpdate
 
       executable_cancelImpl _ = abort "this execution cannot be cancelled"
 
-      executable_executeImpl currentTargets _ = do
+      executable_executeImpl targets _ = do
         configCid <- boundAuthentic (configTargetKey dso)
-          (unchangedAt [transferFeeField]) currentTargets bindings
-        ansCid <- boundOpaque ansTargetKey bindings
+          transferFeeUnchanged targets bindings
+        ansCid <- boundOpaque ansTargetKey targets bindings
         updatedConfig <- exercise (coerceContractId configCid : ContractId AmuletConfig)
           AmuletConfig_SetFee with newTransferFee = transferFee
         updatedAns <- exercise (coerceContractId ansCid : ContractId AnsRules)
@@ -61,23 +62,40 @@ template SetFeesAction
     signatory dso
     observer Set.toList svs
 
+    ensure wellFormedAt Genesis (setFeesBindSpec dso)
+
     interface instance Action for SetFeesAction where
       view = ActionView with
         authorizers = [[dso]]
+        bindSpec = setFeesBindSpec dso
         meta = emptyMetadata
 
       action_authorizeExecutionImpl _ arg = do
-        let ExecutableView with .. = arg.execution
         (transferFee, entryFee) <-
-          orAbort "the execution carries no fees this action can apply" (outcome >>= feesOf)
+          orAbort "the execution carries no fees this action can apply" (arg.outcome >>= feesOf)
         cid <- create FeeUpdate with
-          dso; transferFee; entryFee; core; bindings; outcome
+          dso; transferFee; entryFee
+          bindings = arg.bindings
+          core = arg.core
+          outcome = arg.outcome
         pure Action_AuthorizeExecutionResult with
           executionCids = [toInterfaceContractId cid]
           meta = emptyMetadata
 
 
-
+setFeesBindSpec : Party -> Map TargetKey BindSpec
+setFeesBindSpec dso = Map.fromList
+  [ ( Authentic (configTargetKey dso)
+    , BindSpec with
+        state = Some (AsOf with stage = Submission; seen = None)
+        cid = AsOf with stage = Execution; seen = None
+    )
+  , ( Opaque ansTargetKey
+    , BindSpec with
+        state = None
+        cid = AsOf with stage = Execution; seen = None
+    )
+  ]
 
 entryFeeField : Text
 entryFeeField = "entryFee"
@@ -90,6 +108,15 @@ decimalAt field fields = case TextMap.lookup field fields of
   Some (AV_Decimal value) -> Some value
   _ -> None
 
+transferFeeUnchanged : DriftPolicy
+transferFeeUnchanged = typed sameFee
+  where
+    sameFee : TextMap AnyValue -> TextMap AnyValue -> Bool
+    sameFee pinned current =
+      case (TextMap.lookup transferFeeField pinned, TextMap.lookup transferFeeField current) of
+        (Some a, Some b) -> a == b
+        _ -> False
+
 feesOf : AnyValue -> Optional (Decimal, Decimal)
 feesOf (AV_Map fields) =
   case (decimalAt transferFeeField fields, decimalAt entryFeeField fields) of
@@ -97,33 +124,32 @@ feesOf (AV_Map fields) =
     _ -> None
 feesOf _ = None
 
-theBindFor : TargetKey -> [Bind] -> Update Bind
-theBindFor key bindings = case filter (\bind -> bindKey bind == key) bindings of
-  [bind] -> pure bind
-  _ -> abort "the execution binds this target exactly once"
-
-requireSatisfied : DriftPolicy -> Bind -> AuthenticTarget -> Update ()
-requireSatisfied policy bind presented = case bind of
-  AuthenticBind with .. -> case (state.seen, (view presented).state) of
-    (Some pinned, Some current) ->
-      require "the target no longer satisfies the bind" (policy.holds pinned current)
-    _ -> abort "the bind pins no state, or the target publishes none"
-  _ -> abort "an authentic target is bound authentically"
+theBindFor : TargetKey -> Map TargetKey Bind -> Update Bind
+theBindFor key bindings =
+  orAbort "the execution does not bind this target" (Map.lookup key bindings)
 
 boundAuthentic
-  : AuthenticTargetKey -> DriftPolicy -> Map TargetKey AnyContractId -> [Bind]
-  -> Update AnyContractId
+  : AuthenticTargetKey -> DriftPolicy -> Map TargetKey AnyContractId
+  -> Map TargetKey Bind -> Update AnyContractId
 boundAuthentic key policy currentTargets bindings = do
   bind <- theBindFor (Authentic key) bindings
   cid <- orAbort "the bound target was not presented"
     (Map.lookup (Authentic key) currentTargets)
   presented <- fetchCheckedTarget key (coerceContractId cid)
-  requireSatisfied policy bind presented
+  require "the target no longer satisfies the bind"
+    (holds policy bind (Bind with state = (view presented).state; cid = Some cid))
   pure cid
 
-boundOpaque : OpaqueTargetKey -> [Bind] -> Update AnyContractId
-boundOpaque key bindings = do
+
+boundOpaque
+  : OpaqueTargetKey -> Map TargetKey AnyContractId -> Map TargetKey Bind
+  -> Update AnyContractId
+boundOpaque key currentTargets bindings = do
   bind <- theBindFor (Opaque key) bindings
-  case bind of
-    OpaqueBind with .. -> pure opaqueCid
-    _ -> abort "an opaque target is bound opaquely"
+  case bind.cid of
+    Some pinned -> do
+      whenSome (Map.lookup (Opaque key) currentTargets) $ \presented ->
+        require "the presented target is the one the bind pins" (presented == pinned)
+      pure pinned
+    None -> orAbort "the bound target was not presented"
+      (Map.lookup (Opaque key) currentTargets)

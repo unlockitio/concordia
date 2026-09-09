@@ -51,33 +51,40 @@ move Canton Coin. [`AnsRules`](https://github.com/canton-network/splice/blob/a4e
 
 Suppose, for the demo, that the SVs want to vote a single set of fees covering both. 
 
-**Two kinds of bind, one target of each.** The amulet-side config implements
-`AuthenticTarget` and publishes its state, so it is pinned by *what it says* and judged
-by a policy. `AnsRules` is bound as an `OpaqueBind`, pinned by *which contract it is*.
+**Two kinds of target, one of each.** The amulet-side config implements
+`AuthenticTarget` and publishes its state, so the svs pin *what it says* when they cast
+and a policy judges it at execution. `AnsRules` implements nothing, so there is no state
+to pin: the bind names it by key and the executor supplies the contract.
 
 `AnsRules` could perfectly well be an `AuthenticTarget`, it is DSO-signed and lives in a
 package the same project maintains. It is opaque here for the purpose of the demo: to
-show the two kinds of bind side by side, and what a target gives up by not publishing
+show the two kinds of target side by side, and what a target gives up by not publishing
 state.
 
+`SetFeesAction` declares both, and when each part of each bind is fixed:
+
 ```daml
-bindings =
-  [ AuthenticBind with
-      target = amuletRulesKey dso
-      state  = AsOf with
-        stage = Submission
-        seen  = Some (AV_Map [("transferFee", AV_Decimal 0.03), ("epoch", AV_Int 3)])
-      cid    = AsOf with stage = Execution; seen = None
-  , OpaqueBind with
-      opaqueTarget = OpaqueTargetKey "ans-rules"
-      opaqueCid    = pinnedAnsRulesCid
+setFeesBindSpec : Party -> Map TargetKey BindSpec
+setFeesBindSpec dso = Map.fromList
+  [ ( Authentic (configTargetKey dso)
+    , BindSpec with
+        state = Some (AsOf with stage = Submission; seen = None)
+        cid = AsOf with stage = Execution; seen = None
+    )
+  , ( Opaque ansTargetKey
+    , BindSpec with
+        state = None
+        cid = AsOf with stage = Execution; seen = None
+    )
   ]
 ```
 
 The asymmetry in what each pins follows from that choice. A config that is archived and
 re-created on every write gets a new contract id each time, so its *state* is the stable
-thing to name. A target that publishes no state leaves its contract id as the only thing there
-is to name.
+thing to name, and `unchangedAt [transferFeeField]` decides at execution whether it has
+moved too far. The ans target has no state to name, and its contract id is not named
+either: `AnsRules_SetFee` archives the contract it acts on, so an id fixed in advance
+would be spent after the first execution. Whoever executes presents it instead.
 
 Each SV names the fees it wants and the resolver takes the median of each field. 
 

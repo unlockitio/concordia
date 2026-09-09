@@ -12,7 +12,7 @@ import Cap.Governance.BindingV1 (Bind, TargetKey)
 data ExecutableView = ExecutableView
   with
     core : ExecutionCore
-    bindings : [Bind]
+    bindings : Map TargetKey Bind
     outcome : Optional AnyValue
   deriving (Eq, Show)
 
@@ -43,7 +43,7 @@ interface Executable where
   choice Executable_Execute : Executable_ExecuteResult
     with
       actors : [Party]
-      currentTargets : Map TargetKey AnyContractId
+      targets : Map TargetKey AnyContractId
       extraArgs : ExtraArgs
     controller actors
     do
@@ -52,7 +52,7 @@ interface Executable where
       requireOpen "the execution window is open" now v.core.opensAt v.core.expiresAt
       require "the actors are entitled to execute"
         (entitled v.core.availableActions EA_Execute actors)
-      executable_executeImpl this currentTargets extraArgs
+      executable_executeImpl this targets extraArgs
 
   choice Executable_Cancel : Executable_CancelResult
     with

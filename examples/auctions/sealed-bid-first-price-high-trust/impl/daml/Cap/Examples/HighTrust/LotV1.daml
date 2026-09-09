@@ -14,7 +14,7 @@ import qualified Splice.Api.Token.HoldingV2 as Holding
 
 import Splice.Util (require)
 
-import Cap.Core.Utils (orAbort, requireClosed)
+import Cap.Core.Utils (requireClosed)
 import Cap.Core.ResolverV1
 import Cap.Core.SubmittableV1
 import Cap.Auctions.OneLotBidV1
@@ -130,19 +130,19 @@ resolveFirstPrice
   -> [(ContractId Submittable, Submittable)]
   -> ExtraArgs
   -> Update Resolver_ResolveResult
-resolveFirstPrice lot self cast extraArgs = do
+resolveFirstPrice lot self presented extraArgs = do
   let terms = lot.terms
   now <- getTime
   requireClosed "the bidding window is closed" now terms.biddingClosesAt
 
-  seats <- forA cast $ \(cid, s) -> do
-    b <- orAbort "only seats are presented to this procedure" (fromInterface @OneLotBid s)
+  cast <- presentedAs @OneLotBid "a seat" presented
+  seats <- forA cast $ \(cid, b) -> do
     let bv = view b
     require "every presented seat was opened on the seller's terms"
       (bv.terms == terms)
     require "every presented seat is signed by the bidder it names"
-      (bidderOf bv.bidderPaymentAccount `elem` signatory s)
-    pure (coerceContractId cid : ContractId OneLotBid, bv)
+      (bidderOf bv.bidderPaymentAccount `elem` signatory b)
+    pure (cid, bv)
 
   require "every invited bidder is presented"
     (sort [bidderOf bv.bidderPaymentAccount | (_, bv) <- seats] == sort lot.invited)
@@ -159,7 +159,7 @@ resolveFirstPrice lot self cast extraArgs = do
       awardResult <- exercise winnerCid OneLotBid_Award with
         actors = Set.toList terms.authorities <> [sellerOf terms]
         awarded = [award]
-        lotAllocationCid = lot.sellerLotAllocationCid
+        lotAllocation = lot.sellerLotAllocationCid
         extraArgs
       pure (V_Accepted None, awardResult.created)
 

@@ -16,5 +16,6 @@ data-dependencies:
 - ../../../../cap-core/Interfaces/submittable/.daml/dist/cap-core-submittable-v1-0.1.0.dar
 - ../../../../cap-governance/Interfaces/binding/.daml/dist/cap-governance-binding-0.1.0.dar
 - ../../../../cap-governance/Interfaces/ballot/.daml/dist/cap-governance-ballot-v1-0.1.0.dar
+- ../impl/.daml/dist/cap-example-majority-vote-0.1.0.dar
 build-options:
   - --target=2.1

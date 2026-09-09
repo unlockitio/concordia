@@ -60,11 +60,12 @@ data Fixture = Fixture with
     actionCid : ContractId SetConfigAction
     terms : ProposalTerms
 
-configBind : Party -> Text -> Bind
-configBind dso setting = AuthenticBind with
-  target = configTargetKey dso
-  state = AsOf with stage = Submission; seen = Some (toAnyValue setting)
-  cid = AsOf with stage = Execution; seen = None
+configBind : Party -> Text -> Map TargetKey Bind
+configBind dso setting = Map.fromList
+  [ ( Authentic (configTargetKey dso)
+    , Bind with state = Some (toAnyValue setting); cid = None
+    )
+  ]
 
 setupAs : Text -> Script Fixture
 setupAs ns = do
@@ -87,12 +88,16 @@ setupAs ns = do
         expiresAt = now `addRelTime` days 10
   resolverCid <- submit dso $ createCmd body
 
-  let mechanism = voteMechanism dso bodyName proposalName
+  let mechanism = Mechanism with
+        resolver = ResolverKey with
+          authorities = Set.fromList [dso]
+          id = bodyName
+        resolverCid = None
+        procedure = majorityProcedureName
+        id = proposalName
       terms = ProposalTerms with
-        authorities = Set.fromList [dso]
         options = majorityOptions
-        actionCid = Some (coerceContractId actionCid)
-        bindings = [configBind dso openingSetting]
+        actionCid = toInterfaceContractId @Action actionCid
         entryClosesAt = now `addRelTime` days 1
         votingClosesAt = now `addRelTime` days 2
         expiresAt = now `addRelTime` days 3
@@ -140,8 +145,8 @@ cast f voter ballotCid option = do
   cid <- submit voter $
     exerciseCmd (toInterfaceContractId @Ballot ballotCid) Ballot_Cast with
       actors = [voter]
-      votes = [option]
-      currentTargets = presentedTargets f f.configCid
+      vote = option
+      targets = presentedTargets f f.configCid
       extraArgs = noArgs
   pure (fromInterfaceContractId cid)
 
@@ -187,25 +192,24 @@ runExecute f configCid executionCid = do
   _ <- submit f.alice $
     exerciseCmd executionCid Executable_Execute with
       actors = [f.alice]
-      currentTargets = presentedTargets f configCid
+      targets = presentedTargets f configCid
       extraArgs = noArgs
   pure ()
 
-forgedExecution : Fixture -> ExecutableView
-forgedExecution f = ExecutableView with
-  core = ExecutionCore with
-    authorities = Set.fromList [f.dso]
-    availableActions = Map.fromList [(EA_Execute, [[f.operator]])]
-    opensAt = f.terms.votingClosesAt
-    expiresAt = Some f.terms.expiresAt
-    meta = emptyMetadata
-  bindings = f.terms.bindings
-  outcome = Some acceptOption
+forgedCore : Fixture -> ExecutionCore
+forgedCore f = ExecutionCore with
+  authorities = Set.fromList [f.dso]
+  availableActions = Map.fromList [(EA_Execute, [[f.operator]])]
+  opensAt = f.terms.votingClosesAt
+  expiresAt = Some f.terms.expiresAt
+  meta = emptyMetadata
 
-runIssueMustFail : Fixture -> Party -> ExecutableView -> Script ()
-runIssueMustFail f actor execution =
+runIssueMustFail : Fixture -> Party -> ExecutionCore -> Script ()
+runIssueMustFail f actor core =
   submitMustFail actor $
     exerciseCmd (toInterfaceContractId @Action f.actionCid) Action_AuthorizeExecution with
       actors = [actor]
-      execution
+      core
+      outcome = Some acceptOption
+      bindings = configBind f.dso openingSetting
       extraArgs = noArgs

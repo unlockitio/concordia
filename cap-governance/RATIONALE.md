@@ -52,12 +52,15 @@ spent by using it. It can also be used as a way to delegate authority.
 **It is optional.** 
 A resolver may create an `Executable` itself.
 
+
 ## `Ballot`
 
 *For the input a resolver counts.*
 
-**Enrolment and voting are defined by the implementations** `ProposalTerms` carries
-`entryClosesAt` and `votingClosesAt`, but is up to the implementations to decide what to do with it.
+**Enrolment and voting are defined by the implementations.** `BallotView` carries
+`opensAt`, `closesAt` and `expiresAt`, and `Ballot_Cast`, `Ballot_Withdraw` and
+`Ballot_Expire` enforce that window. Who may enrol, and what a round decides
+between, is the implementation's.
 
 **Votes and options are `AnyValue`.** The same erasure as target state, for the
 same reason: the core cannot name a format's vote type.

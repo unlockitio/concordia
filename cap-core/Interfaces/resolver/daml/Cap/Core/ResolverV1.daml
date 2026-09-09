@@ -1,6 +1,6 @@
 -- SPDX-License-Identifier: Apache-2.0
 
--- A resolver is an authority-scoped, long-lived "host". A mechanism is the unit that varies.
+-- A resolver is an authority-scoped, long-lived "host". The mechanism varies.
 
 module Cap.Core.ResolverV1 where
 

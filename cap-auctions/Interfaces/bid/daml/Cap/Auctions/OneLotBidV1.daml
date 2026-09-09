@@ -32,7 +32,7 @@ data OneLotAuctionTerms = OneLotAuctionTerms
     sellerPaymentAccount : Holding.Account
     sellerLotAccount : Holding.Account
     saleId : Text 
-    registries : RegistryCalls
+    registries : RegistryCalls -- move to bid
     payment : Holding.InstrumentId
     lot : LotSpec
     reserve : Optional Decimal
@@ -117,11 +117,11 @@ interface OneLotBid requires Submittable where
     controller actors
     do
       let bv = view this
-      let sv = view (toInterface @Submittable this)
       require "the actors are entitled to submit"
         (entitled bv.availableActions BA_Submit actors)
       now <- getTime
-      requireOpen "the bidding window is open" now sv.opensAt (Some sv.closesAt)
+      requireOpen "the bidding window is open"
+        now bv.terms.entryClosesAt (Some bv.terms.biddingClosesAt)
       require "a bid is non-empty and names distinct positive price-quantity quotes"
         (wellFormedQuotes quotes)
       require "some quote of the bid meets the reserve"
@@ -143,16 +143,15 @@ interface OneLotBid requires Submittable where
     with
       actors : [Party]
       awarded : [Quote]
-      lotAllocationCid : ContractId Allocation
+      lotAllocation : ContractId Allocation
       extraArgs : ExtraArgs
     controller actors
     do
       let bv = view this
-      let sv = view (toInterface @Submittable this)
       require "the actors are entitled to award"
         (entitled bv.availableActions BA_Award actors)
       now <- getTime
-      requireClosed "the bidding window is closed" now sv.closesAt
+      requireClosed "the bidding window is closed" now bv.terms.biddingClosesAt
       require "an award is non-empty and names distinct positive price-quantity quotes"
         (wellFormedQuotes awarded)
       require "the award is within what this bid quoted at that price"
@@ -179,7 +178,7 @@ interface OneLotBid requires Submittable where
     controller actors
     do
       now <- getTime
-      requireExpired "the bid has expired" now (view (toInterface @Submittable this)).expiresAt
+      requireExpired "the bid has expired" now (Some (view this).terms.expiresAt)
       oneLotBid_expireImpl this self (OneLotBid_Expire with ..)
 
 

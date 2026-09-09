@@ -5,6 +5,7 @@ module Cap.Core.SubmittableV1 where
 import DA.Set (Set)
 
 import Splice.Api.Token.MetadataV1
+import DA.Either (partitionEithers)
 import DA.List (unique)
 
 import Splice.Util (require, fetchCheckedInterface)
@@ -28,9 +29,6 @@ data Mechanism = Mechanism
 data SubmittableView = SubmittableView
   with
     mechanism : Mechanism
-    opensAt : Time
-    closesAt : Time
-    expiresAt : Optional Time
     meta : Metadata
   deriving (Eq, Show)
 
@@ -49,3 +47,22 @@ fetchSubmittables mechanism cids = do
   forA cids $ \cid -> do
     s <- fetchCheckedInterface mechanism cid
     pure (cid, s)
+
+-- move to utils 
+partitionPresentedAs
+  : forall t. HasFromInterface t Submittable
+  => [(ContractId Submittable, Submittable)]
+  -> ([(ContractId t, t)], [(ContractId Submittable, Submittable)])
+partitionPresentedAs presented = partitionEithers (map pick presented)
+  where
+    pick (cid, s) = case fromInterface s of
+      Some t -> Left (fromInterfaceContractId cid, t)
+      None -> Right (cid, s)
+
+presentedAs
+  : forall t. HasFromInterface t Submittable
+  => Text -> [(ContractId Submittable, Submittable)] -> Update [(ContractId t, t)]
+presentedAs what presented = case partitionPresentedAs @t presented of
+  (ts, []) -> pure ts
+  (_, (cid, _) :: _) ->
+    abort ("the presented submittable " <> show cid <> " is not " <> what)

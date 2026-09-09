@@ -3,15 +3,16 @@
 module Cap.Governance.Utils
   (
   -- * Drift policies
-    DriftPolicy (..)
-  , anyDrift
+    DriftPolicy
+  , holds
+  , holdsAll
+  , anyState
   , unchanged
   , typed
-  , withinVersions
-  , withinRatio
-  , notAfter
-  , atSlice
-  , unchangedAt
+
+  -- * Pinning
+  , pinStateAt
   ) where
 
 import Cap.Governance.Utils.Internal.Drift
+import Cap.Governance.Utils.Internal.Pin

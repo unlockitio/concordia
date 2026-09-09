@@ -4,6 +4,7 @@ module Cap.Examples.MajorityVote.Test.Demos where
 
 import DA.Action (unless, when)
 import DA.Assert ((===))
+import qualified DA.Map as Map
 import DA.List (sort)
 import DA.Optional (isSome)
 import qualified DA.Set as Set
@@ -178,13 +179,15 @@ theCountCoversTheElectorate = do
     voter = f.alice
     mechanism = f.mechanism
     terms = f.terms
-    votes = []
+    bindings = Map.empty
+    vote = None
   submitMustFail (actAs f.dso <> actAs f.operator) $ createCmd PrivateBallot with
     operator = f.operator
     voter = f.alice
     mechanism = f.mechanism
     terms = f.terms
-    votes = []
+    bindings = Map.empty
+    vote = None
 
 
   fake <- submit f.operator $ createCmd ImpostorBallot with
@@ -192,7 +195,8 @@ theCountCoversTheElectorate = do
     voter = f.alice
     mechanism = f.mechanism
     terms = f.terms
-    votes = [rejectOption]
+    bindings = Map.empty
+    vote = Some rejectOption
   runResolveMustFailContaining f "every ballot is signed by the voter it names"
     (map presented [votes.bob, votes.carol]
       <> [toInterfaceContractId @Submittable fake])
@@ -205,7 +209,7 @@ theOperatorCannotSkipTheCount = do
   f <- setupAs "skip"
   now <- getTime
 
-  runIssueMustFail f f.operator (forgedExecution f)
+  runIssueMustFail f f.operator (forgedCore f)
 
 
   submitMustFail f.operator $ createCmd VoteResolver with

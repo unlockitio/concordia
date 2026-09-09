@@ -85,10 +85,10 @@ dpm test --package-root examples/governance/private-majority-vote/test
 `setupAs` allocates the five parties and creates three contracts as the `dso`: a
 `Config` opening at `"sync-a"`, a `SetConfigAction` proposing `"sync-b"`, and a
 `VoteResolver` for body `"body-1"` that expires in ten days. It then builds the
-`ProposalTerms` every ballot carries — `{dso}` as authority, accept and reject as
-the options, that action, one binding pinning the config's setting as seen at
-submission, and a three-day timeline: `entryClosesAt` at day 1,
-`votingClosesAt` at day 2, `expiresAt` at day 3. Alice then raises the round on
+`ProposalTerms` every ballot carries — that action and a three-day timeline:
+`entryClosesAt` at day 1, `votingClosesAt` at day 2, `expiresAt` at day 3. The
+action declares the config as its one target, with its state pinned at submission
+and its contract named at execution. Alice then raises the round on
 those terms with `VoteResolver_Propose`, and the `dso` and the operator together
 issue one `BallotInvitation` per entitled voter. The `mechanism` names proposal
 `"proposal-1"` under the `"majority"` procedure and names the body by key.

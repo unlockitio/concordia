@@ -6,10 +6,9 @@ Four interface packages and a utils package, for approving effects on live state
 
 A proposal is resolved by a `Resolver` from `cap-core`: it collects `Submittable`s and
 runs a named `Procedure` over them to reach a `Verdict`. Ballots are those submittables.
-`ProposalTerms` carries the options voters choose between and a `[Bind]`: the contracts
-the decision will act on, each with a pin of what must still be true of it. A proposal may
-bind several targets across several packages, and `Executable_Execute` checks and writes
-them in one transaction. The pins are set out in [State Awerness](#state-awerness) below.
+An action declares the contracts a decision may act on, each with a `BindSpec` saying when
+its state and its contract id are fixed. A proposal may bind several targets across several
+packages, and `Executable_Execute` checks and writes them in one transaction. The pins are set out in [State Awareness](#state-awareness) below.
 
 On acceptance an `Executable` is created, carrying pre-committed authority and the
 bindings. `Action_AuthorizeExecution` is one way to create it: the action reads the decision
@@ -24,25 +23,87 @@ The effect happens at `Executable_Execute`, which can also be exercised inside R
 wallet depends on Amulet, both depend on the Token Standard interfaces.**
 
 
-## State Awerness
+## State Awareness
 
 The governance packages name no governable type. A decision reaches the contract
-it acts on through a `Bind`, so a kind of target that has never been governed
+it acts on through a bind, so a kind of target that has never been governed
 before is a deploy, not a change in the governance logic.
 
-A bind is data, not a check. It is written into `ProposalTerms` when the proposal
-is made and travels onto `ExecutableView` when the executable is created,
-and it stays a record at every step. This data exists in cap-governance only to for implementations to use. 
-Nothing is checked in the interfaces fixed bodies, the reason is that different implementations 
-might need to do different comparations at different stages. 
-`cap-governance-utils` does supply some common `DriftPolicy` cases.
+### Where the vocabulary lives
 
-A bind *pins* targets i.e. records what was true of the target at a certain
-stage, and any later stage can be the one that checks the claim still holds.
-There are two things to pin. Pinning the **state** records what the target
-published about itself, so a check compares the current state against it under a
-`DriftPolicy`. Pinning the **contract id** records the exact contract, so a check
-admits that contract and no other.
+`Cap.Governance.BindingV1` holds `TargetKey`, `Bind`, the `AuthenticTarget`
+interface and the fetches over it. `Cap.Governance.ActionV1` holds `Stage`,
+`AsOf`, `BindSpec`, `dueAt` and `wellFormedAt`, because an action is the only
+thing that declares a bind spec.
+
+### The bind spec
+
+An action declares one `BindSpec` per target it may touch. Each `AsOf` carries
+the `Stage` at which that part is fixed, and the value once something has fixed
+it. `state = None` says the target publishes no state.
+
+```haskell
+data BindSpec = BindSpec with
+    state : Optional (AsOf AnyValue)
+    cid : AsOf AnyContractId
+```
+
+`wellFormedAt stage` holds when, for every spec:
+
+- an opaque target has no state slot, since it publishes nothing to pin;
+- a state slot exists only where the contract is fixed strictly later, since
+  once the contract is fixed the state follows from it;
+- no part carries a value before its stage.
+
+
+### The bind
+
+Everything downstream carries the settled form, which has the values and no
+stages.
+
+```haskell
+data Bind = Bind with
+    state : Optional AnyValue
+    cid : Optional AnyContractId
+```
+
+`BindSpec` and `Bind` are both keyed by `TargetKey` from outside, so
+`ActionView.bindSpec`, `BallotView.bindings` and `ExecutableView.bindings` are
+maps.
+
+### The path a bind takes
+
+- The action declares `bindSpec`.
+- A submitter fills the parts due at `Submission`, reading the targets presented
+  to it. `pinStateAt` in `cap-governance-utils` does that, called from
+  `ballot_castImpl` in both governance examples.
+- The resolver compares the submitters' binds against each other with `holds`
+  and carries one set forward.
+- `Action_AuthorizeExecution` puts the binds on the executable it creates.
+- `Executable_Execute` receives the contracts to act on and checks each against
+  its bind with `holds`.
+
+The interfaces do not check that a bind carries what it claims. Each
+implementation decides what to compare and at which stage.
+
+### Drift policies
+
+A `DriftPolicy` defines `onState : AnyValue -> AnyValue -> Bool` and does not
+export it. `holds` is the only way to apply one, and it takes binds:
+
+```haskell
+holds : DriftPolicy -> Bind -> Bind -> Bool
+```
+
+A pinned contract must be the contract presented. With no contract pinned, the
+two states are compared under the policy. A policy never sees a contract id, so
+none can waive that rule.
+
+`cap-governance-utils` supplies the common cases: `anyDrift`, `unchanged`,
+`unchangedAt`, `typed`, `withinVersions`, `withinRatio`, `notAfter` and
+`atSlice`. They compose with `<>`.
+
+### Targets
 
 A target can be: 
 - an instance of the `AuthenticTarget` interface, publishing
@@ -52,10 +113,7 @@ target's signatories.
 - Only a contract id in that case there is no state to compare, so no drift policy applies, and any change to the
 contract breaks the bind.
 
-`AuthenticBind` carries `state` and `cid` independently, each as an `AsOf` with
-its own stage, so a bind is a choice of when each half binds — or that it does
-not. `OpaqueBind` carries a contract id and nothing else. Every cell below is
-expressible; these are the combinations worth writing.
+Every cell below is expressible; these are the combinations worth writing.
 
 | Submission | Resolution | Execution | What the bind says |
 |:---:|:---:|:---:|---|
@@ -65,7 +123,7 @@ expressible; these are the combinations worth writing.
 | cid | | | the proposal named the exact contract, and nothing about its content |
 | | cid | | the resolution fixed the contract, and nothing the voters saw is pinned |
 | | | | nothing pinned: the bind names the target key and constrains nothing |
-| cid | cid | cid | `OpaqueBind`: this contract and no other, on nothing but the ledger |
+| cid | cid | cid | an opaque target: a contract and nothing else, on nothing but the ledger |
 
 Splice's `AmuletRules` is row one: `AmuletRules_SetConfig` carries a `baseConfig`
 pinned when the action was proposed, and `DsoRules_ExecuteConfirmedAction` takes
@@ -73,16 +131,17 @@ the `amuletRulesCid` at execution. What differs is the comparison. `patch`
 writes the proposal's value where it differs from the base and never refuses,
 where a `DriftPolicy` may.
 
-State binds strictly earlier than cid or not at all, and that is the
-gap the drift policy defined. The wider it is, the more the target may
-legitimately move between resolution and execution.
+`wellFormedAt` requires a state to be fixed strictly before the contract, and
+that gap is what the drift policy judges. The wider it is, the more the target
+may legitimately move between resolution and execution.
 
 Reading the rows: a state pin without a cid pin follows the target through
 re-creation — the decision acts on whatever contract now carries the key,
 provided its state still passes the drift policy. A cid pin without a state pin
 is all-or-nothing on identity: that contract or nothing, whatever it now says.
 
-No fixed body reads `stage`. It declares the intent the format enforces.
+Stages are read by `wellFormedAt` and by each format's own code. No fixed
+body reads one.
 
 ## Governance flows examples
 
@@ -150,11 +209,11 @@ a rule.
 ```
 cap-governance/
 ├── Interfaces/
-│   ├── binding/             Bind, AsOf, Stage, TargetKey, AuthenticTarget
+│   ├── binding/             Bind, TargetKey, AuthenticTarget
 │   ├── executable/          Executable, ExecutableView
-│   ├── action/              Action, Action_AuthorizeExecution
-│   └── ballot/              Ballot, ProposalTerms
-└── cap-governance-utils/    DriftPolicy and its combinators
+│   ├── action/              Action, Action_AuthorizeExecution, BindSpec, AsOf, Stage
+│   └── ballot/              Ballot, BallotView
+└── cap-governance-utils/    DriftPolicy and its combinators, pinStateAt
 
 examples/governance/
 ├── private-majority-vote/
@@ -173,4 +232,4 @@ examples/governance/
 lib/                         vendored Token Standard and Splice DARs
 ```
 
-Why these shapes and not the alternatives: [`RATIONALE.md`](RATIONALE.md).
+Rational behind each interface [`RATIONALE.md`](RATIONALE.md).

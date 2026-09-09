@@ -7,7 +7,7 @@ import Prelude hiding (Action)
 import DA.Foldable (forA_)
 import DA.List (sort, unique)
 import qualified DA.Map as Map
-import DA.Optional (isNone, mapOptional)
+import DA.Optional (isSome)
 import DA.Set (Set)
 import qualified DA.Set as Set
 
@@ -19,7 +19,6 @@ import Cap.Core.SubmittableV1
 import Cap.Core.Utils (ExecutionAction (..), ExecutionCore (..), orAbort, requireClosed)
 import Cap.Governance.ActionV1
 import Cap.Governance.BallotV1
-import Cap.Governance.ExecutableV1
 
 import Cap.Examples.MajorityVote.BallotV1
 
@@ -31,16 +30,6 @@ rejectOption = AV_Text "reject"
 
 majorityProcedureName : Text
 majorityProcedureName = "majority"
-
-voteMechanism : Party -> Text -> Text -> Mechanism
-voteMechanism dso resolverId proposalId = Mechanism with
-  resolver = ResolverKey with
-    authorities = Set.fromList [dso]
-    id = resolverId
-  resolverCid = None
-  procedure = majorityProcedureName
-  id = proposalId
-
 
 template Proposal
   with
@@ -57,9 +46,6 @@ template Proposal
     interface instance Submittable for Proposal where
       view = SubmittableView with
         mechanism
-        opensAt = terms.entryClosesAt
-        closesAt = terms.votingClosesAt
-        expiresAt = Some terms.expiresAt
         meta = emptyMetadata
 
     -- should only be able to do one per proposal.
@@ -75,7 +61,7 @@ template Proposal
     choice Proposal_Join : ContractId Proposal
       with
         voter : Party
-      controller voter
+      controller voter, dso
       do
         now <- getTime
         require "a voter joins the roll before the entry window closes"
@@ -108,7 +94,8 @@ template BallotInvitation
         create PrivateBallot with
           operator; voter; mechanism
           terms = proposal.terms
-          votes = []
+          bindings = Map.empty
+          vote = None
 
 template VoteResolver
   with
@@ -142,8 +129,15 @@ template VoteResolver
           (Set.member proposer electorate)
         create Proposal with
           dso; operator; electorate; terms
-          mechanism = voteMechanism dso resolverId proposalId
+          mechanism = Mechanism with
+            resolver = ResolverKey with
+              authorities = Set.fromList [dso]
+              id = resolverId
+            resolverCid = None
+            procedure = majorityProcedureName
+            id = proposalId
           roll = []
+
 
 majority : VoteResolver -> Procedure
 majority body = Procedure with
@@ -151,37 +145,38 @@ majority body = Procedure with
   resolve = \_ presented extraArgs -> do
     now <- getTime
 
-    (proposalCid, proposal) <-
-      case mapOptional (\(cid, s) -> (cid,) <$> fromInterface @Proposal s) presented of
-        [p] -> pure p
-        _ -> abort "the presentation carries exactly one proposal"
+    let (proposals, rest) = partitionPresentedAs @Proposal presented
+    (proposalCid, proposal) <- case proposals of
+      [p] -> pure p
+      _ -> abort "the presentation carries exactly one proposal" -- orAbort
     require "the proposal is on this body's electorate"
       (proposal.electorate == body.electorate)
-    actionCid <- orAbort "the proposal names no action to issue against"
-      (coerceContractId <$> proposal.terms.actionCid : Optional (ContractId Action))
+    let actionCid = proposal.terms.actionCid
 
-    ballots <- forA [e | e@(_, s) <- presented, isNone (fromInterface @Proposal s)] $
-      \(cid, s) -> do
-        requireClosed "every presented ballot is closed for voting"
-          now (view s).closesAt
-        require "every ballot was cast on this proposal"
-          ((view s).mechanism == proposal.mechanism)
-        ballot <- orAbort "this procedure counts ballots and one proposal"
-          (fromInterface @Ballot s)
-        require "every ballot is signed by the voter it names"
-          ((view ballot).voter `elem` signatory s)
-        pure (coerceContractId cid : ContractId Ballot, view ballot)
+    cast <- presentedAs @Ballot "a ballot" rest
+    ballots <- forA cast $ \(cid, ballot) -> do
+      let bv = view ballot
+      requireClosed "every presented ballot is closed for voting" now bv.closesAt
+      require "every ballot is signed by the voter it names"
+        (bv.voter `elem` signatory ballot)
+      b <- orAbort "every presented ballot is one of this format's"
+        (fromInterface @PrivateBallot ballot)
+      require "every ballot votes on the proposal's terms" (b.terms == proposal.terms)
+      pure (cid, bv)
 
-    require "every ballot votes on the proposal's terms"
-      (all (\(_, bv) -> bv.terms == proposal.terms) ballots)
     let terms = proposal.terms
 
     let voters = [bv.voter | (_, bv) <- ballots]
     require "the presented ballots cover the roll"
       (unique voters && sort voters == sort proposal.roll)
 
-    let voted = [bv | (_, bv) <- ballots, not (null bv.votes)]
-        accepts = length [() | bv <- voted, acceptOption `elem` bv.votes]
+    let voted = [bv | (_, bv) <- ballots, isSome bv.vote]
+    bindings <- case [bv.bindings | bv <- voted] of
+      [] -> pure Map.empty
+      (b :: rest) | all (== b) rest -> pure b
+      _ -> abort "the cast ballots pin one set of targets"
+
+    let accepts = length [() | bv <- voted, bv.vote == Some acceptOption]
         verdict
           | null voted = V_Lapsed None
           | 2 * accepts > Set.size body.electorate = V_Accepted (Some acceptOption)
@@ -191,22 +186,21 @@ majority body = Procedure with
       V_Accepted (Some winner) -> do
         result <- exercise actionCid Action_AuthorizeExecution with
           actors = [body.dso]
-          execution = ExecutableView with
-            core = ExecutionCore with
-              authorities = Set.fromList [body.dso]
-              availableActions = Map.fromList
-                [(EA_Execute, map (\voter -> [voter]) (Set.toList body.electorate))]
-              opensAt = terms.votingClosesAt
-              expiresAt = Some terms.expiresAt
-              meta = emptyMetadata
-            bindings = terms.bindings
-            outcome = Some winner
+          core = ExecutionCore with
+            authorities = Set.fromList [body.dso]
+            availableActions = Map.fromList
+              [(EA_Execute, map (:: []) (Set.toList body.electorate))]
+            opensAt = terms.votingClosesAt
+            expiresAt = Some terms.expiresAt
+            meta = emptyMetadata
+          outcome = Some winner
+          bindings
           extraArgs
         pure (map coerceContractId result.executionCids)
       _ -> pure []
 
     forA_ ballots $ \(cid, _) ->
       exercise cid Ballot_Consume with actors = [body.dso]; extraArgs
-    archive (coerceContractId proposalCid : ContractId Proposal)
+    archive proposalCid
 
     pure Resolver_ResolveResult with verdict; created; meta = emptyMetadata

@@ -6,6 +6,7 @@ import Prelude hiding (Action)
 
 import DA.Foldable (forA_)
 import DA.List (sort, unique)
+import DA.Map (Map)
 import qualified DA.Map as Map
 import DA.Optional (isSome, mapOptional)
 import qualified DA.TextMap as TextMap
@@ -21,8 +22,10 @@ import Cap.Core.ResolverV1
 import Cap.Core.SubmittableV1
 import Cap.Governance.ActionV1
 import Cap.Governance.BallotV1
-import Cap.Governance.BindingV1 (Bind)
-import Cap.Governance.ExecutableV1
+import Cap.Governance.BindingV1
+import Cap.Governance.Utils (DriftPolicy, holdsAll, typed)
+
+import Cap.Examples.BabyDso.Cap.ConfigV1 (transferFeeField)
 
 import Cap.Examples.BabyDso.Cap.SubmissionV1
 
@@ -68,16 +71,18 @@ voteProcedure : DsoResolver -> Procedure
 voteProcedure rules = Procedure with
   resolvers = [[sv] | sv <- Set.toList rules.svs]
   resolve = \_ presented extraArgs -> do
-    require "this procedure counts cast ballots only"
-      (all (isSome . fromInterface @SvBallot . snd) presented)
+    cast <- presentedAs @SvBallot "an sv ballot" presented
     now <- getTime
-    ballots <- submittableToBallot presented
-    terms <- oneProposal now ballots
+    terms <- oneProposal now [b.terms | (_, b) <- cast]
+    let ballots =
+          [ (toInterfaceContractId @Ballot cid, view (toInterface @Ballot b))
+          | (cid, b) <- cast ]
     let counted = [bv | (_, bv) <- ballots, bv.voter `Set.member` rules.svs]
     require "the counted ballots come from distinct svs" (unique (map (.voter) counted))
     verdict <- orAbort "no definite outcome: the ballots decide no value for every field"
-      (verdictOf (Set.size rules.svs) terms.options (map (.votes) counted))
-    created <- onAcceptance rules now rules.executionDelay terms verdict extraArgs
+      (verdictOf (Set.size rules.svs) terms.options (mapOptional (.vote) counted))
+    bindings <- agreedBindings ballots
+    created <- onAcceptance rules now rules.executionDelay terms bindings verdict extraArgs
     consume [rules.dso] (map fst ballots) extraArgs
     pure Resolver_ResolveResult with verdict; created; meta = emptyMetadata
 
@@ -85,34 +90,29 @@ confirmationProcedure : DsoResolver -> Procedure
 confirmationProcedure rules = Procedure with
   resolvers = [[sv] | sv <- Set.toList rules.svs]
   resolve = \_ presented extraArgs -> do
-    require "this procedure counts confirmations only"
-      (all (isSome . fromInterface @SvConfirmation . snd) presented)
+    cast <- presentedAs @SvConfirmation "a confirmation" presented
     now <- getTime
-    ballots <- submittableToBallot presented
-    terms <- oneProposal now ballots
+    terms <- oneProposal now [c.terms | (_, c) <- cast]
+    let ballots =
+          [ (toInterfaceContractId @Ballot cid, view (toInterface @Ballot c))
+          | (cid, c) <- cast ]
     let confirmers = [bv.voter | (_, bv) <- ballots]
     require "every confirmer is an sv" (all (`Set.member` rules.svs) confirmers)
     require "no duplicate confirmers" (unique confirmers)
     require "enough confirmations"
       (length ballots >= requiredNumVotes (Set.size rules.svs))
-    winner <- case concat [bv.votes | (_, bv) <- ballots] of
+    winner <- case mapOptional (\(_, bv) -> bv.vote) ballots of
       (winner :: rest) | all (== winner) rest -> pure winner
       _ -> abort "the confirmations name one option"
     let verdict = V_Accepted (Some winner)
-    created <- onAcceptance rules now immediately terms verdict extraArgs
+    bindings <- agreedBindings ballots
+    created <- onAcceptance rules now immediately terms bindings verdict extraArgs
     consume [rules.dso] (map fst ballots) extraArgs
     pure Resolver_ResolveResult with verdict; created; meta = emptyMetadata
 
-submittableToBallot
-  : [(ContractId Submittable, Submittable)]
-  -> Update [(ContractId Ballot, BallotView)]
-submittableToBallot presented = forA presented $ \(cid, s) -> do
-  ballot <- orAbort "every presented submission is a ballot" (fromInterface @Ballot s)
-  pure (coerceContractId cid, view ballot)
-
-oneProposal : Time -> [(ContractId Ballot, BallotView)] -> Update ProposalTerms
-oneProposal now ballots = do
-  terms <- case [bv.terms | (_, bv) <- ballots] of
+oneProposal : Time -> [ProposalTerms] -> Update ProposalTerms
+oneProposal now presentedTerms = do
+  terms <- case presentedTerms of
     (terms :: rest) | all (== terms) rest -> pure terms
     _ -> abort "the presented ballots name one proposal"
   requireClosed "the voting window has closed" now terms.votingClosesAt
@@ -145,43 +145,54 @@ textOf : AnyValue -> Optional Text
 textOf (AV_Text value) = Some value
 textOf _ = None
 
-verdictOf : Int -> [AnyValue] -> [[AnyValue]] -> Optional Verdict
+verdictOf : Int -> [AnyValue] -> [AnyValue] -> Optional Verdict
 verdictOf electorate options votes
   | length votes < requiredNumVotes electorate = Some (V_Lapsed None)
-  | otherwise = case medianByField (mapOptional textOf options) (concat votes) of
+  | otherwise = case medianByField (mapOptional textOf options) votes of
       Some medians -> Some (V_Accepted (Some medians))
       None -> None
 
-executableFor
-  : DsoResolver -> Time -> RelTime -> [Bind] -> AnyValue -> Update ExecutableView
-executableFor rules now delay bindings winner =
+coreFor : DsoResolver -> Time -> RelTime -> ExecutionCore
+coreFor rules now delay =
   let opensAt = now `addRelTime` delay
-  in pure ExecutableView with
-    core = ExecutionCore with
-      authorities = Set.fromList [rules.dso]
-      availableActions = Map.fromList [(EA_Execute, [[sv] | sv <- Set.toList rules.svs])]
-      opensAt
-      expiresAt = Some (opensAt `addRelTime` rules.executionWindow)
-      meta = emptyMetadata
-    bindings
-    outcome = Some winner
+  in ExecutionCore with
+    authorities = Set.fromList [rules.dso]
+    availableActions = Map.fromList [(EA_Execute, [[sv] | sv <- Set.toList rules.svs])]
+    opensAt
+    expiresAt = Some (opensAt `addRelTime` rules.executionWindow)
+    meta = emptyMetadata
 
 issue
-  : [Party] -> Optional AnyContractId -> ExecutableView -> ExtraArgs
-  -> Update [AnyContractId]
-issue actors actionCid execution extraArgs = do
-  anyCid <- orAbort "the proposal names no action to issue against" actionCid
-  let cid = coerceContractId anyCid : ContractId Action
-  result <- exercise cid Action_AuthorizeExecution with actors; execution; extraArgs
+  : [Party] -> ContractId Action -> ExecutionCore -> Optional AnyValue
+  -> Map TargetKey Bind -> ExtraArgs -> Update [AnyContractId]
+issue actors actionCid core outcome bindings extraArgs = do
+  result <- exercise actionCid Action_AuthorizeExecution with
+    actors; core; outcome; bindings; extraArgs
   pure (map coerceContractId result.executionCids)
 
+agreedBindings : [(ContractId Ballot, BallotView)] -> Update (Map TargetKey Bind)
+agreedBindings ballots = case [bv.bindings | (_, bv) <- ballots, isSome bv.vote] of
+  [] -> pure Map.empty
+  (b :: rest) | all (holdsAll transferFeeUnchanged b) rest -> pure b
+  _ -> abort "the cast ballots pin one set of targets"
+
+transferFeeUnchanged : DriftPolicy
+transferFeeUnchanged = typed sameFee
+  where
+    sameFee : TextMap.TextMap AnyValue -> TextMap.TextMap AnyValue -> Bool
+    sameFee pinned current =
+      case (TextMap.lookup transferFeeField pinned, TextMap.lookup transferFeeField current) of
+        (Some a, Some b) -> a == b
+        _ -> False
+
 onAcceptance
-  : DsoResolver -> Time -> RelTime -> ProposalTerms -> Verdict -> ExtraArgs
+  : DsoResolver -> Time -> RelTime -> ProposalTerms -> Map TargetKey Bind -> Verdict
+  -> ExtraArgs
   -> Update [AnyContractId]
-onAcceptance rules now delay terms verdict extraArgs = case verdict of
-  V_Accepted (Some winner) -> do
-    execution <- executableFor rules now delay terms.bindings winner
-    issue [rules.dso] terms.actionCid execution extraArgs
+onAcceptance rules now delay terms bindings verdict extraArgs = case verdict of
+  V_Accepted (Some winner) ->
+    issue [rules.dso] terms.actionCid (coreFor rules now delay) (Some winner)
+      bindings extraArgs
   _ -> pure []
 
 consume : [Party] -> [ContractId Ballot] -> ExtraArgs -> Update ()

@@ -25,9 +25,6 @@ template ImpostorBid
     interface instance Submittable for ImpostorBid where
       view = SubmittableView with
         mechanism
-        opensAt = terms.entryClosesAt
-        closesAt = terms.biddingClosesAt
-        expiresAt = Some terms.expiresAt
         meta = emptyMetadata
 
     interface instance OneLotBid for ImpostorBid where

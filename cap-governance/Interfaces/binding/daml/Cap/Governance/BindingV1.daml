@@ -1,38 +1,24 @@
 -- SPDX-License-Identifier: Apache-2.0
 
 module Cap.Governance.BindingV1
-  ( Stage (..)
-  , AsOf (..)
-  , OpaqueTargetKey (..)
+  ( OpaqueTargetKey (..)
   , AuthenticTargetKey (..)
   , TargetKey (..)
   , Bind (..)
-  , bindKey
   , AuthenticTargetView (..)
   , AuthenticTarget
-  , fetchAuthenticTarget
+  , fetchAuthenticTargets
   , fetchCheckedTarget
   ) where
 
+import DA.Map (Map)
+import qualified DA.Map as Map
 import DA.Set (Set)
 import qualified DA.Set as Set
 
 import Splice.Api.Token.MetadataV1
 import Splice.Util (require, fetchCheckedInterface)
 import Cap.Core.Utils (HasCheckedFetch (..), admitActors)
-
--- when (cid/state) stops being optional
-data Stage
-  = Submission
-  | Resolution
-  | Execution
-  deriving (Eq, Ord, Show)
-
-data AsOf a = AsOf
-  with
-    stage : Stage
-    seen : Optional a
-  deriving (Eq, Show)
 
 newtype OpaqueTargetKey = OpaqueTargetKey Text
   deriving (Eq, Show, Ord)
@@ -48,20 +34,11 @@ data TargetKey
   | Opaque OpaqueTargetKey
   deriving (Eq, Ord, Show)
 
--- a contract, and what must still be true of it when we act on it and at what stage is that set
-data Bind
-  = AuthenticBind with
-      target : AuthenticTargetKey
-      state : AsOf AnyValue
-      cid : AsOf AnyContractId
-  | OpaqueBind with
-      opaqueTarget : OpaqueTargetKey
-      opaqueCid : AnyContractId
+data Bind = Bind
+  with
+    state : Optional AnyValue
+    cid : Optional AnyContractId
   deriving (Eq, Show)
-
-bindKey : Bind -> TargetKey
-bindKey AuthenticBind with .. = Authentic target
-bindKey OpaqueBind with .. = Opaque opaqueTarget
 
 data AuthenticTargetView = AuthenticTargetView
   with
@@ -77,20 +54,23 @@ interface AuthenticTarget where
 instance HasCheckedFetch AuthenticTargetView AuthenticTargetKey where
   contractGroupId v = AuthenticTargetKey with authorities = v.authorities; id = v.id
 
-requireAuthentic : AuthenticTargetKey -> AuthenticTarget -> Update ()
-requireAuthentic cgid t =
-  require "the target carries the signatures its cgid demands"
-    (admitActors [Set.toList cgid.authorities] (signatory t))
 
-fetchAuthenticTarget : ContractId AuthenticTarget -> Update (AuthenticTargetKey, AuthenticTarget)
-fetchAuthenticTarget cid = do
-  t <- fetch cid
-  let cgid = contractGroupId (view t)
-  requireAuthentic cgid t
-  pure (cgid, t)
 
 fetchCheckedTarget : AuthenticTargetKey -> ContractId AuthenticTarget -> Update AuthenticTarget
 fetchCheckedTarget cgid cid = do
   t <- fetchCheckedInterface cgid cid
   requireAuthentic cgid t
   pure t
+  
+fetchAuthenticTargets
+  : Map TargetKey AnyContractId -> Update (Map TargetKey AuthenticTarget)
+fetchAuthenticTargets targets = do
+  fetched <- forA [(tkey, cid) | (Authentic tkey, cid) <- Map.toList targets] $ \(tkey, cid) -> do
+    target <- fetchCheckedTarget tkey (coerceContractId cid)
+    pure (Authentic tkey, target)
+  pure (Map.fromList fetched)
+
+requireAuthentic : AuthenticTargetKey -> AuthenticTarget -> Update ()
+requireAuthentic cgid t =
+  require "the target carries the signatures its cgid demands"
+    (admitActors [Set.toList cgid.authorities] (signatory t))

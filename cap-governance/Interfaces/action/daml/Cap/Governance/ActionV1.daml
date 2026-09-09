@@ -6,14 +6,63 @@ import Prelude hiding (Action)
 
 import Splice.Api.Token.MetadataV1
 import Splice.Util (require)
-import Cap.Core.Utils (admitActors)
-import Cap.Governance.ExecutableV1 (Executable, ExecutableView (..))
+import DA.Map (Map)
+import qualified DA.Map as Map
+import DA.Optional (isNone)
 
+import Cap.Core.Utils (ExecutionCore, admitActors)
+import Cap.Governance.BindingV1 (Bind (..), TargetKey (..))
+import Cap.Governance.ExecutableV1 (Executable)
+
+-- when (cid/state) stops being optional
+data Stage
+  = Genesis -- set in the action contract.
+  | Submission
+  | Resolution
+  | Execution
+  deriving (Eq, Ord, Show)
+
+data AsOf a = AsOf
+  with
+    stage : Stage
+    seen : Optional a
+  deriving (Eq, Show)
+
+-- a contract, and what must still be true of it when we act on it and at what stage is that set
+data BindSpec = BindSpec
+  with
+    state : Optional (AsOf AnyValue) -- None: the target publishes no state
+    cid : AsOf AnyContractId
+  deriving (Eq, Show)
+
+
+dueAt : Stage -> AsOf a -> Bool
+dueAt stage asOf = isNone asOf.seen || asOf.stage <= stage
+
+wellFormedAt : Stage -> Map TargetKey BindSpec -> Bool
+wellFormedAt stage schedule = all bindWellFormed (Map.toList schedule)
+  where
+    bindWellFormed (key, spec) =
+      statePublished key spec
+        && stateAddsSomething spec
+        && optional True (dueAt stage) spec.state
+        && dueAt stage spec.cid
+
+    -- a state fixed no earlier than the contract adds nothing, cid fixes state
+    stateAddsSomething spec =
+      optional True (\slot -> spec.cid.stage > slot.stage) spec.state
+
+    -- only an authentic target publishes state
+    statePublished key spec = case key of
+      Authentic _ -> True
+      Opaque _ -> isNone spec.state
+
+-- A target must have voters in the observer set set to be pinned at Submission stage.
 data ActionView = ActionView
   with
     authorizers : [[Party]]
-      -- ^ Who may authorize an execution against this action: any one group,
-      --   all of its members
+      -- ^ Who may authorize an execution against this action
+    bindSpec : Map TargetKey BindSpec
     meta : Metadata
   deriving (Eq, Show)
 
@@ -27,11 +76,14 @@ interface Action where
   viewtype ActionView
 
   action_authorizeExecutionImpl : ContractId Action -> Action_AuthorizeExecution -> Update Action_AuthorizeExecutionResult
-
+ -- ^ dispatch executables by outcome
+ 
   nonconsuming choice Action_AuthorizeExecution : Action_AuthorizeExecutionResult
     with
       actors : [Party]
-      execution : ExecutableView
+      core : ExecutionCore
+      outcome : Optional AnyValue
+      bindings : Map TargetKey Bind -- what resolver presents to have seen
       extraArgs : ExtraArgs
     controller actors
     do

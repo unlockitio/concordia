@@ -1,0 +1,38 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Governance.Utils.Internal.Pin
+  ( pinStateAt
+  ) where
+
+import DA.Map (Map)
+import qualified DA.Map as Map
+import DA.Optional (isNone)
+
+import Splice.Api.Token.MetadataV1
+
+import Cap.Core.Utils (orAbort)
+import Cap.Governance.ActionV1 (BindSpec (..), Stage)
+import Cap.Governance.BindingV1 (Bind (..), TargetKey, fetchAuthenticTargets)
+
+
+-- Pins the state of targets at a specific stage. Use when fetchAuthenticTargets do not need to be read outside of this function.
+pinStateAt
+  : Stage -> Map TargetKey AnyContractId -> Map TargetKey BindSpec
+  -> Update (Map TargetKey Bind)
+pinStateAt stage targets bindSpec = do
+  fetched <- fetchAuthenticTargets targets
+  entries <- forA (Map.toList bindSpec) $ \(tkey, spec) -> do
+    state <- case spec.state of
+      Some slot | slot.stage == stage && isNone slot.seen -> do
+        presented <- orAbort "a target the bind spec names was not presented"
+          (Map.lookup tkey fetched)
+        Some <$> orAbort "the bound target publishes no state" (view presented).state
+      Some slot -> pure slot.seen
+      None -> pure None
+    cid <- case spec.cid of
+      slot | slot.stage == stage && isNone slot.seen ->
+        Some <$> orAbort "a target the bind spec names was not presented"
+          (Map.lookup tkey targets)
+      slot -> pure slot.seen
+    pure (tkey, Bind with state; cid)
+  pure (Map.fromList entries)

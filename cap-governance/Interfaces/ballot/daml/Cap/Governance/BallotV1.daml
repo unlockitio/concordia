@@ -3,7 +3,6 @@
 module Cap.Governance.BallotV1 where
 
 import DA.Map (Map)
-import DA.Set (Set)
 import qualified DA.Set as Set
 
 import Splice.Api.Token.MetadataV1
@@ -20,23 +19,15 @@ data BallotAction
       id : Text
   deriving (Eq, Ord, Show)
 
-data ProposalTerms = ProposalTerms
-  with
-    authorities : Set Party
-    options : [AnyValue]
-    actionCid : Optional AnyContractId
-    bindings : [Bind]
-    entryClosesAt : Time
-    votingClosesAt : Time
-    expiresAt : Time
-  deriving (Eq, Show)
-
 data BallotView = BallotView
   with
-    terms : ProposalTerms
+    opensAt : Time
+    closesAt : Time
+    expiresAt : Time
     availableActions : Map BallotAction [[Party]]
+    bindings : Map TargetKey Bind
     voter : Party
-    votes : [AnyValue]
+    vote : Optional AnyValue
     meta : Metadata
   deriving (Eq, Show)
 
@@ -70,17 +61,16 @@ interface Ballot requires Submittable where
   nonconsuming choice Ballot_Cast : ContractId Ballot
     with
       actors : [Party]
-      votes : [AnyValue]
-      currentTargets : Map TargetKey AnyContractId
+      vote : AnyValue
+      targets : Map TargetKey AnyContractId
       extraArgs : ExtraArgs
     controller actors
     do
       let bv = view this
-      let sv = view (toInterface @Submittable this)
       require "the actors are entitled to cast"
         (entitled bv.availableActions BA_Cast actors)
       now <- getTime
-      requireOpen "the voting window is open" now sv.opensAt (Some sv.closesAt)
+      requireOpen "the voting window is open" now bv.opensAt (Some bv.closesAt)
       ballot_castImpl this self (Ballot_Cast with ..)
 
   nonconsuming choice Ballot_Withdraw : Ballot_WithdrawResult
@@ -90,11 +80,10 @@ interface Ballot requires Submittable where
     controller actors
     do
       let bv = view this
-      let sv = view (toInterface @Submittable this)
       require "the actors are entitled to withdraw"
         (entitled bv.availableActions BA_Withdraw actors)
       now <- getTime
-      requireOpen "the voting window is open" now sv.opensAt (Some sv.closesAt)
+      requireOpen "the voting window is open" now bv.opensAt (Some bv.closesAt)
       ballot_withdrawImpl this self (Ballot_Withdraw with ..)
 
   nonconsuming choice Ballot_Expire : Ballot_ExpireResult
@@ -104,7 +93,7 @@ interface Ballot requires Submittable where
     controller actors
     do
       now <- getTime
-      requireExpired "the ballot has expired" now (view (toInterface @Submittable this)).expiresAt
+      requireExpired "the ballot has expired" now (Some (view this).expiresAt)
       ballot_expireImpl this self (Ballot_Expire with ..)
 
   nonconsuming choice Ballot_Consume : Ballot_ConsumeResult

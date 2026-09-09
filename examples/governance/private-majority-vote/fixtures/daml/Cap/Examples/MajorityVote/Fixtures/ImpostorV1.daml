@@ -2,12 +2,15 @@
 
 module Cap.Examples.MajorityVote.Fixtures.ImpostorV1 where
 
+import DA.Map (Map)
 import qualified DA.Map as Map
 
 import Splice.Api.Token.MetadataV1
 
 import Cap.Core.SubmittableV1
 import Cap.Governance.BallotV1
+import Cap.Examples.MajorityVote.BallotV1 (ProposalTerms)
+import Cap.Governance.BindingV1 (Bind, TargetKey)
 
 template ImpostorBallot
   with
@@ -15,24 +18,25 @@ template ImpostorBallot
     voter : Party
     mechanism : Mechanism
     terms : ProposalTerms
-    votes : [AnyValue]
+    bindings : Map TargetKey Bind
+    vote : Optional AnyValue
   where
     signatory operator
 
     interface instance Submittable for ImpostorBallot where
       view = SubmittableView with
         mechanism
-        opensAt = terms.entryClosesAt
-        closesAt = terms.votingClosesAt
-        expiresAt = Some terms.expiresAt
         meta = emptyMetadata
 
     interface instance Ballot for ImpostorBallot where
       view = BallotView with
-        terms
+        opensAt = terms.entryClosesAt
+        closesAt = terms.votingClosesAt
+        expiresAt = terms.expiresAt
+        bindings
         availableActions = Map.empty
         voter
-        votes
+        vote
         meta = emptyMetadata
 
       ballot_castImpl _ _ = abort "this ballot is an impostor"

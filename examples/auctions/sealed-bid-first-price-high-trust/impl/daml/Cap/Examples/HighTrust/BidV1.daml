@@ -90,9 +90,6 @@ template AuctionBid
     interface instance Submittable for AuctionBid where
       view = SubmittableView with
         mechanism
-        opensAt = terms.entryClosesAt
-        closesAt = terms.biddingClosesAt
-        expiresAt = Some terms.expiresAt
         meta = emptyMetadata
 
     interface instance OneLotBid for AuctionBid where
@@ -158,7 +155,7 @@ template AuctionBid
         require "the lot allocation factory is administered by the lot admin"
           (lotFactory.admin == terms.lot.instrument.admin)
 
-        sellerLotView <- view <$> fetch arg.lotAllocationCid
+        sellerLotView <- view <$> fetch arg.lotAllocation
         require "the lot allocation matches the auction terms"
           (sellerLotView.allocation == sellerLotAllocation terms)
 
@@ -171,7 +168,7 @@ template AuctionBid
 
         lotAllocationCid <- reallocate
           terms.registries.lotAllocate
-          arg.lotAllocationCid
+          arg.lotAllocation
           sellerLotView
           settlement
           [senderSide lLeg]
