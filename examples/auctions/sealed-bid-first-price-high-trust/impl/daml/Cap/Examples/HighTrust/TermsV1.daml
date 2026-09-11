@@ -18,13 +18,14 @@ sellerOf : OneLotAuctionTerms -> Party
 sellerOf terms = regularAccountOwner terms.sellerLotAccount
 
 
-settlementOf : OneLotAuctionTerms -> [Party] -> Alloc.SettlementInfo
-settlementOf terms extras =
-  saleSettlement terms (Set.toList terms.authorities <> (sellerOf terms :: extras))
+settlementOf : Text -> Set.Set Party -> OneLotAuctionTerms -> [Party] -> Alloc.SettlementInfo
+settlementOf saleId authorities terms extras =
+  saleSettlement saleId (Set.toList authorities <> (sellerOf terms :: extras))
 
 
-preLotSettlementOf : OneLotAuctionTerms -> Alloc.SettlementInfo
-preLotSettlementOf terms = (settlementOf terms []) with id = terms.saleId <> "/pre-lot"
+preLotSettlementOf : Text -> Set.Set Party -> OneLotAuctionTerms -> Alloc.SettlementInfo
+preLotSettlementOf saleId authorities terms =
+  (settlementOf saleId authorities terms []) with id = saleId <> "/pre-lot"
 
 
 sellerLotAllocation : OneLotAuctionTerms -> Alloc.AllocationSpecification

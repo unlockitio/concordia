@@ -44,7 +44,7 @@ template AuctionInvitation
     bidderLotAccount : Holding.Account
     mechanism : Mechanism
   where
-    signatory Set.toList terms.authorities <> [sellerOf terms]
+    signatory Set.toList (authoritiesOf mechanism) <> [sellerOf terms]
     observer bidderOf bidderPaymentAccount
 
     ensure terms.direction == Forward
@@ -69,7 +69,7 @@ template AuctionBid
     quotes : [Quote]
     paymentAllocation : Optional (ContractId Alloc.Allocation)
   where
-    signatory Set.toList terms.authorities <> [bidderOf bidderPaymentAccount]
+    signatory Set.toList (authoritiesOf mechanism) <> [bidderOf bidderPaymentAccount]
 
     ensure terms.direction == Forward
       && case (quotes, paymentAllocation) of
@@ -80,7 +80,7 @@ template AuctionBid
     choice AuctionBid_Restamp : ContractId AuctionBid
       with
         newMechanism : Mechanism
-      controller Set.toList terms.authorities
+      controller Set.toList (authoritiesOf mechanism)
       do
         now <- getTime
         require "a seat is restamped before bidding opens"
@@ -98,27 +98,30 @@ template AuctionBid
         availableActions = Map.fromList $
           (if null quotes
              then (BA_Submit, [[bidderOf bidderPaymentAccount]])
-             else (BA_Award, [Set.toList terms.authorities <> [sellerOf terms]]))
-          :: [(BA_Release, [Set.toList terms.authorities])]
+             else (BA_Award, [Set.toList (authoritiesOf mechanism) <> [sellerOf terms]]))
+          :: [(BA_Release, [Set.toList (authoritiesOf mechanism)])]
         bidderPaymentAccount
         bidderLotAccount
-        quotes
+        quotes = [quotes | not (null quotes)]
         paymentAllocation
         lotAllocation = None
         meta = emptyMetadata
 
       oneLotBid_submitImpl self arg = do
         require "this seat holds no bid yet" (null quotes)
+        submitted <- case arg.quotes of
+          [qs] -> pure qs
+          _ -> abort "this format takes a single alternative"
         paymentCid <- orAbort "a bid names the allocation it pays from"
           arg.paymentAllocation
         let bv = view (toInterface @OneLotBid this)
         paymentView <- view <$> fetch paymentCid
         require "the payment allocation is the one this bid implies"
-          (paymentView.allocation == bidderPaymentAllocation bv arg.quotes)
+          (paymentView.allocation == bidderPaymentAllocation bv submitted)
         archive self
         toInterfaceContractId <$>
           create this with
-            quotes = arg.quotes
+            quotes = submitted
             paymentAllocation = arg.paymentAllocation
 
       oneLotBid_withdrawImpl _ _ =
@@ -136,7 +139,7 @@ template AuctionBid
 
       oneLotBid_expireImpl self _ = do
         archive self
-        pure OneLotBid_ExpireResult with released = []; meta = emptyMetadata
+        pure OneLotBid_ExpireResult with meta = emptyMetadata
 
       oneLotBid_awardImpl self arg = do
         archive self
@@ -162,7 +165,8 @@ template AuctionBid
         bidderPaymentCid <- orAbort "this seat holds no committed payment allocation"
           paymentAllocation
 
-        let settlement = settlementOf terms [bidderOf bidderPaymentAccount]
+        let settlement = settlementOf mechanism.id (authoritiesOf mechanism) terms
+                           [bidderOf bidderPaymentAccount]
             pLeg = paymentLeg terms bidderPaymentAccount award.price
             lLeg = lotLeg terms bidderLotAccount award.quantity
 
@@ -201,6 +205,8 @@ template AuctionBid
 
         settlementCid <- create AuctionSettlement with
           terms
+          authorities = authoritiesOf mechanism
+          saleId = mechanism.id
           winner = bidderOf bidderPaymentAccount
           opensAt = now
           batches =
@@ -224,6 +230,9 @@ template AuctionBid
 
 bidderOf : Holding.Account -> Party
 bidderOf = regularAccountOwner
+
+authoritiesOf : Mechanism -> Set.Set Party
+authoritiesOf mechanism = mechanism.resolver.authorities
 
 allocateOneStep
   : AllocationFactoryCall

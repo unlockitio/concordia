@@ -2,8 +2,8 @@
 
 module Cap.Auctions.OneLotBidV1 where
 
+import DA.Foldable (forA_)
 import DA.List (unique)
-import DA.Set (Set)
 
 import Splice.Api.Token.MetadataV1
 import Splice.Api.Token.AllocationV2 (Allocation)
@@ -11,7 +11,7 @@ import Splice.Util (require)
 import qualified Splice.Api.Token.HoldingV2 as Holding
 import Cap.Auctions.RegistryV1 (RegistryCalls)
 import DA.Map (Map)
-import Cap.Core.Utils (entitled, requireClosed, requireExpired, requireOpen)
+import Cap.Core.Utils (entitled, requireExpired, requireOpen)
 import Cap.Core.SubmittableV1 (Submittable)
 
 data Direction
@@ -19,7 +19,7 @@ data Direction
   | Reverse
   deriving (Eq, Show)
 
-data LotSpec = LotSpec 
+data Lot = Lot
   with
     instrument : Holding.InstrumentId
     amount : Decimal
@@ -27,18 +27,16 @@ data LotSpec = LotSpec
 
 data OneLotAuctionTerms = OneLotAuctionTerms
   with
-    authorities : Set Party
     direction : Direction
-    sellerPaymentAccount : Holding.Account
-    sellerLotAccount : Holding.Account
-    saleId : Text 
-    registries : RegistryCalls -- move to bid
-    payment : Holding.InstrumentId
-    lot : LotSpec
-    reserve : Optional Decimal
+    reserve : Decimal
     entryClosesAt : Time
     biddingClosesAt : Time
     expiresAt : Time
+    lot : Lot
+    sellerPaymentAccount : Holding.Account
+    sellerLotAccount : Holding.Account
+    registries : RegistryCalls
+    payment : Holding.InstrumentId
   deriving (Eq, Show)
 
 data BidAction
@@ -48,7 +46,7 @@ data BidAction
   | BA_Release
   | BA_Custom with
       id : Text
-  deriving (Eq, Ord, Show)
+  deriving (Eq, Ord, Show) -- remove ord 
 
 data Quote = Quote
   with
@@ -62,7 +60,7 @@ data OneLotBidView = OneLotBidView
     availableActions : Map BidAction [[Party]]
     bidderPaymentAccount : Holding.Account
     bidderLotAccount : Holding.Account
-    quotes : [Quote]
+    quotes : [[Quote]]
     paymentAllocation : Optional (ContractId Allocation)
     lotAllocation : Optional (ContractId Allocation)
       -- ^ according to direction, one authorizes the bidder's sender side and the other its receiver side
@@ -77,6 +75,13 @@ data OneLotBid_AwardResult = OneLotBid_AwardResult
     meta : Metadata
   deriving (Eq, Show)
 
+data OneLotBid_WithdrawResult = OneLotBid_WithdrawResult
+  with
+    bid : Optional (ContractId OneLotBid)
+    released : [ContractId Allocation]
+    meta : Metadata
+  deriving (Eq, Show)
+
 data OneLotBid_ReleaseResult = OneLotBid_ReleaseResult
   with
     released : [ContractId Allocation]
@@ -85,7 +90,6 @@ data OneLotBid_ReleaseResult = OneLotBid_ReleaseResult
 
 data OneLotBid_ExpireResult = OneLotBid_ExpireResult
   with
-    released : [ContractId Allocation]
     meta : Metadata
   deriving (Eq, Show)
 
@@ -96,7 +100,7 @@ interface OneLotBid requires Submittable where
     : ContractId OneLotBid -> OneLotBid_Submit -> Update (ContractId OneLotBid)
 
   oneLotBid_withdrawImpl
-    : ContractId OneLotBid -> OneLotBid_Withdraw -> Update (ContractId OneLotBid)
+    : ContractId OneLotBid -> OneLotBid_Withdraw -> Update OneLotBid_WithdrawResult
 
   oneLotBid_awardImpl
     : ContractId OneLotBid -> OneLotBid_Award -> Update OneLotBid_AwardResult
@@ -110,7 +114,7 @@ interface OneLotBid requires Submittable where
   nonconsuming choice OneLotBid_Submit : ContractId OneLotBid
     with
       actors : [Party]
-      quotes : [Quote]
+      quotes : [[Quote]]  -- ors of ands
       paymentAllocation : Optional (ContractId Allocation)
       lotAllocation : Optional (ContractId Allocation)
       extraArgs : ExtraArgs
@@ -122,13 +126,12 @@ interface OneLotBid requires Submittable where
       now <- getTime
       requireOpen "the bidding window is open"
         now bv.terms.entryClosesAt (Some bv.terms.biddingClosesAt)
-      require "a bid is non-empty and names distinct positive price-quantity quotes"
-        (wellFormedQuotes quotes)
+      requireAlternatives "a submissin " bv.terms.lot quotes
       require "some quote of the bid meets the reserve"
-        (optional True (\r -> quantityAt bv.terms.direction quotes r > 0.0) bv.terms.reserve)
+        (any (any (\q -> meetsReserve bv.terms.direction bv.terms.reserve q.price)) quotes)
       oneLotBid_submitImpl this self (OneLotBid_Submit with ..)
 
-  nonconsuming choice OneLotBid_Withdraw : ContractId OneLotBid
+  nonconsuming choice OneLotBid_Withdraw : OneLotBid_WithdrawResult
     with
       actors : [Party]
       extraArgs : ExtraArgs
@@ -137,6 +140,9 @@ interface OneLotBid requires Submittable where
       let bv = view this
       require "the actors are entitled to withdraw"
         (entitled bv.availableActions BA_Withdraw actors)
+      now <- getTime
+      requireOpen "the bidding window is open"
+        now bv.terms.entryClosesAt (Some bv.terms.biddingClosesAt)
       oneLotBid_withdrawImpl this self (OneLotBid_Withdraw with ..)
 
   nonconsuming choice OneLotBid_Award : OneLotBid_AwardResult
@@ -151,9 +157,9 @@ interface OneLotBid requires Submittable where
       require "the actors are entitled to award"
         (entitled bv.availableActions BA_Award actors)
       now <- getTime
-      requireClosed "the bidding window is closed" now bv.terms.biddingClosesAt
-      require "an award is non-empty and names distinct positive price-quantity quotes"
-        (wellFormedQuotes awarded)
+      requireOpen "the bidding window is closed and the terms have not expired"
+        now bv.terms.biddingClosesAt (Some bv.terms.expiresAt)
+      requireQuotes "an award" bv.terms.lot awarded
       require "the award is within what this bid quoted at that price"
         (awardWithinQuotes bv.terms.direction bv.quotes awarded)
       require "the award meets the reserve"
@@ -192,16 +198,37 @@ quantityAt direction quotes p =
   sum [q.quantity | q <- quotes, acceptablePrice direction q.price p]
 
 -- whether p clears the reserve: at or above it forward, at or below it reverse
-meetsReserve : Direction -> Optional Decimal -> Decimal -> Bool
-meetsReserve direction reserve p = optional True (\r -> acceptablePrice direction p r) reserve
+meetsReserve : Direction -> Decimal -> Decimal -> Bool
+meetsReserve direction reserve p = acceptablePrice direction p reserve
 
-wellFormedQuotes : [Quote] -> Bool
-wellFormedQuotes quotes =
-  not (null quotes)
-    && unique (map (.price) quotes)
-    && all (\q -> q.price > 0.0 && q.quantity > 0.0) quotes
+totalQuantity : [Quote] -> Decimal
+totalQuantity quotes = sum (map (.quantity) quotes)
+
+maxQuantity : [[Quote]] -> Decimal
+maxQuantity alternatives = foldl max 0.0 (map totalQuantity alternatives)
+
+requireAlternatives : (CanAssert m, Action m) => Text -> Lot -> [[Quote]] -> m ()
+requireAlternatives what lot alternatives = do
+  require (what <> " names at least one alternative")
+    (not (null alternatives))
+  forA_ alternatives (requireQuotes (what <> " alternative") lot)
+
+requireQuotes : (CanAssert m, Action m) => Text -> Lot -> [Quote] -> m ()
+requireQuotes what lot quotes = do
+  require (what <> " names at least one quote")
+    (not (null quotes))
+  require (what <> " names each price at most once")
+    (unique (map (.price) quotes))
+  require (what <> " names a positive price and quantity for every quote")
+    (all (\q -> q.price > 0.0 && q.quantity > 0.0) quotes)
+  require (what <> " does not name more units than the lot holds")
+    (totalQuantity quotes <= lot.amount)
 
 
-awardWithinQuotes : Direction -> [Quote] -> [Quote] -> Bool
-awardWithinQuotes direction quotes awarded =
+awardWithinAlternative : Direction -> [Quote] -> [Quote] -> Bool
+awardWithinAlternative direction quotes awarded =
   all (\a -> quantityAt direction awarded a.price <= quantityAt direction quotes a.price) awarded
+
+awardWithinQuotes : Direction -> [[Quote]] -> [Quote] -> Bool
+awardWithinQuotes direction alternatives awarded =
+  any (\quotes -> awardWithinAlternative direction quotes awarded) alternatives

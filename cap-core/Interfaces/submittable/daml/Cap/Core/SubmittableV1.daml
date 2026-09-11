@@ -11,7 +11,7 @@ import DA.List (unique)
 import Splice.Util (require, fetchCheckedInterface)
 import Cap.Core.Utils (HasCheckedFetch (..))
 
--- Split in Bid/Ballot
+
 data ResolverKey = ResolverKey
   with
     authorities : Set Party
@@ -38,7 +38,6 @@ instance HasCheckedFetch SubmittableView Mechanism where
 interface Submittable where
   viewtype SubmittableView
 
--- will be up to each domain
 fetchSubmittables
   : Mechanism -> [ContractId Submittable] -> Update [(ContractId Submittable, Submittable)]
 fetchSubmittables _ [] = fail "a presentation holds at least one submittable"
@@ -48,6 +47,8 @@ fetchSubmittables mechanism cids = do
     s <- fetchCheckedInterface mechanism cid
     pure (cid, s)
 
+
+    
 -- move to utils 
 partitionPresentedAs
   : forall t. HasFromInterface t Submittable

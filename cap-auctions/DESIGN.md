@@ -24,7 +24,7 @@ cap-auctions/
 │                            into utils would close a cycle.
 ├── Interfaces/
 │   ├── bid/                 OneLotBid (requires Submittable), OneLotAuctionTerms,
-│   │                        Direction, LotSpec, Quote
+│   │                        Direction, Lot, Quote
 │   └── settlement/          Settlement, SettlementBatch, SettlementView
 └── cap-auctions-utils/      saleSettlement, paymentLeg, lotLeg, paymentLegId, lotLegId
 

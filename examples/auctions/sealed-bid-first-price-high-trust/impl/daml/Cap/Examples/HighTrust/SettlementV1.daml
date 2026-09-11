@@ -17,23 +17,25 @@ import Cap.Examples.HighTrust.TermsV1 (sellerOf, settlementOf)
 template AuctionSettlement
   with
     terms : OneLotAuctionTerms
+    authorities : Set.Set Party
+    saleId : Text
     winner : Party
     batches : [SettlementBatch]
     opensAt : Time
   where
-    signatory Set.toList terms.authorities <> [sellerOf terms, winner]
+    signatory Set.toList authorities <> [sellerOf terms, winner]
 
     ensure not (null batches)
 
     interface instance Settlement for AuctionSettlement where
       view = SettlementView with
         core = ExecutionCore with
-          authorities = Set.insert (sellerOf terms) (Set.insert winner terms.authorities)
-          availableActions = Map.fromList [(EA_Execute, [Set.toList terms.authorities])]
+          authorities = Set.insert (sellerOf terms) (Set.insert winner authorities)
+          availableActions = Map.fromList [(EA_Execute, [Set.toList authorities])]
           opensAt
           expiresAt = Some terms.expiresAt
           meta = emptyMetadata
-        settlement = settlementOf terms [winner]
+        settlement = settlementOf saleId authorities terms [winner]
         batches
         meta = emptyMetadata
 

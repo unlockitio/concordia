@@ -12,21 +12,22 @@ root [`RATIONALE.md`](../RATIONALE.md).
 ### Why OneLotBid and not Bid
 
 `OneLotBid` covers one lot from one seller. `OneLotAuctionTerms` names a single
-`lot : LotSpec`, a single `payment : InstrumentId` and one pair of seller
-accounts, and a bid is a list of `Quote`, each a price and a quantity for that
-lot.
+`lot : Lot`, a single `payment : InstrumentId` and one pair of seller
+accounts, and a bid is `[[Quote]]` — alternatives, each a demand schedule of
+prices and quantities for that lot.
 
 A general `Bid` that prices bundles across lots was considered and not built. The
 checks in the fixed bodies only work when a quote is a price for one instrument:
 
-- `wellFormedQuotes` requires the quotes to be non-empty, distinct in price and
-  positive. This assumes a quote is a price for one instrument.
+- `requireQuotes` requires an alternative to be non-empty, distinct in price,
+  positive, and no more units in total than `terms.lot.amount`. This assumes a
+  quote is a price for one instrument.
 - `meetsReserve` compares a price against `terms.reserve`, which is a single
   `Decimal`.
-- `awardWithinQuotes` requires that the quantity awarded at a price does not
-  exceed the quantity the bid offered at that price or better, computed by
-  `quantityAt`. This is what stops an auctioneer awarding a bidder more than the
-  bidder offered.
+- `awardWithinQuotes` requires that the award fit inside one of the bid's
+  alternatives: the quantity awarded at a price does not exceed the quantity that
+  alternative offered at that price or better, computed by `quantityAt`. This is
+  what stops an auctioneer awarding a bidder more than the bidder offered.
 
 None of the three carries over. In a combinatorial auction a bid of 100 for the
 bundle `{A, B}` gives no price for `A` on its own, so whether an award is within a
@@ -41,41 +42,7 @@ fails at runtime.
 
 #### Several lots and several sellers
 
-A sale of several lots, from several sellers, needs no new interface if the format
-models a bid as one `OneLotBid` contract per lot, all naming the same
-`Mechanism`. Whether that is the right model is the format's choice, and the
-alternative is not expressible — see below.
-
-Currently, nothing ties a resolution to a single set of terms. `fetchSubmittables` requires
-every presented submittable to fetch against the same `Mechanism` — resolver key,
-resolver cid, procedure and id — and `Mechanism` names no lot. `OneLotBid_Award`
-checks each bid against its own `bv.terms`. So:
-
-- Each bid carries its own `lot`, `reserve`, seller accounts and `RegistryCalls`,
-  which is what makes several sellers and several registries work.
-- The procedure groups the presented bids by `terms.lot` and prices each group.
-- A shared `terms.saleId` puts them under one `SettlementInfo`, because
-  `saleSettlement` builds it from `terms.saleId`. One `Settlement` then carries a
-  batch per registry.
-- The award is atomic, because all the bids are resolved in one
-  `Resolver_Resolve`.
-
-What this does not express is anything that spans lots, because separate bids are
-won independently:
-
-- Bundles. "A and B together or neither" cannot be said, so a bidder can win a
-  subset it did not want.
-- Substitutes. "At most one of A or B" cannot be said either.
-- A budget across lots. Each bid funds its own allocation, so bidding on ten lots
-  locks funds for ten.
-- All-or-nothing withdrawal. A bidder withdraws per lot.
-
-Some of that can be recovered without a new interface. A constraint across lots
-can be enforced by the procedure rather than by the bid: if a bidder's bids carry
-a shared marker in `meta`, the procedure can refuse to award more than one of
-them. The rule is readable, because the procedure is named in the `Mechanism` and
-its code is in the resolver's package. What cannot be recovered is the funding —
-each bid still locks its own allocation.
+A bid that binds several lots together needs a new interface.
 
 #### One contract per bid
 
@@ -122,6 +89,42 @@ The limit is that a format wanting a different notion of "better price" (e.g.
 multi-attribute score) cannot express it. Such a format needs more than a
 price in `Quote`, so it is outside this interface anyway.
 
+### Identity is carried by Mechanism
+
+`OneLotAuctionTerms` names what is being sold and on what schedule. It does not
+name the sale or the authority set, because `Mechanism` already does and every
+`OneLotBid` carries one — the interface requires `Submittable`. The sale is
+`mechanism.id` and the authority set is `mechanism.resolver.authorities`.
+
+### Quotes are a disjunction of conjunctions
+
+A bid is `[[Quote]]`. The outer list is a set of alternatives the bidder will
+accept, exactly one of which can be awarded. The inner list is a demand schedule
+whose quotes compose: `[{price = 100, quantity = 5}, {price = 90, quantity = 3}]`
+means 5 units at 100 and 3 at 90, and `quantityAt` sums the quotes at
+or better than a given price to get the cumulative demand there.
+
+`[[Party]]` already carries this reading in `availableActions` and in
+`Procedure.resolvers`, where `admitActors` admits a group if the actors cover
+every party in it and admits the whole list if they cover some group. `[[Quote]]`
+reads the same way, so the interface has one convention for "any of these, all of
+that" rather than two.
+
+The alternative was a flat `[Quote]`, with a bidder wanting mutually exclusive
+terms taking one seat per alternative on the same `Mechanism`. That works and
+needs no interface change, but it prices the bidder wrongly: each seat funds its
+own allocation, so a bidder offering "five units at 100 or three at 90" escrows
+both and locks 770 to bid for at most 500. Under `[[Quote]]` the exposure is
+`maxQuantity`, the largest an alternative can come to, and the bidder funds one
+allocation for that.
+
+What `[[Quote]]` still cannot express is a price for a bundle across lots. A bid
+of 100 for `{A, B}` gives no price for `A` alone, so the checks below have no
+bundle form regardless of how the list nests. That remains a separate interface
+beside `OneLotBid`.
+
+
+
 ### Allocations on the bid
 
 A bid names an allocation, it does not create one. `paymentAllocation` and
@@ -159,6 +162,22 @@ Three ways to ensure this exist, and the choice is up to the implementation:
 Both examples drive it from their award flow to cancel the losers' allocations.
 
 But a losing bid's funds stay locked until someone exercises it, so the format can chose which authority releases the funds.   
+
+### Withdrawal and expiry
+
+`OneLotBid_Withdraw` returns `OneLotBid_WithdrawResult`, which carries the seat
+that survives the withdrawal and the allocations the format released. Withdrawal
+is the one action that retires a funded bid, so without the `released` field the
+allocations it cancelled could not be reported. The seat is
+`Optional (ContractId OneLotBid)` because a format can either empty it for a
+later bid or retire it, and a mandatory contract id would force the second case
+to create a contract it does not want.
+
+`OneLotBid_ExpireResult` carries `meta` alone. Expiry runs from `expiresAt`,
+which is the allocations' settlement deadline in both examples, so the registry's
+own deadline returns the funds and there is nothing left for the bid to release.
+A format that sets a later settlement deadline releases in
+`oneLotBid_expireImpl`, or exercises `OneLotBid_Release` before the bid expires.
 
 ### What cannot be hidden
 

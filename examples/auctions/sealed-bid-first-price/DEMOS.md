@@ -37,14 +37,14 @@ a dependency on the wallet client and on the V1 API.
 
 `setupAs` allocates the six parties, stands up both registries, and builds one
 `OneLotAuctionTerms`: the operator as sole authority, `basicAccount seller` for
-both seller legs, a single Widget as the lot, no reserve, the four registry calls
+both seller legs, a single Widget as the lot, a `0.0` reserve, the four registry calls
 pinned, and a three-day timeline — `entryClosesAt` at day 1, `biddingClosesAt`
 at day 2, `expiresAt` at day 3. Party names are namespaced per demo, so no two
 demos share a ledger contract.
 
 `openAuction` then opens one auction on those terms. The seller mints and
 allocates its lot and payment allocations, the operator proposes
-`AuctionLotProposal`, and the seller accepts it into an `AuctionLot` — which is
+`AuctionProposal`, and the seller accepts it into an `Auction` — which is
 the resolver, so the mechanism is pinned to that contract id. The operator
 then creates one empty `AuctionBid` seat per invited bidder. Nothing has been
 bid yet; the demos take it from there, opening bidding with
@@ -87,9 +87,9 @@ sequenceDiagram
     participant C as Carol
 
     Note over S,C: Phase 1 — the invited bidders, then the lot
-    O->>O: AuctionLot — invited = A, B, C
+    O->>O: Auction — invited = A, B, C
     Note over A,C: each observes the resolver, the seller does not
-    O->>S: AuctionLotProposal
+    O->>S: AuctionProposal
     S->>S: Accept — locks the lot in an allocation, executors = [O]
     Note over S: sees its own lot allocation, and nothing else
 
@@ -171,7 +171,7 @@ sequenceDiagram
     Note over S,A: ✓ 100 to S, lot to A
 
     Note over S,A: an auction whose TERMS name the impostor
-    S->>S: signs AuctionLot over those terms
+    S->>S: signs Auction over those terms
     A->>A: signs AuctionBid over those terms
     O->>O: Resolver_Resolve
     Note over S,A: ✗ payment moves, lot does not — A pays for nothing

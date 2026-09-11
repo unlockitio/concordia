@@ -48,16 +48,17 @@ Interfaces supporting vote delegation can also be implemented in the future.
 ## New auction formats
 
 The released interfaces sell **one lot from one seller**: `OneLotAuctionTerms`
-names a single `lot : LotSpec` and a single pair of seller accounts, and a bid
-is a set of quotes over that one lot. Formats that keep that shape — a
-second-price payment rule, a Dutch clock, multiple units of that lot's
-quantity — are new templates implementing `OneLotBid` and `Settlement`,
+names a single `lot : Lot` and a single pair of seller accounts, and a bid is a
+set of alternative quote schedules over that one lot. Formats that keep that
+shape — a second-price payment rule, a Dutch clock, multiple units of that
+lot's quantity — are new templates implementing `OneLotBid` and `Settlement`,
 deployed beside the released DARs. cap-auctions extends to them without
 changing.
 
-**Several lots and several sellers** needs no new interface, provided the format
-models a bid as one `OneLotBid` contract per lot, all naming the same
-`Mechanism`. Nothing ties a resolution to a single set of terms, so each bid
+**Several lots and several sellers** carries on the released interfaces only as
+bids that are won independently — one `OneLotBid` contract per lot, all naming
+the same `Mechanism`. Anything that binds the lots together needs a new bid
+interface. Nothing ties a resolution to a single set of terms, so each bid
 carries its own `lot`, `reserve`, seller accounts and `RegistryCalls`, and the
 procedure groups the presented bids by lot. A shared `saleId` settles them
 together. This is a deployment pattern on the released interfaces, not an
@@ -67,10 +68,12 @@ leaves out.
 Two things require a new bid interface, and only one of them is about bundles.
 
 **Bids that span lots** — a bundle priced all-or-nothing, a substitute
-constraint, or a budget across lots — cannot be said, because separate bids are
-won independently. The obstacle is the escrow rather than the lot count: a bundle
-bidder's exposure is the largest bundle it might win, not the sum of its bids,
-while `paymentAllocation` holds one allocation covering one bid.
+constraint across lots, or a budget across lots — cannot be said, because
+separate bids are won independently. `[[Quote]]` says "at most one of these"
+within a lot; there is no form of it that spans lots. The obstacle is the escrow
+rather than the lot count: a bundle bidder's exposure is the largest bundle it
+might win, not the sum of its bids, while `paymentAllocation` holds one
+allocation covering one bid.
 
 **One contract covering several lots** is also outside `OneLotBid`, even for
 separable bids: `OneLotBidView` carries a single `terms.lot` and `Quote` has no

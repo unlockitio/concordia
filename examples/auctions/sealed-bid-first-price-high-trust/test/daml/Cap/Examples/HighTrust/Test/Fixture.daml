@@ -40,6 +40,9 @@ data Fixture = Fixture with
     dave : Party
     amulet : AmuletRegistry.AmuletRegistry
     lot : LotRegistry.TestTokenV2Registry
+    authorities : Set.Set Party
+    resolverId : Text
+    saleId : Text
     terms : OneLotAuctionTerms
 
 setupAs : Text -> Script Fixture
@@ -96,12 +99,13 @@ setupAs ns = do
   paymentSettlementEc <- RegistryApi.getSettlementFactory amulet probeSettle
   lotSettlementEc <- RegistryApi.getSettlementFactory lot probeSettle
 
-  let terms = OneLotAuctionTerms with
-        authorities = Set.fromList [operator]
+  let authorities = Set.fromList [operator]
+      resolverId = "auction-1"
+      saleId = "auction-1/lot-1"
+      terms = OneLotAuctionTerms with
         direction = Forward
         sellerPaymentAccount = basicAccount seller
         sellerLotAccount = basicAccount seller
-        saleId = "auction-1/lot-1"
         registries = RegistryCalls with
           paymentAllocate = AllocationFactoryCall with
             factoryCid = paymentAllocationEc.factoryCid
@@ -121,10 +125,10 @@ setupAs ns = do
             factoryCid = lotSettlementEc.factoryCid
             settleBatchArgs = lotSettlementEc.arg.extraArgs
         payment = paymentInstrument
-        lot = LotSpec with
+        lot = Lot with
           instrument = lotInstrument
           amount = lotAmount
-        reserve = None
+        reserve = 0.0
         entryClosesAt = opensAt `addRelTime` days 1
         biddingClosesAt = opensAt `addRelTime` days 2
         expiresAt = opensAt `addRelTime` days 3
@@ -177,7 +181,7 @@ representativeAllocate f actor authorizer instrumentId =
   AllocInstr.AllocationFactory_Allocate with
     settlement = Alloc.SettlementInfo with
       executors = [f.operator]
-      id = f.terms.saleId
+      id = f.saleId
       cid = None
       meta = emptyMetadata
     allocation = Alloc.AllocationSpecification with

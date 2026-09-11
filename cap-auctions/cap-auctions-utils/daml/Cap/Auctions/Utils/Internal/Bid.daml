@@ -21,10 +21,10 @@ import Cap.Auctions.OneLotBidV1 (Direction (..), OneLotAuctionTerms)
 
 ------------------  ONE LOT AUCTION UTILITIES ------------------
 
-saleSettlement : OneLotAuctionTerms -> [Party] -> Alloc.SettlementInfo
-saleSettlement terms executors = Alloc.SettlementInfo with
+saleSettlement : Text -> [Party] -> Alloc.SettlementInfo
+saleSettlement saleId executors = Alloc.SettlementInfo with
   executors
-  id = terms.saleId
+  id = saleId
   cid = None
   meta = emptyMetadata
 

@@ -16,8 +16,8 @@ sellerOf : OneLotAuctionTerms -> Party
 sellerOf terms = regularAccountOwner terms.sellerLotAccount
 
 
-settlementOf : OneLotAuctionTerms -> Alloc.SettlementInfo
-settlementOf terms = saleSettlement terms (Set.toList terms.authorities)
+settlementOf : Text -> Set.Set Party -> Alloc.SettlementInfo
+settlementOf saleId authorities = saleSettlement saleId (Set.toList authorities)
 
 
 sellerLotAllocation : OneLotAuctionTerms -> Alloc.AllocationSpecification

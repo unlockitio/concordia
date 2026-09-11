@@ -42,10 +42,10 @@ data OpenAuction = OpenAuction with
 invitedBidders : Fixture -> [Party]
 invitedBidders f = [f.alice, f.bob, f.carol]
 
-sealedSettlementOf : OneLotAuctionTerms -> Holding.Account -> Alloc.SettlementInfo
-sealedSettlementOf terms bidderPaymentAccount = Alloc.SettlementInfo with
-  executors = Set.toList terms.authorities <> [bidderOf bidderPaymentAccount]
-  id = terms.saleId <> "/sealed"
+sealedSettlementOf : Fixture -> Holding.Account -> Alloc.SettlementInfo
+sealedSettlementOf f bidderPaymentAccount = Alloc.SettlementInfo with
+  executors = Set.toList f.authorities <> [bidderOf bidderPaymentAccount]
+  id = f.saleId <> "/sealed"
   cid = None
   meta = emptyMetadata
 
@@ -67,7 +67,7 @@ openAuctionWith ns retermsFor = do
   now <- getTime
   lotResult <- submitWithDisclosures' f.seller disclosures $
     exerciseCmd f.terms.registries.lotAllocate.factoryCid AllocInstr.AllocationFactory_Allocate with
-      settlement = preLotSettlementOf f.terms
+      settlement = preLotSettlementOf f.saleId f.authorities f.terms
       allocation = sellerLotAllocation f.terms
       requestedAt = now
       inputHoldingCids = lotHoldingCids
@@ -78,6 +78,9 @@ openAuctionWith ns retermsFor = do
 
   proposalCid <- submit f.operator $ createCmd AuctionLotProposal with
     terms = f.terms
+    authorities = f.authorities
+    resolverId = f.resolverId
+    saleId = f.saleId
     invited = invitedBidders f
   openCid <- submitWithDisclosures' f.seller disclosures $
     exerciseCmd proposalCid AuctionLotProposal_Accept with
@@ -88,12 +91,12 @@ openAuctionWith ns retermsFor = do
   issued <- query @AuctionInvitation f.operator
   seatCids <- forA
     [ (cid, bidderOf iv.bidderPaymentAccount)
-    | (cid, iv) <- issued, iv.mechanism == auctionMechanism f.terms openCid ]
+    | (cid, iv) <- issued, iv.mechanism == auctionMechanism f.authorities f.resolverId f.saleId openCid ]
     (\(cid, bidder) -> submit bidder (exerciseCmd cid AuctionInvitation_Accept))
 
   lotCid <- submit f.operator $
     exerciseCmd openCid AuctionLot_FinalizeInvitation with seatCids
-  let mechanism = auctionMechanism f.terms lotCid
+  let mechanism = auctionMechanism f.authorities f.resolverId f.saleId lotCid
 
   restamped <- query @AuctionBid f.operator
   let seats =
@@ -116,7 +119,7 @@ submitBid auction bidder seatCid price = do
   callD <- paymentCallFor f bidder
   result <- submitWithDisclosures' bidder (auction.disclosures <> callD) $
     exerciseCmd f.terms.registries.paymentAllocate.factoryCid AllocInstr.AllocationFactory_Allocate with
-      settlement = sealedSettlementOf f.terms (basicAccount bidder)
+      settlement = sealedSettlementOf f (basicAccount bidder)
       allocation = Alloc.AllocationSpecification with
         admin = f.terms.payment.admin
         authorizer = basicAccount bidder
@@ -133,7 +136,7 @@ submitBid auction bidder seatCid price = do
   submit bidder $
     exerciseCmd seatCid OneLotBid_Submit with
       actors = [bidder]
-      quotes = [Quote with price; quantity = lotAmount]
+      quotes = [[Quote with price; quantity = lotAmount]]
       paymentAllocation = Some allocation
       lotAllocation = None
       extraArgs = emptyExtraArgs
@@ -181,7 +184,7 @@ settleBatchesFor f sale = case sale.batches of
     [payment, lot] -> (argFor payment, argFor lot)
     _ -> error "a one-lot sale settles a payment batch and a lot batch"
   where
-    settlement = settlementOf f.terms [sale.winner]
+    settlement = settlementOf f.saleId f.authorities f.terms [sale.winner]
     argFor b = Alloc.SettlementFactory_SettleBatch with
       settlement
       transferLegs = b.legs

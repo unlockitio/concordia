@@ -17,11 +17,13 @@ import Cap.Examples.SealedFirstPrice.TermsV1
 template AuctionSettlement
   with
     terms : OneLotAuctionTerms
+    authorities : Set.Set Party
+    saleId : Text
     winner : Party
     batches : [SettlementBatch]
     opensAt : Time
   where
-    signatory Set.toList terms.authorities <> [sellerOf terms]
+    signatory Set.toList authorities <> [sellerOf terms]
     observer winner
 
     ensure not (null batches)
@@ -29,12 +31,12 @@ template AuctionSettlement
     interface instance Settlement for AuctionSettlement where
       view = SettlementView with
         core = ExecutionCore with
-          authorities = terms.authorities
-          availableActions = Map.fromList [(EA_Execute, [Set.toList terms.authorities])]
+          authorities
+          availableActions = Map.fromList [(EA_Execute, [Set.toList authorities])]
           opensAt
           expiresAt = Some terms.expiresAt
           meta = emptyMetadata
-        settlement = settlementOf terms
+        settlement = settlementOf saleId authorities
         batches
         meta = emptyMetadata
 
