@@ -6,7 +6,8 @@ cap-governance/    approving effects on live state    — DESIGN.md
 cap-auctions/      selling                            — DESIGN.md
 
 examples/          formats built on the core, one per tier
-lib/               vendored Token Standard and Splice DARs
+examples/lib/      vendored DARs only the examples need
+lib/               vendored Token Standard DARs the interfaces bind to
 ```
 
 - [`cap-governance/DESIGN.md`](cap-governance/DESIGN.md)

@@ -14,10 +14,10 @@ data-dependencies:
 - ../../../../lib/splice-api-token-holding-v2-1.0.0.dar
 - ../../../../lib/splice-api-token-allocation-v2-1.0.0.dar
 - ../../../../lib/splice-api-token-allocation-instruction-v2-1.0.0.dar
-- ../../../../lib/splice-api-token-transfer-instruction-v2-1.0.0.dar
-- ../../../../lib/splice-token-standard-utils-2.0.0.dar
-- ../../../../lib/splice-amulet-0.1.22.dar
-- ../../../../lib/splice-test-token-v2-1.0.0.dar
+- ../../../lib/splice-api-token-transfer-instruction-v2-1.0.0.dar
+- ../../../lib/splice-token-standard-utils-2.0.0.dar
+- ../../../lib/splice-amulet-0.1.22.dar
+- ../../../lib/splice-test-token-v2-1.0.0.dar
 - ../../../../cap-core/cap-core-utils/.daml/dist/cap-core-utils-0.1.0.dar
 - ../../../../cap-core/Interfaces/submittable/.daml/dist/cap-core-submittable-v1-0.1.0.dar
 - ../../../../cap-core/Interfaces/resolver/.daml/dist/cap-core-resolver-v1-0.1.0.dar

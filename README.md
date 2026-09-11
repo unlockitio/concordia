@@ -85,6 +85,7 @@ concordia/
 │   └── private-majority-vote/         # M2: private ballots, {impl,test}
 ├── examples/auctions/
 │   └── sealed-bid-first-price/        # M2: private bids, {impl,fixtures,test}
+├── examples/lib/                       # vendored DARs only the examples need
 ├── lib/                               # vendored Token Standard DARs (prebuilt)
 ├── scripts/sandbox-test.sh            # sandbox integration run
 ├── multi-package.yaml                 # dpm workspace (build order)

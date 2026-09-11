@@ -37,7 +37,7 @@ examples/auctions/
     {impl,fixtures,test}               settlement, and OneLotBid_Award re-allocates the
                                        escrow onto the real legs before minting it.
 
-lib/                         vendored Token Standard and Splice DARs
+lib/                         vendored Token Standard DARs the interfaces bind to
 ```
 
 Why these shapes and not the alternatives: [`RATIONALE.md`](RATIONALE.md).

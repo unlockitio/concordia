@@ -229,7 +229,7 @@ examples/governance/
         │                    plus the bridge that governs ans/
         └── test/            the demos
 
-lib/                         vendored Token Standard and Splice DARs
+lib/                         vendored Token Standard DARs the interfaces bind to
 ```
 
 Rational behind each interface [`RATIONALE.md`](RATIONALE.md).
