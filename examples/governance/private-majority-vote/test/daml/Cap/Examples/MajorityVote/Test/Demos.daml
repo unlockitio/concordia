@@ -20,7 +20,6 @@ import Cap.Examples.MajorityVote.BallotV1
 import Cap.Examples.MajorityVote.ConfigV1
 import Cap.Examples.MajorityVote.ResolverV1
 
-import Cap.Examples.MajorityVote.Fixtures.ImpostorV1
 import Cap.Examples.MajorityVote.Test.Fixture
 
 class Visible t where
@@ -133,7 +132,7 @@ whoSeesWhat = do
     (map show [round.aliceBallot, round.bobBallot, round.carolBallot] <> openToOperator)
 
   setTime f.terms.entryClosesAt
-  votes <- castAll round acceptOption acceptOption rejectOption
+  votes <- castAll round yayOption yayOption nayOption
 
   f.bob `cannotSee` votes.alice
   f.carol `cannotSee` votes.alice
@@ -165,7 +164,7 @@ theCountCoversTheElectorate = do
   let f = round.fixture
 
   setTime f.terms.entryClosesAt
-  votes <- castAll round acceptOption acceptOption rejectOption
+  votes <- castAll round yayOption yayOption nayOption
 
   setTime f.terms.votingClosesAt
   let coversTheRoll = "the presented ballots cover the roll"
@@ -188,21 +187,16 @@ theCountCoversTheElectorate = do
     terms = f.terms
     bindings = Map.empty
     vote = None
-
-
-  fake <- submit f.operator $ createCmd ImpostorBallot with
+  submitMustFail f.operator $ createCmd PrivateBallot with
     operator = f.operator
     voter = f.alice
     mechanism = f.mechanism
     terms = f.terms
     bindings = Map.empty
-    vote = Some rejectOption
-  runResolveMustFailContaining f "every ballot is signed by the voter it names"
-    (map presented [votes.bob, votes.carol]
-      <> [toInterfaceContractId @Submittable fake])
+    vote = Some nayOption
 
   result <- runResolve f (allPresented votes)
-  result.verdict === V_Accepted (Some acceptOption)
+  result.verdict === V_Decided (Some yayOption)
 
 theOperatorCannotSkipTheCount : Script ()
 theOperatorCannotSkipTheCount = do

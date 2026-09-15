@@ -312,7 +312,7 @@ soleBidderAuction ns = do
   aliceBid <- submitBid auction f.alice aliceSeat 100.0
   setTime f.terms.biddingClosesAt
   result <- runResolve auction [aliceBid, bobSeat, carolSeat]
-  result.verdict === V_Accepted None
+  result.verdict === V_Decided None
   [(settlementCid, sale)] <- query @AuctionSettlement f.operator
   pure (auction, settlementCid, sale)
 
@@ -382,7 +382,7 @@ whoSeesWhat = do
 
   setTime f.terms.biddingClosesAt
   result <- runResolve auction [aliceBid, bobBid, carolSeat]
-  result.verdict === V_Accepted None
+  result.verdict === V_Decided None
 
   [(settlementCid, sale)] <- query @AuctionSettlement f.operator
   (paymentLegOf sale).amount === 100.0
@@ -498,7 +498,7 @@ theAuctionResolvesOnTheInvitedSetAlone = do
   nothingMoved f
 
   result <- runResolve auction [aliceBid, bobBid, carolSeat]
-  result.verdict === V_Accepted None
+  result.verdict === V_Decided None
 
   [(_, sale)] <- query @AuctionSettlement f.operator
   (paymentLegOf sale).amount === 100.0
@@ -521,7 +521,7 @@ lotGoesToTheHighestPresentedBid = do
 
   setTime f.terms.biddingClosesAt
   result <- runResolve auction [aliceBid, bobBid, carolSeat]
-  result.verdict === V_Accepted None
+  result.verdict === V_Decided None
 
   [(_, sale)] <- query @AuctionSettlement f.operator
   (paymentLegOf sale).amount === 100.0
@@ -666,7 +666,7 @@ theOperatorCannotSwapTheRegistry = do
   aliceBid <- submitBid honest hf.alice aliceSeat 100.0
   setTime hf.terms.biddingClosesAt
   honestResult <- runResolve honest [aliceBid, bobSeat, carolSeat]
-  honestResult.verdict === V_Accepted None
+  honestResult.verdict === V_Decided None
   [(honestSettlementCid, honestSale)] <- query @AuctionSettlement hf.operator
 
   let (paymentArg, lotArg) = settleBatchesFor hf honestSale
@@ -727,7 +727,7 @@ theOperatorCannotSwapTheRegistry = do
 
   setTime xf.terms.biddingClosesAt
   xResult <- runResolve hostile [xBid, xBobSeat, xCarolSeat]
-  xResult.verdict === V_Accepted None
+  xResult.verdict === V_Decided None
   [(xSettlementCid, xSale)] <- query @AuctionSettlement xf.operator
   _ <- runSettle hostile xSettlementCid xSale
 

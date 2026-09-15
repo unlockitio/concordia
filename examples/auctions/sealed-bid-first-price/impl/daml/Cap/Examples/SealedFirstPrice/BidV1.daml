@@ -12,7 +12,7 @@ import qualified Splice.Api.Token.HoldingV2 as Holding
 import Splice.Util (require)
 import Splice.TokenStandard.Utils (regularAccountOwner)
 
-import Cap.Core.Utils (orAbort)
+import Cap.Core.Utils (orAbort, single)
 import Cap.Core.SubmittableV1
 import Cap.Auctions.OneLotBidV1
 import Cap.Examples.SealedFirstPrice.TermsV1
@@ -67,9 +67,8 @@ template AuctionBid
 
       oneLotBid_submitImpl self arg = do
         require "this seat holds no bid yet" (null quotes)
-        submitted <- case arg.quotes of
-          [qs] -> pure qs
-          _ -> abort "this format takes a single alternative"
+        submitted <-
+          orAbort "this format takes a single alternative" (single arg.quotes)
         paymentCid <- orAbort "the bid must name the allocation it pays from"
           arg.paymentAllocation
         lotCid <- orAbort "the bid must name the allocation its lot is taken into"

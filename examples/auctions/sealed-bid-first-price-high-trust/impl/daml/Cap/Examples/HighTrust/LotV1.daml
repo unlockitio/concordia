@@ -161,7 +161,7 @@ resolveFirstPrice lot self presented extraArgs = do
       awardedCid = fmap fst winning
 
   (verdict, created) <- case winning of
-    None -> pure (V_Lapsed None, [])
+    None -> pure (V_Lapsed, [])
     Some (winnerCid, award) -> do
       require "the award meets the seller's reserve"
         (meetsReserve terms.direction terms.reserve award.price)
@@ -170,7 +170,7 @@ resolveFirstPrice lot self presented extraArgs = do
         awarded = [award]
         lotAllocation = lot.sellerLotAllocationCid
         extraArgs
-      pure (V_Accepted None, awardResult.created)
+      pure (V_Decided None, awardResult.created)
 
   forA_ [cid | (cid, _) <- seats, Some cid /= awardedCid] $ \cid ->
     exercise cid OneLotBid_Release with

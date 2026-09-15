@@ -50,7 +50,7 @@ against the under-forcing/over-forcing asymmetry.
 | Implementation | Private votes reference flow | [private-majority-vote/impl](examples/governance/private-majority-vote/impl) | **M2** |
 | Demo | Private votes reference flow demo | [private-majority-vote/DEMOS.md](examples/governance/private-majority-vote/DEMOS.md) | **M2** |
 | Tests | Daml Script and sandbox integration tests | [test package](examples/governance/private-majority-vote/test) · [sandbox-test.sh](scripts/sandbox-test.sh) | **M2** |
-| Toolkit | Extend tallies with quorum/threshold rules | sandbox tests | **M3** |
+| Toolkit | Separable quorum and tally rules | [Count](cap-governance/cap-governance-utils/daml/Cap/Governance/Utils/Internal/Count.daml) | **M3** |
 | Toolkit | Default implementations for downstream execution hooks (tbd) | sandbox tests | **M3** |
 | Interfaces | Generalized weighted ballots logic | code | **M3** |
 | Implementation | Weighted voting flow | code | **M3** |

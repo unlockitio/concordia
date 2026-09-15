@@ -41,7 +41,7 @@ proposedSetting : Text
 proposedSetting = "sync-b"
 
 majorityOptions : [AnyValue]
-majorityOptions = [acceptOption, rejectOption]
+majorityOptions = [yayOption, nayOption]
 
 noArgs : ExtraArgs
 noArgs = ExtraArgs with context = emptyChoiceContext; meta = emptyMetadata
@@ -210,6 +210,6 @@ runIssueMustFail f actor core =
     exerciseCmd (toInterfaceContractId @Action f.actionCid) Action_AuthorizeExecution with
       actors = [actor]
       core
-      outcome = Some acceptOption
+      outcome = Some yayOption
       bindings = configBind f.dso openingSetting
       extraArgs = noArgs

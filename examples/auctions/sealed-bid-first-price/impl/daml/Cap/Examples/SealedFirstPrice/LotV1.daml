@@ -86,7 +86,7 @@ resolveFirstPrice auction self presented _ = do
       awardedCid = fmap (\(cid, _, _) -> cid) winning
 
   (verdict, created) <- case winning of
-    None -> pure (V_Lapsed None, [])
+    None -> pure (V_Lapsed, [])
     Some (winnerCid, winner, award) -> do
       require "the award meets the seller's reserve"
         (meetsReserve terms.direction terms.reserve award.price)
@@ -123,7 +123,7 @@ resolveFirstPrice auction self presented _ = do
               factory = terms.registries.lotSettle
           ]
       exercise (fromInterfaceContractId @AuctionBid winnerCid) AuctionBid_Close
-      pure (V_Accepted None, [coerceContractId settlementCid])
+      pure (V_Decided None, [coerceContractId settlementCid])
 
   -- release the rest
   forA_ [cid | (cid, _) <- seats, Some cid /= awardedCid] $ \cid ->

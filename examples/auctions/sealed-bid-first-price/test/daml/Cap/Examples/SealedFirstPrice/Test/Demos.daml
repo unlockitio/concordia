@@ -342,7 +342,7 @@ whoSeesWhat = do
 
   setTime f.terms.biddingClosesAt
   result <- resolveAndSettle auction [aliceBid, bobBid, carolSeat]
-  result.verdict === V_Accepted None
+  result.verdict === V_Decided None
 
   sellerPaid <- balanceOf f.seller f.terms.payment
   sellerPaid === 100.0
@@ -430,7 +430,7 @@ theAuctionResolvesOnTheInvitedSetAlone = do
   nothingMoved f 100.0
 
   result <- resolveAndSettle auction [aliceBid, bobBid, carolSeat]
-  result.verdict === V_Accepted None
+  result.verdict === V_Decided None
 
   sellerPaid <- balanceOf f.seller f.terms.payment
   sellerPaid === 100.0
@@ -457,7 +457,7 @@ lotGoesToTheHighestPresentedBid = do
 
   setTime f.terms.biddingClosesAt
   result <- resolveAndSettle auction [aliceBid, bobBid, carolSeat]
-  result.verdict === V_Accepted None
+  result.verdict === V_Decided None
 
   alicePaid <- balanceOf f.alice f.terms.payment
   alicePaid === 0.0
@@ -499,7 +499,7 @@ theOperatorCannotSwapTheRegistry = do
   setTime hf.terms.biddingClosesAt
 
   honestResult <- resolveAndSettle honest [aliceBid, bobSeat, carolSeat]
-  honestResult.verdict === V_Accepted None
+  honestResult.verdict === V_Decided None
   honestSellerPaid <- balanceOf hf.seller hf.terms.payment
   honestSellerPaid === 100.0
   honestWinnerLot <- balanceOf hf.alice hf.terms.lot.instrument
@@ -528,7 +528,7 @@ theOperatorCannotSwapTheRegistry = do
 
   setTime xf.terms.biddingClosesAt
   xResult <- resolveAndSettle hostile [xBid, xBobSeat, xCarolSeat]
-  xResult.verdict === V_Accepted None
+  xResult.verdict === V_Decided None
 
   xSellerPaid <- balanceOf xf.seller xf.terms.payment
   xSellerPaid === 100.0
@@ -574,7 +574,7 @@ theBidderCannotBlockTheSale = do
       extraArgs = ExtraArgs with context = ctx.choiceContext; meta = emptyMetadata)
 
   result <- resolveAndSettle auction [aliceBid, bobSeat, carolSeat]
-  result.verdict === V_Accepted None
+  result.verdict === V_Decided None
   sellerPaid <- balanceOf f.seller f.terms.payment
   sellerPaid === 100.0
   aliceLot <- balanceOf f.alice f.terms.lot.instrument

@@ -5,7 +5,7 @@ module Cap.Examples.MajorityVote.ResolverV1 where
 import Prelude hiding (Action)
 
 import DA.Foldable (forA_)
-import DA.List (sort, unique)
+import DA.List (sort)
 import qualified DA.Map as Map
 import DA.Optional (isSome)
 import DA.Set (Set)
@@ -16,17 +16,28 @@ import Splice.Util (require)
 
 import Cap.Core.ResolverV1
 import Cap.Core.SubmittableV1
-import Cap.Core.Utils (ExecutionAction (..), ExecutionCore (..), orAbort, requireClosed)
+import Cap.Core.Utils
+  ( ExecutionAction (..), ExecutionCore (..), IsAnyValue (..), allEqual, orAbort
+  , requireClosed, single )
 import Cap.Governance.ActionV1
 import Cap.Governance.BallotV1
+import Cap.Governance.Utils
+  ( Tally (..), admit, atLeastVotes, castWeight, requireOptions, rule, totalWeight
+  , unweighted )
 
 import Cap.Examples.MajorityVote.BallotV1
 
-acceptOption : AnyValue
-acceptOption = AV_Text "accept"
+yay : Text
+yay = "yay"
 
-rejectOption : AnyValue
-rejectOption = AV_Text "reject"
+nay : Text
+nay = "nay"
+
+yayOption : AnyValue
+yayOption = toAnyValue yay
+
+nayOption : AnyValue
+nayOption = toAnyValue nay
 
 majorityProcedureName : Text
 majorityProcedureName = "majority"
@@ -117,7 +128,7 @@ template VoteResolver
 
       procedures = Map.fromList
         [(majorityProcedureName, majority this)]
-        
+
     nonconsuming choice VoteResolver_Propose : ContractId Proposal
       with
         proposer : Party
@@ -139,52 +150,55 @@ template VoteResolver
           roll = []
 
 
+-- | Carried by a strict majority of the electorate, rejected by anything less.
+-- The bar is the electorate, so the same votes decide the same way at any
+-- turnout, and the tally always concludes: 'V_Lapsed' means nobody voted.
+majorityOfElectorate : Tally Text
+majorityOfElectorate = Tally with
+  decide = \electorate casts ->
+    let for = castWeight [c | c <- casts, c.vote == Some yay]
+    in Some (toAnyValue (if for > 0.5 * totalWeight electorate then yay else nay))
+
 majority : VoteResolver -> Procedure
 majority body = Procedure with
   resolvers = [[body.operator]]
-  resolve = \_ presented extraArgs -> do
+  resolve = \_ submitted extraArgs -> do
     now <- getTime
 
-    let (proposals, rest) = partitionPresentedAs @Proposal presented
-    (proposalCid, proposal) <- case proposals of
-      [p] -> pure p
-      _ -> abort "the presentation carries exactly one proposal" -- orAbort
+    let (proposals, rest) = partitionPresentedAs @Proposal submitted
+    (proposalCid, proposal) <-
+      orAbort "the presentation carries exactly one proposal" (single proposals)
     require "the proposal is on this body's electorate"
       (proposal.electorate == body.electorate)
-    let actionCid = proposal.terms.actionCid
-
-    cast <- presentedAs @Ballot "a ballot" rest
-    ballots <- forA cast $ \(cid, ballot) -> do
-      let bv = view ballot
-      requireClosed "every presented ballot is closed for voting" now bv.closesAt
-      require "every ballot is signed by the voter it names"
-        (bv.voter `elem` signatory ballot)
-      b <- orAbort "every presented ballot is one of this format's"
-        (fromInterface @PrivateBallot ballot)
-      require "every ballot votes on the proposal's terms" (b.terms == proposal.terms)
-      pure (cid, bv)
 
     let terms = proposal.terms
+    presented <- presentedAs @PrivateBallot "a ballot" rest
+    let ballots = map snd presented
+        ballotCids = map (toInterfaceContractId @Ballot . fst) presented
+    forA_ ballots $ \b -> do
+      let bv = view (toInterface @Ballot b)
+      requireClosed "every presented ballot is closed for voting" now bv.closesAt
+      require "every ballot is signed by the voter it names"
+        (b.voter `elem` signatory b)
+      require "every ballot votes on the proposal's terms" (b.terms == terms)
 
-    let voters = [bv.voter | (_, bv) <- ballots]
+    let electorate = unweighted body.electorate
+    options <- orAbort "the proposal's options are not text options"
+      (mapA fromAnyValue terms.options)
+    casts <- admit electorate [(b.voter, b.vote) | b <- ballots]
+    requireOptions options casts
     require "the presented ballots cover the roll"
-      (unique voters && sort voters == sort proposal.roll)
+      (sort (map (.voter) casts) == sort proposal.roll)
 
-    let voted = [bv | (_, bv) <- ballots, isSome bv.vote]
-    bindings <- case [bv.bindings | bv <- voted] of
+    bindings <- case [b.bindings | b <- ballots, isSome b.vote] of
       [] -> pure Map.empty
-      (b :: rest) | all (== b) rest -> pure b
-      _ -> abort "the cast ballots pin one set of targets"
+      pinned -> orAbort "the cast ballots pin one set of targets" (allEqual pinned)
 
-    let accepts = length [() | bv <- voted, bv.vote == Some acceptOption]
-        verdict
-          | null voted = V_Lapsed None
-          | 2 * accepts > Set.size body.electorate = V_Accepted (Some acceptOption)
-          | otherwise = V_Rejected
+    let verdict = rule (atLeastVotes 1) majorityOfElectorate electorate casts
 
     created <- case verdict of
-      V_Accepted (Some winner) -> do
-        result <- exercise actionCid Action_AuthorizeExecution with
+      V_Decided (Some winner) | winner == yayOption -> do
+        result <- exercise terms.actionCid Action_AuthorizeExecution with
           actors = [body.dso]
           core = ExecutionCore with
             authorities = Set.fromList [body.dso]
@@ -199,8 +213,8 @@ majority body = Procedure with
         pure (map coerceContractId result.executionCids)
       _ -> pure []
 
-    forA_ ballots $ \(cid, _) ->
-      exercise cid Ballot_Consume with actors = [body.dso]; extraArgs
+    forA_ ballotCids $ \cid ->
+      exercise cid Ballot_Consume with extraArgs
     archive proposalCid
 
     pure Resolver_ResolveResult with verdict; created; meta = emptyMetadata

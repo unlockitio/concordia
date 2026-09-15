@@ -67,7 +67,7 @@ bothFeesMoveTogether = do
   f <- setupAs "both"
   let [_, sv2, _] = f.svs
   result <- theUsualVote f
-  result.verdict === V_Accepted (Some (fees 0.06 2.5))
+  result.verdict === V_Decided (Some (fees 0.06 2.5))
   [execution] <- pure result.created
 
   passTime (hours 3)
@@ -125,7 +125,7 @@ twoPathsOneAction = do
       bindings = openingBindings f
   passTime (hours 2)
   confirmed' <- resolveAs f sv1 confirmMechanism (map coerceContractId confirmations)
-  confirmed'.verdict === V_Accepted (Some confirmed)
+  confirmed'.verdict === V_Decided (Some confirmed)
   [confirmExecution] <- pure confirmed'.created
 
   executed <- executeAs f sv1 confirmExecution f.configCid f.ansCid
@@ -139,7 +139,7 @@ twoPathsOneAction = do
   voteResult <- voteOn f now "fees-vote"
     (currentTargetsOf f (coerceContractId newConfig) (coerceContractId newAns))
     [fees 0.05 2.0, fees 0.06 2.5, fees 0.09 4.0]
-  voteResult.verdict === V_Accepted (Some (fees 0.06 2.5))
+  voteResult.verdict === V_Decided (Some (fees 0.06 2.5))
   [voteExecution] <- pure voteResult.created
 
   passTime (hours 3)
@@ -183,7 +183,7 @@ anEpochBumpMidVoteStillAgrees = do
   passTime (hours 1)
 
   result <- resolveAs f sv1 mechanism [c1, c2, c3]
-  result.verdict === V_Accepted (Some (fees 0.06 2.5))
+  result.verdict === V_Decided (Some (fees 0.06 2.5))
   [execution] <- pure result.created
 
   passTime (hours 3)

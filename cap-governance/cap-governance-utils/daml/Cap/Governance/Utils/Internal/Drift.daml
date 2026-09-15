@@ -30,7 +30,7 @@ instance Monoid DriftPolicy where
   mempty = anyState
 
 -- A pinned cid must be the current cid ALWAYS, a state comparison SHOULD never
--- sees a contract id. Every constructor below
+-- see a contract id. Every constructor below
 -- goes through this one.
 wellFormedPolicyOnState : (AnyValue -> AnyValue -> Bool) -> DriftPolicy
 wellFormedPolicyOnState onState = DriftPolicy with

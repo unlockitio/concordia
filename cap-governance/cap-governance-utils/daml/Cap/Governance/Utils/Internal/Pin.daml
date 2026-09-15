@@ -15,7 +15,8 @@ import Cap.Governance.ActionV1 (BindSpec (..), Stage)
 import Cap.Governance.BindingV1 (Bind (..), TargetKey, fetchAuthenticTargets)
 
 
--- Pins the state of targets at a specific stage. Use when fetchAuthenticTargets do not need to be read outside of this function.
+-- Pins the state of targets at a specific stage. 
+-- Use when fetchAuthenticTargets does not need to be read outside of this function.
 pinStateAt
   : Stage -> Map TargetKey AnyContractId -> Map TargetKey BindSpec
   -> Update (Map TargetKey Bind)

@@ -24,9 +24,9 @@ instance HasCheckedFetch ResolverView ResolverKey where
   contractGroupId v = ResolverKey with authorities = v.authorities; id = v.id
 
 data Verdict
-  = V_Accepted (Optional AnyValue)
-  | V_Rejected
-  | V_Lapsed (Optional AnyValue)
+  = V_Decided (Optional AnyValue)
+  | V_Undecided
+  | V_Lapsed
   deriving (Eq, Show)
 
 data Resolver_ResolveResult = Resolver_ResolveResult

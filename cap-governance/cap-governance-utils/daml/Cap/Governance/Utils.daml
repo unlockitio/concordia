@@ -12,7 +12,42 @@ module Cap.Governance.Utils
 
   -- * Pinning
   , pinStateAt
+
+  -- * Separable formats
+  , Electorate
+  , weighted
+  , unweighted
+  , totalWeight
+  , Cast (..)
+  , admit
+  , requireCoverage
+  , requireOptions
+  , voted
+  , votes
+  , castWeight
+  , Quorum (..)
+  , anyTurnout
+  , allOf
+  , anyOf
+  , atLeastBallots
+  , atLeastVotes
+  , atLeastWeight
+  , votesReaching
+  , weightReaching
+  , shareOfVoters
+  , shareOfWeight
+  , Tally (..)
+  , undecided
+  , firstOf
+  , unanimous
+  , plurality
+  , atLeast
+  , median
+  , medianOf
+  , weightPerOption
+  , rule
   ) where
 
+import Cap.Governance.Utils.Internal.Count
 import Cap.Governance.Utils.Internal.Drift
 import Cap.Governance.Utils.Internal.Pin

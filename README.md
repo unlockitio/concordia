@@ -73,7 +73,7 @@ concordia/
 │   └── cap-core-utils/                #   admission, execution, patch, time, value
 ├── cap-governance/                    # Tier 2: governance
 │   ├── Interfaces/{binding,executable,action,ballot}
-│   └── cap-governance-utils/          #   drift, pinning
+│   └── cap-governance-utils/          #   drift, pinning, separable formats
 ├── cap-auctions/                      # Tier 2: auctions (Token Standard V2)
 │   ├── Interfaces/{bid,settlement}
 │   ├── cap-auctions-registry/

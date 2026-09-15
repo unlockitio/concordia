@@ -52,7 +52,6 @@ template SvConfirmation
         expiresAt = terms.expiresAt
         bindings
         availableActions = Map.empty
-        voter = sv
         vote = Some confirmed
         meta = emptyMetadata
 
@@ -95,7 +94,6 @@ template SvBallot
           [ (BA_Cast, [[sv]])
           , (BA_Withdraw, [[sv]])
           ]
-        voter = sv
         vote
         meta = emptyMetadata
 

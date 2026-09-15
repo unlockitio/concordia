@@ -1,0 +1,258 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Governance.Utils.Internal.Count
+  ( -- * The electorate
+    Electorate
+  , weighted
+  , unweighted
+  , totalWeight
+
+  -- * Casts
+  , Cast (..)
+  , admit
+  , requireCoverage
+  , requireOptions
+  , voted
+  , votes
+  , castWeight
+
+  -- * Quorums
+  , Quorum (..)
+  , anyTurnout
+  , allOf
+  , anyOf
+  , atLeastBallots
+  , atLeastVotes
+  , atLeastWeight
+  , votesReaching
+  , weightReaching
+  , shareOfVoters
+  , shareOfWeight
+
+  -- * Tallies
+  , Tally (..)
+  , undecided
+  , firstOf
+  , unanimous
+  , plurality
+  , atLeast
+  , median
+  , medianOf
+  , weightPerOption
+
+  -- * Verdicts
+  , rule
+  ) where
+
+import DA.List (sort, sortOn, unique)
+import DA.Map (Map)
+import qualified DA.Map as Map
+import DA.Optional (isSome, mapOptional)
+import DA.Set (Set)
+import qualified DA.Set as Set
+
+import Splice.Api.Token.MetadataV1
+import Splice.Util (require)
+
+import Cap.Core.ResolverV1 (Verdict (..))
+import Cap.Core.Utils (IsAnyValue (..), allEqual, orAbort)
+
+
+-- | The voters a format counts, and the weight each one carries. Fixed before
+-- the casts are read, so every bar a quorum or a tally applies is a function of
+-- the electorate and never of the turnout.
+type Electorate = Map Party Decimal
+
+-- | An electorate whose weights come from elsewhere.
+weighted : (Party -> Decimal) -> Set Party -> Electorate
+weighted weightOf voters = Map.fromList [(voter, weightOf voter) | voter <- Set.toList voters]
+
+-- | An electorate in which every voter carries weight @1.0@.
+unweighted : Set Party -> Electorate
+unweighted = weighted (const 1.0)
+
+-- | The total weight on an electorate.
+totalWeight : Electorate -> Decimal
+totalWeight electorate = sum (Map.values electorate)
+
+
+-- | One voter's ballot as a format reads it. 'None' is an abstention: the
+-- ballot was presented but decides nothing.
+data Cast a = Cast
+  with
+    voter : Party
+    weight : Decimal
+    vote : Optional a
+  deriving (Eq, Show)
+
+-- | Decodes presented ballots against an electorate. The only stage that
+-- aborts: a repeated voter, a voter off the electorate, or a vote that is not
+-- of the format's vote type.
+admit : IsAnyValue a => Electorate -> [(Party, Optional AnyValue)] -> Update [Cast a]
+admit electorate presented = do
+  require "the presented ballots come from distinct voters" (unique (map fst presented))
+  forA presented $ \(voter, raw) -> do
+    weight <- orAbort "a presented ballot comes from a voter off the electorate"
+      (Map.lookup voter electorate)
+    vote <- case raw of
+      None -> pure None
+      Some value -> Some <$> orAbort "a presented vote is not of the format's vote type"
+        (fromAnyValue value)
+    pure Cast with voter; weight; vote
+
+-- | Requires a ballot for every voter on the electorate, so no ballot can be
+-- withheld.
+requireCoverage : Electorate -> [Cast a] -> Update ()
+requireCoverage electorate casts =
+  require "the presented ballots cover the electorate"
+    (sort (map (.voter) casts) == Map.keys electorate)
+
+-- | Requires every vote cast to name one of the options the question puts.
+requireOptions : Eq a => [a] -> [Cast a] -> Update ()
+requireOptions options casts =
+  require "a presented vote names an option the question does not put"
+    (all (`elem` options) (votes casts))
+
+-- | The ballots that carry a vote.
+voted : [Cast a] -> [Cast a]
+voted casts = filter (isSome . (.vote)) casts
+
+-- | The votes cast, abstentions dropped.
+votes : [Cast a] -> [a]
+votes casts = [vote | Some vote <- map (.vote) casts]
+
+-- | The summed weight of a set of ballots.
+castWeight : [Cast a] -> Decimal
+castWeight casts = sum (map (.weight) casts)
+
+
+-- | Whether the turnout is enough for the tally to bind. Reads the electorate
+-- and the casts, and decides nothing about which outcome won.
+data Quorum a = Quorum
+  with
+    met : Electorate -> [Cast a] -> Bool
+
+-- | Met by any turnout at all.
+anyTurnout : Quorum a
+anyTurnout = Quorum with met = \_ _ -> True
+
+-- | Met when every one of these quorums is met.
+allOf : [Quorum a] -> Quorum a
+allOf quorums = Quorum with
+  met = \electorate casts -> all (\quorum -> met quorum electorate casts) quorums
+
+-- | Met when at least one of these quorums is met. An empty list is met by no
+-- turnout at all.
+anyOf : [Quorum a] -> Quorum a
+anyOf quorums = Quorum with
+  met = \electorate casts -> any (\quorum -> met quorum electorate casts) quorums
+
+-- | Met when at least this many ballots were presented, abstentions included.
+atLeastBallots : Int -> Quorum a
+atLeastBallots required = Quorum with met = \_ casts -> length casts >= required
+
+-- | Met when the number of votes cast reaches a bar the electorate fixes.
+votesReaching : (Electorate -> Int) -> Quorum a
+votesReaching bar = Quorum with
+  met = \electorate casts -> length (voted casts) >= bar electorate
+
+-- | Met when the weight behind the votes cast reaches a bar the electorate fixes.
+weightReaching : (Electorate -> Decimal) -> Quorum a
+weightReaching bar = Quorum with
+  met = \electorate casts -> castWeight (voted casts) >= bar electorate
+
+-- | Met when at least this many ballots carry a vote.
+atLeastVotes : Int -> Quorum a
+atLeastVotes required = votesReaching (const required)
+
+-- | Met when the weight behind the votes cast reaches an absolute bar.
+atLeastWeight : Decimal -> Quorum a
+atLeastWeight bar = weightReaching (const bar)
+
+-- | Met when this fraction of the electorate's voters cast a vote. An empty
+-- electorate never reaches quorum.
+shareOfVoters : Decimal -> Quorum a
+shareOfVoters fraction = Quorum with
+  met = \electorate casts ->
+    not (Map.null electorate)
+      && intToDecimal (length (voted casts)) >= fraction * intToDecimal (Map.size electorate)
+
+-- | Met when this fraction of the electorate's total weight cast a vote. An
+-- electorate of no positive weight never reaches quorum.
+shareOfWeight : Decimal -> Quorum a
+shareOfWeight fraction = Quorum with
+  met = \electorate casts ->
+    totalWeight electorate > 0.0 && castWeight (voted casts) >= fraction * totalWeight electorate
+
+
+-- | What the votes conclude: the value they decided, or 'None' when they
+-- decided nothing. Every bar it applies comes from the electorate, so the same
+-- votes conclude the same way whatever the turnout was.
+data Tally a = Tally
+  with
+    decide : Electorate -> [Cast a] -> Optional AnyValue
+
+-- | Concludes nothing, whatever the votes.
+undecided : Tally a
+undecided = Tally with decide = \_ _ -> None
+
+-- | Concludes the one value every vote cast names.
+unanimous : (Eq a, IsAnyValue a) => Tally a
+unanimous = Tally with
+  decide = \_ casts -> toAnyValue <$> allEqual (votes casts)
+
+-- | Concludes the option carrying the most weight, and nothing on a tie.
+plurality : (Ord a, IsAnyValue a) => Tally a
+plurality = Tally with
+  decide = \_ casts ->
+    case sortOn (\(_, weight) -> negate weight) (Map.toList (weightPerOption casts)) of
+      (option, best) :: rest | all (\(_, weight) -> weight < best) rest ->
+        Some (toAnyValue option)
+      _ -> None
+
+-- | Concludes the one option whose weight reaches a bar the electorate fixes,
+-- and nothing when none or several reach it.
+atLeast : (Ord a, IsAnyValue a) => (Electorate -> Decimal) -> Tally a
+atLeast bar = Tally with
+  decide = \electorate casts ->
+    case [option | (option, weight) <- Map.toList (weightPerOption casts)
+                 , weight >= bar electorate] of
+      [option] -> Some (toAnyValue option)
+      _ -> None
+
+-- | Concludes the median of the values voted, weights ignored.
+median : Tally Decimal
+median = Tally with
+  decide = \_ casts -> AV_Decimal <$> medianOf (votes casts)
+
+-- | The midpoint of a list of values, averaging the two middles on an even count.
+medianOf : [Decimal] -> Optional Decimal
+medianOf values = case sort values of
+  [] -> None
+  sorted ->
+    let n = length sorted
+    in case (drop ((n - 1) / 2) sorted, drop (n / 2) sorted) of
+      (lo :: _, hi :: _) -> Some ((lo + hi) / 2.0)
+      _ -> None
+
+
+-- | The weight behind each option voted for.
+weightPerOption : Ord a => [Cast a] -> Map a Decimal
+weightPerOption casts =
+  Map.fromListWithR (+) [(option, c.weight) | c <- casts, Some option <- [c.vote]]
+
+-- | Concludes by the first of these tallies that concludes anything. An empty
+-- list concludes nothing.
+firstOf : [Tally a] -> Tally a
+firstOf tallies = Tally with
+  decide = \electorate casts -> case mapOptional (\t -> decide t electorate casts) tallies of
+    value :: _ -> Some value
+    [] -> None
+
+-- | The verdict a quorum and a tally reach together. A vote that fails the
+-- quorum lapses. A vote that meets quorum carries the
+-- tally's conclusion, or is undecided where the tally reached none. (e.g. a tie in a plurality tally.)
+rule : Quorum a -> Tally a -> Electorate -> [Cast a] -> Verdict
+rule quorum tally electorate casts
+  | not (met quorum electorate casts) = V_Lapsed
+  | otherwise = optional V_Undecided (V_Decided . Some) (decide tally electorate casts)

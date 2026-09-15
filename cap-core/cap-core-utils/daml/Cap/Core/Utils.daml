@@ -32,6 +32,9 @@ module Cap.Core.Utils (
 
   -- * Optionals
   orAbort,
+  single,
+  allEqual,
+  allAgreeBy,
 
 ) where
 
@@ -48,3 +51,14 @@ import Cap.Core.Utils.Internal.Patch ()
 orAbort : Text -> Optional a -> Update a
 orAbort msg None = abort msg
 orAbort _ (Some a) = pure a
+
+single : [a] -> Optional a
+single [a] = Some a
+single _ = None
+
+allEqual : Eq a => [a] -> Optional a
+allEqual = allAgreeBy (==)
+
+allAgreeBy : (a -> a -> Bool) -> [a] -> Optional a
+allAgreeBy agrees (a :: rest) | all (agrees a) rest = Some a
+allAgreeBy _ _ = None

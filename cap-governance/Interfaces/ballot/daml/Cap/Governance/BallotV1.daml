@@ -8,7 +8,7 @@ import qualified DA.Set as Set
 import Splice.Api.Token.MetadataV1
 import Splice.Util (require)
 
-import Cap.Core.Utils (admitActors, entitled, requireExpired, requireOpen)
+import Cap.Core.Utils (entitled, requireExpired, requireOpen)
 import Cap.Core.SubmittableV1 (Submittable)
 import Cap.Governance.BindingV1 (Bind, TargetKey)
 
@@ -26,7 +26,6 @@ data BallotView = BallotView
     expiresAt : Time
     availableActions : Map BallotAction [[Party]]
     bindings : Map TargetKey Bind
-    voter : Party
     vote : Optional AnyValue
     meta : Metadata
   deriving (Eq, Show)
@@ -98,11 +97,7 @@ interface Ballot requires Submittable where
 
   nonconsuming choice Ballot_Consume : Ballot_ConsumeResult
     with
-      actors : [Party]
       extraArgs : ExtraArgs
-    controller actors
+    controller Set.toList (view (toInterface @Submittable this)).mechanism.resolver.authorities
     do
-      let mechanism = (view (toInterface @Submittable this)).mechanism
-      require "the actors carry the authority of the resolver this ballot names"
-        (admitActors [Set.toList mechanism.resolver.authorities] actors)
       ballot_consumeImpl this self (Ballot_Consume with ..)

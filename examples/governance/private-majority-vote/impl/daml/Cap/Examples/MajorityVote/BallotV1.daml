@@ -57,7 +57,6 @@ template PrivateBallot
           [ (BA_Cast, [[voter]])
           , (BA_Withdraw, [[voter]])
           ]
-        voter
         vote
         meta = emptyMetadata
 

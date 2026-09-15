@@ -88,8 +88,10 @@ implementation decides what to compare and at which stage.
 
 ### Drift policies
 
-A `DriftPolicy` defines `onState : AnyValue -> AnyValue -> Bool` and does not
-export it. `holds` is the only way to apply one, and it takes binds:
+A `DriftPolicy` carries `holds : Bind -> Bind -> Bool`. Its constructor is not
+exported, so every policy is built from the combinators below and each of those
+routes through one internal wrapper that applies the pinning rule. `holds` is
+the only way to apply a policy, and it takes binds:
 
 ```haskell
 holds : DriftPolicy -> Bind -> Bind -> Bool
@@ -99,9 +101,9 @@ A pinned contract must be the contract presented. With no contract pinned, the
 two states are compared under the policy. A policy never sees a contract id, so
 none can waive that rule.
 
-`cap-governance-utils` supplies the common cases: `anyDrift`, `unchanged`,
-`unchangedAt`, `typed`, `withinVersions`, `withinRatio`, `notAfter` and
-`atSlice`. They compose with `<>`.
+`cap-governance-utils` supplies `anyState`, `unchanged` and `typed`, which
+compose with `<>`, and `holdsAll` to apply one policy across a
+`Map TargetKey Bind`.
 
 ### Targets
 
@@ -142,6 +144,27 @@ is all-or-nothing on identity: that contract or nothing, whatever it now says.
 
 Stages are read by `wellFormedAt` and by each format's own code. No fixed
 body reads one.
+
+## Separable formats
+
+`Cap.Governance.Utils.Internal.Count` holds the helpers for the class of
+governance formats whose quorum and tally are independent. The quorum decides
+whether this vote is valid, the tally decides what it concluded, and neither reads
+the other. Every bar either one applies is a function of the `Electorate` and
+never of the turnout, so "a majority of the body" is in the class and "two
+thirds of those who voted" is not.
+
+A format is three stages. `admit` decodes the presented ballots against the
+electorate, and is the only stage that aborts: a repeated voter, a voter off the
+electorate, or a vote that is not of the format's vote type. A `Quorum` reads
+the casts and says whether the vote Lapsed or not. A `Tally` reads the same casts and
+says what value they decided, or if the tally cannot decide (e.g. a tie in a plurality vote). `rule` puts the three together:
+
+```haskell
+rule : Quorum a -> Tally a -> Electorate -> [Cast a] -> Verdict
+```
+
+
 
 ## Governance flows examples
 

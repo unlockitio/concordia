@@ -22,7 +22,7 @@ import Splice.TokenStandard.Utils
   , textMapValues
   )
 
-import Cap.Core.Utils (orAbort)
+import Cap.Core.Utils (orAbort, single)
 import Cap.Core.SubmittableV1
 import Cap.Auctions.OneLotBidV1
 import Cap.Auctions.RegistryV1 (AllocationFactoryCall)
@@ -109,9 +109,8 @@ template AuctionBid
 
       oneLotBid_submitImpl self arg = do
         require "this seat holds no bid yet" (null quotes)
-        submitted <- case arg.quotes of
-          [qs] -> pure qs
-          _ -> abort "this format takes a single alternative"
+        submitted <-
+          orAbort "this format takes a single alternative" (single arg.quotes)
         paymentCid <- orAbort "a bid names the allocation it pays from"
           arg.paymentAllocation
         let bv = view (toInterface @OneLotBid this)
@@ -143,9 +142,7 @@ template AuctionBid
 
       oneLotBid_awardImpl self arg = do
         archive self
-        award <- case arg.awarded of
-          [a] -> pure a
-          _ -> abort "this format awards a single quote"
+        award <- orAbort "this format awards a single quote" (single arg.awarded)
 
         paymentFactory <- exercise terms.registries.paymentAllocate.factoryCid
           AllocInstr.AllocationFactory_PublicFetch with
