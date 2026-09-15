@@ -80,8 +80,9 @@ maps.
 - The resolver compares the submitters' binds against each other with `holds`
   and carries one set forward.
 - `Action_AuthorizeExecution` puts the binds on the executable it creates.
-- `Executable_Execute` receives the contracts to act on and checks each against
-  its bind with `holds`.
+- `Executable_Execute` receives the contracts to act on and passes them to
+  `executable_executeImpl`, which checks each against its bind with `holds`.
+  `boundAuthentic` and `boundOpaque` do that in both governance examples.
 
 The interfaces do not check that a bind carries what it claims. Each
 implementation decides what to compare and at which stage.
@@ -115,27 +116,47 @@ target's signatories.
 - Only a contract id in that case there is no state to compare, so no drift policy applies, and any change to the
 contract breaks the bind.
 
-Every cell below is expressible; these are the combinations worth writing.
+These are every combination `wellFormedAt` admits. A state must be fixed
+strictly before the contract, so no row carries both at one stage and none
+carries a state at `Execution`.
 
-| Submission | Resolution | Execution | What the bind says |
-|:---:|:---:|:---:|---|
-| state | | cid | the voters agreed about a state; the executor names the contract carrying it at execution |
-| state | cid | | the voters agreed about a state, and the resolution fixed which contract carries it |
-| | state | cid | the resolution pinned the state it saw; the executor names the contract at execution |
-| cid | | | the proposal named the exact contract, and nothing about its content |
-| | cid | | the resolution fixed the contract, and nothing the voters saw is pinned |
-| | | | nothing pinned: the bind names the target key and constrains nothing |
-| cid | cid | cid | an opaque target: a contract and nothing else, on nothing but the ledger |
+A stage says when a value is fixed, not when it is checked: each of `state` and
+`cid` is fixed once and then compared at every later stage, so a row carries at
+most one mark of each.
 
-Splice's `AmuletRules` is row one: `AmuletRules_SetConfig` carries a `baseConfig`
-pinned when the action was proposed, and `DsoRules_ExecuteConfirmedAction` takes
-the `amuletRulesCid` at execution. What differs is the comparison. `patch`
-writes the proposal's value where it differs from the base and never refuses,
-where a `DriftPolicy` may.
+| Genesis | Submission | Resolution | Execution | What the bind says |
+|:---:|:---:|:---:|:---:|---|
+| state | cid | | | the action pinned the state; every submitter names the contract, and they must all name the same one |
+| state | | cid | | the action pinned the state; the resolution fixed which contract carries it |
+| state | | | cid | the action pinned the state it was written against; the executor names the contract carrying it |
+| | state | cid | | the voters agreed about a state, and the resolution fixed which contract carries it |
+| | state | | cid | the voters agreed about a state; the executor names the contract carrying it at execution |
+| | | state | cid | the resolution pinned the state it saw (possibily comming from the submission); the executor names the contract at execution |
+| cid | | | | the action named the exact contract, and nothing about its content |
+| | cid | | | every submitter names the contract and they must all name the same one, and nothing about its content |
+| | | cid | | the resolution fixed the contract, and nothing the voters saw is pinned |
+| | | | cid | the executor names the contract, and nothing about its content is pinned |
+| | | | | nothing pinned: the bind names the target key and constrains nothing |
 
-`wellFormedAt` requires a state to be fixed strictly before the contract, and
-that gap is what the drift policy judges. The wider it is, the more the target
-may legitimately move between resolution and execution.
+A pinned contract is compared by identity, so the rows that pin one at
+`Submission` are the ones requiring every submitter to have seen the same
+contract and not merely a matching state.
+
+An `Opaque` key publishes no state, so it can only take one of the cid-only
+rows: `statePublished` in `wellFormedAt` requires `state` to be `None` for it.
+Both governance examples bind their config target with state at `Submission`
+and the contract at `Execution`, and their ans target with the contract at
+`Execution` alone.
+
+Splice's `AmuletRules` is state at `Genesis` with the contract at `Execution`:
+`AmuletRules_SetConfig` carries a `baseConfig` pinned when the action was
+proposed, and `DsoRules_ExecuteConfirmedAction` takes the `amuletRulesCid` at
+execution. What differs is the comparison. `patch` writes the proposal's value
+where it differs from the base and never refuses, where a `DriftPolicy` may.
+
+The gap between the two stages is what the drift policy judges. The wider it
+is, the more the target may legitimately move between resolution and
+execution.
 
 Reading the rows: a state pin without a cid pin follows the target through
 re-creation — the decision acts on whatever contract now carries the key,
