@@ -1,9 +1,6 @@
 -- SPDX-License-Identifier: Apache-2.0
 
--- | Internal module carrying the one-lot auction encodings: the settlement a
--- set of terms implies, and its payment and lot legs.
---
--- Import 'Cap.Auctions.Utils' to get access to the public ones.
+
 module Cap.Auctions.Utils.Internal.Bid
   ( saleSettlement
   , paymentLegId

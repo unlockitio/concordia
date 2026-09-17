@@ -1,0 +1,67 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Governance.Tests.Casts where
+
+import DA.Assert ((===))
+import qualified DA.Map as Map
+import Daml.Script
+
+import Cap.Governance.Utils (Cast (..), castWeight, voted, votes, weightPerOption)
+
+cast : Party -> Decimal -> Optional Text -> Cast Text
+cast voter weight vote = Cast with voter; weight; vote
+
+-- voted drops the ballots that abstain.
+votedKeepsOnlyTheBallotsCarryingAVote : Script ()
+votedKeepsOnlyTheBallotsCarryingAVote = do
+  alice <- allocateParty "alice"
+  bob <- allocateParty "bob"
+  let casts = [cast alice 1.0 (Some "yes"), cast bob 1.0 None]
+  map (.voter) (voted casts) === [alice]
+
+-- votes returns the votes cast in ballot order, abstentions dropped.
+votesDropsAbstentions : Script ()
+votesDropsAbstentions = do
+  alice <- allocateParty "alice"
+  bob <- allocateParty "bob"
+  carol <- allocateParty "carol"
+  votes [cast alice 1.0 (Some "yes"), cast bob 1.0 None, cast carol 1.0 (Some "no")]
+    === ["yes", "no"]
+
+-- castWeight sums every ballot; filter through voted first to weigh only the votes.
+castWeightSumsAbstentionsToo : Script ()
+castWeightSumsAbstentionsToo = do
+  alice <- allocateParty "alice"
+  bob <- allocateParty "bob"
+  let casts = [cast alice 2.0 (Some "yes"), cast bob 3.0 None]
+  castWeight casts === 5.0
+  castWeight (voted casts) === 2.0
+
+-- Ballots naming the same option have their weights added.
+weightPerOptionSumsRepeatedOptions : Script ()
+weightPerOptionSumsRepeatedOptions = do
+  alice <- allocateParty "alice"
+  bob <- allocateParty "bob"
+  carol <- allocateParty "carol"
+  let casts =
+        [ cast alice 2.0 (Some "yes")
+        , cast bob 3.0 (Some "yes")
+        , cast carol 1.0 (Some "no")
+        ]
+  Map.toList (weightPerOption casts) === [("no", 1.0), ("yes", 5.0)]
+
+-- An abstaining ballot puts no weight behind any option.
+weightPerOptionIgnoresAbstentions : Script ()
+weightPerOptionIgnoresAbstentions = do
+  alice <- allocateParty "alice"
+  bob <- allocateParty "bob"
+  Map.toList (weightPerOption [cast alice 2.0 (Some "yes"), cast bob 3.0 None])
+    === [("yes", 2.0)]
+
+-- Every counting function returns empty or zero when no ballot was presented.
+noCastsCountToNothing : Script ()
+noCastsCountToNothing = do
+  voted ([] : [Cast Text]) === []
+  votes ([] : [Cast Text]) === []
+  castWeight ([] : [Cast Text]) === 0.0
+  Map.toList (weightPerOption ([] : [Cast Text])) === []

@@ -49,7 +49,7 @@ against the under-forcing/over-forcing asymmetry.
 | Demo | Splice-generalizable flow demos | [DEMOS.md](examples/governance/baby-dso/DEMOS.md) | **M1** |
 | Implementation | Private votes reference flow | [private-majority-vote/impl](examples/governance/private-majority-vote/impl) | **M2** |
 | Demo | Private votes reference flow demo | [private-majority-vote/DEMOS.md](examples/governance/private-majority-vote/DEMOS.md) | **M2** |
-| Tests | Daml Script and sandbox integration tests | [test package](examples/governance/private-majority-vote/test) · [sandbox-test.sh](scripts/sandbox-test.sh) | **M2** |
+| Demo | Demo scripts and sandbox integration run | [demo package](examples/governance/private-majority-vote/demo) · [sandbox-test.sh](scripts/sandbox-test.sh) | **M2** |
 | Toolkit | Separable quorum and tally rules | [Count](cap-governance/cap-governance-utils/daml/Cap/Governance/Utils/Internal/Count.daml) | **M3** |
 | Toolkit | Default implementations for downstream execution hooks (tbd) | sandbox tests | **M3** |
 | Interfaces | Generalized weighted ballots logic | code | **M3** |
@@ -72,7 +72,7 @@ resolution. Weighted voting *might* require new interfaces.
 | Toolkit | opt-in toolkit | [cap-auctions-utils](cap-auctions/cap-auctions-utils) | **M2** |
 | Implementation | sealed-bid first-price | [sealed-bid-first-price/impl](examples/auctions/sealed-bid-first-price/impl) | **M2** |
 | Demo | sealed-bid first-price demo | [DEMOS.md](examples/auctions/sealed-bid-first-price/DEMOS.md) | **M2** |
-| Tests | Daml Script and sandbox integration tests | [test package](examples/auctions/sealed-bid-first-price/test) · [sandbox-test.sh](scripts/sandbox-test.sh) | **M2** |
+| Demo | Demo scripts and sandbox integration run | [demo package](examples/auctions/sealed-bid-first-price/demo) · [sandbox-test.sh](scripts/sandbox-test.sh) | **M2** |
 | Toolkit | second-price payment rule | code | **M3** |
 | Implementation | Dutch auction (multi-round) | code | **M4** |
 | Demo | Dutch demo | sandbox prototype | **M4** |

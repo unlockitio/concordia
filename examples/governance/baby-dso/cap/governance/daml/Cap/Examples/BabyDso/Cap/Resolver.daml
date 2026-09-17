@@ -1,0 +1,183 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Examples.BabyDso.Cap.Resolver where
+
+import Prelude hiding (Action)
+
+import DA.Map (Map)
+import qualified DA.Map as Map
+import DA.Optional (isSome, mapOptional)
+import DA.Set (Set)
+import qualified DA.Set as Set
+import DA.TextMap (TextMap)
+import qualified DA.TextMap as TextMap
+import DA.Foldable (forA_)
+import DA.Time (RelTime, addRelTime, seconds)
+
+import Splice.Api.Token.MetadataV1
+import Splice.Util (require)
+
+import Cap.Core.Utils
+  ( ExecutionAction (..), ExecutionCore (..), IsAnyValue (..), allAgreeBy, allEqual
+  , orAbort, requireClosed )
+import Cap.Core.ResolverV1
+import Cap.Core.SubmittableV1
+import Cap.Governance.ActionV1
+import Cap.Governance.BallotV1
+import Cap.Governance.BindingV1
+import Cap.Governance.Utils
+  ( DriftPolicy, Tally (..), admit, holdsAll, medianOf, rule, typed, unanimous
+  , unweighted, votes, votesReaching )
+
+import Cap.Examples.BabyDso.Cap.Config (transferFeeField)
+import Cap.Examples.BabyDso.Cap.Submission
+
+
+confirmationProcedureName : Text
+confirmationProcedureName = "confirmation"
+
+voteProcedureName : Text
+voteProcedureName = "vote"
+
+immediately : RelTime
+immediately = seconds 0
+
+-- | The smallest number of votes such that any two groups that size share at
+-- least one honest voter, tolerating @floor ((voters - 1) / 3)@ byzantine ones.
+byzantineQuorum : Int -> Int
+byzantineQuorum voters =
+  let tolerated = floor (intToDecimal (voters - 1) / 3.0)
+  in ceiling (intToDecimal (voters + tolerated + 1) / 2.0)
+
+
+template DsoResolver
+  with
+    dso : Party
+    svs : Set Party
+    resolverId : Text
+    executionDelay : RelTime
+    executionWindow : RelTime
+    expiresAt : Time
+  where
+    signatory dso
+    observer Set.toList svs
+
+    interface instance Resolver for DsoResolver where
+      view = ResolverView with
+        authorities = Set.fromList [dso]
+        id = resolverId
+        expiresAt = Some expiresAt
+        meta = emptyMetadata
+
+      procedures = Map.fromList
+        [ (confirmationProcedureName, confirmationProcedure this)
+        , (voteProcedureName, voteProcedure this)
+        ]
+
+
+voteProcedure : DsoResolver -> Procedure
+voteProcedure rules = Procedure with
+  resolvers = [[sv] | sv <- Set.toList rules.svs]
+  resolve = \_ submitted extraArgs -> do
+    presented <- presentedAs @SvBallot "an sv ballot" submitted
+    now <- getTime
+    let ballots = map snd presented
+        ballotCids = map (toInterfaceContractId @Ballot . fst) presented
+    terms <- orAbort "the presented ballots name one proposal"
+      (allEqual [b.terms | b <- ballots])
+    requireClosed "the voting window has closed" now terms.votingClosesAt
+    require "the proposal has not expired" (now < terms.expiresAt)
+
+    let electorate = unweighted rules.svs
+    fields <- orAbort "a vote proposal names its fields as text options"
+      (mapA fromAnyValue terms.options)
+    casts <- admit electorate [(b.sv, b.vote) | b <- ballots]
+    bindings <- agreedBindings [b.bindings | b <- ballots, isSome b.vote]
+
+    let verdict =
+          rule (votesReaching (byzantineQuorum . Map.size)) (medianByField fields)
+            electorate casts
+    created <- onAcceptance rules now rules.executionDelay terms bindings verdict extraArgs
+    consume ballotCids extraArgs
+    pure Resolver_ResolveResult with verdict; created; meta = emptyMetadata
+
+
+medianByField : [Text] -> Tally (TextMap Decimal)
+medianByField fields = Tally with
+  decide = \_ casts -> do
+    medians <- forA fields $ \field -> do
+      value <- medianOf (mapOptional (TextMap.lookup field) (votes casts))
+      pure (field, AV_Decimal value)
+    pure (AV_Map (TextMap.fromList medians))
+
+
+confirmationProcedure : DsoResolver -> Procedure
+confirmationProcedure rules = Procedure with
+  resolvers = [[sv] | sv <- Set.toList rules.svs]
+  resolve = \_ submitted extraArgs -> do
+    presented <- presentedAs @SvConfirmation "a confirmation" submitted
+    now <- getTime
+    let confirmations = map snd presented
+        ballotCids = map (toInterfaceContractId @Ballot . fst) presented
+    terms <- orAbort "the presented ballots name one proposal"
+      (allEqual [c.terms | c <- confirmations])
+    requireClosed "the voting window has closed" now terms.votingClosesAt
+    require "the proposal has not expired" (now < terms.expiresAt)
+
+    let electorate = unweighted rules.svs
+    casts <- admit @AnyValue electorate [(c.sv, Some c.confirmed) | c <- confirmations]
+    bindings <- agreedBindings [c.bindings | c <- confirmations]
+
+    let verdict =
+          rule (votesReaching (byzantineQuorum . Map.size)) unanimous electorate casts
+    created <- onAcceptance rules now immediately terms bindings verdict extraArgs
+    consume ballotCids extraArgs
+    pure Resolver_ResolveResult with verdict; created; meta = emptyMetadata
+
+
+agreedBindings : [Map TargetKey Bind] -> Update (Map TargetKey Bind)
+agreedBindings [] = pure Map.empty
+agreedBindings pinned = orAbort "the cast ballots pin one set of targets"
+  (allAgreeBy (holdsAll transferFeeUnchanged) pinned)
+
+coreFor : DsoResolver -> Time -> RelTime -> ExecutionCore
+coreFor rules now delay =
+  let opensAt = now `addRelTime` delay
+  in ExecutionCore with
+    authorities = Set.fromList [rules.dso]
+    availableActions = Map.fromList [(EA_Execute, [[sv] | sv <- Set.toList rules.svs])]
+    opensAt
+    expiresAt = Some (opensAt `addRelTime` rules.executionWindow)
+    meta = emptyMetadata
+
+onAcceptance
+  : DsoResolver -> Time -> RelTime -> ProposalTerms -> Map TargetKey Bind -> Verdict
+  -> ExtraArgs
+  -> Update [AnyContractId]
+onAcceptance rules now delay terms bindings verdict extraArgs = case verdict of
+  V_Decided (Some winner) ->
+    issue [rules.dso] terms.actionCid (coreFor rules now delay) (Some winner)
+      bindings extraArgs
+  _ -> pure []
+
+transferFeeUnchanged : DriftPolicy
+transferFeeUnchanged = typed sameFee
+  where
+    sameFee : TextMap AnyValue -> TextMap AnyValue -> Bool
+    sameFee pinned current =
+      case (TextMap.lookup transferFeeField pinned, TextMap.lookup transferFeeField current) of
+        (Some a, Some b) -> a == b
+        _ -> False
+
+issue
+  : [Party] -> ContractId Action -> ExecutionCore -> Optional AnyValue
+  -> Map TargetKey Bind -> ExtraArgs -> Update [AnyContractId]
+issue actors actionCid core outcome bindings extraArgs = do
+  result <- exercise actionCid Action_AuthorizeExecution with
+    actors; core; outcome; bindings; extraArgs
+  pure (map coerceContractId result.executionCids)
+
+consume : [ContractId Ballot] -> ExtraArgs -> Update ()
+consume ballots extraArgs =
+  forA_ ballots $ \ballot ->
+    exercise ballot Ballot_Consume with extraArgs

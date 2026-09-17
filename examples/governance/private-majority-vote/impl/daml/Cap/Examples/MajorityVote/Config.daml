@@ -1,0 +1,124 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Examples.MajorityVote.Config where
+
+import Prelude hiding (Action)
+
+import DA.Map (Map)
+import qualified DA.Map as Map
+import DA.Set (Set)
+import qualified DA.Set as Set
+
+import Splice.Api.Token.MetadataV1
+import Splice.Util (require)
+
+import Cap.Core.Utils (ExecutionCore, IsAnyValue (..), orAbort)
+import Cap.Governance.ActionV1
+import Cap.Governance.BindingV1
+import Cap.Governance.ExecutableV1
+import Cap.Governance.Utils (holds, unchanged)
+
+
+configId : Text
+configId = "config"
+
+configTargetKey : Party -> AuthenticTargetKey
+configTargetKey dso = AuthenticTargetKey with
+  authorities = Set.fromList [dso]
+  id = configId
+
+
+template Config
+  with
+    dso : Party
+    electorate : Set Party
+    setting : Text
+  where
+    signatory dso
+    observer Set.toList electorate
+
+    interface instance AuthenticTarget for Config where
+      view = AuthenticTargetView with
+        authorities = Set.fromList [dso]
+        id = configId
+        state = Some (toAnyValue setting)
+        meta = emptyMetadata
+
+    choice Config_Set : ContractId Config
+      with
+        newSetting : Text
+      controller dso
+      do create this with setting = newSetting
+
+
+template ConfigUpdate
+  with
+    dso : Party
+    newSetting : Text
+    core : ExecutionCore
+    bindings : Map TargetKey Bind
+    outcome : Optional AnyValue
+  where
+    signatory dso
+    observer concat (concat (Map.values core.availableActions))
+
+    interface instance Executable for ConfigUpdate where
+      view = ExecutableView with core; bindings; outcome
+
+      executable_cancelImpl _ = abort "this execution cannot be cancelled"
+
+      executable_executeImpl targets _ = do
+        let ctk = configTargetKey dso
+        bind <- orAbort "this execution binds only to the config template" $
+          case Map.toList bindings of
+            [(_, b)] -> Some b
+            _ -> None
+        cid <- orAbort "the config the bind names was not presented"
+          (Map.lookup (Authentic ctk) targets)
+        presented <- fetchCheckedTarget ctk (coerceContractId cid)
+        require "the target no longer satisfies the bind"
+          (holds unchanged bind (Bind with state = (view presented).state; cid = Some cid))
+        updated <- exercise (coerceContractId cid : ContractId Config)
+          Config_Set with newSetting
+        pure Executable_ExecuteResult with
+          created = [coerceContractId updated]
+          meta = emptyMetadata
+
+template SetConfigAction
+  with
+    dso : Party
+    operator : Party
+    electorate : Set Party
+    newSetting : Text
+  where
+    signatory dso
+    observer operator :: Set.toList electorate
+
+    ensure wellFormedAt Genesis (setConfigBindSpec dso)
+
+    interface instance Action for SetConfigAction where
+      view = ActionView with
+        authorizers = [[dso]]
+        bindSpec = setConfigBindSpec dso
+        meta = emptyMetadata
+
+      action_authorizeExecutionImpl _ arg = do
+        cid <- create ConfigUpdate with
+          dso; newSetting
+          bindings = arg.bindings
+          core = arg.core
+          outcome = arg.outcome
+        pure Action_AuthorizeExecutionResult with
+          executionCids = [toInterfaceContractId cid]
+          meta = emptyMetadata
+
+
+setConfigBindSpec : Party -> Map TargetKey BindSpec
+setConfigBindSpec dso = Map.fromList
+  [ ( Authentic (configTargetKey dso)
+    , BindSpec with
+        state = Some (AsOf with stage = Submission; seen = None)
+        cid = AsOf with stage = Execution; seen = None
+    )
+  ]
+

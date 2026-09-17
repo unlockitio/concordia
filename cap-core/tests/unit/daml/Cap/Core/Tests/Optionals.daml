@@ -1,0 +1,37 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Core.Tests.Optionals where
+
+import DA.Assert ((===))
+import Daml.Script
+
+import Cap.Core.Utils (allAgreeBy, allEqual, single)
+
+-- single returns the element only when the list holds exactly one.
+singleAcceptsExactlyOneElement : Script ()
+singleAcceptsExactlyOneElement = do
+  single ([] : [Int]) === None
+  single ([1] : [Int]) === Some 1
+  single ([1, 2] : [Int]) === None
+
+-- allEqual returns the value when the list is non-empty and every element matches.
+allEqualNeedsANonEmptyAgreeingList : Script ()
+allEqualNeedsANonEmptyAgreeingList = do
+  allEqual ([] : [Int]) === None
+  allEqual ([1] : [Int]) === Some 1
+  allEqual ([1, 1, 1] : [Int]) === Some 1
+  allEqual ([1, 1, 2] : [Int]) === None
+
+-- Each element is compared to the head, not to its neighbour, so agreement need not be transitive.
+allAgreeByComparesEveryElementToTheHead : Script ()
+allAgreeByComparesEveryElementToTheHead = do
+  let near a b = abs (a - b) <= (1 : Int)
+  allAgreeBy near ([] : [Int]) === None
+  allAgreeBy near ([1, 2, 2] : [Int]) === Some 1
+  allAgreeBy near ([1, 2, 3] : [Int]) === None
+
+-- The relation runs as `agrees head element`, so argument order decides the result for an asymmetric relation.
+allAgreeByAppliesTheRelationHeadFirst : Script ()
+allAgreeByAppliesTheRelationHeadFirst = do
+  allAgreeBy (<=) ([1, 2, 3] : [Int]) === Some 1
+  allAgreeBy (<=) ([3, 2, 1] : [Int]) === None

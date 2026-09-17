@@ -29,7 +29,7 @@ a Canton sandbox.
 | Sealed-bid auction reference slice on `cap-core` | [`examples/auctions/sealed-bid-first-price`](examples/auctions/sealed-bid-first-price) — [demos](examples/auctions/sealed-bid-first-price/DEMOS.md) |
 | Private ballot handling demonstrated | `whoSeesWhat` — [governance demos](examples/governance/private-majority-vote/DEMOS.md) |
 | Private bid handling demonstrated | `whoSeesWhat` — [auction demos](examples/auctions/sealed-bid-first-price/DEMOS.md) |
-| Daml Script tests for both slices | `.../private-majority-vote/test`, `.../sealed-bid-first-price/test` — [how to run](#running-the-demos) |
+| Daml Script demos for both slices | `.../private-majority-vote/demo`, `.../sealed-bid-first-price/demo` — [how to run](#running-the-demos) |
 | Sandbox integration tests for both slices | [`scripts/sandbox-test.sh`](scripts/sandbox-test.sh) — [how to run](#on-a-canton-sandbox) |
 
 
@@ -81,10 +81,10 @@ concordia/
 ├── examples/governance/
 │   ├── baby-dso/                      # M1: Splice DSO governance
 │   │   ├── plain/                     #   the shape being argued against
-│   │   └── cap/{ans,config,governance,action,test}
-│   └── private-majority-vote/         # M2: private ballots, {impl,test}
+│   │   └── cap/{ans,config,governance,action,demo}
+│   └── private-majority-vote/         # M2: private ballots, {impl,demo}
 ├── examples/auctions/
-│   └── sealed-bid-first-price/        # M2: private bids, {impl,fixtures,test}
+│   └── sealed-bid-first-price/        # M2: private bids, {impl,fixtures,demo}
 ├── examples/lib/                       # vendored DARs only the examples need
 ├── lib/                               # vendored Token Standard DARs (prebuilt)
 ├── scripts/sandbox-test.sh            # sandbox integration run
@@ -120,13 +120,13 @@ from the repo root with `--package-root`:
 
 ```bash
 # M2 — majority vote, all scripts ok
-dpm test --package-root examples/governance/private-majority-vote/test
+dpm test --package-root examples/governance/private-majority-vote/demo
 
 # M2 — sealed-bid first price, all scripts ok
-dpm test --package-root examples/auctions/sealed-bid-first-price/test
+dpm test --package-root examples/auctions/sealed-bid-first-price/demo
 
 # M1 — BabyDso on cap, all scripts ok
-dpm test --package-root examples/governance/baby-dso/cap/test
+dpm test --package-root examples/governance/baby-dso/cap/demo
 ```
 
 Each `DEMOS.md` says what its scripts assert, and what they deliberately do not.
@@ -134,7 +134,7 @@ Each `DEMOS.md` says what its scripts assert, and what they deliberately do not.
 ### On a Canton sandbox
 
 The same scripts run against a real ledger. `scripts/sandbox-test.sh` boots a
-static-time sandbox, uploads the test DARs and runs every script in each:
+static-time sandbox, uploads the demo DARs and runs every script in each:
 
 ```bash
 dpm build --all
@@ -152,14 +152,14 @@ dpm sandbox --static-time
 # terminal 2
 dpm script --all --ledger-host localhost --ledger-port 6865 \
   --static-time --upload-dar true \
-  --dar examples/governance/private-majority-vote/test/.daml/dist/cap-example-majority-vote-test-0.1.0.dar
+  --dar examples/governance/private-majority-vote/demo/.daml/dist/cap-example-majority-vote-demo-0.1.0.dar
 ```
 
-The other test DARs, same shape:
+The other demo DARs, same shape:
 
 ```
-examples/auctions/sealed-bid-first-price/test/.daml/dist/cap-example-sealed-first-price-test-0.1.0.dar
-examples/governance/baby-dso/cap/test/.daml/dist/cap-example-babydso-test-0.1.0.dar
+examples/auctions/sealed-bid-first-price/demo/.daml/dist/cap-example-sealed-first-price-demo-0.1.0.dar
+examples/governance/baby-dso/cap/demo/.daml/dist/cap-example-babydso-demo-0.1.0.dar
 ```
 
 Expected: every script reports `SUCCESS`, in the same counts `dpm test` reports

@@ -27,7 +27,7 @@ That can be checked in Daml Studio. The other two claims are proved with asserti
 The test harness is taken from the Splice repository
 (`github.com/canton-network/splice`, under `token-standard/`). Since Daml Script
 cannot be distributed across SDK versions in a DAR, the harness is vendored
-as source under `test/daml/Splice/`. `Testing.Utils`,
+as source under `demo/daml/Splice/`. `Testing.Utils`,
 `Registries.AmuletRegistry.Parameters` and `TokenStandard.RegistryApiV2` are
 copied verbatim; `Registries.AmuletRegistryV2` and
 `Registries.TestTokenV2_RegistryV2` are reduced to their V2 surface, removing
@@ -54,6 +54,27 @@ assets move in a **second** transaction, so the demos use `resolveAndSettle`,
 which runs the resolve and then `Settlement_Settle` on what it minted.
 `openAuctionWith` is the same as `openAuction`, with a hook to rewrite the terms
 first — `theOperatorCannotSwapTheRegistry` uses it to name a hostile factory.
+
+## Placing a bid
+
+Every demo places bids through `fundBid`, which runs the three steps a bidder and
+a wallet take between them.
+
+- `OneLotBid_RequestAllocations` on the seat mints a
+  `OneLotBidAllocationRequest`. It carries the two `AllocationSpecification`s the
+  bid implies — the payment as sender, the lot as receiver — and is signed by the
+  auction authorities and the bidder together.
+- `walletFunds` stands in for the bidder's wallet. It reads the request through
+  the `AllocationRequest` interface, asks each specification's registry for its
+  factory and choice context, picks the bidder's own holdings, and submits one
+  transaction exercising both `AllocationFactory_Allocate` and
+  `AllocationRequest_Accept`.
+- `OneLotBid_Finalize` puts the quotes and the two allocation contract ids on the
+  seat. It fetches each allocation and asserts `AllocationSpecification` are correct.
+
+The wallet reads nothing the auction wrote into `OneLotAuctionTerms`. Everything
+it needs — the settlement, the deadline, the instruments, the amounts, who may
+accept — comes from the request's view, and the rest from the registries.
 
 
 ## Security claims
@@ -94,8 +115,11 @@ sequenceDiagram
     Note over S: sees its own lot allocation, and nothing else
 
     Note over S,C: Phase 2 — bidding, after entryClosesAt
-    A->>O: locks 100 against the sale's settlement, submits 100
-    B->>O: locks 60 against the same settlement, submits 60
+    A->>A: RequestAllocations at 100 — the request names the amount to lock
+    A->>A: wallet allocates at both registries and accepts, 100 locked
+    A->>O: Finalize — the quote and the two allocations
+    B->>B: the same at 60
+    B->>O: Finalize
     Note over S: unchanged — no quote, no bidder, no amount
     Note over A,B: neither can see the other's seal or quote
     Note over O: sees both quotes in full 
@@ -203,4 +227,3 @@ sequenceDiagram
     O->>O: Resolver_Resolve — A is offline
     Note over O,A: ✓ 100 to the seller, the lot to A
 ```
-

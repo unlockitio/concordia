@@ -14,6 +14,19 @@ Cap-auctions currently supports auctions with one lot from one seller. Formats t
 Cap-auctions does not define an asset type of its own. Every asset-shaped thing in cap-auctions is a
 Token Standard type. Allocation are created by the *format*, not by cap-auctions. 
 
+## The bid surface
+
+`OneLotBid` has five choices. `OneLotBid_RequestAllocations` publishes what the
+bidder must lock and returns the requests it minted. `OneLotBid_Finalize` takes
+the quotes and the allocations backing them. `OneLotBid_Withdraw`,
+`OneLotBid_Release` and `OneLotBid_Expire` end a bid without awarding it.
+
+Each choice checks entitlement against `OneLotBidView.availableActions`, the
+window against the terms, and the quote shape against the lot, then calls the
+format's implementation. An implementation may abort: the plain sealed-bid
+format refuses `OneLotBid_Withdraw`, and the high-trust format refuses
+`OneLotBid_RequestAllocations`.
+
 ## Layout
 
 ```
@@ -26,15 +39,18 @@ cap-auctions/
 │   ├── bid/                 OneLotBid (requires Submittable), OneLotAuctionTerms,
 │   │                        Direction, Lot, Quote
 │   └── settlement/          Settlement, SettlementBatch, SettlementView
-└── cap-auctions-utils/      saleSettlement, paymentLeg, lotLeg, paymentLegId, lotLegId
+├── cap-auctions-utils/      saleSettlement, paymentLeg, lotLeg, paymentLegId, lotLegId
+└── cap-auctions-funding/    OneLotBidAllocationRequest, an AllocationRequest carrying
+                             the specifications a one-lot bid implies, plus
+                             bidderPaymentAllocation and bidderLotAllocation
 
 examples/auctions/
 ├── sealed-bid-first-price/            the operator holds the assets and the
-│   {impl,fixtures,test}               presentation: seller and bidders escrow up front,
+│   {impl,fixtures,demo}               presentation: seller and bidders escrow up front,
 │                                      the procedure picks the high quote and mints the
 │                                      Settlement; no bidder authority at award.
 └── sealed-bid-first-price-high-trust/ the stronger one: the winner co-signs the
-    {impl,fixtures,test}               settlement, and OneLotBid_Award re-allocates the
+    {impl,fixtures,demo}               settlement, and AuctionBid_Award re-allocates the
                                        escrow onto the real legs before minting it.
 
 lib/                         vendored Token Standard DARs the interfaces bind to

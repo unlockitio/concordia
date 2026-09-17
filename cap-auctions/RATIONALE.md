@@ -70,7 +70,8 @@ per-lot form.
 
 - `acceptablePrice`, which orders prices: higher is better forward, lower is
   better reverse. `meetsReserve` and `awardWithinQuotes` are built on it, and
-  both run in the fixed bodies of `OneLotBid_Submit` and `OneLotBid_Award`.
+  both run in the fixed bodies of `OneLotBid_RequestAllocations` and
+  `OneLotBid_Finalize`.
 - `paymentLeg` and `lotLeg` in `Cap.Auctions.Utils`, which decide which side of
   each leg the seller is on.
 
@@ -78,9 +79,9 @@ Reverse auctions use the same interface because nothing else differs between the
 two.
 
 Leaving the direction to implementations was considered. 
-Dropping it moves `meetsReserve` and `awardWithinQuotes` into
-`oneLotBid_submitImpl` and `oneLotBid_awardImpl`, because neither check can order
-prices without it. The enum stays because two constructors are the complete set of orderings on a
+Dropping it moves `meetsReserve` into `oneLotBid_finalizeImpl` and
+`oneLotBid_requestAllocationsImpl`, because the check cannot order prices without
+it. The enum stays because two constructors are the complete set of orderings on a
 scalar price, and because a bidder reading the view learns which one applies
 without reading the format's code. It doesnt cost much to implementations that
 supports only one direction. 
@@ -127,11 +128,39 @@ beside `OneLotBid`.
 
 ### Allocations on the bid
 
-A bid names an allocation, it does not create one. `paymentAllocation` and
-`lotAllocation` are `Optional (ContractId Allocation)`, funded by the bidder in a
-transaction of its own before the bid is submitted.
+A bid names allocations, it does not create them. `OneLotBidView.allocations` is
+`[ContractId Allocation]` and `OneLotBid_Finalize` takes the same list, funded by
+the bidder before the bid is finalized.
 
-Funding is a separate transaction by the bidder and the bid holds a reference to the allocation. 
+The list is not a fixed pair because how many allocations a bid carries is a
+property of the format. The plain sealed-bid format locks the payment as sender
+and pre-authorizes the lot as receiver, so it carries two; the high-trust format
+locks only the payment and has the winner co-sign at award, so it carries one; a
+format funded by a transfer pre-approval carries none.
+
+Funding is a separate transaction because the allocation's contract id has to
+exist before it can be an argument, and the Ledger API cannot pass one command's
+output into another command's input.
+
+### Requesting the allocations
+
+`OneLotBid_RequestAllocations` takes the same `[[Quote]]` as `OneLotBid_Finalize`
+and returns `requests : [AnyContractId]`. A format mints whatever carries its
+funding ask; `cap-auctions-funding` supplies `OneLotBidAllocationRequest`, which
+implements the Token Standard `AllocationRequest` interface.
+
+The choice exists on the interface because minting the request needs the auction
+authorities' signature, and the seat is the only contract that carries it. A
+generic client can read `OneLotBidView` and compute the specifications itself,
+but it cannot sign for the auction.
+
+The result is `[AnyContractId]` rather than `ContractId AllocationRequest` so the
+frozen bid package does not depend on
+`splice-api-token-allocation-request-v2`, and so a format may mint one request
+per registry.
+
+An implementation may decline: `oneLotBid_requestAllocationsImpl` aborts in the
+high-trust format, which does not publish requests.
 
 ### When escrow amount differs from transfered amount
 

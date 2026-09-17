@@ -1,0 +1,83 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Examples.MajorityVote.Ballot where
+
+import Prelude hiding (Action)
+
+import DA.Map (Map)
+import qualified DA.Map as Map
+import DA.Optional (isNone, isSome)
+
+
+import Splice.Api.Token.MetadataV1
+import Splice.Util (require)
+
+import Cap.Core.SubmittableV1
+import Cap.Governance.ActionV1 (Action, Stage (..))
+import Cap.Governance.BallotV1
+import Cap.Governance.BindingV1
+import Cap.Governance.Utils (pinStateAt)
+
+-- all voters must agree
+data ProposalTerms = ProposalTerms
+  with
+    options : [AnyValue]
+    actionCid : ContractId Action
+    entryClosesAt : Time
+    votingClosesAt : Time
+    expiresAt : Time
+  deriving (Eq, Show)
+
+template PrivateBallot
+  with
+    operator : Party
+    voter : Party
+    mechanism : Mechanism
+    terms : ProposalTerms
+    bindings : Map TargetKey Bind
+    vote : Optional AnyValue
+  where
+    signatory [operator, voter]
+    observer voter
+
+    ensure optional True (`elem` terms.options) vote
+
+    interface instance Submittable for PrivateBallot where
+      view = SubmittableView with
+        mechanism
+        meta = emptyMetadata
+
+    interface instance Ballot for PrivateBallot where
+      view = BallotView with
+        opensAt = terms.entryClosesAt
+        closesAt = terms.votingClosesAt
+        expiresAt = terms.expiresAt
+        bindings
+        availableActions = Map.fromList
+          [ (BA_Cast, [[voter]])
+          , (BA_Withdraw, [[voter]])
+          ]
+        vote
+        meta = emptyMetadata
+
+      ballot_castImpl self arg = do
+        require "this ballot carries no vote yet" (isNone vote)
+        action <- fetch terms.actionCid
+        pinned <- pinStateAt Submission arg.targets (view action).bindSpec
+        archive self
+        toInterfaceContractId @Ballot <$>
+          create this with vote = Some arg.vote; bindings = pinned
+
+      ballot_withdrawImpl self _ = do
+        require "this ballot carries a vote to withdraw" (isSome vote)
+        archive self
+        _ <- create this with vote = None
+        pure Ballot_WithdrawResult with meta = emptyMetadata
+
+      ballot_expireImpl self _ = do
+        archive self
+        pure Ballot_ExpireResult with meta = emptyMetadata
+
+      ballot_consumeImpl self _ = do
+        archive self
+        pure Ballot_ConsumeResult with meta = emptyMetadata

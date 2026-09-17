@@ -1,0 +1,129 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Governance.Tests.Tallies where
+
+import DA.Assert ((===))
+import qualified DA.Set as Set
+import Daml.Script
+
+import Splice.Api.Token.MetadataV1 (AnyValue (..))
+
+import Cap.Governance.Utils
+  ( Cast (..)
+  , Tally (..)
+  , atLeast
+  , firstOf
+  , median
+  , medianOf
+  , plurality
+  , unanimous
+  , undecided
+  , unweighted
+  )
+
+cast : Party -> Decimal -> Optional Text -> Cast Text
+cast voter weight vote = Cast with voter; weight; vote
+
+numeric : Party -> Decimal -> Optional Decimal -> Cast Decimal
+numeric voter weight vote = Cast with voter; weight; vote
+
+-- undecided concludes nothing, whatever was voted.
+undecidedConcludesNothing : Script ()
+undecidedConcludesNothing = do
+  alice <- allocateParty "alice"
+  let e = unweighted (Set.fromList [alice])
+  (undecided : Tally Text).decide e [cast alice 1.0 (Some "yes")] === None
+
+-- unanimous concludes the value only when every vote names it.
+unanimousNeedsEveryVoteToAgree : Script ()
+unanimousNeedsEveryVoteToAgree = do
+  alice <- allocateParty "alice"
+  bob <- allocateParty "bob"
+  let e = unweighted (Set.fromList [alice, bob])
+  unanimous.decide e [cast alice 1.0 (Some "yes"), cast bob 1.0 (Some "yes")]
+    === Some (AV_Text "yes")
+  unanimous.decide e [cast alice 1.0 (Some "yes"), cast bob 1.0 (Some "no")]
+    === None
+
+-- unanimous concludes nothing when no ballot carries a vote.
+unanimousConcludesNothingWithoutAVote : Script ()
+unanimousConcludesNothingWithoutAVote = do
+  alice <- allocateParty "alice"
+  let e = unweighted (Set.fromList [alice])
+  (unanimous : Tally Text).decide e [] === None
+  (unanimous : Tally Text).decide e [cast alice 1.0 None] === None
+
+-- plurality concludes the option carrying the most weight.
+pluralityTakesTheHeaviestOption : Script ()
+pluralityTakesTheHeaviestOption = do
+  alice <- allocateParty "alice"
+  bob <- allocateParty "bob"
+  carol <- allocateParty "carol"
+  let e = unweighted (Set.fromList [alice, bob, carol])
+  plurality.decide e
+      [cast alice 1.0 (Some "yes"), cast bob 1.0 (Some "no"), cast carol 3.0 (Some "no")]
+    === Some (AV_Text "no")
+
+-- plurality concludes nothing on a tie, and nothing on no votes.
+pluralityConcludesNothingOnATie : Script ()
+pluralityConcludesNothingOnATie = do
+  alice <- allocateParty "alice"
+  bob <- allocateParty "bob"
+  let e = unweighted (Set.fromList [alice, bob])
+  plurality.decide e [cast alice 1.0 (Some "yes"), cast bob 1.0 (Some "no")] === None
+  (plurality : Tally Text).decide e [] === None
+
+-- atLeast concludes only when exactly one option clears the bar.
+atLeastNeedsExactlyOneOptionToClearTheBar : Script ()
+atLeastNeedsExactlyOneOptionToClearTheBar = do
+  alice <- allocateParty "alice"
+  bob <- allocateParty "bob"
+  let e = unweighted (Set.fromList [alice, bob])
+      bar = atLeast (const 2.0)
+  bar.decide e [cast alice 3.0 (Some "yes"), cast bob 1.0 (Some "no")]
+    === Some (AV_Text "yes")
+  bar.decide e [cast alice 1.0 (Some "yes"), cast bob 1.0 (Some "no")]
+    === None
+  bar.decide e [cast alice 3.0 (Some "yes"), cast bob 3.0 (Some "no")]
+    === None
+
+-- medianOf sorts first, averages the two middles on an even count, and returns None on empty.
+medianOfHandlesOddEvenAndEmpty : Script ()
+medianOfHandlesOddEvenAndEmpty = do
+  medianOf [] === None
+  medianOf [1.0] === Some 1.0
+  medianOf [1.0, 2.0] === Some 1.5
+  medianOf [1.0, 2.0, 3.0] === Some 2.0
+  medianOf [3.0, 1.0, 2.0] === Some 2.0
+  medianOf [4.0, 1.0, 3.0, 2.0] === Some 2.5
+
+-- median reads the values voted, ignoring weight and abstentions.
+medianIgnoresWeightAndAbstentions : Script ()
+medianIgnoresWeightAndAbstentions = do
+  alice <- allocateParty "alice"
+  bob <- allocateParty "bob"
+  carol <- allocateParty "carol"
+  let e = unweighted (Set.fromList [alice, bob, carol])
+  median.decide e
+      [numeric alice 99.0 (Some 1.0), numeric bob 1.0 (Some 3.0), numeric carol 1.0 None]
+    === Some (AV_Decimal 2.0)
+  median.decide e [numeric alice 1.0 None] === None
+
+-- firstOf falls through the tallies that conclude nothing.
+firstOfTakesTheFirstTallyThatConcludes : Script ()
+firstOfTakesTheFirstTallyThatConcludes = do
+  alice <- allocateParty "alice"
+  bob <- allocateParty "bob"
+  let e = unweighted (Set.fromList [alice, bob])
+      tied = [cast alice 1.0 (Some "yes"), cast bob 1.0 (Some "no")]
+      agreed = [cast alice 1.0 (Some "yes"), cast bob 1.0 (Some "yes")]
+  (firstOf [plurality, unanimous]).decide e tied === None
+  (firstOf [plurality, unanimous]).decide e agreed === Some (AV_Text "yes")
+  (firstOf [undecided, unanimous]).decide e agreed === Some (AV_Text "yes")
+
+-- firstOf over no tallies concludes nothing.
+firstOfConcludesNothingOnAnEmptyList : Script ()
+firstOfConcludesNothingOnAnEmptyList = do
+  alice <- allocateParty "alice"
+  let e = unweighted (Set.fromList [alice])
+  (firstOf ([] : [Tally Text])).decide e [cast alice 1.0 (Some "yes")] === None

@@ -1,0 +1,61 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Governance.Tests.Verdicts where
+
+import DA.Assert ((===))
+import qualified DA.Set as Set
+import Daml.Script
+
+import Splice.Api.Token.MetadataV1 (AnyValue (..))
+import Cap.Core.ResolverV1 (Verdict (..))
+
+import Cap.Governance.Utils
+  ( Cast (..)
+  , anyTurnout
+  , atLeastVotes
+  , plurality
+  , rule
+  , unanimous
+  , undecided
+  , unweighted
+  )
+
+cast : Party -> Decimal -> Optional Text -> Cast Text
+cast voter weight vote = Cast with voter; weight; vote
+
+-- A turnout below the quorum lapses, whatever the votes said.
+aVoteBelowQuorumLapses : Script ()
+aVoteBelowQuorumLapses = do
+  alice <- allocateParty "alice"
+  bob <- allocateParty "bob"
+  let e = unweighted (Set.fromList [alice, bob])
+      agreed = [cast alice 1.0 (Some "yes"), cast bob 1.0 (Some "yes")]
+  rule (atLeastVotes 3) unanimous e agreed === V_Lapsed
+
+-- A turnout meeting the quorum carries the tally's conclusion.
+aVoteMeetingQuorumCarriesTheTally : Script ()
+aVoteMeetingQuorumCarriesTheTally = do
+  alice <- allocateParty "alice"
+  bob <- allocateParty "bob"
+  let e = unweighted (Set.fromList [alice, bob])
+      agreed = [cast alice 1.0 (Some "yes"), cast bob 1.0 (Some "yes")]
+  rule anyTurnout unanimous e agreed === V_Decided (Some (AV_Text "yes"))
+
+-- A quorum met with no conclusion is undecided, not lapsed.
+aTallyThatConcludesNothingIsUndecided : Script ()
+aTallyThatConcludesNothingIsUndecided = do
+  alice <- allocateParty "alice"
+  bob <- allocateParty "bob"
+  let e = unweighted (Set.fromList [alice, bob])
+      tied = [cast alice 1.0 (Some "yes"), cast bob 1.0 (Some "no")]
+  rule anyTurnout plurality e tied === V_Undecided
+  rule anyTurnout undecided e tied === V_Undecided
+
+-- The quorum is read first, so a failing quorum lapses even where the tally concludes nothing.
+quorumIsCheckedBeforeTheTally : Script ()
+quorumIsCheckedBeforeTheTally = do
+  alice <- allocateParty "alice"
+  bob <- allocateParty "bob"
+  let e = unweighted (Set.fromList [alice, bob])
+      tied = [cast alice 1.0 (Some "yes"), cast bob 1.0 (Some "no")]
+  rule (atLeastVotes 3) plurality e tied === V_Lapsed
