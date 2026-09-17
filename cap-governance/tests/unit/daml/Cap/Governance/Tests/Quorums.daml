@@ -1,0 +1,138 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Governance.Tests.Quorums where
+
+import DA.Assert ((===))
+import qualified DA.Map as Map
+import qualified DA.Set as Set
+import Daml.Script
+
+import Cap.Governance.Utils
+  ( Cast (..)
+  , Electorate
+  , Quorum (..)
+  , allOf
+  , anyOf
+  , anyTurnout
+  , atLeastBallots
+  , atLeastVotes
+  , atLeastWeight
+  , shareOfVoters
+  , shareOfWeight
+  , unweighted
+  , votesReaching
+  , weightReaching
+  , weighted
+  )
+
+cast : Party -> Decimal -> Optional Text -> Cast Text
+cast voter weight vote = Cast with voter; weight; vote
+
+-- anyTurnout is met by anything, including no ballots and no electorate.
+anyTurnoutIsAlwaysMet : Script ()
+anyTurnoutIsAlwaysMet = do
+  alice <- allocateParty "alice"
+  let e = unweighted (Set.fromList [alice])
+  anyTurnout.met e [] === True
+  anyTurnout.met (Map.empty : Electorate) ([] : [Cast Text]) === True
+
+-- atLeastBallots counts every ballot presented, abstentions included.
+atLeastBallotsCountsAbstentions : Script ()
+atLeastBallotsCountsAbstentions = do
+  alice <- allocateParty "alice"
+  bob <- allocateParty "bob"
+  let e = unweighted (Set.fromList [alice, bob])
+      casts = [cast alice 1.0 (Some "yes"), cast bob 1.0 None]
+  (atLeastBallots 2).met e casts === True
+  (atLeastBallots 3).met e casts === False
+
+-- atLeastVotes counts only the ballots carrying a vote.
+atLeastVotesDoesNotCountAbstentions : Script ()
+atLeastVotesDoesNotCountAbstentions = do
+  alice <- allocateParty "alice"
+  bob <- allocateParty "bob"
+  let e = unweighted (Set.fromList [alice, bob])
+      casts = [cast alice 1.0 (Some "yes"), cast bob 1.0 None]
+  (atLeastVotes 1).met e casts === True
+  (atLeastVotes 2).met e casts === False
+
+-- atLeastWeight sums the weight behind the votes, not behind the abstentions.
+atLeastWeightCountsOnlyVotingWeight : Script ()
+atLeastWeightCountsOnlyVotingWeight = do
+  alice <- allocateParty "alice"
+  bob <- allocateParty "bob"
+  let e = weighted (const 1.0) (Set.fromList [alice, bob])
+      casts = [cast alice 2.0 (Some "yes"), cast bob 3.0 None]
+  (atLeastWeight 2.0).met e casts === True
+  (atLeastWeight 2.5).met e casts === False
+
+-- votesReaching and weightReaching take their bar from the electorate, never from the turnout.
+theBarMayBeDerivedFromTheElectorate : Script ()
+theBarMayBeDerivedFromTheElectorate = do
+  alice <- allocateParty "alice"
+  bob <- allocateParty "bob"
+  let e = unweighted (Set.fromList [alice, bob])
+      casts = [cast alice 1.0 (Some "yes")]
+  (votesReaching Map.size).met e casts === False
+  (votesReaching (\el -> Map.size el - 1)).met e casts === True
+  (weightReaching (\el -> sum (Map.values el))).met e casts === False
+  (weightReaching (\el -> sum (Map.values el) / 2.0)).met e casts === True
+
+-- An empty electorate reaches no share, not even a share of zero.
+shareOfVotersIsNeverMetOnAnEmptyElectorate : Script ()
+shareOfVotersIsNeverMetOnAnEmptyElectorate = do
+  (shareOfVoters 0.0).met (Map.empty : Electorate) ([] : [Cast Text]) === False
+  (shareOfVoters 1.0).met (Map.empty : Electorate) ([] : [Cast Text]) === False
+
+-- shareOfVoters compares the voting headcount to the electorate size, and the bar is inclusive.
+shareOfVotersMeasuresTheVotingHeadcount : Script ()
+shareOfVotersMeasuresTheVotingHeadcount = do
+  alice <- allocateParty "alice"
+  bob <- allocateParty "bob"
+  let e = unweighted (Set.fromList [alice, bob])
+      one = [cast alice 1.0 (Some "yes"), cast bob 1.0 None]
+  (shareOfVoters 0.5).met e one === True
+  (shareOfVoters 0.51).met e one === False
+
+-- An electorate carrying no positive weight reaches no share.
+shareOfWeightIsNeverMetWithoutPositiveWeight : Script ()
+shareOfWeightIsNeverMetWithoutPositiveWeight = do
+  alice <- allocateParty "alice"
+  let zero = weighted (const 0.0) (Set.fromList [alice])
+  (shareOfWeight 0.0).met zero [cast alice 0.0 (Some "yes")] === False
+  (shareOfWeight 0.0).met (Map.empty : Electorate) ([] : [Cast Text]) === False
+
+-- shareOfWeight compares the voting weight to the electorate total, and the bar is inclusive.
+shareOfWeightMeasuresTheVotingWeight : Script ()
+shareOfWeightMeasuresTheVotingWeight = do
+  alice <- allocateParty "alice"
+  bob <- allocateParty "bob"
+  let e = weighted (\p -> if p == alice then 3.0 else 1.0) (Set.fromList [alice, bob])
+      casts = [cast alice 3.0 (Some "yes"), cast bob 1.0 None]
+  (shareOfWeight 0.75).met e casts === True
+  (shareOfWeight 0.76).met e casts === False
+
+-- anyOf over no quorums is met by nothing.
+anyOfIsNeverMetOnAnEmptyList : Script ()
+anyOfIsNeverMetOnAnEmptyList = do
+  alice <- allocateParty "alice"
+  let e = unweighted (Set.fromList [alice])
+  (anyOf ([] : [Quorum Text])).met e [cast alice 1.0 (Some "yes")] === False
+
+-- anyOf is met as soon as one of its quorums is.
+anyOfNeedsOneOfItsQuorums : Script ()
+anyOfNeedsOneOfItsQuorums = do
+  alice <- allocateParty "alice"
+  let e = unweighted (Set.fromList [alice])
+      casts = [cast alice 1.0 (Some "yes")]
+  (anyOf [atLeastVotes 5, atLeastVotes 1]).met e casts === True
+  (anyOf [atLeastVotes 5, atLeastVotes 9]).met e casts === False
+
+-- allOf is met only when every one of its quorums is.
+allOfNeedsEveryOneOfItsQuorums : Script ()
+allOfNeedsEveryOneOfItsQuorums = do
+  alice <- allocateParty "alice"
+  let e = unweighted (Set.fromList [alice])
+      casts = [cast alice 1.0 (Some "yes")]
+  (allOf [atLeastVotes 1, atLeastBallots 1]).met e casts === True
+  (allOf [atLeastVotes 1, atLeastVotes 5]).met e casts === False

@@ -1,0 +1,220 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Examples.MajorityVote.Resolver where
+
+import Prelude hiding (Action)
+
+import DA.Foldable (forA_)
+import DA.List (sort)
+import qualified DA.Map as Map
+import DA.Optional (isSome)
+import DA.Set (Set)
+import qualified DA.Set as Set
+
+import Splice.Api.Token.MetadataV1
+import Splice.Util (require)
+
+import Cap.Core.ResolverV1
+import Cap.Core.SubmittableV1
+import Cap.Core.Utils
+  ( ExecutionAction (..), ExecutionCore (..), IsAnyValue (..), allEqual, orAbort
+  , requireClosed, single )
+import Cap.Governance.ActionV1
+import Cap.Governance.BallotV1
+import Cap.Governance.Utils
+  ( Tally (..), admit, atLeastVotes, castWeight, requireOptions, rule, totalWeight
+  , unweighted )
+
+import Cap.Examples.MajorityVote.Ballot
+
+yay : Text
+yay = "yay"
+
+nay : Text
+nay = "nay"
+
+yayOption : AnyValue
+yayOption = toAnyValue yay
+
+nayOption : AnyValue
+nayOption = toAnyValue nay
+
+majorityProcedureName : Text
+majorityProcedureName = "majority"
+
+template Proposal
+  with
+    dso : Party
+    operator : Party
+    mechanism : Mechanism
+    electorate : Set Party
+    terms : ProposalTerms
+    roll : [Party]
+  where
+    signatory dso
+    observer operator :: Set.toList electorate
+
+    interface instance Submittable for Proposal where
+      view = SubmittableView with
+        mechanism
+        meta = emptyMetadata
+
+    -- should only be able to do one per proposal.
+    nonconsuming choice Proposal_Invite : [ContractId BallotInvitation]
+      controller operator
+      do
+        now <- getTime
+        require "invitations are issued before the entry window closes"
+          (now < terms.entryClosesAt)
+        forA (Set.toList electorate) $ \voter ->
+          create BallotInvitation with dso; operator; voter; mechanism
+
+    choice Proposal_Join : ContractId Proposal
+      with
+        voter : Party
+      controller voter, dso
+      do
+        now <- getTime
+        require "a voter joins the roll before the entry window closes"
+          (now < terms.entryClosesAt)
+        require "only an entitled voter joins the roll"
+          (Set.member voter electorate)
+        require "a voter joins the roll once" (voter `notElem` roll)
+        create this with roll = voter :: roll
+
+
+template BallotInvitation
+  with
+    dso : Party
+    operator : Party
+    voter : Party
+    mechanism : Mechanism
+  where
+    signatory dso, operator
+    observer voter
+
+    choice BallotInvitation_Accept : ContractId PrivateBallot
+      with
+        proposalCid : ContractId Proposal
+      controller voter
+      do
+        proposal <- fetch proposalCid
+        require "the invitation and the proposal name one round"
+          (proposal.mechanism == mechanism)
+        _ <- exercise proposalCid Proposal_Join with voter
+        create PrivateBallot with
+          operator; voter; mechanism
+          terms = proposal.terms
+          bindings = Map.empty
+          vote = None
+
+template VoteResolver
+  with
+    dso : Party
+    operator : Party
+    electorate : Set Party
+    resolverId : Text
+    expiresAt : Time
+  where
+    signatory dso -- trusted to keep Resolver id
+    observer operator :: Set.toList electorate
+
+    interface instance Resolver for VoteResolver where
+      view = ResolverView with
+        authorities = Set.fromList [dso]
+        id = resolverId
+        expiresAt = Some expiresAt
+        meta = emptyMetadata
+
+      procedures = Map.fromList
+        [(majorityProcedureName, majority this)]
+
+    nonconsuming choice VoteResolver_Propose : ContractId Proposal
+      with
+        proposer : Party
+        proposalId : Text
+        terms : ProposalTerms
+      controller proposer
+      do
+        require "a proposal is raised by a member of the body"
+          (Set.member proposer electorate)
+        create Proposal with
+          dso; operator; electorate; terms
+          mechanism = Mechanism with
+            resolver = ResolverKey with
+              authorities = Set.fromList [dso]
+              id = resolverId
+            resolverCid = None
+            procedure = majorityProcedureName
+            id = proposalId
+          roll = []
+
+
+-- | Carried by a strict majority of the electorate, rejected by anything less.
+-- The bar is the electorate, so the same votes decide the same way at any
+-- turnout, and the tally always concludes: 'V_Lapsed' means nobody voted.
+majorityOfElectorate : Tally Text
+majorityOfElectorate = Tally with
+  decide = \electorate casts ->
+    let for = castWeight [c | c <- casts, c.vote == Some yay]
+    in Some (toAnyValue (if for > 0.5 * totalWeight electorate then yay else nay))
+
+majority : VoteResolver -> Procedure
+majority body = Procedure with
+  resolvers = [[body.operator]]
+  resolve = \_ submitted extraArgs -> do
+    now <- getTime
+
+    let (proposals, rest) = partitionPresentedAs @Proposal submitted
+    (proposalCid, proposal) <-
+      orAbort "the presentation carries exactly one proposal" (single proposals)
+    require "the proposal is on this body's electorate"
+      (proposal.electorate == body.electorate)
+
+    let terms = proposal.terms
+    presented <- presentedAs @PrivateBallot "a ballot" rest
+    let ballots = map snd presented
+        ballotCids = map (toInterfaceContractId @Ballot . fst) presented
+    forA_ ballots $ \b -> do
+      let bv = view (toInterface @Ballot b)
+      requireClosed "every presented ballot is closed for voting" now bv.closesAt
+      require "every ballot is signed by the voter it names"
+        (b.voter `elem` signatory b)
+      require "every ballot votes on the proposal's terms" (b.terms == terms)
+
+    let electorate = unweighted body.electorate
+    options <- orAbort "the proposal's options are not text options"
+      (mapA fromAnyValue terms.options)
+    casts <- admit electorate [(b.voter, b.vote) | b <- ballots]
+    requireOptions options casts
+    require "the presented ballots cover the roll"
+      (sort (map (.voter) casts) == sort proposal.roll)
+
+    bindings <- case [b.bindings | b <- ballots, isSome b.vote] of
+      [] -> pure Map.empty
+      pinned -> orAbort "the cast ballots pin one set of targets" (allEqual pinned)
+
+    let verdict = rule (atLeastVotes 1) majorityOfElectorate electorate casts
+
+    created <- case verdict of
+      V_Decided (Some winner) | winner == yayOption -> do
+        result <- exercise terms.actionCid Action_AuthorizeExecution with
+          actors = [body.dso]
+          core = ExecutionCore with
+            authorities = Set.fromList [body.dso]
+            availableActions = Map.fromList
+              [(EA_Execute, map (:: []) (Set.toList body.electorate))]
+            opensAt = terms.votingClosesAt
+            expiresAt = Some terms.expiresAt
+            meta = emptyMetadata
+          outcome = Some winner
+          bindings
+          extraArgs
+        pure (map coerceContractId result.executionCids)
+      _ -> pure []
+
+    forA_ ballotCids $ \cid ->
+      exercise cid Ballot_Consume with extraArgs
+    archive proposalCid
+
+    pure Resolver_ResolveResult with verdict; created; meta = emptyMetadata

@@ -72,8 +72,8 @@ constraint across lots, or a budget across lots — cannot be said, because
 separate bids are won independently. `[[Quote]]` says "at most one of these"
 within a lot; there is no form of it that spans lots. The obstacle is the escrow
 rather than the lot count: a bundle bidder's exposure is the largest bundle it
-might win, not the sum of its bids, while `paymentAllocation` holds one
-allocation covering one bid.
+might win, not the sum of its bids, while `OneLotBidView.allocations` covers one
+bid.
 
 **One contract covering several lots** is also outside `OneLotBid`, even for
 separable bids: `OneLotBidView` carries a single `terms.lot` and `Quote` has no
@@ -95,8 +95,7 @@ The deepest tier, and the proposal's stated direction: `cap-core` is the
 foundation for further allocation-oriented modules. A new domain is a package
 beside `cap-governance` and `cap-auctions` where its interfaces require the core
 (`Mechanism`, `Submittable`, `Outcome`), its fixed bodies may reuse the
-shared checks (`Cap.Core.ChecksV1`). Each direction below
-is a further instantiation.
+shared checks. Each direction below is a further instantiation.
 
 | Direction | Submittables are | Resolution is | Outcomes are |
 | --- | --- | --- | --- |

@@ -1,0 +1,111 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Governance.Tests.Drift where
+
+import DA.Assert ((===))
+import DA.Map (Map)
+import qualified DA.Map as Map
+import qualified DA.Set as Set
+import Daml.Script
+
+import Splice.Api.Token.MetadataV1 (AnyValue (..))
+import Cap.Governance.BindingV1
+  ( AuthenticTargetKey (..)
+  , Bind (..)
+  , OpaqueTargetKey (..)
+  , TargetKey (..)
+  )
+
+import Cap.Governance.Utils (DriftPolicy, anyState, holds, holdsAll, typed, unchanged)
+
+bound : Optional AnyValue -> Bind
+bound state = Bind with state; cid = None
+
+opaque : Text -> TargetKey
+opaque = Opaque . OpaqueTargetKey
+
+-- anyState holds whatever the state changed to.
+anyStateAdmitsAnyState : Script ()
+anyStateAdmitsAnyState = do
+  holds anyState (bound (Some (AV_Int 1))) (bound (Some (AV_Int 2))) === True
+  holds anyState (bound None) (bound None) === True
+
+-- unchanged holds only when the state is identical.
+unchangedAdmitsOnlyIdenticalState : Script ()
+unchangedAdmitsOnlyIdenticalState = do
+  holds unchanged (bound (Some (AV_Int 1))) (bound (Some (AV_Int 1))) === True
+  holds unchanged (bound (Some (AV_Int 1))) (bound (Some (AV_Int 2))) === False
+  holds unchanged (bound None) (bound None) === True
+
+-- A state on one side and absent on the other never holds, under any policy.
+aStatePresentOnOneSideOnlyNeverHolds : Script ()
+aStatePresentOnOneSideOnlyNeverHolds = do
+  holds anyState (bound (Some (AV_Int 1))) (bound None) === False
+  holds anyState (bound None) (bound (Some (AV_Int 1))) === False
+  holds unchanged (bound (Some (AV_Int 1))) (bound None) === False
+
+-- typed decodes both sides, then applies the comparison to the decoded values.
+typedLiftsAComparisonOnTheDecodedValue : Script ()
+typedLiftsAComparisonOnTheDecodedValue = do
+  let noDecrease = typed (\p c -> (c : Int) >= p)
+  holds noDecrease (bound (Some (AV_Int 1))) (bound (Some (AV_Int 2))) === True
+  holds noDecrease (bound (Some (AV_Int 2))) (bound (Some (AV_Int 1))) === False
+
+-- typed refuses a state that does not decode to its type, on either side.
+typedRefusesWhatItCannotDecode : Script ()
+typedRefusesWhatItCannotDecode = do
+  let anyInt = typed (\a b -> (a : Int) == a && b == b)
+  holds anyInt (bound (Some (AV_Text "x"))) (bound (Some (AV_Text "y"))) === False
+  holds anyInt (bound (Some (AV_Int 1))) (bound (Some (AV_Text "y"))) === False
+  holds anyInt (bound (Some (AV_Text "x"))) (bound (Some (AV_Int 1))) === False
+
+-- <> demands both policies; mempty demands nothing beyond well-formedness.
+policiesCombineByConjunction : Script ()
+policiesCombineByConjunction = do
+  let noDecrease = typed (\p c -> (c : Int) >= p)
+      both = unchanged <> noDecrease
+  holds both (bound (Some (AV_Int 1))) (bound (Some (AV_Int 1))) === True
+  holds both (bound (Some (AV_Int 1))) (bound (Some (AV_Int 2))) === False
+  holds (mempty : DriftPolicy) (bound (Some (AV_Int 1))) (bound (Some (AV_Int 2))) === True
+
+-- holdsAll fails when either side names a target the other does not.
+holdsAllNeedsTheSameKeysOnBothSides : Script ()
+holdsAllNeedsTheSameKeysOnBothSides = do
+  let pinned = Map.fromList [(opaque "a", bound (Some (AV_Int 1)))]
+      extra = Map.fromList
+        [ (opaque "a", bound (Some (AV_Int 1)))
+        , (opaque "b", bound (Some (AV_Int 1)))
+        ]
+  holdsAll unchanged pinned extra === False
+  holdsAll unchanged extra pinned === False
+  holdsAll unchanged pinned pinned === True
+
+-- One drifted target fails the whole map.
+holdsAllNeedsEveryTargetToHold : Script ()
+holdsAllNeedsEveryTargetToHold = do
+  let pinned = Map.fromList
+        [ (opaque "a", bound (Some (AV_Int 1)))
+        , (opaque "b", bound (Some (AV_Int 1)))
+        ]
+      oneDrifted = Map.fromList
+        [ (opaque "a", bound (Some (AV_Int 1)))
+        , (opaque "b", bound (Some (AV_Int 2)))
+        ]
+  holdsAll unchanged pinned oneDrifted === False
+  holdsAll anyState pinned oneDrifted === True
+
+-- An empty map of targets holds.
+holdsAllOnNoTargetsHolds : Script ()
+holdsAllOnNoTargetsHolds = do
+  holdsAll unchanged (Map.empty : Map TargetKey Bind) Map.empty === True
+
+-- An Authentic and an Opaque key sharing an id are still different keys.
+authenticAndOpaqueKeysDoNotCollide : Script ()
+authenticAndOpaqueKeysDoNotCollide = do
+  alice <- allocateParty "alice"
+  let authentic = Authentic AuthenticTargetKey with
+        authorities = Set.fromList [alice]
+        id = "a"
+      pinned = Map.fromList [(authentic, bound (Some (AV_Int 1)))]
+      opaqueKeyed = Map.fromList [(opaque "a", bound (Some (AV_Int 1)))]
+  holdsAll unchanged pinned opaqueKeyed === False

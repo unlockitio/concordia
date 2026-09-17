@@ -33,7 +33,7 @@ baby-dso/
     ├── governance/  the DSO: DsoResolver, SvBallot, SvConfirmation
     ├── action/      a CAP-aware app: Action + Executable over `config/`, plus the
     │                bridge that governs `ans/`. Never imported by `governance/`.
-    └── test/        the demos below
+    └── demo/        the demos below
 ```
 
 The load-bearing fact is a `daml.yaml`, not a script: **`cap/governance` lists

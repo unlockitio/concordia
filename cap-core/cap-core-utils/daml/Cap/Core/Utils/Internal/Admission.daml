@@ -10,9 +10,7 @@ import qualified DA.Map as Map
 
 admitActors : [[Party]] -> [Party] -> Bool
 admitActors groups sigs =
-  not (null groups)
-    && not (any null groups)
-    && any (all (`elem` sigs)) groups
+  any (all (`elem` sigs)) (filter (not . null) groups)
 
 entitled : Ord k => Map k [[Party]] -> k -> [Party] -> Bool
 entitled availableActions action actors =

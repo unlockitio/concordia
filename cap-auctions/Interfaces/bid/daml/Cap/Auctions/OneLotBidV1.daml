@@ -9,7 +9,7 @@ import Splice.Api.Token.MetadataV1
 import Splice.Api.Token.AllocationV2 (Allocation)
 import Splice.Util (require)
 import qualified Splice.Api.Token.HoldingV2 as Holding
-import Cap.Auctions.RegistryV1 (RegistryCalls)
+import Cap.Auctions.Registry (RegistryCalls)
 import DA.Map (Map)
 import Cap.Core.Utils (entitled, requireExpired, requireOpen)
 import Cap.Core.SubmittableV1 (Submittable)
@@ -40,13 +40,13 @@ data OneLotAuctionTerms = OneLotAuctionTerms
   deriving (Eq, Show)
 
 data BidAction
-  = BA_Submit
+  = BA_RequestAllocations
+  | BA_Finalize
   | BA_Withdraw
-  | BA_Award
   | BA_Release
   | BA_Custom with
       id : Text
-  deriving (Eq, Ord, Show) -- remove ord 
+  deriving (Eq, Ord, Show)
 
 data Quote = Quote
   with
@@ -61,17 +61,14 @@ data OneLotBidView = OneLotBidView
     bidderPaymentAccount : Holding.Account
     bidderLotAccount : Holding.Account
     quotes : [[Quote]]
-    paymentAllocation : Optional (ContractId Allocation)
-    lotAllocation : Optional (ContractId Allocation)
-      -- ^ according to direction, one authorizes the bidder's sender side and the other its receiver side
+    allocations : [ContractId Allocation]
+      -- ^ what the bidder has locked for this bid, in the order the format implies
     meta : Metadata
   deriving (Eq, Show)
 
-
-data OneLotBid_AwardResult = OneLotBid_AwardResult
+data OneLotBid_RequestAllocationsResult = OneLotBid_RequestAllocationsResult
   with
-    allocation : [ContractId Allocation]
-    created : [AnyContractId]
+    requests : [AnyContractId]
     meta : Metadata
   deriving (Eq, Show)
 
@@ -96,14 +93,15 @@ data OneLotBid_ExpireResult = OneLotBid_ExpireResult
 interface OneLotBid requires Submittable where
   viewtype OneLotBidView
 
-  oneLotBid_submitImpl
-    : ContractId OneLotBid -> OneLotBid_Submit -> Update (ContractId OneLotBid)
+  oneLotBid_requestAllocationsImpl
+    : ContractId OneLotBid -> OneLotBid_RequestAllocations
+    -> Update OneLotBid_RequestAllocationsResult
+
+  oneLotBid_finalizeImpl
+    : ContractId OneLotBid -> OneLotBid_Finalize -> Update (ContractId OneLotBid)
 
   oneLotBid_withdrawImpl
     : ContractId OneLotBid -> OneLotBid_Withdraw -> Update OneLotBid_WithdrawResult
-
-  oneLotBid_awardImpl
-    : ContractId OneLotBid -> OneLotBid_Award -> Update OneLotBid_AwardResult
 
   oneLotBid_releaseImpl
     : ContractId OneLotBid -> OneLotBid_Release -> Update OneLotBid_ReleaseResult
@@ -111,25 +109,42 @@ interface OneLotBid requires Submittable where
   oneLotBid_expireImpl
     : ContractId OneLotBid -> OneLotBid_Expire -> Update OneLotBid_ExpireResult
 
-  nonconsuming choice OneLotBid_Submit : ContractId OneLotBid
+  nonconsuming choice OneLotBid_RequestAllocations : OneLotBid_RequestAllocationsResult
     with
       actors : [Party]
-      quotes : [[Quote]]  -- ors of ands
-      paymentAllocation : Optional (ContractId Allocation)
-      lotAllocation : Optional (ContractId Allocation)
+      quotes : [[Quote]]
       extraArgs : ExtraArgs
     controller actors
     do
       let bv = view this
-      require "the actors are entitled to submit"
-        (entitled bv.availableActions BA_Submit actors)
+      require "the actors are entitled to request allocations"
+        (entitled bv.availableActions BA_RequestAllocations actors)
       now <- getTime
       requireOpen "the bidding window is open"
         now bv.terms.entryClosesAt (Some bv.terms.biddingClosesAt)
-      requireAlternatives "a submissin " bv.terms.lot quotes
+      requireAlternatives "a request for allocations" bv.terms.lot quotes
+      require "some quote of the request meets the reserve"
+        (any (any (\q -> meetsReserve bv.terms.direction bv.terms.reserve q.price)) quotes)
+      oneLotBid_requestAllocationsImpl this self (OneLotBid_RequestAllocations with ..)
+
+  nonconsuming choice OneLotBid_Finalize : ContractId OneLotBid
+    with
+      actors : [Party]
+      quotes : [[Quote]]  -- ors of ands
+      allocations : [ContractId Allocation]
+      extraArgs : ExtraArgs
+    controller actors
+    do
+      let bv = view this
+      require "the actors are entitled to finalize"
+        (entitled bv.availableActions BA_Finalize actors)
+      now <- getTime
+      requireOpen "the bidding window is open"
+        now bv.terms.entryClosesAt (Some bv.terms.biddingClosesAt)
+      requireAlternatives "a bid" bv.terms.lot quotes
       require "some quote of the bid meets the reserve"
         (any (any (\q -> meetsReserve bv.terms.direction bv.terms.reserve q.price)) quotes)
-      oneLotBid_submitImpl this self (OneLotBid_Submit with ..)
+      oneLotBid_finalizeImpl this self (OneLotBid_Finalize with ..)
 
   nonconsuming choice OneLotBid_Withdraw : OneLotBid_WithdrawResult
     with
@@ -144,27 +159,6 @@ interface OneLotBid requires Submittable where
       requireOpen "the bidding window is open"
         now bv.terms.entryClosesAt (Some bv.terms.biddingClosesAt)
       oneLotBid_withdrawImpl this self (OneLotBid_Withdraw with ..)
-
-  nonconsuming choice OneLotBid_Award : OneLotBid_AwardResult
-    with
-      actors : [Party]
-      awarded : [Quote]
-      lotAllocation : ContractId Allocation
-      extraArgs : ExtraArgs
-    controller actors
-    do
-      let bv = view this
-      require "the actors are entitled to award"
-        (entitled bv.availableActions BA_Award actors)
-      now <- getTime
-      requireOpen "the bidding window is closed and the terms have not expired"
-        now bv.terms.biddingClosesAt (Some bv.terms.expiresAt)
-      requireQuotes "an award" bv.terms.lot awarded
-      require "the award is within what this bid quoted at that price"
-        (awardWithinQuotes bv.terms.direction bv.quotes awarded)
-      require "the award meets the reserve"
-        (all (\a -> meetsReserve bv.terms.direction bv.terms.reserve a.price) awarded)
-      oneLotBid_awardImpl this self (OneLotBid_Award with ..)
 
   nonconsuming choice OneLotBid_Release : OneLotBid_ReleaseResult
     with

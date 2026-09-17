@@ -261,7 +261,7 @@ cap-governance/
 
 examples/governance/
 ├── private-majority-vote/
-│   └── {impl,test}          a private-ballot majority vote
+│   └── {impl,demo}          a private-ballot majority vote
 └── baby-dso/
     ├── plain/               the reduced DsoRules/AmuletRules — the shape argued against
     └── cap/
@@ -271,7 +271,7 @@ examples/governance/
         │                    Imports no app package — neither ans/, config/ nor action/.
         ├── action/          a CAP-aware app: Action + Executable over config/,
         │                    plus the bridge that governs ans/
-        └── test/            the demos
+        └── demo/            the demos
 
 lib/                         vendored Token Standard DARs the interfaces bind to
 ```

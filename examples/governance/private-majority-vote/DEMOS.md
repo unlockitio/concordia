@@ -77,7 +77,7 @@ That can be checked in Daml Studio. The other two claims are proved with asserti
 
 
 ```bash
-dpm test --package-root examples/governance/private-majority-vote/test
+dpm test --package-root examples/governance/private-majority-vote/demo
 ```
 
 ## Fixture

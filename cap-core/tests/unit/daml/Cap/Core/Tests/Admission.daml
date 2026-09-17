@@ -1,0 +1,103 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Core.Tests.Admission where
+
+import DA.Assert ((===))
+import DA.Map (Map)
+import qualified DA.Map as Map
+import Daml.Script
+
+import Cap.Core.Utils (ExecutionAction (..), admitActors, entitled)
+
+-- No groups at all admits nobody.
+anEmptyPolicyAdmitsNobody : Script ()
+anEmptyPolicyAdmitsNobody = do
+  alice <- allocateParty "alice"
+  admitActors [] [alice] === False
+  admitActors [] [] === False
+
+-- A lone empty group admits nobody, so an empty authority set never passes.
+anEmptyGroupAdmitsNobody : Script ()
+anEmptyGroupAdmitsNobody = do
+  alice <- allocateParty "alice"
+  admitActors [[]] [alice] === False
+  admitActors [[]] [] === False
+
+-- An empty group is skipped and the remaining groups still decide.
+anEmptyGroupIsIgnoredBesideAWellFormedOne : Script ()
+anEmptyGroupIsIgnoredBesideAWellFormedOne = do
+  alice <- allocateParty "alice"
+  bob <- allocateParty "bob"
+  admitActors [[alice], []] [alice] === True
+  admitActors [[alice], []] [bob] === False
+  admitActors [[], [alice, bob]] [alice, bob] === True
+  admitActors [[], [alice, bob]] [alice] === False
+
+-- An extra signature does not spoil a group that otherwise passes.
+aGroupIsAdmittedWhenEveryMemberSigned : Script ()
+aGroupIsAdmittedWhenEveryMemberSigned = do
+  alice <- allocateParty "alice"
+  bob <- allocateParty "bob"
+  carol <- allocateParty "carol"
+  admitActors [[alice, bob]] [alice, bob] === True
+  admitActors [[alice, bob]] [alice, bob, carol] === True
+
+-- A group missing one member is rejected.
+aPartiallySignedGroupIsRejected : Script ()
+aPartiallySignedGroupIsRejected = do
+  alice <- allocateParty "alice"
+  bob <- allocateParty "bob"
+  admitActors [[alice, bob]] [alice] === False
+  admitActors [[alice, bob]] [] === False
+
+-- One satisfied group admits, whatever the other groups need.
+anyOneGroupIsEnough : Script ()
+anyOneGroupIsEnough = do
+  alice <- allocateParty "alice"
+  bob <- allocateParty "bob"
+  carol <- allocateParty "carol"
+  admitActors [[alice, bob], [carol]] [carol] === True
+  admitActors [[alice, bob], [carol]] [bob] === False
+
+-- entitled finds the action, then admits on the groups it maps to.
+entitledLooksThePolicyUpByKey : Script ()
+entitledLooksThePolicyUpByKey = do
+  alice <- allocateParty "alice"
+  bob <- allocateParty "bob"
+  carol <- allocateParty "carol"
+  let policy = Map.fromList
+        [ ("execute", [[alice]])
+        , ("cancel", [[bob], [carol]])
+        ]
+  entitled policy "execute" [alice] === True
+  entitled policy "cancel" [carol] === True
+  entitled policy "cancel" [alice] === False
+
+-- An action absent from the map admits nobody.
+anUnknownKeyIsNotEntitled : Script ()
+anUnknownKeyIsNotEntitled = do
+  alice <- allocateParty "alice"
+  let policy = Map.fromList [("execute", [[alice]])]
+  entitled policy "archive" [alice] === False
+
+-- An empty map, and a key mapped to no groups, both admit nobody.
+anEmptyPolicyMapEntitlesNobody : Script ()
+anEmptyPolicyMapEntitlesNobody = do
+  alice <- allocateParty "alice"
+  entitled (Map.empty : Map Text [[Party]]) "execute" [alice] === False
+  entitled (Map.fromList [("execute", ([] : [[Party]]))]) "execute" [alice] === False
+
+-- ExecutionAction keys separate: EA_Custom compares on its id, EA_Cancel never matches EA_Execute.
+executionActionKeysDiscriminate : Script ()
+executionActionKeysDiscriminate = do
+  alice <- allocateParty "alice"
+  bob <- allocateParty "bob"
+  let policy = Map.fromList
+        [ (EA_Execute, [[alice]])
+        , (EA_Custom "settle", [[bob]])
+        ]
+  entitled policy EA_Execute [alice] === True
+  entitled policy EA_Cancel [alice] === False
+  entitled policy (EA_Custom "settle") [bob] === True
+  entitled policy (EA_Custom "settle") [alice] === False
+  entitled policy (EA_Custom "unsettle") [bob] === False

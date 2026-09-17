@@ -6,7 +6,7 @@ import Splice.Api.Token.MetadataV1
 import qualified Splice.Api.Token.AllocationV2 as Alloc
 import Splice.Util (require)
 import Cap.Core.Utils (entitled, ExecutionAction (..), ExecutionCore, requireExpired, requireOpen)
-import Cap.Auctions.RegistryV1 (SettlementFactoryCall)
+import Cap.Auctions.Registry (SettlementFactoryCall)
 
 data SettlementBatch = SettlementBatch
   with

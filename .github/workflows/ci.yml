@@ -70,37 +70,37 @@ jobs:
       - name: Build all packages
         run: dpm build --all
 
-      - name: Run Daml Script tests
+      - name: Run Daml Script
         run: |
           set -uo pipefail
-          mapfile -t packages < <(
-            sed -nE 's|^[[:space:]]*-[[:space:]]+\./(.*/test)[[:space:]]*$|\1|p' multi-package.yaml
-          )
-          if [ "${#packages[@]}" -eq 0 ]; then
-            echo "no test packages found in multi-package.yaml" >&2
-            exit 1
-          fi
           failed=()
-          for package in "${packages[@]}"; do
-            echo "::group::dpm test $package"
-            if dpm test --package-root "$package"; then
-              echo "::endgroup::"
-              echo "$package ok"
-            else
-              echo "::endgroup::"
-              echo "::error title=Daml Script tests failed::$package"
-              failed+=("$package")
+          run_group() {
+            local label="$1" pattern="$2"
+            mapfile -t packages < <(
+              sed -nE "s|^[[:space:]]*-[[:space:]]+\./($pattern)[[:space:]]*\$|\1|p" multi-package.yaml
+            )
+            if [ "${#packages[@]}" -eq 0 ]; then
+              echo "no packages matching '$pattern' in multi-package.yaml" >&2
+              return 1
             fi
-          done
-          {
-            echo "### Daml Script tests"
-            echo
+            {
+              echo "### $label"
+              echo
+            } >> "$GITHUB_STEP_SUMMARY"
             for package in "${packages[@]}"; do
-              status="ok"
-              for bad in "${failed[@]-}"; do
-                [ "$bad" = "$package" ] && status="FAILED"
-              done
-              echo "- \`$package\` — $status"
+              echo "::group::dpm test $package"
+              if dpm test --package-root "$package"; then
+                echo "::endgroup::"
+                echo "- \`$package\` — ok" >> "$GITHUB_STEP_SUMMARY"
+              else
+                echo "::endgroup::"
+                echo "::error title=$label failed::$package"
+                echo "- \`$package\` — FAILED" >> "$GITHUB_STEP_SUMMARY"
+                failed+=("$package")
+              fi
             done
-          } >> "$GITHUB_STEP_SUMMARY"
+            echo >> "$GITHUB_STEP_SUMMARY"
+          }
+          run_group "Tests" "cap-[^/]*/tests/[^/]*" || exit 1
+          run_group "Demo scripts" ".*/demo" || exit 1
           [ "${#failed[@]}" -eq 0 ]

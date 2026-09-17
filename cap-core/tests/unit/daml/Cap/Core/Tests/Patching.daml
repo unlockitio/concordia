@@ -1,0 +1,77 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Core.Tests.Patching where
+
+import DA.Assert ((===))
+import DA.TextMap (TextMap)
+import qualified DA.TextMap as TextMap
+import Daml.Script
+
+import Splice.Api.Token.MetadataV1 (AnyValue (..))
+import Splice.Util (patch)
+
+import Cap.Core.Utils ()
+
+entries : [(Text, Int)] -> TextMap AnyValue
+entries kvs = TextMap.fromList [(k, AV_Int v) | (k, v) <- kvs]
+
+-- A value the proposal left alone keeps what current holds.
+aScalarKeepsCurrentWhenNewMatchesBase : Script ()
+aScalarKeepsCurrentWhenNewMatchesBase =
+  patch (AV_Int 1) (AV_Int 1) (AV_Int 9) === AV_Int 9
+
+-- A value the proposal changed overrides what current holds.
+aScalarTakesNewWhenItDiffersFromBase : Script ()
+aScalarTakesNewWhenItDiffersFromBase =
+  patch (AV_Int 2) (AV_Int 1) (AV_Int 9) === AV_Int 2
+
+-- A key changed in new overrides current.
+aKeyChangedInNewOverridesCurrent : Script ()
+aKeyChangedInNewOverridesCurrent =
+  patch (entries [("a", 2)]) (entries [("a", 1)]) (entries [("a", 9)])
+    === entries [("a", 2)]
+
+-- A key untouched in new keeps current.
+aKeyUnchangedInNewKeepsCurrent : Script ()
+aKeyUnchangedInNewKeepsCurrent =
+  patch (entries [("a", 1)]) (entries [("a", 1)]) (entries [("a", 9)])
+    === entries [("a", 9)]
+
+-- A key new adds that base lacked is added.
+aKeyOnlyInNewIsAdded : Script ()
+aKeyOnlyInNewIsAdded =
+  patch (entries [("a", 1), ("b", 2)]) (entries [("a", 1)]) (entries [("a", 9)])
+    === entries [("a", 9), ("b", 2)]
+
+-- A key new drops relative to base is removed.
+aKeyOnlyInBaseIsRemoved : Script ()
+aKeyOnlyInBaseIsRemoved =
+  patch (entries [("a", 1)]) (entries [("a", 1), ("b", 2)]) (entries [("a", 9), ("b", 9)])
+    === entries [("a", 9)]
+
+-- A key already gone from current is not brought back.
+aKeyMissingFromCurrentIsNotResurrected : Script ()
+aKeyMissingFromCurrentIsNotResurrected =
+  patch (entries [("a", 2)]) (entries [("a", 1)]) (entries [])
+    === entries []
+
+-- A key only current holds is left alone.
+aKeyOnlyInCurrentSurvives : Script ()
+aKeyOnlyInCurrentSurvives =
+  patch (entries [("a", 2)]) (entries [("a", 1)]) (entries [("a", 9), ("z", 5)])
+    === entries [("a", 2), ("z", 5)]
+
+-- Empty maps patch to empty, and an unchanged empty proposal leaves current untouched.
+emptyMapsPatchToEmpty : Script ()
+emptyMapsPatchToEmpty = do
+  patch (entries []) (entries []) (entries []) === entries []
+  patch (entries []) (entries []) (entries [("a", 9)]) === entries [("a", 9)]
+
+-- AV_Map patches key by key instead of replacing the whole map.
+anAnyValueMapRecursesIntoItsValues : Script ()
+anAnyValueMapRecursesIntoItsValues =
+  patch
+    (AV_Map (entries [("a", 2), ("b", 1)]))
+    (AV_Map (entries [("a", 1), ("b", 1)]))
+    (AV_Map (entries [("a", 9), ("b", 9)]))
+      === AV_Map (entries [("a", 2), ("b", 9)])

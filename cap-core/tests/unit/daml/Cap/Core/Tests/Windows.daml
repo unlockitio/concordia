@@ -1,0 +1,69 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Core.Tests.Windows where
+
+import DA.Assert ((===))
+import DA.Date (Month (..), date)
+import DA.Time (addRelTime, hours, time)
+import Daml.Script
+
+import Cap.Core.Utils (isOpen, requireBeforeOpen, requireClosed, requireOpen)
+
+opensAt : Time
+opensAt = time (date 2026 Jan 1) 0 0 0
+
+closesAt : Time
+closesAt = addRelTime opensAt (hours 24)
+
+beforeOpen : Time
+beforeOpen = addRelTime opensAt (hours (-1))
+
+beforeClose : Time
+beforeClose = addRelTime closesAt (hours (-1))
+
+afterClose : Time
+afterClose = addRelTime closesAt (hours 1)
+
+-- opensAt itself is inside the window.
+theFloorIsInclusive : Script ()
+theFloorIsInclusive = do
+  isOpen beforeOpen opensAt (Some closesAt) === False
+  isOpen opensAt opensAt (Some closesAt) === True
+
+-- closesAt itself is outside the window.
+theCeilingIsExclusive : Script ()
+theCeilingIsExclusive = do
+  isOpen beforeClose opensAt (Some closesAt) === True
+  isOpen closesAt opensAt (Some closesAt) === False
+  isOpen afterClose opensAt (Some closesAt) === False
+
+-- A window with no closesAt stays open for good once it has opened.
+aWindowWithoutACloseNeverCloses : Script ()
+aWindowWithoutACloseNeverCloses = do
+  isOpen beforeOpen opensAt None === False
+  isOpen opensAt opensAt None === True
+  isOpen afterClose opensAt None === True
+
+-- requireOpen, requireClosed and requireBeforeOpen stay silent when their predicate holds.
+theRequireFormsPassWhenThePredicateHolds : Script ()
+theRequireFormsPassWhenThePredicateHolds = do
+  requireOpen "open" opensAt opensAt (Some closesAt)
+  requireOpen "open" beforeClose opensAt None
+  requireClosed "closed" closesAt closesAt
+  requireClosed "closed" afterClose closesAt
+  requireBeforeOpen "early" beforeOpen opensAt
+
+-- The same three abort when it does not.
+theRequireFormsAbortWhenItDoesNot : Script ()
+theRequireFormsAbortWhenItDoesNot = do
+  aborts (requireOpen "open" closesAt opensAt (Some closesAt))
+  aborts (requireOpen "open" beforeOpen opensAt None)
+  aborts (requireClosed "closed" beforeClose closesAt)
+  aborts (requireBeforeOpen "early" opensAt opensAt)
+
+aborts : Script () -> Script ()
+aborts action = do
+  outcome <- tryToEither (\_ -> action)
+  case outcome of
+    Left _ -> pure ()
+    Right _ -> assertFail "expected the requirement to abort"

@@ -1,0 +1,118 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Examples.SealedFirstPrice.Bid where
+
+import qualified DA.Map as Map
+import qualified DA.Set as Set
+
+import Splice.Api.Token.MetadataV1
+import qualified Splice.Api.Token.AllocationV2 as Alloc
+import qualified Splice.Api.Token.HoldingV2 as Holding
+
+import Splice.Util (require)
+import Splice.TokenStandard.Utils (regularAccountOwner)
+
+import Cap.Core.Utils (orAbort, single)
+import Cap.Core.SubmittableV1
+import Cap.Auctions.Funding (OneLotBidAllocationRequest (..), bidderAllocations)
+import Cap.Auctions.OneLotBidV1
+import Cap.Examples.SealedFirstPrice.Terms
+
+bidderOf : Holding.Account -> Party
+bidderOf = regularAccountOwner
+
+authoritiesOf : Mechanism -> Set.Set Party
+authoritiesOf mechanism = mechanism.resolver.authorities
+
+template AuctionBid
+  with
+    terms : OneLotAuctionTerms
+    bidderPaymentAccount : Holding.Account
+    bidderLotAccount : Holding.Account
+    mechanism : Mechanism
+    quotes : [Quote]
+    allocations : [ContractId Alloc.Allocation]
+  where
+    signatory Set.toList (authoritiesOf mechanism)
+           <> [bidderOf bidderPaymentAccount | not (null quotes)]
+    observer bidderOf bidderPaymentAccount
+
+    ensure terms.direction == Forward
+      && case (quotes, allocations) of
+        ([], []) -> True
+        ([q], [_, _]) -> q.quantity == 1.0
+        _ -> False
+
+    choice AuctionBid_Close : ()
+      controller Set.toList (authoritiesOf mechanism)
+      do pure ()
+
+    interface instance Submittable for AuctionBid where
+      view = SubmittableView with
+        mechanism
+        meta = emptyMetadata
+
+    interface instance OneLotBid for AuctionBid where
+      view = OneLotBidView with
+        terms
+        availableActions = Map.fromList $
+          (BA_Release, [Set.toList (authoritiesOf mechanism)])
+            :: [ (action, [[bidderOf bidderPaymentAccount]])
+               | null quotes
+               , action <- [BA_RequestAllocations, BA_Finalize]
+               ]
+        bidderPaymentAccount
+        bidderLotAccount
+        quotes = [quotes | not (null quotes)]
+        allocations
+        meta = emptyMetadata
+
+      oneLotBid_requestAllocationsImpl _ arg = do
+        now <- getTime
+        submitted <-
+          orAbort "this format takes a single alternative" (single arg.quotes)
+        let bv = view (toInterface @OneLotBid this)
+        cid <- create OneLotBidAllocationRequest with
+          mechanism
+          bid = bv with quotes = [submitted]
+          requestedAt = now
+        pure OneLotBid_RequestAllocationsResult with
+          requests = [coerceContractId cid]
+          meta = emptyMetadata
+
+      oneLotBid_finalizeImpl self arg = do
+        require "this seat holds no bid yet" (null quotes)
+        submitted <-
+          orAbort "this format takes a single alternative" (single arg.quotes)
+        let bv = view (toInterface @OneLotBid this)
+        presented <- forA arg.allocations (fmap view . fetch)
+        require "the allocations are the ones this bid implies"
+          (map (.allocation) presented == bidderAllocations (bv with quotes = [submitted]))
+        require "the allocations are scoped to this auction"
+          (all (\v -> v.settlement == settlementOf mechanism.id (authoritiesOf mechanism))
+            presented)
+        archive self
+        toInterfaceContractId <$>
+          create this with quotes = submitted; allocations = arg.allocations
+
+      oneLotBid_releaseImpl self _ = do
+        archive self
+        let actors = (settlementOf mechanism.id (authoritiesOf mechanism)).executors
+        case allocations of
+          [paymentCid, lotCid] -> do
+            _ <- exercise paymentCid Alloc.Allocation_Cancel with
+              actors
+              extraArgs = terms.registries.paymentAllocate.cancelArgs
+            _ <- exercise lotCid Alloc.Allocation_Cancel with
+              actors
+              extraArgs = terms.registries.lotAllocate.cancelArgs
+            pure ()
+          _ -> pure ()
+        pure OneLotBid_ReleaseResult with released = allocations; meta = emptyMetadata
+
+      oneLotBid_expireImpl self _ = do
+        archive self
+        pure OneLotBid_ExpireResult with meta = emptyMetadata
+
+      oneLotBid_withdrawImpl _ _ =
+        abort "a bid cannot be withdrawn after seeing the field quotes"

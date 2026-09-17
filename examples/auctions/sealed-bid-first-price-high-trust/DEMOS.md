@@ -34,7 +34,7 @@ That can be checked in Daml Studio.
 The test harness is taken from the Splice repository
 (`github.com/canton-network/splice`, under `token-standard/`). Since Daml Script
 cannot be distributed across SDK versions in a DAR, the harness is vendored
-as source under `test/daml/Splice/`. `Testing.Utils`,
+as source under `demo/daml/Splice/`. `Testing.Utils`,
 `Registries.AmuletRegistry.Parameters` and `TokenStandard.RegistryApiV2` are
 copied verbatim; `Registries.AmuletRegistryV2` and
 `Registries.TestTokenV2_RegistryV2` are reduced to their V2 surface, removing

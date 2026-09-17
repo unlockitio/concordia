@@ -1,0 +1,85 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Core.Tests.Values where
+
+import DA.Assert ((===))
+import DA.Date (Month (..), date)
+import DA.Foldable (forA_)
+import DA.TextMap (TextMap)
+import qualified DA.TextMap as TextMap
+import DA.Time (hours, time)
+import Daml.Script
+
+import Splice.Api.Token.MetadataV1 (AnyValue (..))
+
+import Cap.Core.Utils (IsAnyValue (..))
+
+roundtrips : (Eq a, Show a, IsAnyValue a) => a -> Script ()
+roundtrips v = fromAnyValue (toAnyValue v) === Some v
+
+samples : Party -> [AnyValue]
+samples p =
+  [ AV_Text "text"
+  , AV_Int 42
+  , AV_Decimal 1.5
+  , AV_Bool True
+  , AV_Date (date 2026 Jan 1)
+  , AV_Time (time (date 2026 Jan 1) 12 0 0)
+  , AV_RelTime (hours 3)
+  , AV_Party p
+  , AV_List [AV_Int 1]
+  , AV_Map (TextMap.fromList [("a", AV_Int 1)])
+  ]
+
+decodesOnlyItsOwnConstructor : forall a. (Eq a, Show a, IsAnyValue a) => [AnyValue] -> a -> Script ()
+decodesOnlyItsOwnConstructor ss v = do
+  fromAnyValue (toAnyValue v) === Some v
+  forA_ (filter (/= toAnyValue v) ss) $ \s ->
+    (fromAnyValue s : Optional a) === None
+
+-- Each instance round-trips its own constructor and returns None for every other one.
+everyInstanceDecodesOnlyItsOwnConstructor : Script ()
+everyInstanceDecodesOnlyItsOwnConstructor = do
+  alice <- allocateParty "alice"
+  let ss = samples alice
+  decodesOnlyItsOwnConstructor ss ("text" : Text)
+  decodesOnlyItsOwnConstructor ss (42 : Int)
+  decodesOnlyItsOwnConstructor ss (1.5 : Decimal)
+  decodesOnlyItsOwnConstructor ss True
+  decodesOnlyItsOwnConstructor ss (date 2026 Jan 1)
+  decodesOnlyItsOwnConstructor ss (time (date 2026 Jan 1) 12 0 0)
+  decodesOnlyItsOwnConstructor ss (hours 3)
+  decodesOnlyItsOwnConstructor ss alice
+  decodesOnlyItsOwnConstructor ss ([1] : [Int])
+  decodesOnlyItsOwnConstructor ss (TextMap.fromList [("a", 1)] : TextMap Int)
+
+-- The AnyValue instance decodes every constructor unchanged.
+theAnyValueInstanceAcceptsEveryConstructor : Script ()
+theAnyValueInstanceAcceptsEveryConstructor = do
+  alice <- allocateParty "alice"
+  forA_ (samples alice) $ \s ->
+    (fromAnyValue s : Optional AnyValue) === Some s
+
+-- Empty and zero values round-trip, so a decoder cannot read them as absence.
+theEmptyAndZeroValuesRoundtrip : Script ()
+theEmptyAndZeroValuesRoundtrip = do
+  roundtrips ("" : Text)
+  roundtrips (0 : Int)
+  roundtrips (0.0 : Decimal)
+  roundtrips False
+  roundtrips ([] : [Int])
+  roundtrips (TextMap.empty : TextMap Int)
+
+-- Lists and TextMaps round-trip, nesting included.
+theContainerInstancesRoundtrip : Script ()
+theContainerInstancesRoundtrip = do
+  roundtrips ([1, 2, 3] : [Int])
+  roundtrips ([[1], [2, 3]] : [[Int]])
+  roundtrips (TextMap.fromList [("a", 1), ("b", 2)] : TextMap Int)
+  roundtrips (TextMap.fromList [("a", [1, 2])] : TextMap [Int])
+
+-- A container decodes to None when any one element fails to decode.
+aContainerFailsWhenAnyElementFails : Script ()
+aContainerFailsWhenAnyElementFails = do
+  (fromAnyValue (AV_List [AV_Int 1, AV_Text "x"]) : Optional [Int]) === None
+  (fromAnyValue (AV_Map (TextMap.fromList [("a", AV_Int 1), ("b", AV_Text "x")])) : Optional (TextMap Int)) === None

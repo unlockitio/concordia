@@ -1,0 +1,54 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Governance.Tests.Electorate where
+
+import DA.Assert ((===))
+import qualified DA.Map as Map
+import DA.Set (Set)
+import qualified DA.Set as Set
+import Daml.Script
+
+import Cap.Governance.Utils (totalWeight, unweighted, weighted)
+
+-- unweighted gives every voter weight 1.0.
+unweightedGivesEveryVoterWeightOne : Script ()
+unweightedGivesEveryVoterWeightOne = do
+  alice <- allocateParty "alice"
+  bob <- allocateParty "bob"
+  let e = unweighted (Set.fromList [alice, bob])
+  Map.lookup alice e === Some 1.0
+  Map.lookup bob e === Some 1.0
+  totalWeight e === 2.0
+
+-- weighted reads each voter weight from the function it is given.
+weightedTakesEachWeightFromTheFunction : Script ()
+weightedTakesEachWeightFromTheFunction = do
+  alice <- allocateParty "alice"
+  bob <- allocateParty "bob"
+  let e = weighted (\p -> if p == alice then 3.0 else 1.0) (Set.fromList [alice, bob])
+  Map.lookup alice e === Some 3.0
+  Map.lookup bob e === Some 1.0
+  totalWeight e === 4.0
+
+-- A party outside the set has no entry in the electorate.
+anElectorateNamesOnlyItsVoters : Script ()
+anElectorateNamesOnlyItsVoters = do
+  alice <- allocateParty "alice"
+  carol <- allocateParty "carol"
+  let e = unweighted (Set.fromList [alice])
+  Map.lookup carol e === None
+  Map.size e === 1
+
+-- An empty electorate holds no voters and no weight.
+anEmptyElectorateHasNoWeight : Script ()
+anEmptyElectorateHasNoWeight = do
+  let e = unweighted (Set.empty : Set Party)
+  Map.size e === 0
+  totalWeight e === 0.0
+
+-- Voters that all carry zero weight total zero.
+zeroWeightsSumToZero : Script ()
+zeroWeightsSumToZero = do
+  alice <- allocateParty "alice"
+  bob <- allocateParty "bob"
+  totalWeight (weighted (const 0.0) (Set.fromList [alice, bob])) === 0.0
