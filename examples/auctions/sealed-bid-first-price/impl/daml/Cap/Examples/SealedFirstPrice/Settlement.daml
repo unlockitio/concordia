@@ -11,8 +11,8 @@ import qualified DA.Map as Map
 import Cap.Core.Utils (ExecutionAction (..), ExecutionCore (..))
 import Cap.Auctions.OneLotBidV1 (OneLotAuctionTerms)
 import Cap.Auctions.SettlementV1
+import Cap.Auctions.Utils (sellerOf, oneLotSettlement)
 
-import Cap.Examples.SealedFirstPrice.Terms
 
 template AuctionSettlement
   with
@@ -36,7 +36,7 @@ template AuctionSettlement
           opensAt
           expiresAt = Some terms.expiresAt
           meta = emptyMetadata
-        settlement = settlementOf saleId authorities
+        settlement = oneLotSettlement saleId authorities
         batches
         meta = emptyMetadata
 

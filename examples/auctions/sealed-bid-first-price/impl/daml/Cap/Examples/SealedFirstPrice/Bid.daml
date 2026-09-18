@@ -2,6 +2,7 @@
 
 module Cap.Examples.SealedFirstPrice.Bid where
 
+import DA.Foldable (forA_)
 import qualified DA.Map as Map
 import qualified DA.Set as Set
 
@@ -14,15 +15,10 @@ import Splice.TokenStandard.Utils (regularAccountOwner)
 
 import Cap.Core.Utils (orAbort, single)
 import Cap.Core.SubmittableV1
-import Cap.Auctions.Funding (OneLotBidAllocationRequest (..), bidderAllocations)
+import Cap.Auctions.Funding
+  ( OneLotBidAllocationRequest (..), bidderPaymentAllocation, bidderLotAllocation )
 import Cap.Auctions.OneLotBidV1
-import Cap.Examples.SealedFirstPrice.Terms
-
-bidderOf : Holding.Account -> Party
-bidderOf = regularAccountOwner
-
-authoritiesOf : Mechanism -> Set.Set Party
-authoritiesOf mechanism = mechanism.resolver.authorities
+import Cap.Auctions.Utils (oneLotSettlement)
 
 template AuctionBid
   with
@@ -34,8 +30,8 @@ template AuctionBid
     allocations : [ContractId Alloc.Allocation]
   where
     signatory Set.toList (authoritiesOf mechanism)
-           <> [bidderOf bidderPaymentAccount | not (null quotes)]
-    observer bidderOf bidderPaymentAccount
+           <> [regularAccountOwner bidderPaymentAccount | not (null quotes)]
+    observer regularAccountOwner bidderPaymentAccount
 
     ensure terms.direction == Forward
       && case (quotes, allocations) of
@@ -57,7 +53,7 @@ template AuctionBid
         terms
         availableActions = Map.fromList $
           (BA_Release, [Set.toList (authoritiesOf mechanism)])
-            :: [ (action, [[bidderOf bidderPaymentAccount]])
+            :: [ (action, [[regularAccountOwner bidderPaymentAccount]])
                | null quotes
                , action <- [BA_RequestAllocations, BA_Finalize]
                ]
@@ -85,29 +81,29 @@ template AuctionBid
         submitted <-
           orAbort "this format takes a single alternative" (single arg.quotes)
         let bv = view (toInterface @OneLotBid this)
-        presented <- forA arg.allocations (fmap view . fetch)
+            submittedBid = bv with quotes = [submitted]
+        presentedC <- forA arg.allocations fetch
+        let presented = map view presentedC
         require "the allocations are the ones this bid implies"
-          (map (.allocation) presented == bidderAllocations (bv with quotes = [submitted]))
+          (map (.allocation) presented ==
+            [ bidderPaymentAllocation submittedBid (concat submittedBid.quotes)
+            , bidderLotAllocation submittedBid ])
         require "the allocations are scoped to this auction"
-          (all (\v -> v.settlement == settlementOf mechanism.id (authoritiesOf mechanism))
+          (all (\v -> v.settlement == oneLotSettlement mechanism.id (authoritiesOf mechanism))
             presented)
+        require "each allocation is signed by its instrument admin"
+          (all (\a -> (view a).allocation.admin `elem` signatory a) presentedC)
         archive self
         toInterfaceContractId <$>
           create this with quotes = submitted; allocations = arg.allocations
 
-      oneLotBid_releaseImpl self _ = do
+      oneLotBid_releaseImpl self arg = do
         archive self
-        let actors = (settlementOf mechanism.id (authoritiesOf mechanism)).executors
-        case allocations of
-          [paymentCid, lotCid] -> do
-            _ <- exercise paymentCid Alloc.Allocation_Cancel with
-              actors
-              extraArgs = terms.registries.paymentAllocate.cancelArgs
-            _ <- exercise lotCid Alloc.Allocation_Cancel with
-              actors
-              extraArgs = terms.registries.lotAllocate.cancelArgs
-            pure ()
-          _ -> pure ()
+        let actors = (oneLotSettlement mechanism.id (authoritiesOf mechanism)).executors
+        forA_ allocations $ \cid ->
+          exercise cid Alloc.Allocation_Cancel with
+            actors
+            extraArgs = arg.extraArgs
         pure OneLotBid_ReleaseResult with released = allocations; meta = emptyMetadata
 
       oneLotBid_expireImpl self _ = do

@@ -1,6 +1,6 @@
 -- SPDX-License-Identifier: Apache-2.0
 
-module Cap.Examples.HighTrust.Fixtures.Impostor where
+module Cap.Examples.SealedFirstPrice.Impostors.ImpostorSettlementFactory where
 
 import Splice.Api.Token.MetadataV1
 import qualified Splice.Api.Token.AllocationV2 as Alloc

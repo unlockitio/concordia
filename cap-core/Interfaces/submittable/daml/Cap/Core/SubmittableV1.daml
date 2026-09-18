@@ -26,6 +26,9 @@ data Mechanism = Mechanism
     id : Text
   deriving (Eq, Show)
 
+authoritiesOf : Mechanism -> Set Party
+authoritiesOf mechanism = mechanism.resolver.authorities
+
 data SubmittableView = SubmittableView
   with
     mechanism : Mechanism

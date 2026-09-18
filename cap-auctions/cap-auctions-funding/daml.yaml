@@ -16,7 +16,6 @@ data-dependencies:
 - ../../lib/splice-util-0.1.7.dar
 - ../../cap-core/cap-core-utils/.daml/dist/cap-core-utils-0.1.0.dar
 - ../../cap-core/Interfaces/submittable/.daml/dist/cap-core-submittable-v1-0.1.0.dar
-- ../cap-auctions-registry/.daml/dist/cap-auctions-registry-0.1.0.dar
 - ../Interfaces/bid/.daml/dist/cap-auctions-bid-v1-0.1.0.dar
 - ../cap-auctions-utils/.daml/dist/cap-auctions-utils-0.1.0.dar
 build-options:

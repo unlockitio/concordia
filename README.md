@@ -76,15 +76,15 @@ concordia/
 │   └── cap-governance-utils/          #   drift, pinning, separable formats
 ├── cap-auctions/                      # Tier 2: auctions (Token Standard V2)
 │   ├── Interfaces/{bid,settlement}
-│   ├── cap-auctions-registry/
-│   └── cap-auctions-utils/
+│   ├── cap-auctions-utils/
+│   └── cap-auctions-funding/
 ├── examples/governance/
 │   ├── baby-dso/                      # M1: Splice DSO governance
 │   │   ├── plain/                     #   the shape being argued against
 │   │   └── cap/{ans,config,governance,action,demo}
 │   └── private-majority-vote/         # M2: private ballots, {impl,demo}
 ├── examples/auctions/
-│   └── sealed-bid-first-price/        # M2: private bids, {impl,fixtures,demo}
+│   └── sealed-bid-first-price/        # M2: private bids, {impl,impostors,demo}
 ├── examples/lib/                       # vendored DARs only the examples need
 ├── lib/                               # vendored Token Standard DARs (prebuilt)
 ├── scripts/sandbox-test.sh            # sandbox integration run

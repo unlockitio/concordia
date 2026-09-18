@@ -59,7 +59,7 @@ changing.
 bids that are won independently — one `OneLotBid` contract per lot, all naming
 the same `Mechanism`. Anything that binds the lots together needs a new bid
 interface. Nothing ties a resolution to a single set of terms, so each bid
-carries its own `lot`, `reserve`, seller accounts and `RegistryCalls`, and the
+carries its own `lot`, `reserve`, seller accounts and settlement factories, and the
 procedure groups the presented bids by lot. A shared `saleId` settles them
 together. This is a deployment pattern on the released interfaces, not an
 addition to them; `cap-auctions/RATIONALE.md` sets out how it works and what it

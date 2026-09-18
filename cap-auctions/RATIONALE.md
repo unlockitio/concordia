@@ -133,10 +133,9 @@ A bid names allocations, it does not create them. `OneLotBidView.allocations` is
 the bidder before the bid is finalized.
 
 The list is not a fixed pair because how many allocations a bid carries is a
-property of the format. The plain sealed-bid format locks the payment as sender
-and pre-authorizes the lot as receiver, so it carries two; the high-trust format
-locks only the payment and has the winner co-sign at award, so it carries one; a
-format funded by a transfer pre-approval carries none.
+property of the format. The sealed-bid format locks the payment as sender
+and pre-authorizes the lot as receiver, so it carries two; a format funded by a
+transfer pre-approval carries none.
 
 Funding is a separate transaction because the allocation's contract id has to
 exist before it can be an argument, and the Ledger API cannot pass one command's
@@ -158,9 +157,6 @@ The result is `[AnyContractId]` rather than `ContractId AllocationRequest` so th
 frozen bid package does not depend on
 `splice-api-token-allocation-request-v2`, and so a format may mint one request
 per registry.
-
-An implementation may decline: `oneLotBid_requestAllocationsImpl` aborts in the
-high-trust format, which does not publish requests.
 
 ### When escrow amount differs from transfered amount
 
@@ -274,18 +270,31 @@ A format that names a party to the trade as an executor lets that party withhold
 settlement after the award. That is the format's choice; the interface publishes
 who may settle so it can be seen.
 
-## RegistryCalls
+## Settlement factories
 
-`RegistryCalls` holds four factory calls — `paymentAllocate`, `paymentSettle`,
-`lotAllocate` and `lotSettle` — each a factory contract id plus the `ExtraArgs`
-that registry needs. Carrying them as data on `OneLotAuctionTerms` lets a sale
-span two registries without either interface knowing what a registry is.
+`OneLotAuctionTerms` carries two settlement factory contract ids,
+`paymentSettleFactory` and `lotSettleFactory`, one per registry the sale settles
+against. `Settlement_Settle` exercises `SettlementFactory_SettleBatch` on each.
+Carrying them as data on the terms lets a sale span two registries without either
+interface knowing what a registry is.
 
-`cap-auctions-registry` is its own package because `Interfaces/bid` and
-`Interfaces/settlement` both import it.
+The factory ids are fixed when the terms are written, so a bidder sees which
+factory will settle each leg before funding a bid. A registry that replaces its
+factories invalidates open sales; the interfaces do not supply an alternative
+path for that case.
 
-The factory ids are fixed when the terms are written. A registry that replaces its
-factories invalidates open sales, currently the interfaces do not supply an alternative path for when that is the case.
+The `ExtraArgs` each registry call needs are not pinned. The caller supplies them
+at call time: the executor passes a settlement context to `Settlement_Settle`,
+and the resolver passes a cancel context to the release of losing bids. A call
+spanning two registries carries the union of both contexts, and each registry
+reads only the keys it owns. The contexts might hold contract ids a registry rotates,
+so pinning them in the terms would let them go stale between the award and
+settlement.
+
+`Settlement_Settle` requires the instrument admin to be a signatory of each
+allocation it settles. The Token Standard settle path authenticates an allocation
+by an admin field on its view, which an impostor allocation can set; the
+signatory check rejects an allocation the admin did not sign.
 
 ## Package dependencies
 

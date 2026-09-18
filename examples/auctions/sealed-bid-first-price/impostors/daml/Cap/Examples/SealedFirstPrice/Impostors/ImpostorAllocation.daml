@@ -1,0 +1,56 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Examples.SealedFirstPrice.Impostors.ImpostorAllocation where
+
+import qualified DA.Map as Map
+import qualified DA.TextMap as TextMap
+
+import Splice.Api.Token.MetadataV1
+import qualified Splice.Api.Token.AllocationV2 as Alloc
+
+template ImpostorAllocation
+  with
+    owner : Party
+    settlement : Alloc.SettlementInfo
+    allocation : Alloc.AllocationSpecification
+    createdAt : Time
+  where
+    signatory owner
+    observer settlement.executors, allocation.admin
+
+    interface instance Alloc.Allocation for ImpostorAllocation where
+      view = Alloc.AllocationView with
+        originalAllocationCid = None
+        settlement
+        allocation
+        holdingCids = []
+        createdAt
+        numIterations = 0
+        expiresAt = None
+        availableActions = Map.empty
+        meta = emptyMetadata
+
+      allocation_settleImpl self _ = do
+        archive self
+        pure Alloc.AllocationResult with
+          output = Alloc.AllocationResult_Settled with nextIterationAllocationCid = None
+          authorizerHoldingCids = TextMap.empty
+          meta = emptyMetadata
+
+      allocation_cancelImpl self _ = do
+        archive self
+        pure Alloc.AllocationResult with
+          output = Alloc.AllocationResult_Cancelled
+          authorizerHoldingCids = TextMap.empty
+          meta = emptyMetadata
+
+      allocation_withdrawImpl self _ = do
+        archive self
+        pure Alloc.AllocationResult with
+          output = Alloc.AllocationResult_Withdrawn
+          authorizerHoldingCids = TextMap.empty
+          meta = emptyMetadata
+
+      allocation_settleExtraObservers _ = []
+      allocation_cancelExtraObservers _ = []
+      allocation_withdrawExtraObservers _ = []

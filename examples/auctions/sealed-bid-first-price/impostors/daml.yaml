@@ -1,10 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
-# Templates used only by the demos. They live outside the test package because
-# a package that defines templates and depends on daml-script drags daml-script
-# onto any ledger the DAR is uploaded to.
+# The impostor templates the demos instantiate to attack the auction and prove
+# its security claims. They live in their own package because it defines templates
+# and must not depend on daml-script, which would otherwise be dragged onto any
+# ledger the DAR is uploaded to.
 sdk-version: 3.4.11
-name: cap-example-sealed-first-price-high-trust-fixtures
+name: cap-example-sealed-first-price-impostors
 version: 0.1.0
 source: daml
 dependencies:
@@ -16,7 +17,6 @@ data-dependencies:
 - ../../../../lib/splice-api-token-allocation-v2-1.0.0.dar
 - ../../../../cap-core/cap-core-utils/.daml/dist/cap-core-utils-0.1.0.dar
 - ../../../../cap-core/Interfaces/submittable/.daml/dist/cap-core-submittable-v1-0.1.0.dar
-- ../../../../cap-auctions/cap-auctions-registry/.daml/dist/cap-auctions-registry-0.1.0.dar
 - ../../../../cap-auctions/Interfaces/bid/.daml/dist/cap-auctions-bid-v1-0.1.0.dar
 build-options:
   - --target=2.1

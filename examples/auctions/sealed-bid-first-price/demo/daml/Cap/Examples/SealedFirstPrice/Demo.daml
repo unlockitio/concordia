@@ -16,7 +16,7 @@ import qualified Splice.Api.Token.AllocationV2 as Alloc
 import qualified Splice.Api.Token.HoldingV2 as Holding
 import qualified Splice.Api.Token.AllocationInstructionV2 as AllocInstr
 import qualified Splice.Api.Token.AllocationRequestV2 as AllocReq
-import Splice.TokenStandard.Utils (basicAccount)
+import Splice.TokenStandard.Utils (basicAccount, senderSide)
 
 import Splice.Testing.Utils
 import qualified Splice.Testing.TokenStandard.RegistryApiV2 as RegistryApi
@@ -25,14 +25,15 @@ import Cap.Core.ResolverV1
 import Cap.Core.SubmittableV1
 import Cap.Auctions.Funding (OneLotBidAllocationRequest)
 import Cap.Auctions.OneLotBidV1
+import Cap.Auctions.Utils (oneLotSettlement)
 
 import Cap.Auctions.SettlementV1
 
 import Cap.Examples.SealedFirstPrice.Bid
 import Cap.Examples.SealedFirstPrice.Settlement
 import Cap.Examples.SealedFirstPrice.Lot
-import Cap.Examples.SealedFirstPrice.Terms
-import Cap.Examples.SealedFirstPrice.Fixtures.Impostor
+import Cap.Examples.SealedFirstPrice.Impostors.ImpostorSettlementFactory
+import Cap.Examples.SealedFirstPrice.Impostors.ImpostorAllocation
 
 import Cap.Examples.SealedFirstPrice.Demo.Fixture
 
@@ -72,24 +73,28 @@ openAuctionWith ns retermsFor = do
 
   lotHoldingCids <- fundSeller f
   now <- getTime
-  lotResult <- submitWithDisclosures' f.seller disclosures $
-    exerciseCmd f.terms.registries.lotAllocate.factoryCid AllocInstr.AllocationFactory_Allocate with
-      settlement = settlementOf f.saleId f.authorities
-      allocation = sellerLotAllocation f.terms
-      requestedAt = now
-      inputHoldingCids = lotHoldingCids
-      extraArgs = f.terms.registries.lotAllocate.allocateArgs
-      actors = [f.seller]
+  let lotArg = AllocInstr.AllocationFactory_Allocate with
+        settlement = oneLotSettlement f.saleId f.authorities
+        allocation = sellerLotAllocation f.terms
+        requestedAt = now
+        inputHoldingCids = lotHoldingCids
+        actors = [f.seller]
+        extraArgs = emptyExtraArgs
+  lotEc <- RegistryApi.getAllocationFactory f.lot lotArg
+  lotResult <- submitWithDisclosures' f.seller lotEc.disclosures $
+    exerciseCmd lotEc.factoryCid lotEc.arg
   AllocInstr.AllocationInstructionResult_Completed sellerLotAllocationCid <-
     pure lotResult.output
-  paymentResult <- submitWithDisclosures' f.seller disclosures $
-    exerciseCmd f.terms.registries.paymentAllocate.factoryCid AllocInstr.AllocationFactory_Allocate with
-      settlement = settlementOf f.saleId f.authorities
-      allocation = sellerPaymentAllocation f.terms
-      requestedAt = now
-      inputHoldingCids = []
-      extraArgs = f.terms.registries.paymentAllocate.allocateArgs
-      actors = [f.seller]
+  let paymentArg = AllocInstr.AllocationFactory_Allocate with
+        settlement = oneLotSettlement f.saleId f.authorities
+        allocation = sellerPaymentAllocation f.terms
+        requestedAt = now
+        inputHoldingCids = []
+        actors = [f.seller]
+        extraArgs = emptyExtraArgs
+  paymentEc <- RegistryApi.getAllocationFactory f.amulet paymentArg
+  paymentResult <- submitWithDisclosures' f.seller paymentEc.disclosures $
+    exerciseCmd paymentEc.factoryCid paymentEc.arg
   AllocInstr.AllocationInstructionResult_Completed sellerPaymentAllocationCid <-
     pure paymentResult.output
 
@@ -249,13 +254,13 @@ fundBid auction bidder price = do
 presentationOf : OpenAuction -> [ContractId OneLotBid] -> [ContractId Submittable]
 presentationOf _ entries = map coerceContractId entries
 
-resolveCmd : OpenAuction -> [ContractId OneLotBid] -> Commands Resolver_ResolveResult
-resolveCmd auction entries =
+resolveCmd : OpenAuction -> [ContractId OneLotBid] -> ExtraArgs -> Commands Resolver_ResolveResult
+resolveCmd auction entries ctx =
   exerciseCmd (toInterfaceContractId @Resolver auction.auctionCid) Resolver_Resolve with
     actors = [auction.fixture.operator]
     mechanism = auction.mechanism
     submittables = presentationOf auction entries
-    extraArgs = emptyExtraArgs
+    extraArgs = ctx
 
 resolveDisclosures : OpenAuction -> Script Disclosures'
 resolveDisclosures auction = do
@@ -264,16 +269,29 @@ resolveDisclosures auction = do
   allocD <- mconcat <$> forA [cid | (cid, Some _) <- allocs] (allocationDisclosures f)
   pure (auction.disclosures <> allocD)
 
+
+resolveContext : OpenAuction -> Script ExtraArgs
+resolveContext auction = do
+  let f = auction.fixture
+  allocs <- queryInterface @Alloc.Allocation f.operator
+  ctxs <- forA [cid | (cid, Some _) <- allocs] (cancelContextFor f)
+  pure ExtraArgs with
+    context = ChoiceContext with
+      values = mconcat (map (\c -> c.choiceContext.values) ctxs)
+    meta = emptyMetadata
+
 runResolve : OpenAuction -> [ContractId OneLotBid] -> Script Resolver_ResolveResult
 runResolve auction entries = do
   ds <- resolveDisclosures auction
-  submitWithDisclosures' auction.fixture.operator ds (resolveCmd auction entries)
+  ctx <- resolveContext auction
+  submitWithDisclosures' auction.fixture.operator ds (resolveCmd auction entries ctx)
 
 runResolveMustFail : OpenAuction -> [ContractId OneLotBid] -> Script ()
 runResolveMustFail auction entries = do
   ds <- resolveDisclosures auction
+  ctx <- resolveContext auction
   submitMustFail (actAs auction.fixture.operator <> discloseMany' ds)
-    (resolveCmd auction entries)
+    (resolveCmd auction entries ctx)
 
 settlementOf' : Resolver_ResolveResult -> ContractId AuctionSettlement
 settlementOf' result = case result.created of
@@ -283,16 +301,11 @@ settlementOf' result = case result.created of
 runSettle : OpenAuction -> ContractId AuctionSettlement -> Script Settlement_SettleResult
 runSettle auction settlementCid = do
   ds <- resolveDisclosures auction
+  ctx <- settleContext auction.fixture
   submitWithDisclosures' auction.fixture.operator ds $
     exerciseCmd (toInterfaceContractId @Settlement settlementCid) Settlement_Settle with
       actors = [auction.fixture.operator]
-      extraArgs = emptyExtraArgs
-
-resolveAndSettle : OpenAuction -> [ContractId OneLotBid] -> Script Resolver_ResolveResult
-resolveAndSettle auction entries = do
-  result <- runResolve auction entries
-  _ <- runSettle auction (settlementOf' result)
-  pure result
+      extraArgs = ctx
 
 class Visible t where
   isVisibleTo : Party -> ContractId t -> Script Bool
@@ -364,44 +377,6 @@ impostorFactoryFor f =
     operator = f.operator
     claimedAdmin = f.terms.lot.instrument.admin)
 
-lotGoesToTheHighestPresentedBid : Script ()
-lotGoesToTheHighestPresentedBid = do
-  auction <- openAuction "highest"
-  let f = auction.fixture
-
-  carolSeat <- seatFor auction f.carol
-  lotAllocationCid <- lotAllocationOf auction
-
-  setTime f.terms.entryClosesAt
-  aliceBid <- fundBid auction f.alice 100.0
-  bobBid <- fundBid auction f.bob 60.0
-  bobAllocation <- bidAllocationOf f bobBid
-
-  lockedLot <- lockedBalanceOf f.seller f.terms.lot.instrument
-  lockedLot === lotAmount
-
-  setTime f.terms.biddingClosesAt
-  result <- resolveAndSettle auction [aliceBid, bobBid, carolSeat]
-  result.verdict === V_Decided None
-
-  alicePaid <- balanceOf f.alice f.terms.payment
-  alicePaid === 0.0
-  sellerPaid <- balanceOf f.seller f.terms.payment
-  sellerPaid === 100.0
-  aliceLot <- balanceOf f.alice f.terms.lot.instrument
-  aliceLot === lotAmount
-
-  f.bob `cannotSee` bobAllocation
-  bobLocked <- lockedBalanceOf f.bob f.terms.payment
-  bobLocked === 0.0
-  bobReturned <- unlockedBalanceOf f.bob f.terms.payment
-  bobReturned === 60.0
-  bobLot <- balanceOf f.bob f.terms.lot.instrument
-  bobLot === 0.0
-
-  f.seller `cannotSee` lotAllocationCid
-  f.operator `cannotSee` auction.auctionCid
-  runResolveMustFail auction [bobBid, carolSeat]
 
 whoSeesWhat : Script ()
 whoSeesWhat = do
@@ -438,8 +413,15 @@ whoSeesWhat = do
   f.seller `cannotSee` aliceAllocation
 
   setTime f.terms.biddingClosesAt
-  result <- resolveAndSettle auction [aliceBid, bobBid, carolSeat]
+  result <- runResolve auction [aliceBid, bobBid, carolSeat]
   result.verdict === V_Decided None
+
+  let settlementCid = settlementOf' result
+  f.alice `sees` settlementCid
+  f.bob `cannotSee` settlementCid
+  f.carol `cannotSee` settlementCid
+
+  _ <- runSettle auction settlementCid
 
   sellerPaid <- balanceOf f.seller f.terms.payment
   sellerPaid === 100.0
@@ -452,14 +434,51 @@ whoSeesWhat = do
   sellerLot <- balanceOf f.seller f.terms.lot.instrument
   sellerLot === 0.0
 
-  f.bob `cannotSee` aliceBid
-  f.bob `cannotSee` aliceAllocation
+lotGoesToTheHighestPresentedBid : Script ()
+lotGoesToTheHighestPresentedBid = do
+  auction <- openAuction "highest"
+  let f = auction.fixture
+
+  carolSeat <- seatFor auction f.carol
+  lotAllocationCid <- lotAllocationOf auction
+
+  setTime f.terms.entryClosesAt
+  aliceBid <- fundBid auction f.alice 100.0
+  bobBid <- fundBid auction f.bob 60.0
+  bobAllocation <- bidAllocationOf f bobBid
+
+  lockedLot <- lockedBalanceOf f.seller f.terms.lot.instrument
+  lockedLot === lotAmount
+
+  setTime f.terms.biddingClosesAt
+  result <- runResolve auction [aliceBid, bobBid, carolSeat]
+  result.verdict === V_Decided None
+  _ <- runSettle auction (settlementOf' result)
+
+  alicePaid <- balanceOf f.alice f.terms.payment
+  alicePaid === 0.0
+  sellerPaid <- balanceOf f.seller f.terms.payment
+  sellerPaid === 100.0
+  aliceLot <- balanceOf f.alice f.terms.lot.instrument
+  aliceLot === lotAmount
+
+  f.bob `cannotSee` bobAllocation
+  bobLocked <- lockedBalanceOf f.bob f.terms.payment
+  bobLocked === 0.0
+  bobReturned <- unlockedBalanceOf f.bob f.terms.payment
+  bobReturned === 60.0
+  bobLot <- balanceOf f.bob f.terms.lot.instrument
+  bobLot === 0.0
+
+  f.seller `cannotSee` lotAllocationCid
+  f.operator `cannotSee` auction.auctionCid
+  runResolveMustFail auction [bobBid, carolSeat]
 
 
 
 
-theOperatorCannotSwapTheRegistry : Script ()
-theOperatorCannotSwapTheRegistry = do
+settlementRunsThroughTheFactoriesTheTermsName : Script ()
+settlementRunsThroughTheFactoriesTheTermsName = do
   -- terms naming the real lot settlement factory
   honest <- openAuction "registry"
   let hf = honest.fixture
@@ -469,17 +488,17 @@ theOperatorCannotSwapTheRegistry = do
     exerciseCmd impostorCid Alloc.SettlementFactory_PublicFetch with actors = [hf.operator]
   claimedAdmin.admin === hf.terms.lot.instrument.admin
   assertMsg "the impostor is not the factory the terms name"
-    (impostorCid /= hf.terms.registries.lotSettle.factoryCid)
+    (impostorCid /= hf.terms.lotSettleFactory)
 
-  aliceSeat <- seatFor honest hf.alice
   bobSeat <- seatFor honest hf.bob
   carolSeat <- seatFor honest hf.carol
   setTime hf.terms.entryClosesAt
   aliceBid <- fundBid honest hf.alice 100.0
   setTime hf.terms.biddingClosesAt
 
-  honestResult <- resolveAndSettle honest [aliceBid, bobSeat, carolSeat]
+  honestResult <- runResolve honest [aliceBid, bobSeat, carolSeat]
   honestResult.verdict === V_Decided None
+  _ <- runSettle honest (settlementOf' honestResult)
   honestSellerPaid <- balanceOf hf.seller hf.terms.payment
   honestSellerPaid === 100.0
   honestWinnerLot <- balanceOf hf.alice hf.terms.lot.instrument
@@ -489,73 +508,199 @@ theOperatorCannotSwapTheRegistry = do
   hostile <- openAuctionWith "hostile" $ \f -> do
     cid <- impostorFactoryFor f
     pure f.terms with
-      registries = f.terms.registries with
-        lotSettle = f.terms.registries.lotSettle with factoryCid = cid
+      lotSettleFactory = cid
   let xf = hostile.fixture
 
-  [(_, hostileAuction)] <- query @Auction xf.seller
-  assertMsg "the seller signed terms that name the impostor"
-    (hostileAuction.terms.registries.lotSettle.factoryCid
-      /= xf.terms.registries.paymentSettle.factoryCid)
-
-  xSeat <- seatFor hostile xf.alice
   xBobSeat <- seatFor hostile xf.bob
   xCarolSeat <- seatFor hostile xf.carol
   setTime xf.terms.entryClosesAt
   xBid <- fundBid hostile xf.alice 100.0
+  [(hostileFactoryCid, _)] <- query @ImpostorSettlementFactory xf.operator
+  [(_, hostileAuction)] <- query @Auction xf.seller
+  hostileAuction.terms.lotSettleFactory
+    === toInterfaceContractId @Alloc.SettlementFactory hostileFactoryCid
   [(_, signedBid)] <- query @AuctionBid xf.alice
-  signedBid.terms === xf.terms
+  signedBid.terms.lotSettleFactory
+    === toInterfaceContractId @Alloc.SettlementFactory hostileFactoryCid
 
   setTime xf.terms.biddingClosesAt
-  xResult <- resolveAndSettle hostile [xBid, xBobSeat, xCarolSeat]
+  xResult <- runResolve hostile [xBid, xBobSeat, xCarolSeat]
   xResult.verdict === V_Decided None
+
+  _ <- runSettle hostile (settlementOf' xResult)
 
   xSellerPaid <- balanceOf xf.seller xf.terms.payment
   xSellerPaid === 100.0
   xWinnerLot <- balanceOf xf.alice xf.terms.lot.instrument
   xWinnerLot === 0.0
 
-theBidderCannotBlockTheSale : Script ()
-theBidderCannotBlockTheSale = do
+aBidderCannotBlockTheSale : Script ()
+aBidderCannotBlockTheSale = do
   auction <- openAuction "block"
   let f = auction.fixture
-  aliceSeat <- seatFor auction f.alice
-  bobSeat <- seatFor auction f.bob
   carolSeat <- seatFor auction f.carol
   setTime f.terms.entryClosesAt
   aliceBid <- fundBid auction f.alice 100.0
+  bobBid <- fundBid auction f.bob 60.0
   aliceAllocation <- bidAllocationOf f aliceBid
+  bobAllocation <- bidAllocationOf f bobBid
   setTime f.terms.biddingClosesAt
 
+  aliceCtx <- cancelContextFor f aliceAllocation
+  bobCtx <- cancelContextFor f bobAllocation
+
+  -- a bid cannot be archived alone: the auction authorities are signatories
   submitMustFail f.alice $
     archiveCmd (fromInterfaceContractId @AuctionBid aliceBid)
+  submitMustFail f.bob $
+    archiveCmd (fromInterfaceContractId @AuctionBid bobBid)
 
+  -- the seat offers no withdraw action, so no one is entitled to it
   submitMustFailContaining "the actors are entitled to withdraw" (actAs f.alice) $
     exerciseCmd aliceBid OneLotBid_Withdraw with
       actors = [f.alice]
       extraArgs = emptyExtraArgs
+  submitMustFailContaining "the actors are entitled to withdraw" (actAs f.bob) $
+    exerciseCmd bobBid OneLotBid_Withdraw with
+      actors = [f.bob]
+      extraArgs = emptyExtraArgs
 
-  ctx <- cancelContextFor f aliceAllocation
+  -- the bid has not reached expiresAt, so it cannot be expired
+  submitMustFailContaining "the bid has expired" (actAs f.alice) $
+    exerciseCmd aliceBid OneLotBid_Expire with
+      actors = [f.alice]
+      extraArgs = emptyExtraArgs
+  submitMustFailContaining "the bid has expired" (actAs f.bob) $
+    exerciseCmd bobBid OneLotBid_Expire with
+      actors = [f.bob]
+      extraArgs = emptyExtraArgs
+
+  -- only the settlement executors may cancel the allocation, not the bidder
   submitMustFailContaining
     "'actors' does not have the same elements as one of 'allowed actors'."
-    (actAs f.alice <> discloseMany' ctx.disclosures)
+    (actAs f.alice <> discloseMany' aliceCtx.disclosures)
     (exerciseCmd aliceAllocation Alloc.Allocation_Cancel with
       actors = [f.alice]
-      extraArgs = ExtraArgs with context = ctx.choiceContext; meta = emptyMetadata)
+      extraArgs = ExtraArgs with context = aliceCtx.choiceContext; meta = emptyMetadata)
+  submitMustFailContaining
+    "'actors' does not have the same elements as one of 'allowed actors'."
+    (actAs f.bob <> discloseMany' bobCtx.disclosures)
+    (exerciseCmd bobAllocation Alloc.Allocation_Cancel with
+      actors = [f.bob]
+      extraArgs = ExtraArgs with context = bobCtx.choiceContext; meta = emptyMetadata)
 
-  Some av <- queryInterfaceContractId @Alloc.Allocation f.operator aliceAllocation
-  av.allocation.committed === True
-  av.allocation.settlementDeadline === Some f.terms.expiresAt
+
+  -- the allocation is committed and before its deadline, so it cannot be withdrawn
   submitMustFailContaining
     "Cannot withdraw a committed allocation before its settlement deadline"
-    (actAs f.alice <> discloseMany' ctx.disclosures)
+    (actAs f.alice <> discloseMany' aliceCtx.disclosures)
     (exerciseCmd aliceAllocation Alloc.Allocation_Withdraw with
       actors = [f.alice]
-      extraArgs = ExtraArgs with context = ctx.choiceContext; meta = emptyMetadata)
+      extraArgs = ExtraArgs with context = aliceCtx.choiceContext; meta = emptyMetadata)
+  submitMustFailContaining
+    "Cannot withdraw a committed allocation before its settlement deadline"
+    (actAs f.bob <> discloseMany' bobCtx.disclosures)
+    (exerciseCmd bobAllocation Alloc.Allocation_Withdraw with
+      actors = [f.bob]
+      extraArgs = ExtraArgs with context = bobCtx.choiceContext; meta = emptyMetadata)
 
-  result <- resolveAndSettle auction [aliceBid, bobSeat, carolSeat]
+  result <- runResolve auction [aliceBid, bobBid, carolSeat]
   result.verdict === V_Decided None
+  let settlementCid = settlementOf' result
+
+  bobRefunded <- unlockedBalanceOf f.bob f.terms.payment
+  bobRefunded === 60.0
+  f.bob `cannotSee` bobAllocation
+
+  awardCtx <- cancelContextFor f aliceAllocation
+  -- after the award the winner still cannot cancel its allocation: only the executors may
+  submitMustFailContaining
+    "'actors' does not have the same elements as one of 'allowed actors'."
+    (actAs f.alice <> discloseMany' awardCtx.disclosures)
+    (exerciseCmd aliceAllocation Alloc.Allocation_Cancel with
+      actors = [f.alice]
+      extraArgs = ExtraArgs with context = awardCtx.choiceContext; meta = emptyMetadata)
+  -- nor withdraw it: still committed, still before the deadline
+  submitMustFailContaining
+    "Cannot withdraw a committed allocation before its settlement deadline"
+    (actAs f.alice <> discloseMany' awardCtx.disclosures)
+    (exerciseCmd aliceAllocation Alloc.Allocation_Withdraw with
+      actors = [f.alice]
+      extraArgs = ExtraArgs with context = awardCtx.choiceContext; meta = emptyMetadata)
+
+  -- the settlement cannot be archived alone: the authorities and seller sign it
+  submitMustFail f.alice $ archiveCmd settlementCid
+  -- the winner is not entitled to cancel the settlement
+  submitMustFailContaining "the actors are entitled to cancel" (actAs f.alice) $
+    exerciseCmd (toInterfaceContractId @Settlement settlementCid) Settlement_Cancel with
+      actors = [f.alice]
+      extraArgs = emptyExtraArgs
+  -- the settlement has not expired, so it cannot be expired
+  submitMustFailContaining "the settlement has expired" (actAs f.alice) $
+    exerciseCmd (toInterfaceContractId @Settlement settlementCid) Settlement_Expire with
+      actor = f.alice
+
+  _ <- runSettle auction settlementCid
   sellerPaid <- balanceOf f.seller f.terms.payment
   sellerPaid === 100.0
   aliceLot <- balanceOf f.alice f.terms.lot.instrument
   aliceLot === lotAmount
+
+
+
+settlementRejectsAnImpostorAllocation : Script ()
+settlementRejectsAnImpostorAllocation = do
+  f <- setupAs "impostor"
+  now <- getTime
+
+  let leg = Alloc.TransferLeg with
+        transferLegId = "payment"
+        sender = basicAccount f.alice
+        receiver = basicAccount f.seller
+        amount = 100.0
+        instrumentId = f.terms.payment.id
+        meta = emptyMetadata
+      settlement = Alloc.SettlementInfo with
+        executors = [f.operator]
+        id = f.saleId
+        cid = None
+        meta = emptyMetadata
+
+  -- signed by Alice, but its view claims that admin
+  impostorAllocationCid <- fmap toInterfaceContractId $ submit f.alice $
+    createCmd ImpostorAllocation with
+      owner = f.alice
+      settlement
+      allocation = Alloc.AllocationSpecification with
+        admin = f.terms.payment.admin
+        authorizer = basicAccount f.alice
+        transferLegSides = [senderSide leg]
+        settlementDeadline = Some f.terms.expiresAt
+        nextIterationFunding = None
+        committed = True
+        meta = emptyMetadata
+      createdAt = now
+
+  let batch = SettlementBatch with
+        legs = [leg]
+        allocations =
+          [ Alloc.FinalizedAllocation with
+              allocationCid = impostorAllocationCid
+              extraTransferLegSides = []
+              nextIterationFunding = None ]
+        factoryCid = f.terms.paymentSettleFactory
+
+  settlementCid <- submit (actAs f.operator <> actAs f.seller) $
+    createCmd AuctionSettlement with
+      terms = f.terms
+      authorities = f.authorities
+      saleId = f.saleId
+      winner = f.alice
+      batches = [batch]
+      opensAt = now
+
+  submitMustFailContaining "the allocation is signed by the admin it names"
+    (actAs f.operator) $
+    exerciseCmd (toInterfaceContractId @Settlement settlementCid) Settlement_Settle with
+      actors = [f.operator]
+      extraArgs = emptyExtraArgs

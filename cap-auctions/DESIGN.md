@@ -23,35 +23,32 @@ the quotes and the allocations backing them. `OneLotBid_Withdraw`,
 
 Each choice checks entitlement against `OneLotBidView.availableActions`, the
 window against the terms, and the quote shape against the lot, then calls the
-format's implementation. An implementation may abort: the plain sealed-bid
-format refuses `OneLotBid_Withdraw`, and the high-trust format refuses
-`OneLotBid_RequestAllocations`.
+format's implementation. An implementation may abort: the sealed-bid
+format refuses `OneLotBid_Withdraw`.
 
 ## Layout
 
 ```
 cap-auctions/
-├── cap-auctions-registry/   RegistryCalls, AllocationFactoryCall,
-│                            SettlementFactoryCall — the factory cids + ExtraArgs.
-│                            Its own package: the interfaces import it, so folding it
-│                            into utils would close a cycle.
 ├── Interfaces/
-│   ├── bid/                 OneLotBid (requires Submittable), OneLotAuctionTerms,
+│   ├── bid/                 OneLotBid (requires Submittable), OneLotAuctionTerms
+│   │                        (carrying paymentSettleFactory and lotSettleFactory),
 │   │                        Direction, Lot, Quote
-│   └── settlement/          Settlement, SettlementBatch, SettlementView
-├── cap-auctions-utils/      saleSettlement, paymentLeg, lotLeg, paymentLegId, lotLegId
+│   └── settlement/          Settlement, SettlementBatch (legs, allocations, factoryCid),
+│                            SettlementView
+├── cap-auctions-utils/      oneLotSettlement, sellerOf, bidderOf, the committed
+│                            allocation specs (committedAllocation,
+│                            fundingOneInstrumentAllocation, receivingAllocation),
+│                            paymentLeg, lotLeg, paymentLegId, lotLegId
 └── cap-auctions-funding/    OneLotBidAllocationRequest, an AllocationRequest carrying
                              the specifications a one-lot bid implies, plus
                              bidderPaymentAllocation and bidderLotAllocation
 
 examples/auctions/
-├── sealed-bid-first-price/            the operator holds the assets and the
-│   {impl,fixtures,demo}               presentation: seller and bidders escrow up front,
-│                                      the procedure picks the high quote and mints the
-│                                      Settlement; no bidder authority at award.
-└── sealed-bid-first-price-high-trust/ the stronger one: the winner co-signs the
-    {impl,fixtures,demo}               settlement, and AuctionBid_Award re-allocates the
-                                       escrow onto the real legs before minting it.
+└── sealed-bid-first-price/            the operator holds the assets and the
+    {impl,impostors,demo}              presentation: seller and bidders escrow up front,
+                                       the procedure picks the high quote and mints the
+                                       Settlement; no bidder authority at award.
 
 lib/                         vendored Token Standard DARs the interfaces bind to
 ```

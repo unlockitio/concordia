@@ -2,17 +2,18 @@
 
 module Cap.Auctions.SettlementV1 where
 
+import DA.Foldable (forA_)
+
 import Splice.Api.Token.MetadataV1
 import qualified Splice.Api.Token.AllocationV2 as Alloc
 import Splice.Util (require)
 import Cap.Core.Utils (entitled, ExecutionAction (..), ExecutionCore, requireExpired, requireOpen)
-import Cap.Auctions.Registry (SettlementFactoryCall)
 
 data SettlementBatch = SettlementBatch
   with
     legs : [Alloc.TransferLeg]
     allocations : [Alloc.FinalizedAllocation]
-    factory : SettlementFactoryCall
+    factoryCid : ContractId Alloc.SettlementFactory
   deriving (Eq, Show)
 
 data SettlementView = SettlementView
@@ -60,13 +61,17 @@ interface Settlement where
         (entitled v.core.availableActions EA_Execute actors)
       require "every batch of the settlement moves at least one leg"
         (not (null v.batches) && all (\b -> not (null b.legs)) v.batches)
-      results <- forA v.batches $ \b ->
-        exercise b.factory.factoryCid Alloc.SettlementFactory_SettleBatch with
+      results <- forA v.batches $ \b -> do
+        forA_ b.allocations $ \fa -> do
+          a <- fetch fa.allocationCid
+          require "the allocation is signed by the admin it names"
+            ((view a).allocation.admin `elem` signatory a)
+        exercise b.factoryCid Alloc.SettlementFactory_SettleBatch with
           settlement = v.settlement
           transferLegs = b.legs
           allocations = b.allocations
           actors = v.settlement.executors
-          extraArgs = b.factory.settleBatchArgs
+          extraArgs
       pure Settlement_SettleResult with batches = results; meta = emptyMetadata
 
   choice Settlement_Cancel : Settlement_CancelResult

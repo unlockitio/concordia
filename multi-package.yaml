@@ -11,7 +11,6 @@ packages:
 - ./cap-governance/Interfaces/ballot
 - ./cap-governance/cap-governance-utils
 - ./cap-governance/tests/unit
-- ./cap-auctions/cap-auctions-registry
 - ./cap-auctions/Interfaces/bid
 - ./cap-auctions/Interfaces/settlement
 - ./cap-auctions/cap-auctions-utils
@@ -25,8 +24,5 @@ packages:
 - ./examples/governance/private-majority-vote/impl
 - ./examples/governance/private-majority-vote/demo
 - ./examples/auctions/sealed-bid-first-price/impl
-- ./examples/auctions/sealed-bid-first-price/fixtures
+- ./examples/auctions/sealed-bid-first-price/impostors
 - ./examples/auctions/sealed-bid-first-price/demo
-- ./examples/auctions/sealed-bid-first-price-high-trust/impl
-- ./examples/auctions/sealed-bid-first-price-high-trust/fixtures
-- ./examples/auctions/sealed-bid-first-price-high-trust/demo

@@ -7,7 +7,14 @@ module Cap.Auctions.Utils (
   -- * One-lot auctions
 
   -- ** Settlement and its legs
-  saleSettlement,
+  oneLotSettlement,
+  sellerOf,
+  bidderOf,
+
+  -- ** Committed allocation specs
+  committedAllocation,
+  fundingOneInstrumentAllocation,
+  receivingAllocation,
   paymentLegId,
   lotLegId,
   paymentLeg,

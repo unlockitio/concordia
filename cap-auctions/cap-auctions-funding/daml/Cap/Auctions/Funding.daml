@@ -5,24 +5,25 @@ module Cap.Auctions.Funding where
 import qualified DA.Map as Map
 import DA.Set (Set)
 import qualified DA.Set as Set
-import qualified DA.TextMap as TextMap
 
 import Splice.Api.Token.MetadataV1
-import qualified Splice.Api.Token.AllocationV2 as Alloc
 import qualified Splice.Api.Token.AllocationRequestV2 as AllocReq
 
 import Splice.TokenStandard.Utils
-  ( allocationRequestV2_acceptDefaultImpl, archiveAndCheckActors, regularAccountOwner
+  ( allocationRequestV2_acceptDefaultImpl, archiveAndCheckActors
   , regularAccountParties )
 
-import Cap.Core.SubmittableV1 (Mechanism)
+import qualified Splice.Api.Token.AllocationV2 as Alloc
+
+import Cap.Core.SubmittableV1 (Mechanism, authoritiesOf)
 import Cap.Auctions.OneLotBidV1 (OneLotBidView, Quote)
-import Cap.Auctions.Utils (saleSettlement)
+import Cap.Auctions.Utils
+  ( oneLotSettlement, bidderOf, fundingOneInstrumentAllocation, receivingAllocation )
 
 template OneLotBidAllocationRequest
   with
     mechanism : Mechanism
-    bid : OneLotBidView
+    bid : OneLotBidView -- could be generalized to any bid type actually
     requestedAt : Time
   where
     signatory Set.toList (authoritiesOf mechanism) <> [bidderOf bid]
@@ -34,8 +35,8 @@ template OneLotBidAllocationRequest
     interface instance AllocReq.AllocationRequest for OneLotBidAllocationRequest where
       view = AllocReq.AllocationRequestView with
         originalRequestCid = None
-        settlement = settlementFor mechanism
-        allocations = bidderAllocations bid
+        settlement = oneLotSettlement mechanism.id (authoritiesOf mechanism)
+        allocations = [bidderPaymentAllocation bid (concat bid.quotes), bidderLotAllocation bid]
         requestedAt
         settleAt = Some bid.terms.expiresAt
         availableActions = Map.fromList
@@ -51,7 +52,8 @@ template OneLotBidAllocationRequest
         pure AllocReq.AllocationRequest_RejectResult with meta = emptyMetadata
 
       allocationRequest_withdrawImpl self arg = do
-        archiveAndCheckActors self arg.actors [(settlementFor mechanism).executors]
+        archiveAndCheckActors self arg.actors
+          [(oneLotSettlement mechanism.id (authoritiesOf mechanism)).executors]
         pure AllocReq.AllocationRequest_WithdrawResult with meta = emptyMetadata
 
       allocationRequest_acceptExtraObservers _ = []
@@ -59,39 +61,12 @@ template OneLotBidAllocationRequest
       allocationRequest_withdrawExtraObservers _ = []
 
 
-authoritiesOf : Mechanism -> Set Party
-authoritiesOf mechanism = mechanism.resolver.authorities
-
-settlementFor : Mechanism -> Alloc.SettlementInfo
-settlementFor mechanism =
-  saleSettlement mechanism.id (Set.toList (authoritiesOf mechanism))
-
-bidderOf : OneLotBidView -> Party
-bidderOf bid = regularAccountOwner bid.bidderPaymentAccount
-
-bidderAllocations : OneLotBidView -> [Alloc.AllocationSpecification]
-bidderAllocations bid =
-  [bidderPaymentAllocation bid (concat bid.quotes), bidderLotAllocation bid]
 
 bidderPaymentAllocation : OneLotBidView -> [Quote] -> Alloc.AllocationSpecification
-bidderPaymentAllocation bid quotes = Alloc.AllocationSpecification with
-  admin = bid.terms.payment.admin
-  authorizer = bid.bidderPaymentAccount
-  transferLegSides = []
-  settlementDeadline = Some bid.terms.expiresAt
-  nextIterationFunding = funding bid.terms.payment.id (foldl max 0.0 (map (.price) quotes))
-  committed = True
-  meta = emptyMetadata
+bidderPaymentAllocation bid quotes =
+  fundingOneInstrumentAllocation bid.terms.payment bid.bidderPaymentAccount bid.terms.expiresAt
+    (foldl max 0.0 (map (.price) quotes))
 
 bidderLotAllocation : OneLotBidView -> Alloc.AllocationSpecification
-bidderLotAllocation bid = Alloc.AllocationSpecification with
-  admin = bid.terms.lot.instrument.admin
-  authorizer = bid.bidderLotAccount
-  transferLegSides = []
-  settlementDeadline = Some bid.terms.expiresAt
-  nextIterationFunding = Some TextMap.empty
-  committed = True
-  meta = emptyMetadata
-
-funding : Text -> Decimal -> Optional (TextMap.TextMap Decimal)
-funding instrumentId amount = Some (TextMap.fromList [(instrumentId, amount)])
+bidderLotAllocation bid =
+  receivingAllocation bid.terms.lot.instrument bid.bidderLotAccount bid.terms.expiresAt

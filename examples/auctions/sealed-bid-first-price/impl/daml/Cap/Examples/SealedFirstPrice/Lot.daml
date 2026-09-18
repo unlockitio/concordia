@@ -19,11 +19,12 @@ import Cap.Core.ResolverV1
 import Cap.Core.SubmittableV1
 import Cap.Auctions.OneLotBidV1
 import Cap.Auctions.SettlementV1 (SettlementBatch (..))
-import Cap.Auctions.Utils (lotLeg, paymentLeg)
+import Cap.Auctions.Utils
+  ( lotLeg, paymentLeg, sellerOf, bidderOf, oneLotSettlement
+  , fundingOneInstrumentAllocation, receivingAllocation )
 
 import Cap.Examples.SealedFirstPrice.Bid
 import Cap.Examples.SealedFirstPrice.Settlement
-import Cap.Examples.SealedFirstPrice.Terms
 
 firstPriceProcedureName : Text
 firstPriceProcedureName = ""
@@ -61,7 +62,7 @@ resolveFirstPrice
   -> [(ContractId Submittable, Submittable)]
   -> ExtraArgs
   -> Update Resolver_ResolveResult
-resolveFirstPrice auction self presented _ = do
+resolveFirstPrice auction self presented resolveArgs = do
   let terms = auction.terms
   now <- getTime
   requireClosed "the bidding window is closed" now terms.biddingClosesAt
@@ -74,11 +75,11 @@ resolveFirstPrice auction self presented _ = do
     require "every presented seat was opened on the seller's terms"
       (bv.terms == terms)
     require "every presented bid is signed by the bidder it names"
-      (null bv.quotes || bidderOf bv.bidderPaymentAccount `elem` signatory b)
+      (null bv.quotes || bidderOf bv `elem` signatory b)
     pure (cid, bv)
 
   require "every invited bidder is presented"
-    (sort [bidderOf bv.bidderPaymentAccount | (_, bv) <- seats] == sort auction.invited)
+    (sort [bidderOf bv | (_, bv) <- seats] == sort auction.invited)
 
   -- compute outcome
   let quoted = [(cid, bv, q) | (cid, bv) <- seats, [[q]] <- [bv.quotes]]
@@ -94,8 +95,8 @@ resolveFirstPrice auction self presented _ = do
         case winner.allocations of
           [paymentCid, lotCid] -> pure (paymentCid, lotCid)
           _ -> abort "the winning seat holds no pair of allocations"
-      let pLeg = paymentLeg terms winner.bidderPaymentAccount award.price
-          lLeg = lotLeg terms winner.bidderLotAccount award.quantity
+      let pLeg = paymentLeg winner award.price
+          lLeg = lotLeg winner award.quantity
           finalized cid side = Alloc.FinalizedAllocation with
             allocationCid = cid
             extraTransferLegSides = [side]
@@ -104,7 +105,7 @@ resolveFirstPrice auction self presented _ = do
         terms
         authorities = auction.authorities
         saleId
-        winner = bidderOf winner.bidderPaymentAccount
+        winner = bidderOf winner
         opensAt = now
         batches =
           [ SettlementBatch with
@@ -113,14 +114,14 @@ resolveFirstPrice auction self presented _ = do
                 [ finalized winnerPaymentAllocationCid (senderSide pLeg)
                 , finalized auction.sellerPaymentAllocationCid (receiverSide pLeg)
                 ]
-              factory = terms.registries.paymentSettle
+              factoryCid = terms.paymentSettleFactory
           , SettlementBatch with
               legs = [lLeg]
               allocations =
                 [ finalized auction.sellerLotAllocationCid (senderSide lLeg)
                 , finalized winnerLotAllocationCid (receiverSide lLeg)
                 ]
-              factory = terms.registries.lotSettle
+              factoryCid = terms.lotSettleFactory
           ]
       exercise (fromInterfaceContractId @AuctionBid winnerCid) AuctionBid_Close
       pure (V_Decided None, [coerceContractId settlementCid])
@@ -129,7 +130,7 @@ resolveFirstPrice auction self presented _ = do
   forA_ [cid | (cid, _) <- seats, Some cid /= awardedCid] $ \cid ->
     exercise cid OneLotBid_Release with
       actors = Set.toList auction.authorities
-      extraArgs = ExtraArgs with context = emptyChoiceContext; meta = emptyMetadata
+      extraArgs = resolveArgs
 
   archive self
   pure Resolver_ResolveResult with
@@ -162,16 +163,31 @@ template AuctionProposal
         now <- getTime
         require "the lot is locked before the entry window closes"
           (now < terms.entryClosesAt)
-        lotView <- view <$> fetch sellerLotAllocationCid
+        lotAlloc <- fetch sellerLotAllocationCid
+        let lotView = view lotAlloc
         require "the lot allocation is the one these terms imply"
           (lotView.allocation == sellerLotAllocation terms)
         require "the lot allocation is scoped to this auction"
-          (lotView.settlement == settlementOf saleId authorities)
-        paymentView <- view <$> fetch sellerPaymentAllocationCid
+          (lotView.settlement == oneLotSettlement saleId authorities)
+        require "the lot allocation is signed by its instrument admin"
+          (lotView.allocation.admin `elem` signatory lotAlloc)
+        paymentAlloc <- fetch sellerPaymentAllocationCid
+        let paymentView = view paymentAlloc
         require "the payment allocation is the one these terms imply"
           (paymentView.allocation == sellerPaymentAllocation terms)
         require "the payment allocation is scoped to this auction"
-          (paymentView.settlement == settlementOf saleId authorities)
+          (paymentView.settlement == oneLotSettlement saleId authorities)
+        require "the payment allocation is signed by its instrument admin"
+          (paymentView.allocation.admin `elem` signatory paymentAlloc)
         create Auction with
           terms; authorities; resolverId; invited
           sellerLotAllocationCid; sellerPaymentAllocationCid
+
+
+sellerLotAllocation : OneLotAuctionTerms -> Alloc.AllocationSpecification
+sellerLotAllocation terms =
+  fundingOneInstrumentAllocation terms.lot.instrument terms.sellerLotAccount terms.expiresAt terms.lot.amount
+
+sellerPaymentAllocation : OneLotAuctionTerms -> Alloc.AllocationSpecification
+sellerPaymentAllocation terms =
+  receivingAllocation terms.payment terms.sellerPaymentAccount terms.expiresAt

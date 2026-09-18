@@ -6,10 +6,9 @@ import DA.Foldable (forA_)
 import DA.List (unique)
 
 import Splice.Api.Token.MetadataV1
-import Splice.Api.Token.AllocationV2 (Allocation)
+import Splice.Api.Token.AllocationV2 (Allocation, SettlementFactory)
 import Splice.Util (require)
 import qualified Splice.Api.Token.HoldingV2 as Holding
-import Cap.Auctions.Registry (RegistryCalls)
 import DA.Map (Map)
 import Cap.Core.Utils (entitled, requireExpired, requireOpen)
 import Cap.Core.SubmittableV1 (Submittable)
@@ -35,7 +34,8 @@ data OneLotAuctionTerms = OneLotAuctionTerms
     lot : Lot
     sellerPaymentAccount : Holding.Account
     sellerLotAccount : Holding.Account
-    registries : RegistryCalls
+    paymentSettleFactory : ContractId SettlementFactory
+    lotSettleFactory : ContractId SettlementFactory
     payment : Holding.InstrumentId
   deriving (Eq, Show)
 

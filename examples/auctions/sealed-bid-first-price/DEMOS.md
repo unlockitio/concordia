@@ -1,28 +1,38 @@
 # Demos — `examples/auctions/sealed-bid-first-price`
 
-Demos showing what a sealed-bid first-price auction with ex-post bid privacy
-when the operator is trusted with correctly spending the allocation. 
-In this example the operator is trusted to correctly resolve the auction and to correctly spend the allocations. 
+Demos of a sealed-bid first-price auction with ex-post bid privacy. The operator
+is trusted to resolve the auction correctly and to spend the allocations
+correctly.
 
-The auction runs over a fixed set of invited bidders, named on the lot before it
-locks. Those bidders observe the lot, so each is an informee of
-`Resolver_Resolve` and reads the bid presentation. Bid privacy *among bidders*
-is guaranteed after settelment and the winner and higher bid are also kept private.
+The auction runs over a fixed set of invited bidders, named in `Auction.invited`
+before the seller accepts. Those bidders observe the `Auction`, so each is an
+informee of `Resolver_Resolve` and reads the bid presentation. A bidder reads no
+other bidder's quote, before or after settlement, and the losers read neither the
+winner nor the winning price.
 
 
 ## Method
 
 The demos are Daml Script tests exercised against two independent token
 registries: Canton Coin (Amulet) settles the payment leg, and a simulated
-registry built on `TestTokenV2` issues the lot. A single registry administering
-both instruments would leave the cross-registry atomicity of `Settlement_Settle`
-untested — the payment and lot batches move through different registries in one
-transaction.
+registry built on `TestTokenV2` issues the lot. The payment and lot batches of a
+`Settlement_Settle` therefore move through different registries in one
+transaction. `Settlement_Settle` does not check that a batch moved the legs it
+named, so transaction atomicity is all it gives —
+`settlementRunsThroughTheFactoriesTheTermsName` shows one batch settling while
+the other does nothing.
 
-Visibility claims take two forms. Single claims are `sees` / `cannotSee`
-predicates over a party and one contract, so each note in the diagrams below is
-one line of test code. These checks cannot catch is divulgence. 
-That can be checked in Daml Studio. The other two claims are proved with assertions.
+Visibility is checked two ways. `sees` and `cannotSee` query one party's active
+contract set for one contract id, so most notes in the diagrams below are one
+line of test code. `visibleTo` returns a party's complete visible set;
+`whoSeesWhat` uses it to assert that the seller's set is unchanged across
+bidding.
+
+Both forms read the active contract set, so a `cannotSee` holds for every party
+once the contract is archived. Each check is therefore placed while its contract
+is still live: `whoSeesWhat` splits `runResolve` from `runSettle` because
+`Settlement_Settle` archives the `AuctionSettlement` it settles. Neither form
+catches divulgence, which is visible in Daml Studio.
 
 The test harness is taken from the Splice repository
 (`github.com/canton-network/splice`, under `token-standard/`). Since Daml Script
@@ -37,8 +47,8 @@ a dependency on the wallet client and on the V1 API.
 
 `setupAs` allocates the six parties, stands up both registries, and builds one
 `OneLotAuctionTerms`: the operator as sole authority, `basicAccount seller` for
-both seller legs, a single Widget as the lot, a `0.0` reserve, the four registry calls
-pinned, and a three-day timeline — `entryClosesAt` at day 1, `biddingClosesAt`
+both seller legs, a single Widget as the lot, a `0.0` reserve, the two settlement
+factories pinned, and a three-day timeline — `entryClosesAt` at day 1, `biddingClosesAt`
 at day 2, `expiresAt` at day 3. Party names are namespaced per demo, so no two
 demos share a ledger contract.
 
@@ -50,10 +60,11 @@ then creates one empty `AuctionBid` seat per invited bidder. Nothing has been
 bid yet; the demos take it from there, opening bidding with
 `setTime f.terms.entryClosesAt` and resolving after
 `setTime f.terms.biddingClosesAt`. Resolving mints an `AuctionSettlement`; the
-assets move in a **second** transaction, so the demos use `resolveAndSettle`,
-which runs the resolve and then `Settlement_Settle` on what it minted.
+assets move in a **second** transaction, so each demo calls `runResolve` and
+then `runSettle` on the `AuctionSettlement` the resolve minted.
 `openAuctionWith` is the same as `openAuction`, with a hook to rewrite the terms
-first — `theOperatorCannotSwapTheRegistry` uses it to name a hostile factory.
+first — `settlementRunsThroughTheFactoriesTheTermsName` uses it to name an
+impostor factory.
 
 ## Placing a bid
 
@@ -83,21 +94,19 @@ Each demo carries one claim. Dispatched here:
 
 | Test | Security claim |
 | --- | --- |
-| [`whoSeesWhat`](#1-whoseeswhat) | A losing bidder reads the bid presentation but cannot read the quote in it — bid privacy survives the outcome |
-| [`lotGoesToTheHighestPresentedBid`](#2-lotgoestothehighestpresentedbid) | The lot goes to the highest presented bid at that bidder's own quoted price, and every loser is made whole in the same transaction |
-| [`theOperatorCannotSwapTheRegistry`](#3-theoperatorcannotswaptheregistry) | Settlement cannot be redirected: the registry calls are pinned in the terms when the auction is constituted, not chosen at settlement |
-| [`theBidderCannotBlockTheSale`](#4-thebiddercannotblockthesale) | Neither the winner nor a loser holds a veto at settlement time |
-
-A version whose contracts carry higher guarantees: the operator can
-neither drop a bidder nor incorrectly spend allocations the settlement can be found in
-[`../sealed-bid-first-price-high-trust`](../sealed-bid-first-price-high-trust/DEMOS.md).
+| [`whoSeesWhat`](#1-whoseeswhat) | A losing bidder cannot see another bidder's bid, nor the settlement that names the winner and price |
+| [`lotGoesToTheHighestPresentedBid`](#2-lotgoestothehighestpresentedbid) | The lot goes to the highest presented bid at that bidder's own quoted price, and every loser's allocation is cancelled in the resolve that awards it |
+| [`settlementRunsThroughTheFactoriesTheTermsName`](#3-settlementrunsthroughthefactoriesthetermsname) | The award reads both settlement factories off `OneLotAuctionTerms`; it is not passed at settlement time |
+| [`aBidderCannotBlockTheSale`](#4-abiddercannotblockthesale) | Neither the winner nor a loser holds a veto at settlement time |
+| [`settlementRejectsAnImpostorAllocation`](#5-settlementrejectsanimpostorallocation) | An impostor allocation whose view names the admin but which the admin did not sign cannot be settled | 
 
 
 ## 1. `whoSeesWhat`
 
-One happy-path auction over three invited bidders, two of whom bid. After every
-phase the demo asserts each party's **complete** visible set. This demo covers
-the whole privacy guarantee at once, and follows the sale through to settlement.
+One happy-path auction over three invited bidders, two of whom bid. The demo
+checks each contract against the parties that should and should not read it,
+asserts that the seller's complete visible set is unchanged across bidding, and
+follows the sale through to settlement.
 
 ```mermaid
 sequenceDiagram
@@ -107,12 +116,12 @@ sequenceDiagram
     participant B as Bob
     participant C as Carol
 
-    Note over S,C: Phase 1 — the invited bidders, then the lot
-    O->>O: Auction — invited = A, B, C
-    Note over A,C: each observes the resolver, the seller does not
-    O->>S: AuctionProposal
-    S->>S: Accept — locks the lot in an allocation, executors = [O]
-    Note over S: sees its own lot allocation, and nothing else
+    Note over S,C: Phase 1 — the lot is locked, then the auction
+    S->>S: allocates the lot and the payment leg, executors = [O]
+    O->>S: AuctionProposal — invited = A, B, C
+    S->>S: Accept — checks both allocations, creates Auction
+    Note over A,C: each observes the Auction; the seller signs it
+    Note over S: reads the Auction and its own two allocations
 
     Note over S,C: Phase 2 — bidding, after entryClosesAt
     A->>A: RequestAllocations at 100 — the request names the amount to lock
@@ -129,6 +138,7 @@ sequenceDiagram
     O->>O: presents A's bid, B's bid, and C's empty seat
     Note over A,C: each is an informee — each finds its own entry
     O->>O: mints AuctionSettlement — the two batches, off the terms
+    Note over A,B: A (winner) sees the AuctionSettlement; B cannot — it names the winner and price
     O-->>B: seal cancelled, 60 back to B
     Note over S,C: nothing has moved yet
 
@@ -137,8 +147,12 @@ sequenceDiagram
     O->>A: lot batch — the lot from S to A
     Note over S,C: ✓ both legs, one transaction, two registries
     Note over B: learns it did not win, and that all three were presented
-    Note over B: learns no quote — the verdict carries no value
+    Note over B: learns no winner and no quote
 ```
+
+The last two notes are read off the resolve transaction tree in Daml Studio.
+Daml Script asserts contract visibility, not which nodes a party is an informee
+of.
 
 
 ## 2. `lotGoesToTheHighestPresentedBid`
@@ -167,16 +181,24 @@ sequenceDiagram
     Note over S,B: ✓ both legs together
 
     O->>O: resolve again
-    Note over O: ✗ the lot and its allocation are both spent
+    Note over O: ✗ the Auction archived itself in the first resolve
 ```
 
 
-## 3. `theOperatorCannotSwapTheRegistry`
-
+## 3. `settlementRunsThroughTheFactoriesTheTermsName`
 
 A `SettlementFactory` view is self-asserted: any party can create a template
-whose `view.admin` names someone else. The factory call contract id and choice context both are pinned in the auction terms,
-and the award reads it from there.
+whose `view.admin` names someone else, and `SettlementFactory_PublicFetch`
+returns that claim unchecked. `OneLotAuctionTerms` pins both factories by
+contract id in `paymentSettleFactory` and `lotSettleFactory`, and
+`resolveFirstPrice` reads them from there, so the operator names no factory at
+resolve or settle time.
+
+The seller and the bidder must therefore check the factories the terms name. The
+second half of the demo opens an auction whose terms name the impostor: the
+seller signs those terms in `AuctionProposal_Accept`, the bidder signs them in
+`OneLotBid_Finalize`, the payment batch settles, the lot batch does nothing, and
+the winner pays for nothing.
 
 
 ```mermaid
@@ -203,27 +225,76 @@ sequenceDiagram
 
 
 
-## 4. `theBidderCannotBlockTheSale`
+## 4. `aBidderCannotBlockTheSale`
 
-Alice tries to abort the sale trough all possible choices and it fails in all of them.
+Alice bids 100 and wins, Bob bids 60 and loses. Each tries the same five ways out
+of its own seat and allocation once bidding has closed, and Alice tries four more
+in the window between `Resolver_Resolve` and `Settlement_Settle`, where the
+`AuctionSettlement` exists and her two allocations are still live.
+
+`OneLotBid_Expire` is the one choice on the seat with no entitlement check, so
+any party may exercise it. It is bounded by `requireExpired` against
+`terms.expiresAt`, and `Settlement_Settle` is bounded by `requireOpen` against
+the same instant. The two windows do not overlap, so a bidder can only expire its
+seat once the sale can no longer settle.
 
 ```mermaid
 sequenceDiagram
     participant O as Operator
     participant A as Alice
+    participant B as Bob
 
-    A->>A: bid submitted — A signs AuctionBid, 100 committed
-    Note over A: bidding is closed
+    A->>O: bid 100 — A signs AuctionBid, 100 committed
+    B->>O: bid 60 — B signs AuctionBid, 60 committed
+    Note over A,B: bidding is closed
 
+    Note over A,B: each tries five paths on its own seat and allocation
     A->>A: archive AuctionBid alone
-    Note over A: ✗ Archive needs every signatory, and the operator is one
+    Note over A,B: ✗ Archive needs every signatory, and the operator is one
     A->>A: OneLotBid_Withdraw
-    Note over A: ✗ the actors are entitled to withdraw — the seat offers no such action
-    A->>A: Allocation_Cancel on its own payment allocation
-    Note over A: ✗ actors does not have the same elements as one of allowed actors
-    A->>A: Allocation_Withdraw on its own payment allocation
-    Note over A: ✗ cannot withdraw a committed allocation before its settlement deadline
+    Note over A,B: ✗ the seat lists no BA_Withdraw in availableActions
+    A->>A: OneLotBid_Expire
+    Note over A,B: ✗ expiresAt has not passed
+    A->>A: Allocation_Cancel
+    Note over A,B: ✗ cancel is for the executors, not the authorizer
+    A->>A: Allocation_Withdraw
+    Note over A,B: ✗ the allocation is committed and its deadline has not passed
 
-    O->>O: Resolver_Resolve — A is offline
+    O->>O: Resolver_Resolve — A wins, B's allocation is cancelled
+    Note over B: 60 back; B holds nothing left to take back
+
+    Note over A: the settlement exists, A's allocations are still live
+    A->>A: Allocation_Cancel, then Allocation_Withdraw
+    Note over A: ✗ the same two refusals
+    A->>A: archive AuctionSettlement
+    Note over A: ✗ A is observer winner, not a signatory
+    A->>A: Settlement_Cancel
+    Note over A: ✗ availableActions holds only EA_Execute
+    A->>A: Settlement_Expire
+    Note over A: ✗ expiresAt has not passed
+
+    O->>O: Settlement_Settle
     Note over O,A: ✓ 100 to the seller, the lot to A
+```
+
+
+## 5. `settlementRejectsAnImpostorAllocation`
+
+An allocation is authenticated by whoever signed it, not by the `admin` field on
+its view. This demo places an impostor allocation — signed by the bidder, its
+view claiming the payment admin — in a settlement batch and tries to settle it.
+`Settlement_Settle` fetches each allocation and requires the instrument admin to
+be a signatory, so it refuses the batch. The auction cannot be made to settle an
+allocation the admin did not sign, even one whose view names the admin correctly.
+
+```mermaid
+sequenceDiagram
+    participant O as Operator
+    participant S as Seller
+    participant A as Alice
+
+    A->>A: ImpostorAllocation — signed by Alice, view.admin = payment admin
+    O->>O: AuctionSettlement — a batch naming the impostor
+    O->>O: Settlement_Settle
+    Note over O,A: ✗ the allocation is signed by the admin it names — Alice is not the admin
 ```

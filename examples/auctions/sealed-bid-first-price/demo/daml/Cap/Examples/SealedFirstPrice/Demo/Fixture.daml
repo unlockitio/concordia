@@ -7,14 +7,12 @@ import DA.Optional (isNone, isSome)
 import qualified DA.Text as Text
 import DA.Time
 import qualified DA.Set as Set
-import qualified DA.TextMap as TextMap
 import Daml.Script
 
 import Splice.Api.Token.MetadataV1
 import qualified Splice.Api.Token.AllocationV2 as Alloc
 import qualified Splice.Api.Token.AllocationInstructionV2 as AllocInstr
 import qualified Splice.Api.Token.HoldingV2 as Holding
-import Splice.Amulet.TokenApiUtils (expireLockKey)
 import Splice.TokenStandard.Utils (basicAccount)
 
 import Splice.Testing.Utils
@@ -22,7 +20,6 @@ import qualified Splice.Testing.Registries.AmuletRegistryV2 as AmuletRegistry
 import qualified Splice.Testing.Registries.TestTokenV2_RegistryV2 as LotRegistry
 import qualified Splice.Testing.TokenStandard.RegistryApiV2 as RegistryApi
 
-import Cap.Auctions.Registry
 import Cap.Auctions.OneLotBidV1
 
 lotInstrumentName : Text
@@ -73,20 +70,6 @@ setupAs ns = do
         id = "auction-1/lot-1"
         cid = None
         meta = emptyMetadata
-      probeAllocate instrumentId = AllocInstr.AllocationFactory_Allocate with
-        settlement = probeSettlement
-        allocation = Alloc.AllocationSpecification with
-          admin = instrumentId.admin
-          authorizer = basicAccount seller
-          transferLegSides = []
-          settlementDeadline = Some (opensAt `addRelTime` days 3)
-          nextIterationFunding = None
-          committed = True
-          meta = emptyMetadata
-        requestedAt = opensAt
-        inputHoldingCids = []
-        actors = [seller]
-        extraArgs = emptyExtraArgs
       probeSettle = Alloc.SettlementFactory_SettleBatch with
         settlement = probeSettlement
         transferLegs = []
@@ -94,8 +77,6 @@ setupAs ns = do
         actors = [operator]
         extraArgs = emptyExtraArgs
 
-  paymentAllocationEc <- RegistryApi.getAllocationFactory amulet (probeAllocate paymentInstrument)
-  lotAllocationEc <- RegistryApi.getAllocationFactory lot (probeAllocate lotInstrument)
   paymentSettlementEc <- RegistryApi.getSettlementFactory amulet probeSettle
   lotSettlementEc <- RegistryApi.getSettlementFactory lot probeSettle
 
@@ -106,24 +87,8 @@ setupAs ns = do
         direction = Forward
         sellerPaymentAccount = basicAccount seller
         sellerLotAccount = basicAccount seller
-        registries = RegistryCalls with
-          paymentAllocate = AllocationFactoryCall with
-            factoryCid = paymentAllocationEc.factoryCid
-            allocateArgs = paymentAllocationEc.arg.extraArgs
-            cancelArgs = ExtraArgs with
-              context = ChoiceContext with
-                values = TextMap.fromList [(expireLockKey, AV_Bool True)]
-              meta = emptyMetadata
-          paymentSettle = SettlementFactoryCall with
-            factoryCid = paymentSettlementEc.factoryCid
-            settleBatchArgs = paymentSettlementEc.arg.extraArgs
-          lotAllocate = AllocationFactoryCall with
-            factoryCid = lotAllocationEc.factoryCid
-            allocateArgs = lotAllocationEc.arg.extraArgs
-            cancelArgs = lotAllocationEc.arg.extraArgs
-          lotSettle = SettlementFactoryCall with
-            factoryCid = lotSettlementEc.factoryCid
-            settleBatchArgs = lotSettlementEc.arg.extraArgs
+        paymentSettleFactory = paymentSettlementEc.factoryCid
+        lotSettleFactory = lotSettlementEc.factoryCid
         payment = paymentInstrument
         lot = Lot with
           instrument = lotInstrument
@@ -264,3 +229,15 @@ settleDisclosures f = do
   paymentD <- paymentSettleFor f (probeSettleBatch f)
   lotD <- lotSettleFor f (probeSettleBatch f)
   pure (paymentD <> lotD)
+
+
+settleContext : Fixture -> Script ExtraArgs
+settleContext f = do
+  paymentEc <- RegistryApi.getSettlementFactory f.amulet (probeSettleBatch f)
+  lotEc <- RegistryApi.getSettlementFactory f.lot (probeSettleBatch f)
+  pure ExtraArgs with
+    context = ChoiceContext with
+      values =
+        paymentEc.arg.extraArgs.context.values
+          <> lotEc.arg.extraArgs.context.values
+    meta = emptyMetadata
