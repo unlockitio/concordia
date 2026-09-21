@@ -22,6 +22,7 @@ data ExecutionCore = ExecutionCore
     authorities : Set Party
     availableActions : Map ExecutionAction [[Party]]
     opensAt : Time
+    cancelAt : Time
     expiresAt : Optional Time
     meta : Metadata
   deriving (Eq, Show)

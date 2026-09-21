@@ -99,8 +99,7 @@ holds : DriftPolicy -> Bind -> Bind -> Bool
 ```
 
 A pinned contract must be the contract presented. With no contract pinned, the
-two states are compared under the policy. A policy never sees a contract id, so
-none can waive that rule.
+two states are compared under the policy. 
 
 `cap-governance-utils` supplies `anyState`, `unchanged` and `typed`, which
 compose with `<>`, and `holdsAll` to apply one policy across a

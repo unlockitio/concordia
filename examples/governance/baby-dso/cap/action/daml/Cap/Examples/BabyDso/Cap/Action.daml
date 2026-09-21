@@ -133,7 +133,7 @@ boundAuthentic key policy currentTargets bindings = do
   cid <- orAbort "the bound target was not presented"
     (Map.lookup (Authentic key) currentTargets)
   presented <- fetchCheckedTarget key (coerceContractId cid)
-  require "the target no longer satisfies the bind"
+  require "the target still satisfies the bind"
     (holds policy bind (Bind with state = (view presented).state; cid = Some cid))
   pure cid
 

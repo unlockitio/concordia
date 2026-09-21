@@ -1,0 +1,167 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | Test helpers for driving a CAP mechanism from Daml Script.
+--
+-- A format supplies a LiveMechanism; the shared tests in
+-- cap-core/tests/ledger consume it. Nothing here is specific to governance or
+-- auctions.
+module Cap.Core.Harness (
+
+  -- * The test environment
+  -- | Built fresh per test by the format, so the contract ids it holds are
+  -- never stale.
+  LiveMechanism (..),
+  startMechanism,
+  createResolver,
+
+  -- * Building the resolve argument
+  -- | Used by the format to fill the driver, and by a test to vary one part of
+  -- a well-formed resolve.
+  resolveArg,
+  createSubmittable,
+  createSubmittables,
+  present,
+  emptyExtraArgs,
+
+  -- * Driving a resolve
+  -- | Called by the shared tests in cap-core/tests/ledger.
+  runResolve,
+  runResolveFails,
+  afterExpiry,
+  expire,
+
+  -- * Reading a result
+  -- | Called by the shared tests, and by the layer packages that name what a
+  -- resolve created.
+  createdAs,
+  createdOne,
+  decided,
+
+) where
+
+import qualified DA.Set as Set
+import DA.Time
+import Daml.Script
+
+import Splice.Api.Token.MetadataV1
+
+import Cap.Core.ResolverV1
+import Cap.Core.SubmittableV1
+import Cap.Core.Dummies.Resolver
+import Cap.Core.Dummies.Submittable
+import Cap.Core.Harness.Failures
+
+
+-- The test environment
+--------------------------
+
+-- | What the shared tests need from a format to exercise the resolve seam
+-- against it.
+data LiveMechanism = LiveMechanism with
+    resolverCid : ContractId Resolver
+    resolvers : [Party]
+    mechanism : Mechanism
+    extraArgs : ExtraArgs
+    disclosures : [Disclosure]
+    toExpiry : Optional (Script ())
+
+
+-- Building the resolve argument
+--------------------------------
+
+startMechanism : DummyResolver -> Script LiveMechanism
+startMechanism resolver = do
+  resolverCid <- createResolver resolver
+  resolvers <- case filter (not . null) resolver.resolvers of
+    group :: _ -> pure group
+    [] -> fail "the resolver admits nobody"
+  pure LiveMechanism with
+    resolverCid
+    resolvers
+    mechanism = Mechanism with
+      resolver = ResolverKey with
+        authorities = resolver.authorities
+        id = resolver.id
+      resolverCid = None
+      procedure = resolver.procedure
+      id = "mechanism-1"
+    extraArgs = emptyExtraArgs -- will probably change with auctions
+    disclosures = [] -- will probably change with auctions
+    toExpiry = fmap (\t -> setTime (t `addRelTime` seconds 1)) resolver.expiresAt
+
+createResolver
+  : forall t. (Template t, HasSignatory t, HasEnsure t, HasToInterface t Resolver)
+  => t -> Script (ContractId Resolver)
+createResolver resolver = do
+  cid <- submit (signatory resolver) $ createCmd resolver
+  pure (toInterfaceContractId @Resolver cid)
+
+resolveArg : LiveMechanism -> [ContractId Submittable] -> Resolver_Resolve
+resolveArg live submittables = Resolver_Resolve with
+  actors = live.resolvers
+  mechanism = live.mechanism
+  submittables
+  extraArgs = live.extraArgs
+
+createSubmittable : DummySubmittable -> Script (ContractId Submittable)
+createSubmittable submittable = do
+  cid <- submit submittable.submitter $ createCmd submittable
+  pure (toInterfaceContractId @Submittable cid)
+
+createSubmittables : [DummySubmittable] -> Script [ContractId Submittable]
+createSubmittables = mapA createSubmittable
+
+present : forall t. HasToInterface t Submittable => ContractId t -> ContractId Submittable
+present = toInterfaceContractId @Submittable
+
+emptyExtraArgs : ExtraArgs
+emptyExtraArgs = ExtraArgs with
+  context = emptyChoiceContext
+  meta = emptyMetadata
+
+
+-- Resolving a mechanism
+---------------------
+
+runResolve : LiveMechanism -> Resolver_Resolve -> Script Resolver_ResolveResult
+runResolve live arg =
+  submit (actAs arg.actors <> discloseMany live.disclosures) $
+    exerciseCmd live.resolverCid arg
+
+-- | As runResolve, but the resolve must fail with a message containing
+-- expectedMsg.
+runResolveFails : LiveMechanism -> Text -> Resolver_Resolve -> Script ()
+runResolveFails live expectedMsg arg =
+  failsWith expectedMsg (actAs arg.actors <> discloseMany live.disclosures) $
+    exerciseCmd live.resolverCid arg
+
+-- | Run body past the resolver's expiry, or skip it when the format declares none.
+afterExpiry : LiveMechanism -> Script () -> Script ()
+afterExpiry live body = case live.toExpiry of
+  None -> pure ()
+  Some pass -> pass >> body
+
+expire : LiveMechanism -> Party -> Script Resolver_ExpireResult
+expire live actor =
+  submit actor $ exerciseCmd live.resolverCid Resolver_Expire with actor
+
+
+-- Reading a result
+--------------------
+
+createdAs : forall i. Resolver_ResolveResult -> [ContractId i]
+createdAs result = map coerceContractId result.created
+
+createdOne : forall i. Text -> Resolver_ResolveResult -> Script (ContractId i)
+createdOne what result = case createdAs @i result of
+  [cid] -> pure cid
+  cids ->
+    fail
+      ( "expected the resolve to create one " <> what
+          <> ", it created " <> show (length cids)
+      )
+
+decided : Resolver_ResolveResult -> Script (Optional AnyValue)
+decided result = case result.verdict of
+  V_Decided value -> pure value
+  verdict -> fail ("expected a decided verdict, got " <> show verdict)

@@ -76,7 +76,7 @@ template ConfigUpdate
         cid <- orAbort "the config the bind names was not presented"
           (Map.lookup (Authentic ctk) targets)
         presented <- fetchCheckedTarget ctk (coerceContractId cid)
-        require "the target no longer satisfies the bind"
+        require "the target still satisfies the bind"
           (holds unchanged bind (Bind with state = (view presented).state; cid = Some cid))
         updated <- exercise (coerceContractId cid : ContractId Config)
           Config_Set with newSetting

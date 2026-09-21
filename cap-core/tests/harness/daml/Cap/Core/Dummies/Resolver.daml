@@ -1,0 +1,47 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Core.Dummies.Resolver
+  ( DummyResolver (..)
+  ) where
+
+import DA.Map (Map)
+import qualified DA.Map as Map
+import DA.Set (Set)
+import qualified DA.Set as Set
+
+import Splice.Api.Token.MetadataV1
+
+import Cap.Core.ResolverV1
+
+template DummyResolver
+  with
+    authorities : Set Party
+    id : Text
+    procedure : Text
+    resolvers : [[Party]]
+    observers : [Party]
+    expiresAt : Optional Time
+  where
+    signatory Set.toList authorities
+    observer observers
+
+    interface instance Resolver for DummyResolver where
+      view = ResolverView with
+        authorities
+        id
+        expiresAt
+        meta = emptyMetadata
+
+      procedures = procedureMap this
+
+procedureMap : DummyResolver -> Map Text Procedure
+procedureMap this = Map.fromList
+  [ ( this.procedure
+    , Procedure with
+        resolvers = this.resolvers
+        resolve = \_ _ _ -> pure Resolver_ResolveResult with
+          verdict = V_Decided None
+          created = []
+          meta = emptyMetadata
+    )
+  ]

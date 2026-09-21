@@ -5,12 +5,16 @@ packages:
 - ./cap-core/Interfaces/submittable
 - ./cap-core/Interfaces/resolver
 - ./cap-core/tests/unit
+- ./cap-core/tests/harness
+- ./cap-core/tests/ledger
 - ./cap-governance/Interfaces/binding
 - ./cap-governance/Interfaces/executable
 - ./cap-governance/Interfaces/action
 - ./cap-governance/Interfaces/ballot
 - ./cap-governance/cap-governance-utils
 - ./cap-governance/tests/unit
+- ./cap-governance/tests/harness
+- ./cap-governance/tests/ledger
 - ./cap-auctions/Interfaces/bid
 - ./cap-auctions/Interfaces/settlement
 - ./cap-auctions/cap-auctions-utils

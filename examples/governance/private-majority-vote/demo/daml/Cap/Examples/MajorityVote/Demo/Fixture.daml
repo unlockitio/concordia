@@ -60,12 +60,6 @@ data Fixture = Fixture with
     actionCid : ContractId SetConfigAction
     terms : ProposalTerms
 
-configBind : Party -> Text -> Map TargetKey Bind
-configBind dso setting = Map.fromList
-  [ ( Authentic (configTargetKey dso)
-    , Bind with state = Some (toAnyValue setting); cid = None
-    )
-  ]
 
 setupAs : Text -> Script Fixture
 setupAs ns = do
@@ -177,11 +171,6 @@ resolveOnCmd f resolverCid mechanism submittables =
     submittables = withProposal f submittables
     extraArgs = noArgs
 
-runResolveMustFailContaining : Fixture -> Text -> [ContractId Submittable] -> Script ()
-runResolveMustFailContaining f expected submittables =
-  submitMustFailContaining expected f.operator
-    (resolveOnCmd f f.resolverCid f.mechanism submittables)
-
 executionOf : Resolver_ResolveResult -> ContractId Executable
 executionOf result = case result.created of
   [cid] -> coerceContractId cid
@@ -201,6 +190,7 @@ forgedCore f = ExecutionCore with
   authorities = Set.fromList [f.dso]
   availableActions = Map.fromList [(EA_Execute, [[f.operator]])]
   opensAt = f.terms.votingClosesAt
+  cancelAt = f.terms.votingClosesAt
   expiresAt = Some f.terms.expiresAt
   meta = emptyMetadata
 
@@ -213,3 +203,11 @@ runIssueMustFail f actor core =
       outcome = Some yayOption
       bindings = configBind f.dso openingSetting
       extraArgs = noArgs
+
+
+configBind : Party -> Text -> Map TargetKey Bind
+configBind dso setting = Map.fromList
+  [ ( Authentic (configTargetKey dso)
+    , Bind with state = Some (toAnyValue setting); cid = None
+    )
+  ]

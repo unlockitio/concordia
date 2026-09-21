@@ -66,10 +66,11 @@ interface Ballot requires Submittable where
     controller actors
     do
       let bv = view this
-      require "the actors are entitled to cast"
-        (entitled bv.availableActions BA_Cast actors)
       now <- getTime
       requireOpen "the voting window is open" now bv.opensAt (Some bv.closesAt)
+      require "the ballot has not expired" (now < bv.expiresAt)
+      require "the actors are entitled to cast"
+        (entitled bv.availableActions BA_Cast actors)
       ballot_castImpl this self (Ballot_Cast with ..)
 
   nonconsuming choice Ballot_Withdraw : Ballot_WithdrawResult
@@ -79,10 +80,11 @@ interface Ballot requires Submittable where
     controller actors
     do
       let bv = view this
-      require "the actors are entitled to withdraw"
-        (entitled bv.availableActions BA_Withdraw actors)
       now <- getTime
       requireOpen "the voting window is open" now bv.opensAt (Some bv.closesAt)
+      require "the ballot has not expired" (now < bv.expiresAt)
+      require "the actors are entitled to withdraw"
+        (entitled bv.availableActions BA_Withdraw actors)
       ballot_withdrawImpl this self (Ballot_Withdraw with ..)
 
   nonconsuming choice Ballot_Expire : Ballot_ExpireResult

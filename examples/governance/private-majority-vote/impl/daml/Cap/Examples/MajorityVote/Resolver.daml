@@ -150,9 +150,7 @@ template VoteResolver
           roll = []
 
 
--- | Carried by a strict majority of the electorate, rejected by anything less.
--- The bar is the electorate, so the same votes decide the same way at any
--- turnout, and the tally always concludes: 'V_Lapsed' means nobody voted.
+
 majorityOfElectorate : Tally Text
 majorityOfElectorate = Tally with
   decide = \electorate casts ->
@@ -205,6 +203,7 @@ majority body = Procedure with
             availableActions = Map.fromList
               [(EA_Execute, map (:: []) (Set.toList body.electorate))]
             opensAt = terms.votingClosesAt
+            cancelAt = terms.votingClosesAt
             expiresAt = Some terms.expiresAt
             meta = emptyMetadata
           outcome = Some winner

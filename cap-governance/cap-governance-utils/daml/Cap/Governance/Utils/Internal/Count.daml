@@ -110,7 +110,7 @@ requireCoverage electorate casts =
 -- | Requires every vote cast to name one of the options the question puts.
 requireOptions : Eq a => [a] -> [Cast a] -> Update ()
 requireOptions options casts =
-  require "a presented vote names an option the question does not put"
+  require "every presented vote names an option the question puts"
     (all (`elem` options) (votes casts))
 
 -- | The ballots that carry a vote.

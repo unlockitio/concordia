@@ -36,9 +36,6 @@ data BindSpec = BindSpec
   deriving (Eq, Show)
 
 
-dueAt : Stage -> AsOf a -> Bool
-dueAt stage asOf = isNone asOf.seen || asOf.stage <= stage
-
 wellFormedAt : Stage -> Map TargetKey BindSpec -> Bool
 wellFormedAt stage schedule = all bindWellFormed (Map.toList schedule)
   where
@@ -47,6 +44,10 @@ wellFormedAt stage schedule = all bindWellFormed (Map.toList schedule)
         && stateAddsSomething spec
         && optional True (dueAt stage) spec.state
         && dueAt stage spec.cid
+
+    -- no part carries a value before the stage that fixes it
+    dueAt : Stage -> AsOf a -> Bool
+    dueAt at asOf = isNone asOf.seen || asOf.stage <= at
 
     -- a state fixed no earlier than the contract adds nothing, cid fixes state
     stateAddsSomething spec =

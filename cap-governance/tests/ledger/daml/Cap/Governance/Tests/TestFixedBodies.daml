@@ -1,0 +1,442 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Governance.Tests.TestFixedBodies () where
+
+import Prelude hiding (Action)
+
+import DA.Assert ((===))
+import qualified DA.Map as Map
+import qualified DA.Set as Set
+import DA.Time
+import Daml.Script hiding (AnyContractId)
+
+import Splice.Api.Token.MetadataV1
+
+import Cap.Core.SubmittableV1 (Mechanism (..), ResolverKey (..))
+import Cap.Core.Utils (ExecutionAction (..), ExecutionCore (..))
+import Cap.Governance.ActionV1 (Action)
+import Cap.Governance.BallotV1
+import Cap.Governance.Dummies.Action
+import Cap.Governance.Dummies.Ballot
+import Cap.Governance.Dummies.Executable
+import Cap.Governance.Harness
+
+data Fixture = Fixture with
+    dso : Party
+    voter : Party
+    delegate : Party
+    external : Party
+    now : Time
+    ballot : DummyBallot
+    action : DummyAction
+    executable : DummyExecutable
+    core : ExecutionCore
+
+setupAs : Text -> Script Fixture
+setupAs ns = do
+  let party role = "fixed-" <> ns <> "-" <> role
+  dso <- allocatePartyByHint (PartyIdHint (party "dso"))
+  voter <- allocatePartyByHint (PartyIdHint (party "voter"))
+  delegate <- allocatePartyByHint (PartyIdHint (party "delegate"))
+  external <- allocatePartyByHint (PartyIdHint (party "external"))
+  now <- getTime
+
+  let watchers = [voter, delegate, external]
+      action = DummyAction with
+        signer = dso; observers = watchers; authorizers = [[dso]]; bindSpec = Map.empty
+      core = ExecutionCore with
+        authorities = Set.fromList [dso]
+        availableActions = Map.fromList [(EA_Execute, [[voter]]), (EA_Cancel, [[voter]])]
+        opensAt = now `addRelTime` hours (-1)
+        cancelAt = now `addRelTime` hours (-1)
+        expiresAt = Some (now `addRelTime` days 1)
+        meta = emptyMetadata
+      executable = DummyExecutable with
+        core; observers = watchers; bindings = Map.empty; outcome = None
+
+  actionCid <- toInterfaceContractId @Action <$> submit dso (createCmd action)
+
+  let ballot = DummyBallot with
+        mechanism = Mechanism with
+          resolver = ResolverKey with authorities = Set.fromList [dso]; id = "body-1"
+          resolverCid = None
+          procedure = "procedure-1"
+          id = "mechanism-1"
+        actionCid
+        voter
+        observers = watchers
+        opensAt = now `addRelTime` hours (-1)
+        closesAt = now `addRelTime` days 1
+        expiresAt = now `addRelTime` days 2
+        availableActions = Map.fromList [(BA_Cast, [[voter]]), (BA_Withdraw, [[voter]])]
+        bindings = Map.empty
+        vote = None
+
+  pure Fixture with ..
+
+anAdmittedVoterCasts : Script ()
+anAdmittedVoterCasts = do
+  Fixture {..} <- setupAs "cast-admitted"
+  live <- putBallotUnbound ballot
+  cast <- runCast live (castArg live)
+  seen <- ballotView voter cast
+  seen.vote === Some live.vote
+
+aStrangerDoesNotCast : Script ()
+aStrangerDoesNotCast = do
+  Fixture {..} <- setupAs "cast-stranger"
+  live <- putBallotUnbound ballot
+  runCastFails live "the actors are entitled to cast" $
+    (castArg live) with actors = [external]
+
+aDelegateCastsWhenTheMapNamesIt : Script ()
+aDelegateCastsWhenTheMapNamesIt = do
+  Fixture {..} <- setupAs "cast-delegate"
+  live <- putBallotUnbound (ballot with
+    availableActions = Map.fromList
+      [ (BA_Cast, [[voter], [delegate]])
+      , (BA_Withdraw, [[voter]])
+      ])
+  _ <- runCast live ((castArg live) with actors = [delegate])
+  pure ()
+
+aJointGroupCastsTogether : Script ()
+aJointGroupCastsTogether = do
+  Fixture {..} <- setupAs "cast-joint"
+  live <- putBallotUnbound (ballot with
+    availableActions = Map.fromList [(BA_Cast, [[voter, delegate]])])
+  _ <- runCast live ((castArg live) with actors = [voter, delegate])
+  pure ()
+
+aJointGroupDoesNotCastAlone : Script ()
+aJointGroupDoesNotCastAlone = do
+  Fixture {..} <- setupAs "cast-joint-alone"
+  live <- putBallotUnbound (ballot with
+    availableActions = Map.fromList [(BA_Cast, [[voter, delegate]])])
+  runCastFails live "the actors are entitled to cast" $
+    (castArg live) with actors = [voter]
+
+anActorBeyondTheGroupStillCasts : Script ()
+anActorBeyondTheGroupStillCasts = do
+  Fixture {..} <- setupAs "cast-covering"
+  live <- putBallotUnbound (ballot with
+    availableActions = Map.fromList [(BA_Cast, [[voter]])])
+  _ <- runCast live ((castArg live) with actors = [voter, delegate])
+  pure ()
+
+anEmptyGroupAdmitsNobodyToCast : Script ()
+anEmptyGroupAdmitsNobodyToCast = do
+  Fixture {..} <- setupAs "cast-empty-group"
+  live <- putBallotUnbound (ballot with
+    availableActions = Map.fromList [(BA_Cast, [[]])])
+  runCastFails live "the actors are entitled to cast" (castArg live)
+
+anUnnamedActionAdmitsNobody : Script ()
+anUnnamedActionAdmitsNobody = do
+  Fixture {..} <- setupAs "cast-unnamed"
+  live <- putBallotUnbound (ballot with
+    availableActions = Map.fromList [(BA_Withdraw, [[voter]])])
+  runCastFails live "the actors are entitled to cast" (castArg live)
+
+castingOpensAtOpensAt : Script ()
+castingOpensAtOpensAt = do
+  Fixture {..} <- setupAs "cast-at-open"
+  live <- putBallotUnbound (ballot with opensAt = now)
+  _ <- runCast live (castArg live)
+  pure ()
+
+castingIsRefusedBeforeItOpens : Script ()
+castingIsRefusedBeforeItOpens = do
+  Fixture {..} <- setupAs "cast-before-open"
+  live <- putBallotUnbound (ballot with opensAt = now `addRelTime` seconds 1)
+  runCastFails live "the voting window is open" (castArg live)
+
+castingIsRefusedAtTheClose : Script ()
+castingIsRefusedAtTheClose = do
+  Fixture {..} <- setupAs "cast-at-close"
+  live <- putBallotUnbound (ballot with closesAt = now)
+  runCastFails live "the voting window is open" (castArg live)
+
+castingIsRefusedAfterTheClose : Script ()
+castingIsRefusedAfterTheClose = do
+  Fixture {..} <- setupAs "cast-after-close"
+  live <- putBallotUnbound (ballot with closesAt = now `addRelTime` seconds (-1))
+  runCastFails live "the voting window is open" (castArg live)
+
+castingIsRefusedOnceTheBallotCanExpire : Script ()
+castingIsRefusedOnceTheBallotCanExpire = do
+  Fixture {..} <- setupAs "cast-expirable"
+  live <- putBallotUnbound (ballot with
+    opensAt = now `addRelTime` hours (-1)
+    closesAt = now `addRelTime` days 1
+    expiresAt = now)
+  runCastFails live "the ballot has not expired" (castArg live)
+
+anAdmittedVoterWithdraws : Script ()
+anAdmittedVoterWithdraws = do
+  Fixture {..} <- setupAs "withdraw-admitted"
+  live <- putBallotUnbound ballot
+  _ <- runWithdraw live (withdrawArg live)
+  pure ()
+
+aStrangerDoesNotWithdraw : Script ()
+aStrangerDoesNotWithdraw = do
+  Fixture {..} <- setupAs "withdraw-stranger"
+  live <- putBallotUnbound ballot
+  runWithdrawFails live "the actors are entitled to withdraw" $
+    (withdrawArg live) with actors = [external]
+
+castingAndWithdrawingAreEntitledApart : Script ()
+castingAndWithdrawingAreEntitledApart = do
+  Fixture {..} <- setupAs "withdraw-apart"
+  live <- putBallotUnbound (ballot with
+    availableActions = Map.fromList
+      [ (BA_Cast, [[voter]])
+      , (BA_Withdraw, [[delegate]])
+      ])
+  runWithdrawFails live "the actors are entitled to withdraw" (withdrawArg live)
+  _ <- runWithdraw live ((withdrawArg live) with actors = [delegate])
+  pure ()
+
+withdrawingIsRefusedAfterTheClose : Script ()
+withdrawingIsRefusedAfterTheClose = do
+  Fixture {..} <- setupAs "withdraw-after-close"
+  live <- putBallotUnbound (ballot with closesAt = now)
+  runWithdrawFails live "the voting window is open" (withdrawArg live)
+
+withdrawingIsRefusedOnceTheBallotCanExpire : Script ()
+withdrawingIsRefusedOnceTheBallotCanExpire = do
+  Fixture {..} <- setupAs "withdraw-expirable"
+  live <- putBallotUnbound (ballot with
+    opensAt = now `addRelTime` hours (-1)
+    closesAt = now `addRelTime` days 1
+    expiresAt = now)
+  runWithdrawFails live "the ballot has not expired" (withdrawArg live)
+
+aBallotDoesNotExpireBeforeItsTime : Script ()
+aBallotDoesNotExpireBeforeItsTime = do
+  Fixture {..} <- setupAs "expire-early"
+  live <- putBallotUnbound (ballot with
+    closesAt = now `addRelTime` hours (-1)
+    expiresAt = now `addRelTime` seconds 1)
+  runBallotExpireFails live "the ballot has expired" [voter]
+
+aBallotExpiresAtItsExpiry : Script ()
+aBallotExpiresAtItsExpiry = do
+  Fixture {..} <- setupAs "expire-at-expiry"
+  live <- putBallotUnbound (ballot with
+    closesAt = now `addRelTime` hours (-1)
+    expiresAt = now)
+  _ <- runBallotExpire live [voter]
+  pure ()
+
+anyPartyExpiresABallot : Script ()
+anyPartyExpiresABallot = do
+  Fixture {..} <- setupAs "expire-anyone"
+  live <- putBallotUnbound (ballot with
+    availableActions = Map.fromList [(BA_Cast, [[voter]])]
+    closesAt = now `addRelTime` hours (-1)
+    expiresAt = now)
+  _ <- runBallotExpire live [external]
+  pure ()
+
+theResolverAuthoritiesConsume : Script ()
+theResolverAuthoritiesConsume = do
+  Fixture {..} <- setupAs "consume-authorities"
+  live <- putBallotUnbound ballot
+  _ <- runConsume live [dso]
+  pure ()
+
+aVoterDoesNotConsume : Script ()
+aVoterDoesNotConsume = do
+  Fixture {..} <- setupAs "consume-voter"
+  live <- putBallotUnbound ballot
+  runConsumeUnauthorized live [voter]
+
+everyResolverAuthorityConsentsToAConsume : Script ()
+everyResolverAuthorityConsentsToAConsume = do
+  Fixture {..} <- setupAs "consume-joint"
+  let joint = Set.fromList [dso, delegate]
+  live <- putBallotUnbound (ballot with
+    mechanism = ballot.mechanism with
+      resolver = ResolverKey with
+        authorities = joint
+        id = ballot.mechanism.resolver.id)
+  runConsumeUnauthorized live [dso]
+  _ <- runConsume live (Set.toList joint)
+  pure ()
+
+anAuthorizerSetAuthorizes : Script ()
+anAuthorizerSetAuthorizes = do
+  Fixture {..} <- setupAs "authorize-admitted"
+  live <- putActionUnbound (action with authorizers = [[dso]]) core
+  result <- runAuthorize live (authorizeArg live)
+  length result.executionCids === 1
+
+aStrangerDoesNotAuthorize : Script ()
+aStrangerDoesNotAuthorize = do
+  Fixture {..} <- setupAs "authorize-stranger"
+  live <- putActionUnbound (action with authorizers = [[dso]]) core
+  runAuthorizeFails live "the actors are an authorizer set of this action" $
+    (authorizeArg live) with actors = [external]
+
+eitherAuthorizerGroupActsAlone : Script ()
+eitherAuthorizerGroupActsAlone = do
+  Fixture {..} <- setupAs "authorize-either"
+  live <- putActionUnbound (action with authorizers = [[dso], [delegate]]) core
+  _ <- runAuthorize live (authorizeArg live)
+  _ <- runAuthorize live ((authorizeArg live) with actors = [delegate])
+  pure ()
+
+aJointAuthorizerGroupDoesNotActAlone : Script ()
+aJointAuthorizerGroupDoesNotActAlone = do
+  Fixture {..} <- setupAs "authorize-joint"
+  live <- putActionUnbound (action with authorizers = [[dso, delegate]]) core
+  runAuthorizeFails live "the actors are an authorizer set of this action" $
+    (authorizeArg live) with actors = [delegate]
+  _ <- runAuthorize live ((authorizeArg live) with actors = [dso, delegate])
+  pure ()
+
+anActionNamingNoGroupAdmitsNobody : Script ()
+anActionNamingNoGroupAdmitsNobody = do
+  Fixture {..} <- setupAs "authorize-no-group"
+  live <- putActionUnbound (action with authorizers = []) core
+  runAuthorizeFails live "the actors are an authorizer set of this action" $
+    authorizeArg live
+
+anEmptyAuthorizerGroupAdmitsNobody : Script ()
+anEmptyAuthorizerGroupAdmitsNobody = do
+  Fixture {..} <- setupAs "authorize-empty-group"
+  live <- putActionUnbound (action with authorizers = [[]]) core
+  runAuthorizeFails live "the actors are an authorizer set of this action" $
+    authorizeArg live
+
+anAdmittedExecutorExecutes : Script ()
+anAdmittedExecutorExecutes = do
+  Fixture {..} <- setupAs "execute-admitted"
+  live <- putExecutableUnbound executable [voter]
+  _ <- runExecute live (executeArg live)
+  pure ()
+
+aStrangerDoesNotExecute : Script ()
+aStrangerDoesNotExecute = do
+  Fixture {..} <- setupAs "execute-stranger"
+  live <- putExecutableUnbound executable [voter]
+  runExecuteFails live "the actors are entitled to execute" $
+    (executeArg live) with actors = [external]
+
+executionOpensAtOpensAt : Script ()
+executionOpensAtOpensAt = do
+  Fixture {..} <- setupAs "execute-at-open"
+  live <- putExecutableUnbound (executable with core = (core with opensAt = now)) [voter]
+  _ <- runExecute live (executeArg live)
+  pure ()
+
+executionIsRefusedBeforeItOpens : Script ()
+executionIsRefusedBeforeItOpens = do
+  Fixture {..} <- setupAs "execute-timelock"
+  live <- putExecutableUnbound (executable with core = (core with opensAt = now `addRelTime` seconds 1)) [voter]
+  runExecuteFails live "the execution window is open" (executeArg live)
+
+executionIsRefusedAtTheExpiry : Script ()
+executionIsRefusedAtTheExpiry = do
+  Fixture {..} <- setupAs "execute-at-expiry"
+  live <- putExecutableUnbound (executable with core = (core with expiresAt = Some now)) [voter]
+  runExecuteFails live "the execution window is open" (executeArg live)
+
+anExecutionWithNoExpiryStaysOpen : Script ()
+anExecutionWithNoExpiryStaysOpen = do
+  Fixture {..} <- setupAs "execute-no-expiry"
+  live <- putExecutableUnbound (executable with core = (core with expiresAt = None)) [voter]
+  _ <- runExecute live (executeArg live)
+  pure ()
+
+anEmptyExecutionWindowRefusesAndExpires : Script ()
+anEmptyExecutionWindowRefusesAndExpires = do
+  Fixture {..} <- setupAs "execute-empty-window"
+  live <- putExecutableUnbound (executable with core = (core with opensAt = now; expiresAt = Some now)) [voter]
+  runExecuteFails live "the execution window is open" (executeArg live)
+  _ <- runExecutionExpire live external
+  pure ()
+
+anAdmittedCancellerCancels : Script ()
+anAdmittedCancellerCancels = do
+  Fixture {..} <- setupAs "cancel-admitted"
+  live <- putExecutableUnbound executable [voter]
+  _ <- runCancel live (cancelArg live)
+  pure ()
+
+aStrangerDoesNotCancel : Script ()
+aStrangerDoesNotCancel = do
+  Fixture {..} <- setupAs "cancel-stranger"
+  live <- putExecutableUnbound executable [voter]
+  runCancelFails live "the actors are entitled to cancel" $
+    (cancelArg live) with actors = [external]
+
+executingAndCancellingAreEntitledApart : Script ()
+executingAndCancellingAreEntitledApart = do
+  Fixture {..} <- setupAs "cancel-apart"
+  let split = core with
+        availableActions = Map.fromList
+          [ (EA_Execute, [[voter]])
+          , (EA_Cancel, [[delegate]])
+          ]
+  live <- putExecutableUnbound (executable with core = split) [voter]
+  runCancelFails live "the actors are entitled to cancel" (cancelArg live)
+  _ <- runCancel live ((cancelArg live) with actors = [delegate])
+  pure ()
+
+cancellingOpensAtCancelAt : Script ()
+cancellingOpensAtCancelAt = do
+  Fixture {..} <- setupAs "cancel-at-open"
+  live <- putExecutableUnbound (executable with core = (core with cancelAt = now)) [voter]
+  _ <- runCancel live (cancelArg live)
+  pure ()
+
+cancellingIsRefusedBeforeCancelAt : Script ()
+cancellingIsRefusedBeforeCancelAt = do
+  Fixture {..} <- setupAs "cancel-before-open"
+  live <- putExecutableUnbound (executable with core = (core with cancelAt = now `addRelTime` seconds 1)) [voter]
+  runCancelFails live "the cancellation window is open" (cancelArg live)
+
+cancellingIsRefusedBeforeCancelAtEvenAfterExecutionOpens : Script ()
+cancellingIsRefusedBeforeCancelAtEvenAfterExecutionOpens = do
+  Fixture {..} <- setupAs "cancel-after-execution-opens"
+  let late = core with
+        opensAt = now `addRelTime` hours (-1)
+        cancelAt = now `addRelTime` days 1
+  live <- putExecutableUnbound (executable with core = late) [voter]
+  runCancelFails live "the cancellation window is open" (cancelArg live)
+
+cancellingOutlivesTheExpiry : Script ()
+cancellingOutlivesTheExpiry = do
+  Fixture {..} <- setupAs "cancel-after-expiry"
+  live <- putExecutableUnbound (executable with core = (core with cancelAt = now; expiresAt = Some now)) [voter]
+  _ <- runCancel live (cancelArg live)
+  pure ()
+
+anExecutionDoesNotExpireBeforeItsTime : Script ()
+anExecutionDoesNotExpireBeforeItsTime = do
+  Fixture {..} <- setupAs "execution-expire-early"
+  live <- putExecutableUnbound (executable with core = (core with expiresAt = Some (now `addRelTime` seconds 1))) [voter]
+  runExecutionExpireFails live "the execution has expired" voter
+
+anExecutionExpiresAtItsExpiry : Script ()
+anExecutionExpiresAtItsExpiry = do
+  Fixture {..} <- setupAs "execution-expire-at-expiry"
+  live <- putExecutableUnbound (executable with core = (core with expiresAt = Some now)) [voter]
+  _ <- runExecutionExpire live voter
+  pure ()
+
+anyPartyExpiresAnExecution : Script ()
+anyPartyExpiresAnExecution = do
+  Fixture {..} <- setupAs "execution-expire-anyone"
+  live <- putExecutableUnbound (executable with core = (core with expiresAt = Some now)) [voter]
+  _ <- runExecutionExpire live external
+  pure ()
+
+anExecutionWithNoExpiryCannotBeExpired : Script ()
+anExecutionWithNoExpiryCannotBeExpired = do
+  Fixture {..} <- setupAs "execution-expire-never"
+  live <- putExecutableUnbound (executable with core = (core with expiresAt = None)) [voter]
+  runExecutionExpireFails live "this contract has no expiry" voter

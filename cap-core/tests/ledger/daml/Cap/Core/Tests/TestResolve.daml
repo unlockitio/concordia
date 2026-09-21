@@ -1,0 +1,106 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Core.Tests.TestResolve where
+
+import DA.Assert ((===))
+import qualified DA.Set as Set
+import Daml.Script
+
+import Cap.Core.ResolverV1
+import Cap.Core.Dummies.Resolver
+import Cap.Core.Dummies.Submittable
+import Cap.Core.Harness
+import Cap.Core.Tests.TestResolveFixture
+
+aResolveDecides : Script ()
+aResolveDecides = do
+  Fixture {..} <- setupAs "decides"
+  result <- runResolve live (resolveArg live submittables)
+  verdict <- decided result
+  verdict === None
+  result.created === []
+
+theResolverSurvivesAResolve : Script ()
+theResolverSurvivesAResolve = do
+  Fixture {..} <- setupAs "survives"
+  _ <- runResolve live (resolveArg live submittables)
+  _ <- runResolve live (resolveArg live submittables)
+  pure ()
+
+aMechanismNamingAnotherResolverIsRefused : Script ()
+aMechanismNamingAnotherResolverIsRefused = do
+  Fixture {..} <- setupAs "other-key"
+  runResolveFails live "the declared mechanism names another resolver" $
+    (resolveArg live submittables) with
+      mechanism = live.mechanism with
+        resolver = live.mechanism.resolver with id = "resolver-2"
+
+aMechanismBoundToAnotherContractIsRefused : Script ()
+aMechanismBoundToAnotherContractIsRefused = do
+  Fixture {..} <- setupAs "other-cid"
+  other <- createResolver DummyResolver with
+    authorities = Set.fromList [dso]
+    id = "resolver-1"
+    procedure = "procedure-1"
+    resolvers = [[operator]]
+    observers = [operator]
+    expiresAt = None
+  runResolveFails live "the declared mechanism is binded to another resolver contract" $
+    (resolveArg live submittables) with
+      mechanism = live.mechanism with resolverCid = Some (coerceContractId other)
+
+anEmptyPresentationIsRefused : Script ()
+anEmptyPresentationIsRefused = do
+  Fixture {..} <- setupAs "empty"
+  runResolveFails live "a presentation holds at least one submittable" (resolveArg live [])
+
+aRepeatedSubmittableIsRefused : Script ()
+aRepeatedSubmittableIsRefused = do
+  Fixture {..} <- setupAs "repeated"
+  runResolveFails live "the presented submittables are distinct" $
+    resolveArg live (submittables <> submittables)
+
+aSubmittableOfAnotherMechanismIsRefused : Script ()
+aSubmittableOfAnotherMechanismIsRefused = do
+  Fixture {..} <- setupAs "foreign"
+  foreign <- createSubmittable DummySubmittable with
+    mechanism = live.mechanism with id = "mechanism-2"
+    submitter = alice
+    observers = [operator]
+  runResolveFails live "Contract group identifier mismatch" $
+    resolveArg live (submittables <> [foreign])
+
+anUndeclaredProcedureIsRefused : Script ()
+anUndeclaredProcedureIsRefused = do
+  Fixture {..} <- setupAs "procedure"
+  let undeclared = live.mechanism with procedure = "procedure-2"
+  presented <- createSubmittables
+    [ DummySubmittable with
+        mechanism = undeclared
+        submitter = alice
+        observers = [operator]
+    ]
+  runResolveFails live "the mechanism names a procedure this resolver does not have" $
+    (resolveArg live presented) with mechanism = undeclared
+
+anUnadmittedActorCannotResolve : Script ()
+anUnadmittedActorCannotResolve = do
+  Fixture {..} <- setupAs "unadmitted"
+  runResolveFails live "not authorised to resolve" $
+    (resolveArg live submittables) with actors = [external]
+
+theResolverDoesNotExpireEarly : Script ()
+theResolverDoesNotExpireEarly = do
+  Fixture {..} <- setupAs "early"
+  result <- trySubmit (actAs dso) $
+    exerciseCmd live.resolverCid Resolver_Expire with actor = dso
+  case result of
+    Left _ -> pure ()
+    Right _ -> fail "the resolver expired before its expiry"
+
+theResolverExpires : Script ()
+theResolverExpires = do
+  Fixture {..} <- setupAs "expires"
+  afterExpiry live $ do
+    _ <- expire live dso
+    pure ()

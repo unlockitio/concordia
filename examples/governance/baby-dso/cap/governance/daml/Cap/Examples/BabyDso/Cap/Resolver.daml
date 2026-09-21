@@ -147,6 +147,7 @@ coreFor rules now delay =
     authorities = Set.fromList [rules.dso]
     availableActions = Map.fromList [(EA_Execute, [[sv] | sv <- Set.toList rules.svs])]
     opensAt
+    cancelAt = opensAt
     expiresAt = Some (opensAt `addRelTime` rules.executionWindow)
     meta = emptyMetadata
 

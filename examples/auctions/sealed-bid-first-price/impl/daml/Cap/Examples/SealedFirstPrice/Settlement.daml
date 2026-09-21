@@ -34,6 +34,7 @@ template AuctionSettlement
           authorities
           availableActions = Map.fromList [(EA_Execute, [Set.toList authorities])]
           opensAt
+          cancelAt = opensAt
           expiresAt = Some terms.expiresAt
           meta = emptyMetadata
         settlement = oneLotSettlement saleId authorities

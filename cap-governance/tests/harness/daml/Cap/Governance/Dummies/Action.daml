@@ -1,0 +1,44 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Governance.Dummies.Action
+  ( DummyAction (..)
+  ) where
+
+import Prelude hiding (Action)
+
+import DA.Map (Map)
+
+import Splice.Api.Token.MetadataV1
+
+import Cap.Governance.ActionV1
+import Cap.Governance.BindingV1 (TargetKey)
+import Cap.Governance.Dummies.Executable
+import Cap.Governance.ExecutableV1 (Executable)
+
+template DummyAction
+  with
+    signer : Party
+    observers : [Party]
+    authorizers : [[Party]]
+    bindSpec : Map TargetKey BindSpec
+  where
+    signatory signer
+    observer observers
+
+    ensure wellFormedAt Genesis bindSpec
+
+    interface instance Action for DummyAction where
+      view = ActionView with
+        authorizers
+        bindSpec
+        meta = emptyMetadata
+
+      action_authorizeExecutionImpl _ arg = do
+        cid <- create DummyExecutable with
+          core = arg.core
+          observers
+          bindings = arg.bindings
+          outcome = arg.outcome
+        pure Action_AuthorizeExecutionResult with
+          executionCids = [toInterfaceContractId @Executable cid]
+          meta = emptyMetadata

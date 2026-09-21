@@ -1,0 +1,22 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Core.Harness.Failures
+  ( failsWith
+  ) where
+
+import DA.Action (unless)
+import qualified DA.Text as Text
+import Daml.Script
+
+failsWith : Show a => Text -> SubmitOptions -> Commands a -> Script ()
+failsWith expectedMsg options cmds = do
+  result <- trySubmit options cmds
+  case result of
+    Left (FailureStatusError status) -> check status.message
+    Left (TruncatedError _ message) -> check message
+    Left err -> fail ("the command failed unexpectedly: " <> show err)
+    Right value -> fail ("the command succeeded with " <> show value)
+  where
+    check actual =
+      unless (expectedMsg `Text.isInfixOf` actual) $
+        fail ("expected a failure stating " <> expectedMsg <> ", got " <> actual)

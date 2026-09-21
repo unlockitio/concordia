@@ -167,11 +167,12 @@ theCountCoversTheElectorate = do
   votes <- castAll round yayOption yayOption nayOption
 
   setTime f.terms.votingClosesAt
-  let coversTheRoll = "the presented ballots cover the roll"
-  runResolveMustFailContaining f coversTheRoll
-    (map presented [votes.alice, votes.carol])
-  runResolveMustFailContaining f coversTheRoll
-    (map presented [votes.alice, votes.bob])
+  submitMustFailContaining "the presented ballots cover the roll" f.operator $
+    resolveOnCmd f f.resolverCid f.mechanism $
+      map presented [votes.alice, votes.carol]
+  submitMustFailContaining "the presented ballots cover the roll" f.operator $
+    resolveOnCmd f f.resolverCid f.mechanism $
+      map presented [votes.alice, votes.bob]
 
   submitMustFail f.operator $ createCmd PrivateBallot with
     operator = f.operator

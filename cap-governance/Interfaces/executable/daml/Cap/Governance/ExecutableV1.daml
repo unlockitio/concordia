@@ -60,8 +60,11 @@ interface Executable where
       extraArgs : ExtraArgs
     controller actors
     do
+      let v = view this
+      now <- getTime
+      requireOpen "the cancellation window is open" now v.core.cancelAt None
       require "the actors are entitled to cancel"
-        (entitled (view this).core.availableActions EA_Cancel actors)
+        (entitled v.core.availableActions EA_Cancel actors)
       executable_cancelImpl this (Executable_Cancel with ..)
 
   choice Executable_Expire : Executable_ExpireResult
