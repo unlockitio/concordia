@@ -1,6 +1,6 @@
 -- SPDX-License-Identifier: Apache-2.0
 
-module Cap.Examples.BabyDso.Resolver where
+module Cap.Examples.BabyDso.Governor where
 
 import Prelude hiding (Action)
 
@@ -22,7 +22,7 @@ import Cap.Governance.ActionV1
 import Cap.Governance.ExecutableV1 (Executable)
 import Cap.Governance.Utils
   ( Cast (..), HasWeight (..), Quorum, Tally, Verdict (..), atLeastVotes
-  , atLeastWeight, consumeBallots, pinStatesWith, readWeights, rule, unanimous, weighBallots
+  , consumeBallots, pinStatesWith, readWeights, rule, shareOfTotal, unanimous, weighBallots
   , weighBallotsEqually, weightedMedian )
 
 import Cap.Examples.BabyDso.Rights
@@ -36,11 +36,11 @@ data ResolveResult r = ResolveResult
   deriving (Eq, Show)
 
 
-template DsoResolver
+template DsoGovernor
   with
     dso : Party
     svs : Set Party
-    resolverId : Text
+    governorId : Text
     weightKeys : Set RightKey --  It says which sources count for which voter, but not how much + fixes the total weight
     executionDelay : RelTime
     executionWindow : RelTime
@@ -49,7 +49,7 @@ template DsoResolver
     signatory dso
     observer Set.toList svs
 
-    nonconsuming choice DsoResolver_OpenVote : ContractId SharedBallot
+    nonconsuming choice DsoGovernor_OpenVote : ContractId SharedBallot
       with
         proposer : Party
         mechanism : Mechanism
@@ -61,7 +61,7 @@ template DsoResolver
         targets : Map AuthenticKey AnyContractId
       controller proposer
       do
-        requireMechanism (resolverKey this) (coerceContractId self) weightedVoteProcedureName mechanism
+        requireMechanism (governorKey this) (coerceContractId self) weightedVoteProcedureName mechanism
         sourced <- readWeights weightKeys weightSources
         let weights = Map.fromListWithR (+) (Map.values sourced)
         require "the proposer is a voter: it holds weight in the snapshot"
@@ -73,7 +73,7 @@ template DsoResolver
           binds = pinned
           votes = Map.singleton proposer vote
 
-    nonconsuming choice DsoResolver_ResolveVote : ResolveResult (TextMap Decimal)
+    nonconsuming choice DsoGovernor_ResolveVote : ResolveResult (TextMap Decimal)
       with
         sv : Party
         mechanism : Mechanism
@@ -81,12 +81,12 @@ template DsoResolver
         extraArgs : ExtraArgs
       controller sv
       do
-        require "the resolver is an sv" (sv `Set.member` svs)
-        requireMechanism (resolverKey this) (coerceContractId self) weightedVoteProcedureName mechanism
+        require "the resolving party is an sv" (sv `Set.member` svs)
+        requireMechanism (governorKey this) (coerceContractId self) weightedVoteProcedureName mechanism
         presented <- fetchGroup mechanism ballotCids
         resolveWeightedVote this presented extraArgs
 
-    nonconsuming choice DsoResolver_Confirm : ContractId SvConfirmation
+    nonconsuming choice DsoGovernor_Confirm : ContractId SvConfirmation
       with
         confirmer : Party
         mechanism : Mechanism
@@ -97,14 +97,14 @@ template DsoResolver
       controller confirmer
       do
         require "the confirmer is an sv" (confirmer `Set.member` svs)
-        requireMechanism (resolverKey this) (coerceContractId self) confirmationProcedureName mechanism
+        requireMechanism (governorKey this) (coerceContractId self) confirmationProcedureName mechanism
         action <- fetch actionCid
         pinned <- pinStatesWith (action_readStateImpl action) (view action).binds targets
         create SvConfirmation with
           dso; confirmer; mechanism; actionCid; vote; expiresAt
           binds = pinned
 
-    nonconsuming choice DsoResolver_ResolveConfirmations : ResolveResult AnyValue
+    nonconsuming choice DsoGovernor_ResolveConfirmations : ResolveResult AnyValue
       with
         sv : Party
         mechanism : Mechanism
@@ -112,14 +112,14 @@ template DsoResolver
         extraArgs : ExtraArgs
       controller sv
       do
-        require "the resolver is an sv" (sv `Set.member` svs)
-        requireMechanism (resolverKey this) (coerceContractId self) confirmationProcedureName mechanism
+        require "the resolving party is an sv" (sv `Set.member` svs)
+        requireMechanism (governorKey this) (coerceContractId self) confirmationProcedureName mechanism
         resolveConfirmations this mechanism confirmationCids extraArgs
 
-resolverKey : DsoResolver -> AuthenticKey
-resolverKey rules = AuthenticKey with
+governorKey : DsoGovernor -> AuthenticKey
+governorKey rules = AuthenticKey with
   authorities = Set.fromList [rules.dso]
-  id = rules.resolverId
+  id = rules.governorId
 
 
 instance HasCheckedFetch SvWeightSource RightKey where
@@ -132,7 +132,7 @@ instance HasWeight SvWeightSource where
 
 
 resolveWeightedVote
-  : DsoResolver -> [(ContractId SharedBallot, SharedBallot)] -> ExtraArgs
+  : DsoGovernor -> [(ContractId SharedBallot, SharedBallot)] -> ExtraArgs
   -> Update (ResolveResult (TextMap Decimal))
 resolveWeightedVote rules presented extraArgs = do
   ballot <- case presented of
@@ -171,7 +171,7 @@ parametersOf (V_Parameters parameters) = Some parameters
 parametersOf _ = None
 
 twoThirdsOf : Map Party Decimal -> Quorum a
-twoThirdsOf weights = atLeastWeight (sum (Map.values weights) * 2.0 / 3.0)
+twoThirdsOf weights = shareOfTotal 2 3 (sum (Map.values weights))
 
 weightedMedianByField : Tally (TextMap Decimal) (TextMap Decimal)
 weightedMedianByField casts = case [parameters | Cast with vote = Some parameters <- Map.values casts] of
@@ -185,7 +185,7 @@ weightedMedianByField casts = case [parameters | Cast with vote = Some parameter
 
 
 resolveConfirmations
-  : DsoResolver -> Mechanism -> [ContractId SvConfirmation] -> ExtraArgs
+  : DsoGovernor -> Mechanism -> [ContractId SvConfirmation] -> ExtraArgs
   -> Update (ResolveResult AnyValue)
 resolveConfirmations rules mechanism confirmationCids extraArgs = do
   now <- getTime

@@ -24,11 +24,12 @@ flow built on them.
 
 | M3 deliverable | Where to look |
 | --- | --- |
-| Separable quorum and tally rules | [`Count.daml`](cap-governance/utils/daml/Cap/Governance/Utils/Count.daml) |
-| Generalized weighted ballots logic | [`Ballots.daml`](cap-governance/utils/daml/Cap/Governance/Utils/Ballots.daml) · [`Weights.daml`](cap-governance/utils/daml/Cap/Governance/Utils/Weights.daml) |
-| Default implementations for downstream execution hooks | [`Targets.daml`](cap-governance/utils/daml/Cap/Governance/Utils/Targets.daml) — `checkTarget`, `checkIdentity`, `requireSameKeys` and the drift policies |
-| Weighted voting flow | [`examples/governance/babydso`](examples/governance/babydso) |
-| Weighted voting flow demo | [`examples/governance/babydso/demo`](examples/governance/babydso/demo) — [how to run](#running-the-demos) · [`scripts/sandbox-test.sh`](scripts/sandbox-test.sh) — [how to run](#on-a-canton-sandbox) |
+| Weighted-vote implementation | [`examples/governance/babydso/impl`](examples/governance/babydso/impl) — weights read by [`Weights.daml`](cap-governance/utils/daml/Cap/Governance/Utils/Weights.daml) and attached to ballots by [`Ballots.daml`](cap-governance/utils/daml/Cap/Governance/Utils/Ballots.daml) · [sequence diagrams](examples/governance/DEMOS-happy.md#babydso) |
+| Quorum, threshold, and approval logic for supported governance formats | [`Count.daml`](cap-governance/utils/daml/Cap/Governance/Utils/Count.daml) — quorums (`atLeastVotes`, `atLeastWeight`, `shareOfTotal`), thresholds and tallies (`shareOfVotes`, `plurality`, `unanimous`, `weightedMedian`) combined by `rule` |
+| Downstream execution hooks for approved proposals | [`ActionV1`](cap-governance/interfaces/action/daml/Cap/Governance/ActionV1.daml) and [`ExecutableV1`](cap-governance/interfaces/executable/daml/Cap/Governance/ExecutableV1.daml) · [`Targets.daml`](cap-governance/utils/daml/Cap/Governance/Utils/Targets.daml) |
+| Daml Script and sandbox integration tests for supported governance formats | [`babydso/demo`](examples/governance/babydso/demo) and [`private-majority-vote/demo`](examples/governance/private-majority-vote/demo) — [how to run](#running-the-demos) · [`scripts/sandbox-test.sh`](scripts/sandbox-test.sh) — [how to run](#on-a-canton-sandbox) · library tests in [`cap-governance/tests`](cap-governance/tests) |
+
+M3 tracks as [issue #540](https://github.com/canton-foundation/canton-dev-fund/issues/540).
 
 ## Milestone 2 — first executable slices in both proving domains
 
@@ -39,7 +40,7 @@ a Canton sandbox.
 
 | M2 deliverable | Where to look |
 | --- | --- |
-| Majority-vote reference slice on `cap-core` | [`examples/governance/private-majority-vote`](examples/governance/private-majority-vote) |
+| Majority-vote reference slice on `cap-core` | [`examples/governance/private-majority-vote`](examples/governance/private-majority-vote) — [sequence diagrams](examples/governance/DEMOS-happy.md#private-majority-vote) |
 | Sealed-bid auction reference slice on `cap-core` | [`examples/auctions/sealed-bid-first-price`](examples/auctions/sealed-bid-first-price) — [demos](examples/auctions/sealed-bid-first-price/DEMOS.md) |
 | Private ballot handling demonstrated | `whoSeesWhat` in [`MajorityVote/Demo.daml`](examples/governance/private-majority-vote/demo/daml/Cap/Examples/MajorityVote/Demo.daml) |
 | Private bid handling demonstrated | `whoSeesWhat` — [auction demos](examples/auctions/sealed-bid-first-price/DEMOS.md) |
@@ -102,7 +103,7 @@ concordia/
 │   └── RATIONALE.md
 ├── examples/governance/
 │   ├── babydso/                       # Splice DSO governance with weighted votes
-│   │                                  #   {ans,config,rights,governance,action,demo}
+│   │                                  #   impl/{ans,config,rights,governance,action}, demo
 │   └── private-majority-vote/         # M2: private ballots, {impl,demo}
 ├── examples/auctions/
 │   └── sealed-bid-first-price/        # M2: private bids, {impl,impostors,demo}
@@ -112,7 +113,6 @@ concordia/
 ├── .github/workflows/ci.yml           # build and test on push and pull request to dev
 ├── multi-package.yaml                 # dpm workspace (build order)
 ├── DESIGN.md                          # map of the design docs
-├── RATIONALE.md                       # why the design is not something else
 ├── cap-governance-rationale.md        # cap-governance design decisions
 ├── SCOPE.md                           # first-release scope, capability → milestone
 ├── POST-RELEASE.md                    # extension points for downstream modules
@@ -124,9 +124,8 @@ concordia/
 
 [`cap-governance-rationale.md`](cap-governance-rationale.md) and
 [`cap-auctions/DESIGN.md`](cap-auctions/DESIGN.md) carry the tier-2 designs.
-[`RATIONALE.md`](RATIONALE.md) records why each of these shapes was chosen over
-the alternative, with the auction decisions in
-[`cap-auctions/RATIONALE.md`](cap-auctions/RATIONALE.md).
+[`cap-auctions/RATIONALE.md`](cap-auctions/RATIONALE.md) records the auction
+decisions.
 
 ## Building
 

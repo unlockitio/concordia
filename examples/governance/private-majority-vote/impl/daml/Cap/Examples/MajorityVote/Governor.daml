@@ -1,6 +1,6 @@
 -- SPDX-License-Identifier: Apache-2.0
 
-module Cap.Examples.MajorityVote.Resolver where
+module Cap.Examples.MajorityVote.Governor where
 
 import Prelude hiding (Action)
 
@@ -103,18 +103,18 @@ template BallotInvitation
           vote = None
 
 
-template VoteResolver
+template Governor
   with
     dso : Party
     operator : Party
     electorate : Set Party
-    resolverId : Text
+    governorId : Text
     expiresAt : Time
   where
     signatory dso
     observer operator :: Set.toList electorate
 
-    nonconsuming choice VoteResolver_Propose : ContractId Proposal
+    nonconsuming choice Governor_Propose : ContractId Proposal
       with
         proposer : Party
         proposalId : Text
@@ -126,13 +126,13 @@ template VoteResolver
         create Proposal with
           dso; operator; electorate; terms
           mechanism = Mechanism with
-            resolver = resolverKey this
+            resolver = governorKey this
             resolverCid = None
             procedure = majorityProcedureName
             id = proposalId
           roll = []
 
-    nonconsuming choice VoteResolver_ResolveMajority : ResolveResult
+    nonconsuming choice Governor_ResolveMajority : ResolveResult
       with
         proposalCid : ContractId Proposal
         ballotCids : [ContractId PrivateBallot]
@@ -141,10 +141,10 @@ template VoteResolver
       do resolveMajority this self proposalCid ballotCids extraArgs
 
 
-resolverKey : VoteResolver -> AuthenticKey
-resolverKey rules = AuthenticKey with
+governorKey : Governor -> AuthenticKey
+governorKey rules = AuthenticKey with
   authorities = Set.fromList [rules.dso]
-  id = rules.resolverId
+  id = rules.governorId
 
 majorityOf : Decimal -> Tally Text Text
 majorityOf electorateSize casts =
@@ -152,13 +152,13 @@ majorityOf electorateSize casts =
   in Some (if for > 0.5 * electorateSize then yay else nay)
 
 resolveMajority
-  : VoteResolver -> ContractId VoteResolver -> ContractId Proposal -> [ContractId PrivateBallot]
+  : Governor -> ContractId Governor -> ContractId Proposal -> [ContractId PrivateBallot]
   -> ExtraArgs -> Update ResolveResult
 resolveMajority rules self proposalCid ballotCids extraArgs = do
   now <- getTime
   proposal <- fetch proposalCid
-  requireMechanism (resolverKey rules) (coerceContractId self) majorityProcedureName proposal.mechanism
-  require "the proposal is on this resolver's electorate" (proposal.electorate == rules.electorate)
+  requireMechanism (governorKey rules) (coerceContractId self) majorityProcedureName proposal.mechanism
+  require "the proposal is on this governor's electorate" (proposal.electorate == rules.electorate)
   let terms = proposal.terms
 
   presented <- fetchGroup proposal.mechanism ballotCids

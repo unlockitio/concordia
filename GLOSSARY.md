@@ -26,8 +26,7 @@ settlement, and when. `ExecutionCore` in `Cap.Core.Types`.
 
 **Authority, admission** — `Set Party` is authority, every member signs;
 `[[Party]]` is admission, the caller must cover one listed group entirely.
-`admitActors` in `Cap.Core.Utils` ·
-[Authority and admission are separate fields](RATIONALE.md#authority-and-admission-are-separate-fields).
+`admitActors` in `Cap.Core.Utils`.
 
 ## cap-governance
 

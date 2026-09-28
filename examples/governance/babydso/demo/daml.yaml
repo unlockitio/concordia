@@ -17,10 +17,10 @@ data-dependencies:
 - ../../../../cap-governance/interfaces/executable/.daml/dist/cap-governance-executable-v1-0.1.0.dar
 - ../../../../cap-governance/interfaces/action/.daml/dist/cap-governance-action-v1-0.1.0.dar
 - ../../../../cap-governance/utils/.daml/dist/cap-governance-utils-0.1.0.dar
-- ../ans/.daml/dist/cap-example-babydso-ans-0.1.0.dar
-- ../config/.daml/dist/cap-example-babydso-config-0.1.0.dar
-- ../rights/.daml/dist/cap-example-babydso-rights-0.1.0.dar
-- ../governance/.daml/dist/cap-example-babydso-governance-0.1.0.dar
-- ../action/.daml/dist/cap-example-babydso-action-0.1.0.dar
+- ../impl/ans/.daml/dist/cap-example-babydso-ans-0.1.0.dar
+- ../impl/config/.daml/dist/cap-example-babydso-config-0.1.0.dar
+- ../impl/rights/.daml/dist/cap-example-babydso-rights-0.1.0.dar
+- ../impl/governance/.daml/dist/cap-example-babydso-governance-0.1.0.dar
+- ../impl/action/.daml/dist/cap-example-babydso-action-0.1.0.dar
 build-options:
   - --target=2.1

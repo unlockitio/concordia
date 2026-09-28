@@ -3,8 +3,7 @@
 # Rationale — cap-auctions
 
 [`DESIGN.md`](DESIGN.md) describes what cap-auctions is. This file records why the
-interfaces have the shape they do. Decisions inherited from the core are in the
-root [`RATIONALE.md`](../RATIONALE.md).
+interfaces have the shape they do.
 
 
 ## OneLotBid

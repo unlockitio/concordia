@@ -24,10 +24,10 @@ import Cap.Governance.Types (Bind (..))
 
 import Cap.Examples.MajorityVote.Ballot
 import Cap.Examples.MajorityVote.Config
-import Cap.Examples.MajorityVote.Resolver
+import Cap.Examples.MajorityVote.Governor
 
-resolverName : Text
-resolverName = "resolver-1"
+governorName : Text
+governorName = "governor-1"
 
 proposalName : Text
 proposalName = "proposal-1"
@@ -48,7 +48,7 @@ data Fixture = Fixture with
     bob : Party
     carol : Party
     electorate : Set Party
-    resolverCid : ContractId VoteResolver
+    governorCid : ContractId Governor
     proposalCid : ContractId Proposal
     mechanism : Mechanism
     configCid : ContractId Config
@@ -71,16 +71,16 @@ setupAs ns = do
     dso; electorate; setting = openingSetting
   actionCid <- submit dso $ createCmd SetConfigAction with
     dso; operator; electorate; baseSetting = openingSetting; newSetting = proposedSetting
-  let rules = VoteResolver with
+  let rules = Governor with
         dso; operator; electorate
-        resolverId = resolverName
+        governorId = governorName
         expiresAt = now `addRelTime` days 10
-  resolverCid <- submit dso $ createCmd rules
+  governorCid <- submit dso $ createCmd rules
 
   let mechanism = Mechanism with
         resolver = AuthenticKey with
           authorities = Set.fromList [dso]
-          id = resolverName
+          id = governorName
         resolverCid = None
         procedure = majorityProcedureName
         id = proposalName
@@ -90,7 +90,7 @@ setupAs ns = do
         votingClosesAt = now `addRelTime` days 2
         expiresAt = now `addRelTime` days 3
 
-  proposalCid <- submit alice $ exerciseCmd resolverCid VoteResolver_Propose with
+  proposalCid <- submit alice $ exerciseCmd governorCid Governor_Propose with
     proposer = alice
     proposalId = proposalName
     terms
@@ -108,7 +108,7 @@ liveProposal f = do
   proposals <- query @Proposal f.operator
   case [cid | (cid, p) <- proposals, p.mechanism == f.mechanism] of
     [cid] -> pure cid
-    _ -> fail "no live proposal on this resolver"
+    _ -> fail "no live proposal on this governor"
 
 seat : Fixture -> Party -> Script (ContractId PrivateBallot)
 seat f voter = do
@@ -124,7 +124,7 @@ cast voter ballotCid option =
 
 resolveCmd : Fixture -> [ContractId PrivateBallot] -> Commands ResolveResult
 resolveCmd f ballotCids =
-  exerciseCmd f.resolverCid VoteResolver_ResolveMajority with
+  exerciseCmd f.governorCid Governor_ResolveMajority with
     proposalCid = f.proposalCid
     ballotCids
     extraArgs = noArgs

@@ -11,6 +11,5 @@ lib/               vendored Token Standard DARs the interfaces bind to
 ```
 
 - [`cap-governance-rationale.md`](cap-governance-rationale.md)
-- [`cap-auctions/DESIGN.md`](cap-auctions/DESIGN.md)
-
-Why the design is not something else: [`RATIONALE.md`](RATIONALE.md).
+- [`cap-auctions/DESIGN.md`](cap-auctions/DESIGN.md) and
+  [`cap-auctions/RATIONALE.md`](cap-auctions/RATIONALE.md)
