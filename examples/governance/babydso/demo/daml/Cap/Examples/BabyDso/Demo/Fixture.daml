@@ -134,9 +134,13 @@ feeValue : Decimal -> Decimal -> AnyValue
 feeValue transferFee entryFee = AV_Map (fmap AV_Decimal (feeParameters transferFee entryFee))
 
 targetsOf : Fixture -> Map AuthenticKey AnyContractId
-targetsOf f = Map.fromList
-  [ (configTargetKey f.amuletAuthority, coerceContractId f.configCid)
-  , (ansTargetKey f.dso, coerceContractId f.ansCid)
+targetsOf f = targetsWith f f.configCid f.ansCid
+
+targetsWith
+  : Fixture -> ContractId AmuletConfig -> ContractId AnsRules -> Map AuthenticKey AnyContractId
+targetsWith f configCid ansCid = Map.fromList
+  [ (configTargetKey f.amuletAuthority, coerceContractId configCid)
+  , (ansTargetKey f.dso, coerceContractId ansCid)
   ]
 
 
@@ -193,12 +197,18 @@ resolveConfirmationsAs f sv confirmationCids =
     mechanism = f.confirmMechanism
     extraArgs = noArgs
 
+executeCmd
+  : Party -> ContractId Executable -> Map AuthenticKey AnyContractId
+  -> Commands Executable_ExecuteResult
+executeCmd sv executionCid targets =
+  exerciseCmd executionCid Executable_Execute with
+    actors = [sv]
+    targets
+    extraArgs = noArgs
+
 executeAs : Fixture -> Party -> ContractId Executable -> Script Executable_ExecuteResult
 executeAs f sv executionCid =
-  submit (actAs sv <> readAs f.dso) $ exerciseCmd executionCid Executable_Execute with
-    actors = [sv]
-    targets = targetsOf f
-    extraArgs = noArgs
+  submit (actAs sv <> readAs f.dso) (executeCmd sv executionCid (targetsOf f))
 
 
 feesNow : Fixture -> Script (Decimal, Decimal)
