@@ -4,17 +4,13 @@ module Cap.Examples.MajorityVote.Demo where
 
 import DA.Action (unless, when)
 import DA.Assert ((===))
-import qualified DA.Map as Map
 import DA.List (sort)
 import DA.Optional (isSome)
 import qualified DA.Set as Set
 import DA.Time (addRelTime, days)
 import Daml.Script
 
-import Splice.Api.Token.MetadataV1 (AnyValue)
-
-import Cap.Core.ResolverV1 (Verdict (..))
-import Cap.Core.SubmittableV1 (Submittable)
+import Cap.Governance.Utils (Verdict (..))
 
 import Cap.Examples.MajorityVote.Ballot
 import Cap.Examples.MajorityVote.Config
@@ -74,7 +70,6 @@ seesExactly p expected = do
 public : Fixture -> [Text]
 public f = [show f.configCid, show f.actionCid, show f.resolverCid]
 
-
 publicToOperator : Fixture -> [Text]
 publicToOperator f = [show f.actionCid, show f.resolverCid]
 
@@ -100,16 +95,16 @@ data Cast = Cast with
     bob : ContractId PrivateBallot
     carol : ContractId PrivateBallot
 
-castAll : Round -> AnyValue -> AnyValue -> AnyValue -> Script Cast
+castAll : Round -> Text -> Text -> Text -> Script Cast
 castAll round aliceOption bobOption carolOption = do
   let f = round.fixture
-  alice <- cast f f.alice round.aliceBallot aliceOption
-  bob <- cast f f.bob round.bobBallot bobOption
-  carol <- cast f f.carol round.carolBallot carolOption
+  alice <- cast f.alice round.aliceBallot aliceOption
+  bob <- cast f.bob round.bobBallot bobOption
+  carol <- cast f.carol round.carolBallot carolOption
   pure Cast with ..
 
-allPresented : Cast -> [ContractId Submittable]
-allPresented c = map presented [c.alice, c.bob, c.carol]
+allPresented : Cast -> [ContractId PrivateBallot]
+allPresented c = [c.alice, c.bob, c.carol]
 
 settingNow : Fixture -> Script Text
 settingNow f = do
@@ -132,7 +127,7 @@ whoSeesWhat = do
     (map show [round.aliceBallot, round.bobBallot, round.carolBallot] <> openToOperator)
 
   setTime f.terms.entryClosesAt
-  votes <- castAll round yayOption yayOption nayOption
+  votes <- castAll round yay yay nay
 
   f.bob `cannotSee` votes.alice
   f.carol `cannotSee` votes.alice
@@ -164,39 +159,44 @@ theCountCoversTheElectorate = do
   let f = round.fixture
 
   setTime f.terms.entryClosesAt
-  votes <- castAll round yayOption yayOption nayOption
+  votes <- castAll round yay yay nay
 
   setTime f.terms.votingClosesAt
-  let coversTheRoll = "the presented ballots cover the roll"
-  runResolveMustFailContaining f coversTheRoll
-    (map presented [votes.alice, votes.carol])
-  runResolveMustFailContaining f coversTheRoll
-    (map presented [votes.alice, votes.bob])
+  submitMustFailContaining "the presented ballots cover the roll" f.operator $
+    resolveCmd f [votes.alice, votes.carol]
+  submitMustFailContaining "the presented ballots cover the roll" f.operator $
+    resolveCmd f [votes.alice, votes.bob]
 
   submitMustFail f.operator $ createCmd PrivateBallot with
     operator = f.operator
     voter = f.alice
     mechanism = f.mechanism
-    terms = f.terms
-    bindings = Map.empty
+    actionCid = f.terms.actionCid
+    opensAt = f.terms.entryClosesAt
+    closesAt = f.terms.votingClosesAt
+    expiresAt = f.terms.expiresAt
     vote = None
   submitMustFail (actAs f.dso <> actAs f.operator) $ createCmd PrivateBallot with
     operator = f.operator
     voter = f.alice
     mechanism = f.mechanism
-    terms = f.terms
-    bindings = Map.empty
+    actionCid = f.terms.actionCid
+    opensAt = f.terms.entryClosesAt
+    closesAt = f.terms.votingClosesAt
+    expiresAt = f.terms.expiresAt
     vote = None
   submitMustFail f.operator $ createCmd PrivateBallot with
     operator = f.operator
     voter = f.alice
     mechanism = f.mechanism
-    terms = f.terms
-    bindings = Map.empty
-    vote = Some nayOption
+    actionCid = f.terms.actionCid
+    opensAt = f.terms.entryClosesAt
+    closesAt = f.terms.votingClosesAt
+    expiresAt = f.terms.expiresAt
+    vote = Some nay
 
   result <- runResolve f (allPresented votes)
-  result.verdict === V_Decided (Some yayOption)
+  result.verdict === Decided yay
 
 theOperatorCannotSkipTheCount : Script ()
 theOperatorCannotSkipTheCount = do
@@ -204,7 +204,6 @@ theOperatorCannotSkipTheCount = do
   now <- getTime
 
   runIssueMustFail f f.operator (forgedCore f)
-
 
   submitMustFail f.operator $ createCmd VoteResolver with
     dso = f.dso

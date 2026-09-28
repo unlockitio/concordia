@@ -13,13 +13,12 @@ data-dependencies:
 - ../../../../lib/splice-api-token-holding-v2-1.0.0.dar
 - ../../../../lib/splice-api-token-allocation-v2-1.0.0.dar
 - ../../../../lib/splice-api-token-allocation-instruction-v2-1.0.0.dar
-- ../../../../cap-core/cap-core-utils/.daml/dist/cap-core-utils-0.1.0.dar
-- ../../../../cap-core/Interfaces/submittable/.daml/dist/cap-core-submittable-v1-0.1.0.dar
-- ../../../../cap-core/Interfaces/resolver/.daml/dist/cap-core-resolver-v1-0.1.0.dar
 - ../../../lib/splice-token-standard-utils-2.0.0.dar
-- ../../../../cap-auctions/Interfaces/bid/.daml/dist/cap-auctions-bid-v1-0.1.0.dar
-- ../../../../cap-auctions/Interfaces/settlement/.daml/dist/cap-auctions-settlement-v1-0.1.0.dar
-- ../../../../cap-auctions/cap-auctions-utils/.daml/dist/cap-auctions-utils-0.1.0.dar
-- ../../../../cap-auctions/cap-auctions-funding/.daml/dist/cap-auctions-funding-0.1.0.dar
+- ../../../../cap-core/types/.daml/dist/cap-core-types-0.1.0.dar
+- ../../../../cap-core/utils/.daml/dist/cap-core-utils-0.1.0.dar
+- ../../../../cap-auctions/interfaces/bid/.daml/dist/cap-auctions-bid-v1-0.1.0.dar
+- ../../../../cap-auctions/interfaces/settlement/.daml/dist/cap-auctions-settlement-v1-0.1.0.dar
+- ../../../../cap-auctions/utils/.daml/dist/cap-auctions-utils-0.1.0.dar
+- ../../../../cap-auctions/funding/.daml/dist/cap-auctions-funding-0.1.0.dar
 build-options:
   - --target=2.1

@@ -1,0 +1,232 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Governance.Tests.Harness where
+
+import Prelude hiding (Action)
+
+import DA.Map (Map)
+import qualified DA.Map as Map
+import DA.Set (Set)
+import qualified DA.Set as Set
+
+import Splice.Api.Token.MetadataV1
+import Splice.Util (HasCheckedFetch (..))
+
+import Cap.Core.Types (AuthenticKey (..), ExecutionCore (..), Mechanism (..))
+import Cap.Core.Utils (IsAnyValue (..), fetchCheckedAny, signedKey)
+import Cap.Governance.ActionV1
+import Cap.Governance.ExecutableV1
+import Cap.Governance.Types (Bind (..))
+import Cap.Governance.Utils
+
+
+targetKey : Party -> Text -> AuthenticKey
+targetKey party tag = AuthenticKey with authorities = Set.fromList [party]; id = tag
+
+template Target
+  with
+    owner : Party
+    tag : Text
+    value : Int
+    readers : [Party]
+  where
+    signatory owner
+    observer readers
+
+instance HasCheckedFetch Target AuthenticKey where
+  contractGroupId target = signedKey target.tag target
+
+instance HasState Target Int where
+  stateOf target = target.value
+
+readTarget : ReadTarget
+readTarget key cid = do
+  (_, target) <- fetchCheckedAny @Target key cid
+  pure (if target.value < 0 then None else Some (toAnyValue (stateOf target)))
+
+
+template Ballot
+  with
+    owner : Party
+    mechanism : Mechanism
+    actionCid : ContractId Action
+    votes : Map Party (Optional Text)
+    binds : Map AuthenticKey Bind
+  where
+    signatory owner
+
+instance HasCheckedFetch Ballot Mechanism where
+  contractGroupId ballot = ballot.mechanism
+
+instance IsBallot Ballot Text where
+  castsOf ballot = ballot.votes
+  bindsOf ballot = ballot.binds
+  actionOf ballot = ballot.actionCid
+  consume = archive
+
+narrowText : Text -> Optional Text
+narrowText vote = if vote == "bad" then None else Some vote
+
+
+template Weight
+  with
+    owner : Party
+    tag : Text
+    holder : Party
+    amount : Decimal
+  where
+    signatory owner
+
+instance HasCheckedFetch Weight Text where
+  contractGroupId weight = weight.tag
+
+instance HasWeight Weight where
+  weightOf weight = (weight.holder, weight.amount)
+
+
+template DummyAction
+  with
+    owner : Party
+    readers : [Party]
+    authorizers : [[Party]]
+    declared : Map AuthenticKey Bind
+  where
+    signatory owner
+    observer readers
+
+    interface instance Action for DummyAction where
+      view = ActionView with
+        authorizers
+        binds = declared
+        meta = emptyMetadata
+
+      action_readStateImpl = readTarget
+
+      action_authorizeExecutionImpl _ arg = do
+        cid <- create DummyExecutable with
+          owner
+          core = arg.executionCore
+          binds = arg.binds
+          outcome = arg.outcome
+        pure Action_AuthorizeExecutionResult with
+          executionCids = [toInterfaceContractId cid]
+          meta = emptyMetadata
+
+template DummyExecutable
+  with
+    owner : Party
+    core : ExecutionCore
+    binds : Map AuthenticKey Bind
+    outcome : Optional AnyValue
+  where
+    signatory owner
+    observer concat (concat (Map.values core.availableActions))
+
+    interface instance Executable for DummyExecutable where
+      view = ExecutableView with
+        executionCore = core
+        binds
+        outcome
+
+      executable_executeImpl _ _ =
+        pure Executable_ExecuteResult with created = []; meta = emptyMetadata
+
+      executable_cancelImpl _ =
+        pure Executable_CancelResult with meta = emptyMetadata
+
+
+template Probe
+  with
+    owner : Party
+  where
+    signatory owner
+
+    nonconsuming choice Probe_WeighBallots : Casts Text
+      with
+        weights : Map Party Decimal
+        ballotCids : [ContractId Ballot]
+      controller owner
+      do
+        presented <- fetchBallots ballotCids
+        weighBallots narrowText weights presented
+
+    nonconsuming choice Probe_WeighBallotsEqually : Casts Text
+      with
+        voters : Set Party
+        ballotCids : [ContractId Ballot]
+      controller owner
+      do
+        presented <- fetchBallots ballotCids
+        weighBallotsEqually narrowText voters presented
+
+    nonconsuming choice Probe_AgreedRequest : (ContractId Action, Map AuthenticKey Bind)
+      with
+        ballotCids : [ContractId Ballot]
+      controller owner
+      do
+        presented <- fetchBallots ballotCids
+        agreedRequest (map snd presented)
+
+    nonconsuming choice Probe_ConsumeBallots : ()
+      with
+        ballotCids : [ContractId Ballot]
+      controller owner
+      do
+        presented <- fetchBallots ballotCids
+        consumeBallots presented
+
+    nonconsuming choice Probe_ReadWeights : Map Text (Party, Decimal)
+      with
+        registered : Set Text
+        sources : Map Text (ContractId Weight)
+      controller owner
+      do readWeights registered sources
+
+    nonconsuming choice Probe_PinStates : Map AuthenticKey Bind
+      with
+        fixed : Map AuthenticKey Bind
+        targets : Map AuthenticKey AnyContractId
+      controller owner
+      do pinStatesWith readTarget fixed targets
+
+    nonconsuming choice Probe_PinCids : Map AuthenticKey Bind
+      with
+        fixed : Map AuthenticKey Bind
+        targets : Map AuthenticKey AnyContractId
+      controller owner
+      do pinCidsWith readTarget fixed targets
+
+    nonconsuming choice Probe_MergeAuthentic : Map AuthenticKey Bind
+      with
+        fixed : Map AuthenticKey Bind
+        pinned : Map AuthenticKey Bind
+      controller owner
+      do mergeAuthentic fixed pinned
+
+    nonconsuming choice Probe_RequireSameKeys : ()
+      with
+        bound : Map AuthenticKey Bind
+        targets : Map AuthenticKey AnyContractId
+      controller owner
+      do requireSameKeys bound targets
+
+    nonconsuming choice Probe_CheckTarget : ContractId Target
+      with
+        key : AuthenticKey
+        bound : Map AuthenticKey Bind
+        targets : Map AuthenticKey AnyContractId
+      controller owner
+      do fst <$> checkTarget @Target (==) key bound targets
+
+    nonconsuming choice Probe_CheckIdentity : ContractId Target
+      with
+        key : AuthenticKey
+        bound : Map AuthenticKey Bind
+        targets : Map AuthenticKey AnyContractId
+      controller owner
+      do fst <$> checkIdentity @Target key bound targets
+
+fetchBallots : [ContractId Ballot] -> Update [(ContractId Ballot, Ballot)]
+fetchBallots = mapA (\cid -> do
+  ballot <- fetch cid
+  pure (cid, ballot))

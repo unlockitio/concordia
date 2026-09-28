@@ -1,0 +1,130 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Governance.Tests.Interfaces where
+
+import Prelude hiding (Action)
+
+import DA.Assert ((===))
+import DA.Date (Month (..), date)
+import qualified DA.Map as Map
+import qualified DA.Set as Set
+import DA.Time (RelTime, addRelTime, days, time)
+import Daml.Script hiding (AnyContractId)
+
+import Splice.Api.Token.MetadataV1
+
+import Cap.Core.Types (ExecutionAction (..), ExecutionCore (..))
+import Cap.Governance.ActionV1
+import Cap.Governance.ExecutableV1
+
+import Cap.Governance.Tests.Harness
+import Cap.Governance.Tests.Support
+
+
+t0 : Time
+t0 = time (date 2026 Jan 1) 0 0 0
+
+at : RelTime -> Time
+at = addRelTime t0
+
+data Env = Env with
+    owner : Party
+    alice : Party
+    bob : Party
+    action : ContractId Action
+
+setup : Text -> Script Env
+setup ns = do
+  setTime t0
+  owner <- allocateParty (ns <> "-owner")
+  alice <- allocateParty (ns <> "-alice")
+  bob <- allocateParty (ns <> "-bob")
+  dummy <- submit owner $ createCmd DummyAction with
+    owner; readers = [alice, bob]; authorizers = [[owner]]; declared = Map.empty
+  pure Env with action = toInterfaceContractId dummy; ..
+
+coreFor : Env -> Optional Time -> ExecutionCore
+coreFor env expiresAt = ExecutionCore with
+  authorities = Set.fromList [env.owner]
+  availableActions = Map.fromList [(EA_Execute, [[env.alice]]), (EA_Cancel, [[env.bob]])]
+  opensAt = at (days 1)
+  cancelAt = at (days 2)
+  expiresAt
+  meta = emptyMetadata
+
+authorizeCmd : Env -> Party -> Optional Time -> Commands Action_AuthorizeExecutionResult
+authorizeCmd env actor expiresAt = exerciseCmd env.action Action_AuthorizeExecution with
+  actors = [actor]
+  executionCore = coreFor env expiresAt
+  outcome = None
+  binds = Map.empty
+  extraArgs = noArgs
+
+newExecution : Env -> Optional Time -> Script (ContractId Executable)
+newExecution env expiresAt = do
+  result <- submit env.owner (authorizeCmd env env.owner expiresAt)
+  case result.executionCids of
+    [cid] -> pure cid
+    _ -> fail "the action created no single execution"
+
+executeCmd : Party -> ContractId Executable -> Commands Executable_ExecuteResult
+executeCmd actor cid = exerciseCmd cid Executable_Execute with
+  actors = [actor]; targets = Map.empty; extraArgs = noArgs
+
+cancelCmd : Party -> ContractId Executable -> Commands Executable_CancelResult
+cancelCmd actor cid = exerciseCmd cid Executable_Cancel with actors = [actor]; extraArgs = noArgs
+
+expireCmd : Party -> ContractId Executable -> Commands Executable_ExpireResult
+expireCmd actor cid = exerciseCmd cid Executable_Expire with actor
+
+
+authorizeExecutionRefusesANonAuthorizer : Script ()
+authorizeExecutionRefusesANonAuthorizer = do
+  env <- setup "authorize-refused"
+  submitMustFailContaining "the actors are an authorizer set of this action" env.alice $
+    authorizeCmd env env.alice (Some (at (days 3)))
+
+authorizeExecutionCreatesTheExecution : Script ()
+authorizeExecutionCreatesTheExecution = do
+  env <- setup "authorize-ok"
+  result <- submit env.owner (authorizeCmd env env.owner (Some (at (days 3))))
+  length result.executionCids === 1
+
+executeChecksTheWindow : Script ()
+executeChecksTheWindow = do
+  env <- setup "execute-window"
+  early <- newExecution env (Some (at (days 3)))
+  submitMustFailContaining "the execution window is open" env.alice (executeCmd env.alice early)
+  setTime (at (days 3))
+  submitMustFailContaining "the execution window is open" env.alice (executeCmd env.alice early)
+
+executeChecksTheEntitlement : Script ()
+executeChecksTheEntitlement = do
+  env <- setup "execute-entitled"
+  execution <- newExecution env (Some (at (days 3)))
+  setTime (at (days 1))
+  submitMustFailContaining "the actors are entitled to execute" env.bob (executeCmd env.bob execution)
+  _ <- submit env.alice (executeCmd env.alice execution)
+  pure ()
+
+cancelChecksTheWindowAndTheEntitlement : Script ()
+cancelChecksTheWindowAndTheEntitlement = do
+  env <- setup "cancel"
+  execution <- newExecution env (Some (at (days 3)))
+  setTime (at (days 1))
+  submitMustFailContaining "the cancellation window is open" env.bob (cancelCmd env.bob execution)
+  setTime (at (days 2))
+  submitMustFailContaining "the actors are entitled to cancel" env.alice (cancelCmd env.alice execution)
+  _ <- submit env.bob (cancelCmd env.bob execution)
+  pure ()
+
+expireChecksTheExpiry : Script ()
+expireChecksTheExpiry = do
+  env <- setup "expire"
+  execution <- newExecution env (Some (at (days 3)))
+  endless <- newExecution env None
+  submitMustFailContaining "the execution has expired" env.alice (expireCmd env.alice execution)
+  submitMustFailContaining "this contract has no expiry" env.alice (expireCmd env.alice endless)
+  setTime (at (days 3))
+  _ <- submit env.alice (expireCmd env.alice execution)
+  pure ()

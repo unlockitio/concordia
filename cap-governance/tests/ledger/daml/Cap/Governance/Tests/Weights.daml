@@ -1,0 +1,74 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Governance.Tests.Weights where
+
+import DA.Assert ((===))
+import qualified DA.Map as Map
+import qualified DA.Set as Set
+import Daml.Script
+
+import Cap.Governance.Tests.Harness
+import Cap.Governance.Tests.Support
+
+
+data Env = Env with
+    owner : Party
+    alice : Party
+    bob : Party
+    probe : ContractId Probe
+
+setup : Text -> Script Env
+setup ns = do
+  owner <- allocateParty (ns <> "-owner")
+  alice <- allocateParty (ns <> "-alice")
+  bob <- allocateParty (ns <> "-bob")
+  probe <- submit owner $ createCmd Probe with owner
+  pure Env with ..
+
+weight : Env -> Text -> Party -> Decimal -> Script (ContractId Weight)
+weight env tag holder amount = submit env.owner $ createCmd Weight with
+  owner = env.owner; tag; holder; amount
+
+
+readWeightsReadsTheRegisteredContracts : Script ()
+readWeightsReadsTheRegisteredContracts = do
+  env <- setup "weights-ok"
+  w1 <- weight env "w1" env.alice 2.0
+  w2 <- weight env "w2" env.bob 1.0
+  result <- submit env.owner $ exerciseCmd env.probe Probe_ReadWeights with
+    registered = Set.fromList ["w1", "w2"]
+    sources = Map.fromList [("w1", w1), ("w2", w2)]
+  result === Map.fromList [("w1", (env.alice, 2.0)), ("w2", (env.bob, 1.0))]
+
+readWeightsRefusesAMissingContract : Script ()
+readWeightsRefusesAMissingContract = do
+  env <- setup "weights-missing"
+  w1 <- weight env "w1" env.alice 2.0
+  submitMustFailContaining "exactly the registered ones" env.owner $
+    exerciseCmd env.probe Probe_ReadWeights with
+      registered = Set.fromList ["w1", "w2"]; sources = Map.fromList [("w1", w1)]
+
+readWeightsRefusesAnExtraContract : Script ()
+readWeightsRefusesAnExtraContract = do
+  env <- setup "weights-extra"
+  w1 <- weight env "w1" env.alice 2.0
+  w2 <- weight env "w2" env.bob 1.0
+  submitMustFailContaining "exactly the registered ones" env.owner $
+    exerciseCmd env.probe Probe_ReadWeights with
+      registered = Set.fromList ["w1"]; sources = Map.fromList [("w1", w1), ("w2", w2)]
+
+readWeightsRefusesAContractUnderAnotherKey : Script ()
+readWeightsRefusesAContractUnderAnotherKey = do
+  env <- setup "weights-key"
+  w2 <- weight env "w2" env.bob 1.0
+  submitMustFailContaining "Contract group identifier mismatch" env.owner $
+    exerciseCmd env.probe Probe_ReadWeights with
+      registered = Set.fromList ["w1"]; sources = Map.fromList [("w1", w2)]
+
+readWeightsRefusesANegativeWeight : Script ()
+readWeightsRefusesANegativeWeight = do
+  env <- setup "weights-negative"
+  w1 <- weight env "w1" env.alice (-1.0)
+  submitMustFailContaining "is not negative" env.owner $
+    exerciseCmd env.probe Probe_ReadWeights with
+      registered = Set.fromList ["w1"]; sources = Map.fromList [("w1", w1)]

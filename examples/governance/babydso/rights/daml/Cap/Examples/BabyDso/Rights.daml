@@ -1,0 +1,40 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Examples.BabyDso.Rights where
+
+import DA.Set (Set)
+import qualified DA.Set as Set
+
+import Cap.Core.Types (AuthenticKey (..))
+
+
+template SvWeightSource
+  with
+    dso : Party
+    svs : Set Party
+    name : Text
+    sv : Party
+    weight : Decimal
+  where
+    signatory dso
+    observer Set.toList svs
+
+    ensure weight >= 0.0 && sv `Set.member` svs
+
+    choice SvWeightSource_SetWeight : ContractId SvWeightSource
+      with
+        newWeight : Decimal
+      controller dso
+      do create this with weight = newWeight
+
+
+data RightKey = RightKey
+  with
+    authKey : AuthenticKey
+    sv : Party
+  deriving (Eq, Ord, Show)
+
+sourceKey : Party -> Text -> AuthenticKey
+sourceKey dso name = AuthenticKey with
+  authorities = Set.fromList [dso]
+  id = name

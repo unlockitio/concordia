@@ -1,0 +1,363 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Examples.BabyDso.Demo where
+
+import DA.Action (foldlA)
+import DA.Assert ((===))
+import qualified DA.Map as Map
+import DA.Optional (isSome)
+import DA.TextMap (TextMap)
+import qualified DA.TextMap as TextMap
+import DA.Time
+import Daml.Script hiding (AnyContractId)
+
+import Splice.Api.Token.MetadataV1
+
+import Cap.Core.Types (Mechanism)
+import Cap.Governance.Utils (Verdict (..))
+
+import Cap.Examples.BabyDso.Action (ansTargetKey, transferFeeField)
+import Cap.Examples.BabyDso.Config
+import Cap.Examples.BabyDso.Resolver
+import Cap.Examples.BabyDso.Rights
+import Cap.Examples.BabyDso.Submission
+
+import Cap.Examples.BabyDso.Demo.Fixture
+
+
+confirmAs
+  : Fixture -> Mechanism -> AnyValue -> [Party]
+  -> Script [ContractId SvConfirmation]
+confirmAs f mechanism confirmed confirmers =
+  forA confirmers $ \confirmer ->
+    submit (actAs confirmer <> readAs f.dso) $ exerciseCmd f.resolverCid DsoResolver_Confirm with
+      confirmer; mechanism
+      actionCid = actionOf f
+      vote = V_Confirm confirmed
+      targets = (currentTargetsOf f f.configCid f.ansCid).authentic
+      expiresAt = proposalExpiry f.start
+
+openVote
+  : Fixture -> Time -> Text -> Targets -> Party -> Vote
+  -> Script (Mechanism, ContractId SharedBallot)
+openVote f opensAt proposalId targets proposer vote = do
+  let mechanism = mechanismFor f weightedVoteProcedureName proposalId
+  ballotCid <- submit (actAs proposer <> readAs f.dso) $
+    openVoteCmd f targets opensAt proposer vote mechanism f.sourceCids
+  pure (mechanism, ballotCid)
+
+openFeesVote : Fixture -> Party -> Vote -> Script (Mechanism, ContractId SharedBallot)
+openFeesVote f = openVote f f.start "fees-vote" (currentTargetsOf f f.configCid f.ansCid)
+
+castAs
+  : Fixture -> ContractId SharedBallot -> Party -> Vote
+  -> Script (ContractId SharedBallot)
+castAs f ballotCid voter choice =
+  submit (actAs voter <> readAs f.dso) (castVoteCmd ballotCid voter choice)
+
+castAll
+  : Fixture -> ContractId SharedBallot -> [(Party, Vote)]
+  -> Script (ContractId SharedBallot)
+castAll f = foldlA (\ballotCid (voter, choice) -> castAs f ballotCid voter choice)
+
+castBy : Fixture -> [(Party, Vote)] -> Script (Mechanism, [ContractId SharedBallot])
+castBy f choices = do
+  (proposer, vote) :: rest <- pure choices
+  (mechanism, opened) <- openFeesVote f proposer vote
+  ballotCid <- castAll f opened rest
+  passTime (hours 1)
+  pure (mechanism, [ballotCid])
+
+voteOn
+  : Fixture -> Time -> Text -> Targets -> [(Party, Vote)]
+  -> Script (ResolveResult (TextMap Decimal))
+voteOn f opensAt proposalId targets choices = do
+  let sv1 :: _ = f.svs
+  (proposer, vote) :: rest <- pure choices
+  (mechanism, opened) <- openVote f opensAt proposalId targets proposer vote
+  ballotCid <- castAll f opened rest
+  passTime (hours 1)
+  resolveVoteAs f sv1 mechanism [ballotCid]
+
+theUsualVotes : Fixture -> [(Party, Vote)]
+theUsualVotes f =
+  let [sv1, sv2, sv3] = f.svs
+  in [(sv1, feeVote 0.05 2.0), (sv2, feeVote 0.06 2.5), (sv3, feeVote 0.09 4.0)]
+
+theUsualVote : Fixture -> Script (ResolveResult (TextMap Decimal))
+theUsualVote f =
+  voteOn f f.start "fees-vote" (currentTargetsOf f f.configCid f.ansCid) (theUsualVotes f)
+
+bothFeesMoveTogether : Script ()
+bothFeesMoveTogether = do
+  f <- setupAs "both"
+  let [_, sv2, _] = f.svs
+  result <- theUsualVote f
+  result.verdict === Decided (feeParameters 0.05 2.0)
+  [execution] <- pure result.executions
+
+  passTime (hours 3)
+  executed <- executeAs f sv2 execution f.configCid f.ansCid
+  length executed.created === 2
+
+  feesNow f >>= (=== (0.05, 2.0))
+
+aDriftedFeeStopsBoth : Script ()
+aDriftedFeeStopsBoth = do
+  f <- setupAs "drift"
+  let [_, sv2, _] = f.svs
+  result <- theUsualVote f
+  [execution] <- pure result.executions
+
+  drifted <- submit f.amuletAuthority $ exerciseCmd f.configCid
+    AmuletConfig_SetFee with newTransferFee = 0.07
+
+  passTime (hours 3)
+  submitMustFail (actAs sv2 <> readAs f.dso) $
+    executeCmd sv2 execution (currentTargetsOf f drifted f.ansCid)
+
+  feesNow f >>= (=== (0.07, openingEntryFee))
+
+anUnrelatedChangeIsAdmitted : Script ()
+anUnrelatedChangeIsAdmitted = do
+  f <- setupAs "unrelated"
+  let [_, sv2, _] = f.svs
+  result <- theUsualVote f
+  [execution] <- pure result.executions
+
+  bumped <- submit f.amuletAuthority $ exerciseCmd f.configCid
+    AmuletConfig_SetFee with newTransferFee = openingTransferFee
+
+  passTime (hours 3)
+  _ <- executeAs f sv2 execution bumped f.ansCid
+
+  feesNow f >>= (=== (0.05, 2.0))
+
+anOmittedTargetIsRefused : Script ()
+anOmittedTargetIsRefused = do
+  f <- setupAs "omitted"
+  let [_, sv2, _] = f.svs
+  result <- theUsualVote f
+  [execution] <- pure result.executions
+
+  passTime (hours 3)
+  let full = currentTargetsOf f f.configCid f.ansCid
+  submitMustFail (actAs sv2 <> readAs f.dso) $
+    executeCmd sv2 execution full with authentic = Map.delete (ansTargetKey f.dso) full.authentic
+
+  feesNow f >>= (=== (openingTransferFee, openingEntryFee))
+
+twoPathsOneAction : Script ()
+twoPathsOneAction = do
+  f <- setupAs "twopaths"
+  let [sv1, sv2, _] = f.svs
+      confirmed = fees 0.04 1.5
+      confirmMechanism = mechanismFor f confirmationProcedureName "fees-confirm"
+
+  confirmations <- confirmAs f confirmMechanism confirmed [sv1, sv2]
+  passTime (hours 2)
+  confirmed' <- resolveConfirmationsAs f sv1 confirmMechanism confirmations
+  confirmed'.verdict === Decided confirmed
+  [confirmExecution] <- pure confirmed'.executions
+
+  executed <- executeAs f sv1 confirmExecution f.configCid f.ansCid
+  [newConfig, newAns] <- pure executed.created
+  feesNow f >>= (=== (0.04, 1.5))
+
+  stillActive <- queryContractId f.dso f.actionCid
+  assertMsg "the action survives issuing an execution" (isSome stillActive)
+
+  now <- getTime
+  voteResult <- voteOn f now "fees-vote"
+    (currentTargetsOf f (coerceContractId newConfig) (coerceContractId newAns))
+    (theUsualVotes f)
+  voteResult.verdict === Decided (feeParameters 0.05 2.0)
+  [voteExecution] <- pure voteResult.executions
+
+  passTime (hours 3)
+  _ <- executeAs f sv2 voteExecution (coerceContractId newConfig)
+    (coerceContractId newAns)
+  feesNow f >>= (=== (0.05, 2.0))
+
+anEpochBumpMidVoteStillAgrees : Script ()
+anEpochBumpMidVoteStillAgrees = do
+  f <- setupAs "epochmid"
+  let [sv1, sv2, sv3] = f.svs
+  (mechanism, opened) <- openFeesVote f sv1 (feeVote 0.05 2.0)
+
+  bumped <- submit f.amuletAuthority $ exerciseCmd f.configCid
+    AmuletConfig_SetFee with newTransferFee = openingTransferFee
+  ballotCid <- castAll f opened
+    [ (sv2, feeVote 0.06 2.5)
+    , (sv3, feeVote 0.09 4.0) ]
+  passTime (hours 1)
+
+  result <- resolveVoteAs f sv1 mechanism [ballotCid]
+  result.verdict === Decided (feeParameters 0.05 2.0)
+  [execution] <- pure result.executions
+
+  passTime (hours 3)
+  _ <- executeAs f sv2 execution bumped f.ansCid
+  feesNow f >>= (=== (0.05, 2.0))
+
+aFeeChangeMidVoteStopsExecution : Script ()
+aFeeChangeMidVoteStopsExecution = do
+  f <- setupAs "splitmid"
+  let [sv1, sv2, sv3] = f.svs
+  (mechanism, opened) <- openFeesVote f sv1 (feeVote 0.05 2.0)
+
+  drifted <- submit f.amuletAuthority $ exerciseCmd f.configCid
+    AmuletConfig_SetFee with newTransferFee = 0.07
+  ballotCid <- castAll f opened
+    [ (sv2, feeVote 0.06 2.5)
+    , (sv3, feeVote 0.09 4.0) ]
+  passTime (hours 1)
+
+  result <- resolveVoteAs f sv1 mechanism [ballotCid]
+  [execution] <- pure result.executions
+  passTime (hours 3)
+  submitMustFail (actAs sv2 <> readAs f.dso) $
+    executeCmd sv2 execution (currentTargetsOf f drifted f.ansCid)
+  feesNow f >>= (=== (0.07, openingEntryFee))
+
+
+-- The weight snapshot
+-----------------------
+
+aWeightChangeAfterOpeningDoesNotCount : Script ()
+aWeightChangeAfterOpeningDoesNotCount = do
+  f <- setupAs "later-weight"
+  let [sv1, sv2, sv3] = f.svs
+  (mechanism, opened) <- openFeesVote f sv2 (feeVote 0.06 2.5)
+  Some sv3Rights <- pure (Map.lookup "sv3-a" f.sourceCids)
+  _ <- submit f.dso $ exerciseCmd sv3Rights SvWeightSource_SetWeight with newWeight = 10.0
+  ballotCid <- castAs f opened sv3 (feeVote 0.09 4.0)
+  passTime (hours 1)
+  result <- resolveVoteAs f sv1 mechanism [ballotCid]
+  result.verdict === Lapsed
+
+aStaleSourceIsRefusedAtOpening : Script ()
+aStaleSourceIsRefusedAtOpening = do
+  f <- setupAs "stale"
+  let sv1 :: _ = f.svs
+      mechanism = mechanismFor f weightedVoteProcedureName "fees-vote"
+  Some sv3Rights <- pure (Map.lookup "sv3-a" f.sourceCids)
+  _ <- submit f.dso $ exerciseCmd sv3Rights SvWeightSource_SetWeight with newWeight = 10.0
+  submitMustFail (actAs sv1 <> readAs f.dso) $
+    openVoteCmd f (currentTargetsOf f f.configCid f.ansCid) f.start sv1 (feeVote 0.05 2.0) mechanism
+      f.sourceCids
+
+anIncompleteSourceSetIsRefusedAtOpening : Script ()
+anIncompleteSourceSetIsRefusedAtOpening = do
+  f <- setupAs "incomplete"
+  let sv1 :: _ = f.svs
+      mechanism = mechanismFor f weightedVoteProcedureName "fees-vote"
+  submitMustFail (actAs sv1 <> readAs f.dso) $
+    openVoteCmd f (currentTargetsOf f f.configCid f.ansCid) f.start sv1 (feeVote 0.05 2.0) mechanism
+      (Map.delete "sv2-a" f.sourceCids)
+
+aSourceUnderAnotherNameIsRefusedAtOpening : Script ()
+aSourceUnderAnotherNameIsRefusedAtOpening = do
+  f <- setupAs "renamed"
+  let sv1 :: _ = f.svs
+      mechanism = mechanismFor f weightedVoteProcedureName "fees-vote"
+  Some sv2Rights <- pure (Map.lookup "sv2-a" f.sourceCids)
+  submitMustFail (actAs sv1 <> readAs f.dso) $
+    openVoteCmd f (currentTargetsOf f f.configCid f.ansCid) f.start sv1 (feeVote 0.05 2.0) mechanism
+      (Map.insert "sv3-a" sv2Rights f.sourceCids)
+
+aPartyWithoutWeightCannotOpenAVote : Script ()
+aPartyWithoutWeightCannotOpenAVote = do
+  f <- setupAs "outsider-opens"
+  let mechanism = mechanismFor f weightedVoteProcedureName "fees-vote"
+  submitMustFail (actAs f.outsider <> readAs f.dso) $
+    openVoteCmd f (currentTargetsOf f f.configCid f.ansCid) f.start f.outsider (feeVote 0.05 2.0)
+      mechanism f.sourceCids
+
+
+-- The shared ballot
+---------------------
+
+aRecastReplacesTheVote : Script ()
+aRecastReplacesTheVote = do
+  f <- setupAs "recast"
+  let [sv1, sv2, _] = f.svs
+  (mechanism, opened) <- openFeesVote f sv1 (feeVote 0.09 4.0)
+  ballotCid <- castAll f opened
+    [ (sv1, feeVote 0.05 2.0)
+    , (sv2, feeVote 0.09 4.0) ]
+  passTime (hours 1)
+  result <- resolveVoteAs f sv1 mechanism [ballotCid]
+  result.verdict === Decided (feeParameters 0.05 2.0)
+
+aSharedBallotResolvesOnce : Script ()
+aSharedBallotResolvesOnce = do
+  f <- setupAs "once"
+  let [sv1, sv2, sv3] = f.svs
+  (mechanism, cast) <- castBy f [(sv1, feeVote 0.05 2.0), (sv2, feeVote 0.05 2.0), (sv3, feeVote 0.06 2.5)]
+  _ <- resolveVoteAs f sv1 mechanism cast
+  submitMustFail (actAs sv2 <> readAs f.dso) (resolveVoteCmdAs f sv2 mechanism cast)
+
+aPartyWithoutWeightCannotVote : Script ()
+aPartyWithoutWeightCannotVote = do
+  f <- setupAs "no-weight"
+  let sv1 :: _ = f.svs
+  (_, opened) <- openFeesVote f sv1 (feeVote 0.05 2.0)
+  submitMustFail (actAs f.outsider <> readAs f.dso) $
+    castVoteCmd opened f.outsider (feeVote 0.05 2.0)
+
+aVoterCannotCastForAnotherVoter : Script ()
+aVoterCannotCastForAnotherVoter = do
+  f <- setupAs "cast-for"
+  let [sv1, sv2, sv3] = f.svs
+  (_, opened) <- openFeesVote f sv1 (feeVote 0.05 2.0)
+  submitMustFail (actAs sv2 <> readAs f.dso) $
+    castVoteCmd opened sv3 (feeVote 0.05 2.0)
+
+aVoteOnOtherParametersIsRefused : Script ()
+aVoteOnOtherParametersIsRefused = do
+  f <- setupAs "other-parameters"
+  let [sv1, sv2, _] = f.svs
+  (_, opened) <- openFeesVote f sv1 (feeVote 0.05 2.0)
+  submitMustFail (actAs sv2 <> readAs f.dso) $
+    castVoteCmd opened sv2 (V_Parameters (TextMap.fromList [(transferFeeField, 0.05)]))
+
+aVotersSourcesAddUp : Script ()
+aVotersSourcesAddUp = do
+  f <- setupAs "together"
+  let [sv1, _, sv3] = f.svs
+  (mechanism, cast) <- castBy f [(sv1, feeVote 0.05 2.0), (sv3, feeVote 0.09 4.0)]
+  result <- resolveVoteAs f sv1 mechanism cast
+  result.verdict === Decided (feeParameters 0.05 2.0)
+
+aVoteBelowTwoThirdsLapses : Script ()
+aVoteBelowTwoThirdsLapses = do
+  f <- setupAs "below"
+  let [sv1, sv2, sv3] = f.svs
+  (mechanism, cast) <- castBy f [(sv2, feeVote 0.06 2.5), (sv3, feeVote 0.09 4.0)]
+  result <- resolveVoteAs f sv1 mechanism cast
+  result.verdict === Lapsed
+
+
+-- Confirmations
+-----------------
+
+aSingleConfirmationIsRefused : Script ()
+aSingleConfirmationIsRefused = do
+  f <- setupAs "single-confirm"
+  let [sv1, sv2, _] = f.svs
+      confirmed = fees 0.04 1.5
+      mechanism = mechanismFor f confirmationProcedureName "fees-confirm"
+  confirmations <- confirmAs f mechanism confirmed [sv2]
+  submitMustFail (actAs sv1 <> readAs f.dso) (resolveConfirmationsCmdAs f sv1 mechanism confirmations)
+  feesNow f >>= (=== (openingTransferFee, openingEntryFee))
+
+twoSvsOfThreeConfirm : Script ()
+twoSvsOfThreeConfirm = do
+  f <- setupAs "light-confirm"
+  let [sv1, sv2, sv3] = f.svs
+      confirmed = fees 0.04 1.5
+      mechanism = mechanismFor f confirmationProcedureName "fees-confirm"
+  confirmations <- confirmAs f mechanism confirmed [sv2, sv3]
+  result <- resolveConfirmationsAs f sv1 mechanism confirmations
+  result.verdict === Decided confirmed

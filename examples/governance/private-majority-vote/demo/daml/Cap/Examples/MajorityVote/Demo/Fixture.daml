@@ -16,13 +16,11 @@ import Daml.Script
 import Splice.Api.Token.MetadataV1
 import qualified Splice.Api.Token.MetadataV1 as Meta
 
-import Cap.Core.ResolverV1
-import Cap.Core.SubmittableV1
-import Cap.Core.Utils (ExecutionAction (..), ExecutionCore (..), IsAnyValue (..))
+import Cap.Core.Types (AuthenticKey (..), ExecutionAction (..), ExecutionCore (..), Mechanism (..))
+import Cap.Core.Utils (IsAnyValue (..))
 import Cap.Governance.ActionV1 (Action, Action_AuthorizeExecution (..))
-import Cap.Governance.BallotV1
-import Cap.Governance.BindingV1
 import Cap.Governance.ExecutableV1
+import Cap.Governance.Types (Bind (..))
 
 import Cap.Examples.MajorityVote.Ballot
 import Cap.Examples.MajorityVote.Config
@@ -39,9 +37,6 @@ openingSetting = "sync-a"
 
 proposedSetting : Text
 proposedSetting = "sync-b"
-
-majorityOptions : [AnyValue]
-majorityOptions = [yayOption, nayOption]
 
 noArgs : ExtraArgs
 noArgs = ExtraArgs with context = emptyChoiceContext; meta = emptyMetadata
@@ -60,12 +55,6 @@ data Fixture = Fixture with
     actionCid : ContractId SetConfigAction
     terms : ProposalTerms
 
-configBind : Party -> Text -> Map TargetKey Bind
-configBind dso setting = Map.fromList
-  [ ( Authentic (configTargetKey dso)
-    , Bind with state = Some (toAnyValue setting); cid = None
-    )
-  ]
 
 setupAs : Text -> Script Fixture
 setupAs ns = do
@@ -81,7 +70,7 @@ setupAs ns = do
   configCid <- submit dso $ createCmd Config with
     dso; electorate; setting = openingSetting
   actionCid <- submit dso $ createCmd SetConfigAction with
-    dso; operator; electorate; newSetting = proposedSetting
+    dso; operator; electorate; baseSetting = openingSetting; newSetting = proposedSetting
   let body = VoteResolver with
         dso; operator; electorate
         resolverId = bodyName
@@ -89,14 +78,13 @@ setupAs ns = do
   resolverCid <- submit dso $ createCmd body
 
   let mechanism = Mechanism with
-        resolver = ResolverKey with
+        resolver = AuthenticKey with
           authorities = Set.fromList [dso]
           id = bodyName
         resolverCid = None
         procedure = majorityProcedureName
         id = proposalName
       terms = ProposalTerms with
-        options = majorityOptions
         actionCid = toInterfaceContractId @Action actionCid
         entryClosesAt = now `addRelTime` days 1
         votingClosesAt = now `addRelTime` days 2
@@ -111,17 +99,9 @@ setupAs ns = do
 
   pure Fixture with ..
 
-presentedTargets : Fixture -> ContractId Config -> Map TargetKey Meta.AnyContractId
+presentedTargets : Fixture -> ContractId Config -> Map AuthenticKey Meta.AnyContractId
 presentedTargets f configCid = Map.fromList
-  [(Authentic (configTargetKey f.dso), coerceContractId configCid)]
-
-presented : ContractId PrivateBallot -> ContractId Submittable
-presented = toInterfaceContractId @Submittable
-
-
-withProposal : Fixture -> [ContractId Submittable] -> [ContractId Submittable]
-withProposal f ballots = toInterfaceContractId @Submittable f.proposalCid :: ballots
-
+  [(configTargetKey f.dso, coerceContractId configCid)]
 
 liveProposal : Fixture -> Script (ContractId Proposal)
 liveProposal f = do
@@ -138,21 +118,19 @@ seat f voter = do
     [cid] -> submit voter (exerciseCmd cid BallotInvitation_Accept with proposalCid)
     _ -> fail "that voter holds no invitation on this proposal"
 
-cast
-  : Fixture -> Party -> ContractId PrivateBallot -> AnyValue
-  -> Script (ContractId PrivateBallot)
-cast f voter ballotCid option = do
-  cid <- submit voter $
-    exerciseCmd (toInterfaceContractId @Ballot ballotCid) Ballot_Cast with
-      actors = [voter]
-      vote = option
-      targets = presentedTargets f f.configCid
-      extraArgs = noArgs
-  pure (fromInterfaceContractId cid)
+cast : Party -> ContractId PrivateBallot -> Text -> Script (ContractId PrivateBallot)
+cast voter ballotCid option =
+  submit voter $ exerciseCmd ballotCid PrivateBallot_Cast with option
 
-runResolve : Fixture -> [ContractId Submittable] -> Script Resolver_ResolveResult
-runResolve f submittables = submit f.operator $
-  resolveOnCmd f f.resolverCid f.mechanism submittables
+resolveCmd : Fixture -> [ContractId PrivateBallot] -> Commands ResolveResult
+resolveCmd f ballotCids =
+  exerciseCmd f.resolverCid VoteResolver_ResolveMajority with
+    proposalCid = f.proposalCid
+    ballotCids
+    extraArgs = noArgs
+
+runResolve : Fixture -> [ContractId PrivateBallot] -> Script ResolveResult
+runResolve f ballotCids = submit f.operator (resolveCmd f ballotCids)
 
 submitMustFailContaining : Show a => Text -> Party -> Commands a -> Script ()
 submitMustFailContaining expected actor cmds = do
@@ -167,22 +145,7 @@ submitMustFailContaining expected actor cmds = do
       unless (expected `Text.isInfixOf` actual) $
         fail ("expected a failure containing " <> expected <> ", got " <> actual)
 
-resolveOnCmd
-  : Fixture -> ContractId VoteResolver -> Mechanism -> [ContractId Submittable]
-  -> Commands Resolver_ResolveResult
-resolveOnCmd f resolverCid mechanism submittables =
-  exerciseCmd (toInterfaceContractId @Resolver resolverCid) Resolver_Resolve with
-    actors = [f.operator]
-    mechanism
-    submittables = withProposal f submittables
-    extraArgs = noArgs
-
-runResolveMustFailContaining : Fixture -> Text -> [ContractId Submittable] -> Script ()
-runResolveMustFailContaining f expected submittables =
-  submitMustFailContaining expected f.operator
-    (resolveOnCmd f f.resolverCid f.mechanism submittables)
-
-executionOf : Resolver_ResolveResult -> ContractId Executable
+executionOf : ResolveResult -> ContractId Executable
 executionOf result = case result.created of
   [cid] -> coerceContractId cid
   _ -> error "the resolve minted no single execution"
@@ -201,6 +164,7 @@ forgedCore f = ExecutionCore with
   authorities = Set.fromList [f.dso]
   availableActions = Map.fromList [(EA_Execute, [[f.operator]])]
   opensAt = f.terms.votingClosesAt
+  cancelAt = f.terms.votingClosesAt
   expiresAt = Some f.terms.expiresAt
   meta = emptyMetadata
 
@@ -209,7 +173,15 @@ runIssueMustFail f actor core =
   submitMustFail actor $
     exerciseCmd (toInterfaceContractId @Action f.actionCid) Action_AuthorizeExecution with
       actors = [actor]
-      core
-      outcome = Some yayOption
-      bindings = configBind f.dso openingSetting
+      executionCore = core
+      outcome = Some (toAnyValue yay)
+      binds = configBind f.dso openingSetting
       extraArgs = noArgs
+
+
+configBind : Party -> Text -> Map AuthenticKey Bind
+configBind dso setting = Map.fromList
+  [ ( configTargetKey dso
+    , Bind with state = Some (toAnyValue setting); cid = None
+    )
+  ]

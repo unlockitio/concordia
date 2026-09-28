@@ -4,80 +4,71 @@ module Cap.Examples.MajorityVote.Ballot where
 
 import Prelude hiding (Action)
 
-import DA.Map (Map)
 import qualified DA.Map as Map
 import DA.Optional (isNone, isSome)
 
+import Splice.Util (HasCheckedFetch (..), require)
 
-import Splice.Api.Token.MetadataV1
-import Splice.Util (require)
+import Cap.Core.Types (Mechanism)
+import Cap.Core.Utils (requireExpired, requireOpen)
+import Cap.Governance.ActionV1 (Action)
+import Cap.Governance.Utils (IsBallot (..))
 
-import Cap.Core.SubmittableV1
-import Cap.Governance.ActionV1 (Action, Stage (..))
-import Cap.Governance.BallotV1
-import Cap.Governance.BindingV1
-import Cap.Governance.Utils (pinStateAt)
+yay : Text
+yay = "yay"
 
--- all voters must agree
-data ProposalTerms = ProposalTerms
-  with
-    options : [AnyValue]
-    actionCid : ContractId Action
-    entryClosesAt : Time
-    votingClosesAt : Time
-    expiresAt : Time
-  deriving (Eq, Show)
+nay : Text
+nay = "nay"
 
 template PrivateBallot
   with
     operator : Party
     voter : Party
     mechanism : Mechanism
-    terms : ProposalTerms
-    bindings : Map TargetKey Bind
-    vote : Optional AnyValue
+    actionCid : ContractId Action
+    opensAt : Time
+    closesAt : Time
+    expiresAt : Time
+    vote : Optional Text
   where
     signatory [operator, voter]
-    observer voter
 
-    ensure optional True (`elem` terms.options) vote
+    ensure optional True (`elem` [yay, nay]) vote
 
-    interface instance Submittable for PrivateBallot where
-      view = SubmittableView with
-        mechanism
-        meta = emptyMetadata
-
-    interface instance Ballot for PrivateBallot where
-      view = BallotView with
-        opensAt = terms.entryClosesAt
-        closesAt = terms.votingClosesAt
-        expiresAt = terms.expiresAt
-        bindings
-        availableActions = Map.fromList
-          [ (BA_Cast, [[voter]])
-          , (BA_Withdraw, [[voter]])
-          ]
-        vote
-        meta = emptyMetadata
-
-      ballot_castImpl self arg = do
+    choice PrivateBallot_Cast : ContractId PrivateBallot
+      with
+        option : Text
+      controller voter
+      do
+        now <- getTime
+        requireOpen "the voting window is open" now opensAt (Some closesAt)
         require "this ballot carries no vote yet" (isNone vote)
-        action <- fetch terms.actionCid
-        pinned <- pinStateAt Submission arg.targets (view action).bindSpec
-        archive self
-        toInterfaceContractId @Ballot <$>
-          create this with vote = Some arg.vote; bindings = pinned
+        create this with vote = Some option
 
-      ballot_withdrawImpl self _ = do
+    choice PrivateBallot_Withdraw : ContractId PrivateBallot
+      controller voter
+      do
+        now <- getTime
+        requireOpen "the voting window is open" now opensAt (Some closesAt)
         require "this ballot carries a vote to withdraw" (isSome vote)
-        archive self
-        _ <- create this with vote = None
-        pure Ballot_WithdrawResult with meta = emptyMetadata
+        create this with vote = None
 
-      ballot_expireImpl self _ = do
-        archive self
-        pure Ballot_ExpireResult with meta = emptyMetadata
+    choice PrivateBallot_Expire : ()
+      controller operator
+      do
+        now <- getTime
+        requireExpired "the ballot has expired" now (Some expiresAt)
 
-      ballot_consumeImpl self _ = do
-        archive self
-        pure Ballot_ConsumeResult with meta = emptyMetadata
+    choice PrivateBallot_Consume : ()
+      controller operator
+      do pure ()
+
+
+instance HasCheckedFetch PrivateBallot Mechanism where
+  contractGroupId ballot = ballot.mechanism
+
+instance IsBallot PrivateBallot Text where
+  castsOf ballot = Map.fromList [(ballot.voter, ballot.vote)]
+  bindsOf _ = Map.empty
+  actionOf ballot = ballot.actionCid
+  consume cid = exercise cid PrivateBallot_Consume

@@ -1,0 +1,218 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Core.Tests.Ledger where
+
+import DA.Assert ((===))
+import DA.Date (Month (..), date)
+import qualified DA.Set as Set
+import DA.Time (addRelTime, days, time)
+import Daml.Script hiding (AnyContractId)
+
+import Splice.Api.Token.MetadataV1 (AnyContractId)
+
+import Cap.Core.Types (AuthenticKey (..), Mechanism (..))
+import Cap.Core.Utils
+
+import Cap.Core.Tests.Support
+
+
+template Grouped
+  with
+    owner : Party
+    group : Text
+  where
+    signatory owner
+
+instance HasCheckedFetch Grouped Text where
+  contractGroupId grouped = grouped.group
+
+template SignedTarget
+  with
+    signer : Party
+    readers : [Party]
+  where
+    signatory signer
+    observer readers
+
+instance HasCheckedFetch SignedTarget AuthenticKey where
+  contractGroupId = signedKey "signed"
+
+template Probe
+  with
+    owner : Party
+  where
+    signatory owner
+
+    nonconsuming choice Probe_FetchGroup : [ContractId Grouped]
+      with
+        group : Text
+        cids : [ContractId Grouped]
+      controller owner
+      do map fst <$> fetchGroup group cids
+
+    nonconsuming choice Probe_FetchCheckedAny : ContractId SignedTarget
+      with
+        key : AuthenticKey
+        cid : AnyContractId
+      controller owner
+      do fst <$> fetchCheckedAny @SignedTarget key cid
+
+    nonconsuming choice Probe_RequireMechanism : ()
+      with
+        key : AuthenticKey
+        procedure : Text
+        mechanism : Mechanism
+      controller owner
+      do requireMechanism key (coerceContractId self) procedure mechanism
+
+    nonconsuming choice Probe_RequireOpen : ()
+      with
+        opensAt : Time
+        closesAt : Optional Time
+      controller owner
+      do
+        now <- getTime
+        requireOpen "the window is open" now opensAt closesAt
+
+    nonconsuming choice Probe_RequireExpired : ()
+      with
+        expiresAt : Optional Time
+      controller owner
+      do
+        now <- getTime
+        requireExpired "the contract has expired" now expiresAt
+
+
+t0 : Time
+t0 = time (date 2026 Jan 1) 0 0 0
+
+bodyKey : Party -> AuthenticKey
+bodyKey party = AuthenticKey with authorities = Set.fromList [party]; id = "body"
+
+signedKeyOf : Party -> Text -> AuthenticKey
+signedKeyOf party id = AuthenticKey with authorities = Set.fromList [party]; id
+
+mechanismOf : Party -> Optional AnyContractId -> Text -> Mechanism
+mechanismOf party resolverCid procedure = Mechanism with
+  resolver = bodyKey party
+  resolverCid
+  procedure
+  id = "proposal"
+
+setupProbe : Text -> Script (Party, ContractId Probe)
+setupProbe ns = do
+  owner <- allocateParty (ns <> "-owner")
+  probe <- submit owner $ createCmd Probe with owner
+  pure (owner, probe)
+
+
+fetchGroupReturnsTheGroup : Script ()
+fetchGroupReturnsTheGroup = do
+  (owner, probe) <- setupProbe "group-ok"
+  a <- submit owner $ createCmd Grouped with owner; group = "g"
+  b <- submit owner $ createCmd Grouped with owner; group = "g"
+  result <- submit owner $ exerciseCmd probe Probe_FetchGroup with group = "g"; cids = [a, b]
+  result === [a, b]
+
+fetchGroupRefusesAnEmptyList : Script ()
+fetchGroupRefusesAnEmptyList = do
+  (owner, probe) <- setupProbe "group-empty"
+  submitMustFailContaining "a resolution presents at least one contract" owner $
+    exerciseCmd probe Probe_FetchGroup with group = "g"; cids = []
+
+fetchGroupRefusesADuplicate : Script ()
+fetchGroupRefusesADuplicate = do
+  (owner, probe) <- setupProbe "group-duplicate"
+  a <- submit owner $ createCmd Grouped with owner; group = "g"
+  submitMustFailContaining "the presented contracts are distinct" owner $
+    exerciseCmd probe Probe_FetchGroup with group = "g"; cids = [a, a]
+
+fetchGroupRefusesAnotherGroup : Script ()
+fetchGroupRefusesAnotherGroup = do
+  (owner, probe) <- setupProbe "group-other"
+  a <- submit owner $ createCmd Grouped with owner; group = "g"
+  b <- submit owner $ createCmd Grouped with owner; group = "h"
+  submitMustFailContaining "Contract group identifier mismatch" owner $
+    exerciseCmd probe Probe_FetchGroup with group = "g"; cids = [a, b]
+
+fetchCheckedAnyAcceptsTheKeyTheContractCarries : Script ()
+fetchCheckedAnyAcceptsTheKeyTheContractCarries = do
+  (owner, probe) <- setupProbe "checked-ok"
+  signed <- submit owner $ createCmd SignedTarget with signer = owner; readers = []
+  result <- submit owner $ exerciseCmd probe Probe_FetchCheckedAny with
+    key = signedKeyOf owner "signed"; cid = coerceContractId signed
+  result === signed
+
+fetchCheckedAnyRefusesAnotherId : Script ()
+fetchCheckedAnyRefusesAnotherId = do
+  (owner, probe) <- setupProbe "checked-id"
+  signed <- submit owner $ createCmd SignedTarget with signer = owner; readers = []
+  submitMustFailContaining "Contract group identifier mismatch" owner $
+    exerciseCmd probe Probe_FetchCheckedAny with
+      key = signedKeyOf owner "other"; cid = coerceContractId signed
+
+fetchCheckedAnyRefusesAnotherSigner : Script ()
+fetchCheckedAnyRefusesAnotherSigner = do
+  (owner, probe) <- setupProbe "checked-signer"
+  other <- allocateParty "checked-signer-other"
+  signed <- submit other $ createCmd SignedTarget with signer = other; readers = [owner]
+  submitMustFailContaining "Contract group identifier mismatch" owner $
+    exerciseCmd probe Probe_FetchCheckedAny with
+      key = signedKeyOf owner "signed"; cid = coerceContractId signed
+
+requireMechanismAcceptsAnUnboundMechanism : Script ()
+requireMechanismAcceptsAnUnboundMechanism = do
+  (owner, probe) <- setupProbe "mechanism-unbound"
+  submit owner $ exerciseCmd probe Probe_RequireMechanism with
+    key = bodyKey owner; procedure = "vote"; mechanism = mechanismOf owner None "vote"
+
+requireMechanismAcceptsAMechanismBoundToThisContract : Script ()
+requireMechanismAcceptsAMechanismBoundToThisContract = do
+  (owner, probe) <- setupProbe "mechanism-bound"
+  submit owner $ exerciseCmd probe Probe_RequireMechanism with
+    key = bodyKey owner; procedure = "vote"
+    mechanism = mechanismOf owner (Some (coerceContractId probe)) "vote"
+
+requireMechanismRefusesAnotherBody : Script ()
+requireMechanismRefusesAnotherBody = do
+  (owner, probe) <- setupProbe "mechanism-body"
+  other <- allocateParty "mechanism-body-other"
+  submitMustFailContaining "the mechanism names the ResolveKey" owner $
+    exerciseCmd probe Probe_RequireMechanism with
+      key = bodyKey owner; procedure = "vote"; mechanism = mechanismOf other None "vote"
+
+requireMechanismRefusesAnotherRulesContract : Script ()
+requireMechanismRefusesAnotherRulesContract = do
+  (owner, probe) <- setupProbe "mechanism-rules"
+  otherProbe <- submit owner $ createCmd Probe with owner
+  submitMustFailContaining "the mechanism is bound to no other rules contract" owner $
+    exerciseCmd probe Probe_RequireMechanism with
+      key = bodyKey owner; procedure = "vote"
+      mechanism = mechanismOf owner (Some (coerceContractId otherProbe)) "vote"
+
+requireMechanismRefusesAnotherProcedure : Script ()
+requireMechanismRefusesAnotherProcedure = do
+  (owner, probe) <- setupProbe "mechanism-procedure"
+  submitMustFailContaining "the mechanism names the procedure vote" owner $
+    exerciseCmd probe Probe_RequireMechanism with
+      key = bodyKey owner; procedure = "vote"; mechanism = mechanismOf owner None "confirm"
+
+requireOpenChecksTheWindow : Script ()
+requireOpenChecksTheWindow = do
+  (owner, probe) <- setupProbe "window"
+  setTime t0
+  submit owner $ exerciseCmd probe Probe_RequireOpen with opensAt = t0; closesAt = None
+  submitMustFailContaining "the window is open" owner $
+    exerciseCmd probe Probe_RequireOpen with opensAt = addRelTime t0 (days 1); closesAt = None
+  submitMustFailContaining "the window is open" owner $
+    exerciseCmd probe Probe_RequireOpen with opensAt = addRelTime t0 (days (-1)); closesAt = Some t0
+
+requireExpiredChecksTheExpiry : Script ()
+requireExpiredChecksTheExpiry = do
+  (owner, probe) <- setupProbe "expiry"
+  setTime t0
+  submit owner $ exerciseCmd probe Probe_RequireExpired with expiresAt = Some t0
+  submitMustFailContaining "the contract has expired" owner $
+    exerciseCmd probe Probe_RequireExpired with expiresAt = Some (addRelTime t0 (days 1))
+  submitMustFailContaining "this contract has no expiry" owner $
+    exerciseCmd probe Probe_RequireExpired with expiresAt = None

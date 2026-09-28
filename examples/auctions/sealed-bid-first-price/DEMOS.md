@@ -81,7 +81,7 @@ a wallet take between them.
   transaction exercising both `AllocationFactory_Allocate` and
   `AllocationRequest_Accept`.
 - `OneLotBid_Finalize` puts the quotes and the two allocation contract ids on the
-  seat. It fetches each allocation and asserts `AllocationSpecification` are correct.
+  seat. It fetches each allocation, asserts its `AllocationSpecification` is the one the bid implies, and requires each to be signed by its instrument admin.
 
 The wallet reads nothing the auction wrote into `OneLotAuctionTerms`. Everything
 it needs — the settlement, the deadline, the instruments, the amounts, who may
@@ -228,7 +228,7 @@ sequenceDiagram
 ## 4. `aBidderCannotBlockTheSale`
 
 Alice bids 100 and wins, Bob bids 60 and loses. Each tries the same five ways out
-of its own seat and allocation once bidding has closed, and Alice tries four more
+of its own seat and allocation once bidding has closed, and Alice tries five more
 in the window between `Resolver_Resolve` and `Settlement_Settle`, where the
 `AuctionSettlement` exists and her two allocations are still live.
 

@@ -1,0 +1,211 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Examples.BabyDso.Demo.Fixture where
+
+import Prelude hiding (Action)
+
+import DA.Map (Map)
+import qualified DA.Map as Map
+import DA.Set (Set)
+import qualified DA.Set as Set
+import DA.TextMap (TextMap)
+import qualified DA.TextMap as TextMap
+import DA.Time
+import Daml.Script hiding (AnyContractId)
+
+import Splice.Api.Token.MetadataV1
+
+import Cap.Core.Types (AuthenticKey (..), Mechanism (..))
+import Cap.Governance.ActionV1 (Action)
+import Cap.Governance.ExecutableV1
+import Cap.Governance.Types (Bind (..))
+
+import Cap.Examples.BabyDso.Action
+import Cap.Examples.BabyDso.Ans
+import Cap.Examples.BabyDso.Config
+import Cap.Examples.BabyDso.Resolver
+import Cap.Examples.BabyDso.Rights
+import Cap.Examples.BabyDso.Submission
+
+
+openingTransferFee : Decimal
+openingTransferFee = 0.03
+
+openingEntryFee : Decimal
+openingEntryFee = 2.0
+
+openingEpoch : Int
+openingEpoch = 3
+
+bodyId : Text
+bodyId = "baby-dso"
+
+data Fixture = Fixture with
+    amuletAuthority : Party
+    dso : Party
+    svs : [Party]
+    outsider : Party
+    electorate : Set Party
+    configCid : ContractId AmuletConfig
+    ansCid : ContractId AnsRules
+    actionCid : ContractId SetFeesAction
+    resolverCid : ContractId DsoResolver
+    sourceCids : Map Text (ContractId SvWeightSource)
+    keyOf : Map Text RightKey
+    start : Time
+
+data Targets = Targets with
+    authentic : Map AuthenticKey AnyContractId
+
+
+setupAs : Text -> Script Fixture
+setupAs ns = do
+  let party role = "baby-" <> ns <> "-" <> role
+  amuletAuthority <- allocateParty (party "amulet-authority")
+  dso <- allocateParty (party "dso")
+  sv1 <- allocateParty (party "sv1")
+  sv2 <- allocateParty (party "sv2")
+  sv3 <- allocateParty (party "sv3")
+  outsider <- allocateParty (party "outsider")
+  let svs = [sv1, sv2, sv3]
+      electorate = Set.fromList svs
+  start <- getTime
+
+  configCid <- submit amuletAuthority $ createCmd AmuletConfig with
+    amuletAuthority; svs = electorate
+    transferFee = openingTransferFee
+    epoch = openingEpoch
+  ansCid <- submit dso $ createCmd AnsRules with dso; entryFee = openingEntryFee
+  actionCid <- submit amuletAuthority $ createCmd SetFeesAction with amuletAuthority; dso; svs = electorate
+  created <- forA
+    [ ("sv1-a", sv1, 3.0), ("sv1-b", sv1, 2.0)
+    , ("sv2-a", sv2, 3.0), ("sv3-a", sv3, 1.0) ]
+    (\(name, sv, weight) -> do
+      cid <- submit dso $ createCmd SvWeightSource with
+        dso; svs = electorate; name; sv; weight
+      pure (name, sv, cid))
+  let sourceCids = Map.fromList [(name, cid) | (name, _, cid) <- created]
+      keyOf = Map.fromList
+        [ (name, RightKey with authKey = sourceKey dso name; sv)
+        | (name, sv, _) <- created ]
+  resolverCid <- submit dso $ createCmd DsoResolver with
+    dso
+    svs = electorate
+    resolverId = bodyId
+    weightKeys = Set.fromList (Map.values keyOf)
+    executionDelay = hours 2
+    executionWindow = days 1
+    expiresAt = start `addRelTime` days 30
+
+  pure Fixture with ..
+
+
+feeParameters : Decimal -> Decimal -> TextMap Decimal
+feeParameters transferFee entryFee = TextMap.fromList
+  [ (transferFeeField, transferFee)
+  , (entryFeeField, entryFee)
+  ]
+
+feeVote : Decimal -> Decimal -> Vote
+feeVote transferFee entryFee = V_Parameters (feeParameters transferFee entryFee)
+
+fees : Decimal -> Decimal -> AnyValue
+fees transferFee entryFee = AV_Map (fmap AV_Decimal (feeParameters transferFee entryFee))
+
+actionOf : Fixture -> ContractId Action
+actionOf f = toInterfaceContractId @Action f.actionCid
+
+proposalExpiry : Time -> Time
+proposalExpiry opensAt = opensAt `addRelTime` days 2
+
+mechanismFor : Fixture -> Text -> Text -> Mechanism
+mechanismFor f procedure proposalId = Mechanism with
+  resolver = AuthenticKey with
+    authorities = Set.fromList [f.dso]
+    id = bodyId
+  resolverCid = Some (coerceContractId f.resolverCid)
+  procedure
+  id = proposalId
+
+openingAuthentic : Fixture -> Map AuthenticKey Bind
+openingAuthentic f = Map.fromList
+  [ ( configTargetKey f.amuletAuthority
+    , Bind with state = Some (amuletConfigState openingTransferFee openingEpoch); cid = None
+    )
+  ]
+
+currentTargetsOf : Fixture -> ContractId AmuletConfig -> ContractId AnsRules -> Targets
+currentTargetsOf f configCid ansCid = Targets with
+  authentic = Map.fromList
+    [ (configTargetKey f.amuletAuthority, coerceContractId configCid)
+    , (ansTargetKey f.dso, coerceContractId ansCid)
+    ]
+
+sourcesFrom : Fixture -> Map Text (ContractId SvWeightSource) -> Map RightKey (ContractId SvWeightSource)
+sourcesFrom f sourceCids = Map.fromList
+  [ (wkey, cid)
+  | (name, cid) <- Map.toList sourceCids, Some wkey <- [Map.lookup name f.keyOf] ]
+
+
+openVoteCmd
+  : Fixture -> Targets -> Time -> Party -> Vote -> Mechanism -> Map Text (ContractId SvWeightSource)
+  -> Commands (ContractId SharedBallot)
+openVoteCmd f targets opensAt proposer vote mechanism sources =
+  exerciseCmd f.resolverCid DsoResolver_OpenVote with
+    proposer; mechanism; vote
+    actionCid = actionOf f
+    votingClosesAt = opensAt `addRelTime` hours 1
+    expiresAt = proposalExpiry opensAt
+    weightSources = sourcesFrom f sources
+    targets = targets.authentic
+
+castVoteCmd
+  : ContractId SharedBallot -> Party -> Vote -> Commands (ContractId SharedBallot)
+castVoteCmd ballotCid voter vote =
+  exerciseCmd ballotCid SharedBallot_Cast with voter; vote
+
+resolveVoteCmdAs
+  : Fixture -> Party -> Mechanism -> [ContractId SharedBallot] -> Commands (ResolveResult (TextMap Decimal))
+resolveVoteCmdAs f sv mechanism ballotCids =
+  exerciseCmd f.resolverCid DsoResolver_ResolveVote with
+    sv; mechanism; ballotCids
+    extraArgs = ExtraArgs with context = emptyChoiceContext; meta = emptyMetadata
+
+resolveVoteAs
+  : Fixture -> Party -> Mechanism -> [ContractId SharedBallot] -> Script (ResolveResult (TextMap Decimal))
+resolveVoteAs f sv mechanism ballotCids =
+  submit (actAs sv <> readAs f.dso) (resolveVoteCmdAs f sv mechanism ballotCids)
+
+resolveConfirmationsCmdAs
+  : Fixture -> Party -> Mechanism -> [ContractId SvConfirmation] -> Commands (ResolveResult AnyValue)
+resolveConfirmationsCmdAs f sv mechanism confirmationCids =
+  exerciseCmd f.resolverCid DsoResolver_ResolveConfirmations with
+    sv; mechanism; confirmationCids
+    extraArgs = ExtraArgs with context = emptyChoiceContext; meta = emptyMetadata
+
+resolveConfirmationsAs
+  : Fixture -> Party -> Mechanism -> [ContractId SvConfirmation] -> Script (ResolveResult AnyValue)
+resolveConfirmationsAs f sv mechanism confirmationCids =
+  submit (actAs sv <> readAs f.dso) (resolveConfirmationsCmdAs f sv mechanism confirmationCids)
+
+executeCmd : Party -> ContractId Executable -> Targets -> Commands Executable_ExecuteResult
+executeCmd sv executionCid targets =
+  exerciseCmd executionCid
+    Executable_Execute with
+      actors = [sv]
+      targets = targets.authentic
+      extraArgs = ExtraArgs with context = emptyChoiceContext; meta = emptyMetadata
+
+executeAs
+  : Fixture -> Party -> ContractId Executable -> ContractId AmuletConfig -> ContractId AnsRules
+  -> Script Executable_ExecuteResult
+executeAs f sv executionCid configCid ansCid =
+  submit (actAs sv <> readAs f.dso) $
+    executeCmd sv executionCid (currentTargetsOf f configCid ansCid)
+
+
+feesNow : Fixture -> Script (Decimal, Decimal)
+feesNow f = do
+  [(_, config)] <- query @AmuletConfig f.amuletAuthority
+  [(_, ans)] <- query @AnsRules f.dso
+  pure (config.transferFee, ans.entryFee)

@@ -1,0 +1,37 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Governance.Utils.Weights
+  ( HasWeight (..)
+  , readWeights
+  ) where
+
+import DA.Map (Map)
+import qualified DA.Map as Map
+import DA.Set (Set)
+import qualified DA.Set as Set
+
+import Splice.Util (HasCheckedFetch, fetchChecked, require)
+
+
+------------------  WEIGHTS  ------------------
+-- Used by a body to read voting weight from contracts whose templates it knows.
+
+-- | The owner of a weight contract and the weight it carries.
+class HasWeight t where
+  weightOf : t -> (Party, Decimal)
+
+-- | Reads exactly the registered weight contracts, each checked against its
+-- key, refusing a missing or extra one and a negative weight. Returns the
+-- owner and weight read under each key; how weights combine per voter is the
+-- body's own rule.
+readWeights
+  : (HasFetch t, HasCheckedFetch t k, HasWeight t, Ord k)
+  => Set k -> Map k (ContractId t) -> Update (Map k (Party, Decimal))
+readWeights registered sources = do
+  require "the presented weight contracts are exactly the registered ones"
+    (Map.keys sources == Set.toList registered)
+  Map.fromList <$> forA (Map.toList sources) (\(key, cid) -> do
+    contract <- fetchChecked key cid
+    let (owner, weight) = weightOf contract
+    require ("the weight of " <> show owner <> " is not negative") (weight >= 0.0)
+    pure (key, (owner, weight)))
