@@ -159,14 +159,6 @@ template Probe
         presented <- fetchBallots ballotCids
         weighBallotsEqually narrowText voters presented
 
-    nonconsuming choice Probe_AgreedRequest : (ContractId Action, Map AuthenticKey Bind)
-      with
-        ballotCids : [ContractId Ballot]
-      controller owner
-      do
-        presented <- fetchBallots ballotCids
-        agreedRequest (map snd presented)
-
     nonconsuming choice Probe_ConsumeBallots : ()
       with
         ballotCids : [ContractId Ballot]
@@ -196,12 +188,12 @@ template Probe
       controller owner
       do pinCidsWith readTarget fixed targets
 
-    nonconsuming choice Probe_MergeAuthentic : Map AuthenticKey Bind
+    nonconsuming choice Probe_MergeBinds : Map AuthenticKey Bind
       with
         fixed : Map AuthenticKey Bind
         pinned : Map AuthenticKey Bind
       controller owner
-      do mergeAuthentic fixed pinned
+      do mergeBinds fixed pinned
 
     nonconsuming choice Probe_RequireSameKeys : ()
       with

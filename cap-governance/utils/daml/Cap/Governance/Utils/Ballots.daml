@@ -5,7 +5,6 @@ module Cap.Governance.Utils.Ballots
   , weighBallotsEqually
   , weighBallots
   , consumeBallots
-  , agreedRequest
   ) where
 
 import Prelude hiding (Action)
@@ -20,7 +19,7 @@ import qualified DA.Set as Set
 import Splice.Util (require)
 
 import Cap.Core.Types (AuthenticKey)
-import Cap.Core.Utils (allEqual, orAbort)
+import Cap.Core.Utils (orAbort)
 import Cap.Governance.ActionV1 (Action)
 import Cap.Governance.Types (Bind)
 import Cap.Governance.Utils.Count (Cast (..), Casts)
@@ -70,11 +69,3 @@ weighBallots narrow weights ballots = do
 -- | Consumes every presented ballot, so it cannot be counted again.
 consumeBallots : IsBallot b v => [(ContractId b, b)] -> Update ()
 consumeBallots = mapA_ (consume . fst)
-
--- | The action every presented ballot asks to authorize and the binds every
--- one of them pinned, refusing ballots that disagree on either.
-agreedRequest : IsBallot b v => [b] -> Update (ContractId Action, Map AuthenticKey Bind)
-agreedRequest ballots = do
-  actionCid <- orAbort "the presented ballots ask for one action" (allEqual (map actionOf ballots))
-  binds <- orAbort "the presented ballots pin one set of targets" (allEqual (map bindsOf ballots))
-  pure (actionCid, binds)

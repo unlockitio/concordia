@@ -107,46 +107,46 @@ pinCidsChecksTheKey = do
       fixed = Map.fromList [(keyOf env "t1", emptyBind)]
       targets = Map.fromList [(keyOf env "t1", coerceContractId t2)]
 
-mergeAuthenticFillsTheOpenParts : Script ()
-mergeAuthenticFillsTheOpenParts = do
+mergeBindsFillsTheOpenParts : Script ()
+mergeBindsFillsTheOpenParts = do
   env <- setup "merge-ok"
-  merged <- submit env.owner $ exerciseCmd env.probe Probe_MergeAuthentic with
+  merged <- submit env.owner $ exerciseCmd env.probe Probe_MergeBinds with
     fixed = Map.fromList [(keyOf env "t1", emptyBind), (keyOf env "t2", emptyBind)]
     pinned = Map.fromList [(keyOf env "t1", stateOf' 5)]
   merged === Map.fromList [(keyOf env "t1", stateOf' 5), (keyOf env "t2", emptyBind)]
 
-mergeAuthenticRefusesAPinForAnUnknownTarget : Script ()
-mergeAuthenticRefusesAPinForAnUnknownTarget = do
+mergeBindsRefusesAPinForAnUnknownTarget : Script ()
+mergeBindsRefusesAPinForAnUnknownTarget = do
   env <- setup "merge-unknown"
   submitMustFailContaining "the action names the pinned target" env.owner $
-    exerciseCmd env.probe Probe_MergeAuthentic with
+    exerciseCmd env.probe Probe_MergeBinds with
       fixed = Map.fromList [(keyOf env "t1", emptyBind)]
       pinned = Map.fromList [(keyOf env "t9", stateOf' 5)]
 
-mergeAuthenticRefusesAStateOverAFixedState : Script ()
-mergeAuthenticRefusesAStateOverAFixedState = do
+mergeBindsRefusesAStateOverAFixedState : Script ()
+mergeBindsRefusesAStateOverAFixedState = do
   env <- setup "merge-state"
   submitMustFailContaining "pins no state of" env.owner $
-    exerciseCmd env.probe Probe_MergeAuthentic with
+    exerciseCmd env.probe Probe_MergeBinds with
       fixed = Map.fromList [(keyOf env "t1", stateOf' 3)]
       pinned = Map.fromList [(keyOf env "t1", stateOf' 5)]
 
-mergeAuthenticRefusesAContractOverAFixedContract : Script ()
-mergeAuthenticRefusesAContractOverAFixedContract = do
+mergeBindsRefusesAContractOverAFixedContract : Script ()
+mergeBindsRefusesAContractOverAFixedContract = do
   env <- setup "merge-cid"
   t1 <- target env "t1" 5
   t1b <- target env "t1" 6
   submitMustFailContaining "pins no contract of" env.owner $
-    exerciseCmd env.probe Probe_MergeAuthentic with
+    exerciseCmd env.probe Probe_MergeBinds with
       fixed = Map.fromList [(keyOf env "t1", cidOf t1)]
       pinned = Map.fromList [(keyOf env "t1", cidOf t1b)]
 
-mergeAuthenticRefusesAStateForAFixedContract : Script ()
-mergeAuthenticRefusesAStateForAFixedContract = do
+mergeBindsRefusesAStateForAFixedContract : Script ()
+mergeBindsRefusesAStateForAFixedContract = do
   env <- setup "merge-state-cid"
   t1 <- target env "t1" 5
   submitMustFailContaining "whose contract the action fixed" env.owner $
-    exerciseCmd env.probe Probe_MergeAuthentic with
+    exerciseCmd env.probe Probe_MergeBinds with
       fixed = Map.fromList [(keyOf env "t1", cidOf t1)]
       pinned = Map.fromList [(keyOf env "t1", stateOf' 5)]
 

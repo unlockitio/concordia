@@ -86,15 +86,15 @@ template Probe
 t0 : Time
 t0 = time (date 2026 Jan 1) 0 0 0
 
-bodyKey : Party -> AuthenticKey
-bodyKey party = AuthenticKey with authorities = Set.fromList [party]; id = "body"
+resolverKey : Party -> AuthenticKey
+resolverKey party = AuthenticKey with authorities = Set.fromList [party]; id = "resolver"
 
 signedKeyOf : Party -> Text -> AuthenticKey
 signedKeyOf party id = AuthenticKey with authorities = Set.fromList [party]; id
 
 mechanismOf : Party -> Optional AnyContractId -> Text -> Mechanism
 mechanismOf party resolverCid procedure = Mechanism with
-  resolver = bodyKey party
+  resolver = resolverKey party
   resolverCid
   procedure
   id = "proposal"
@@ -164,22 +164,22 @@ requireMechanismAcceptsAnUnboundMechanism : Script ()
 requireMechanismAcceptsAnUnboundMechanism = do
   (owner, probe) <- setupProbe "mechanism-unbound"
   submit owner $ exerciseCmd probe Probe_RequireMechanism with
-    key = bodyKey owner; procedure = "vote"; mechanism = mechanismOf owner None "vote"
+    key = resolverKey owner; procedure = "vote"; mechanism = mechanismOf owner None "vote"
 
 requireMechanismAcceptsAMechanismBoundToThisContract : Script ()
 requireMechanismAcceptsAMechanismBoundToThisContract = do
   (owner, probe) <- setupProbe "mechanism-bound"
   submit owner $ exerciseCmd probe Probe_RequireMechanism with
-    key = bodyKey owner; procedure = "vote"
+    key = resolverKey owner; procedure = "vote"
     mechanism = mechanismOf owner (Some (coerceContractId probe)) "vote"
 
 requireMechanismRefusesAnotherBody : Script ()
 requireMechanismRefusesAnotherBody = do
-  (owner, probe) <- setupProbe "mechanism-body"
-  other <- allocateParty "mechanism-body-other"
+  (owner, probe) <- setupProbe "mechanism-resolver"
+  other <- allocateParty "mechanism-resolver-other"
   submitMustFailContaining "the mechanism names the ResolveKey" owner $
     exerciseCmd probe Probe_RequireMechanism with
-      key = bodyKey owner; procedure = "vote"; mechanism = mechanismOf other None "vote"
+      key = resolverKey owner; procedure = "vote"; mechanism = mechanismOf other None "vote"
 
 requireMechanismRefusesAnotherRulesContract : Script ()
 requireMechanismRefusesAnotherRulesContract = do
@@ -187,7 +187,7 @@ requireMechanismRefusesAnotherRulesContract = do
   otherProbe <- submit owner $ createCmd Probe with owner
   submitMustFailContaining "the mechanism is bound to no other rules contract" owner $
     exerciseCmd probe Probe_RequireMechanism with
-      key = bodyKey owner; procedure = "vote"
+      key = resolverKey owner; procedure = "vote"
       mechanism = mechanismOf owner (Some (coerceContractId otherProbe)) "vote"
 
 requireMechanismRefusesAnotherProcedure : Script ()
@@ -195,7 +195,7 @@ requireMechanismRefusesAnotherProcedure = do
   (owner, probe) <- setupProbe "mechanism-procedure"
   submitMustFailContaining "the mechanism names the procedure vote" owner $
     exerciseCmd probe Probe_RequireMechanism with
-      key = bodyKey owner; procedure = "vote"; mechanism = mechanismOf owner None "confirm"
+      key = resolverKey owner; procedure = "vote"; mechanism = mechanismOf owner None "confirm"
 
 requireOpenChecksTheWindow : Script ()
 requireOpenChecksTheWindow = do

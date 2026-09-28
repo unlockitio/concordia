@@ -19,7 +19,7 @@ import Cap.Governance.ActionV1
 import Cap.Governance.ExecutableV1
 import Cap.Governance.Types (Bind (..))
 import Cap.Governance.Utils
-  ( DriftPolicy, HasState (..), checkIdentity, checkTarget, mergeAuthentic
+  ( DriftPolicy, HasState (..), checkIdentity, checkTarget, mergeBinds
   , readIdentity, readState, requireSameKeys, sameFields )
 
 import Cap.Examples.BabyDso.Ans
@@ -70,7 +70,7 @@ template SetFeesAction
     interface instance Action for SetFeesAction where
       view = ActionView with
         authorizers = [[dso]]
-        binds = setFeesAuthenticBindings amuletAuthority dso
+        binds = setFeesBinds amuletAuthority dso
         meta = emptyMetadata
 
       action_readStateImpl tkey cid
@@ -81,18 +81,18 @@ template SetFeesAction
       action_authorizeExecutionImpl _ arg = do
         (transferFee, entryFee) <-
           orAbort "the execution carries no fees this action can apply" (arg.outcome >>= feesOf)
-        authentic <- mergeAuthentic (setFeesAuthenticBindings amuletAuthority dso) arg.binds
+        binds <- mergeBinds (setFeesBinds amuletAuthority dso) arg.binds
         cid <- create FeeUpdate with
           amuletAuthority; dso; transferFee; entryFee
-          binds = authentic
+          binds
           core = arg.executionCore
           outcome = arg.outcome
         pure Action_AuthorizeExecutionResult with
           executionCids = [toInterfaceContractId cid]
           meta = emptyMetadata
 
-setFeesAuthenticBindings : Party -> Party -> Map AuthenticKey Bind
-setFeesAuthenticBindings amuletAuthority dso = Map.fromList
+setFeesBinds : Party -> Party -> Map AuthenticKey Bind
+setFeesBinds amuletAuthority dso = Map.fromList
   [ (configTargetKey amuletAuthority, Bind with state = None; cid = None)
   , (ansTargetKey dso, Bind with state = None; cid = None)
   ]

@@ -41,7 +41,7 @@ setup ns = do
 
 mechanismOf : Party -> Mechanism
 mechanismOf owner = Mechanism with
-  resolver = AuthenticKey with authorities = Set.fromList [owner]; id = "body"
+  resolver = AuthenticKey with authorities = Set.fromList [owner]; id = "resolver"
   resolverCid = None
   procedure = "vote"
   id = "proposal"
@@ -122,31 +122,6 @@ weighBallotsEquallyRefusesAVoterOutsideTheSet = do
   submitMustFailContaining "has no right to vote" env.owner $
     exerciseCmd env.probe Probe_WeighBallotsEqually with
       voters = Set.fromList [env.bob]; ballotCids = [b1]
-
-agreedRequestReturnsTheSharedActionAndBinds : Script ()
-agreedRequestReturnsTheSharedActionAndBinds = do
-  env <- setup "agreed-ok"
-  b1 <- ballot env [(env.alice, Some "yes")]
-  b2 <- ballot env [(env.bob, Some "yes")]
-  result <- submit env.owner $ exerciseCmd env.probe Probe_AgreedRequest with ballotCids = [b1, b2]
-  result === (env.actionA, Map.empty)
-
-agreedRequestRefusesDifferentActions : Script ()
-agreedRequestRefusesDifferentActions = do
-  env <- setup "agreed-action"
-  b1 <- ballot env [(env.alice, Some "yes")]
-  b2 <- ballotWith env env.actionB Map.empty [(env.bob, Some "yes")]
-  submitMustFailContaining "the presented ballots ask for one action" env.owner $
-    exerciseCmd env.probe Probe_AgreedRequest with ballotCids = [b1, b2]
-
-agreedRequestRefusesDifferentBinds : Script ()
-agreedRequestRefusesDifferentBinds = do
-  env <- setup "agreed-binds"
-  let pinned = Map.fromList [(targetKey env.owner "t1", Bind with state = None; cid = None)]
-  b1 <- ballot env [(env.alice, Some "yes")]
-  b2 <- ballotWith env env.actionA pinned [(env.bob, Some "yes")]
-  submitMustFailContaining "the presented ballots pin one set of targets" env.owner $
-    exerciseCmd env.probe Probe_AgreedRequest with ballotCids = [b1, b2]
 
 consumeBallotsArchivesEveryBallot : Script ()
 consumeBallotsArchivesEveryBallot = do

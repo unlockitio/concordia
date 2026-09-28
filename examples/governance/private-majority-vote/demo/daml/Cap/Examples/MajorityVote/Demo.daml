@@ -209,7 +209,7 @@ theOperatorCannotSkipTheCount = do
     dso = f.dso
     operator = f.operator
     electorate = Set.fromList [f.alice]
-    resolverId = bodyName
+    resolverId = resolverName
     expiresAt = now `addRelTime` days 10
 
   setting <- settingNow f

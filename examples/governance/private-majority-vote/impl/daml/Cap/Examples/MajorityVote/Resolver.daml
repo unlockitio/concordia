@@ -17,7 +17,7 @@ import Cap.Core.Types (AuthenticKey (..), ExecutionAction (..), ExecutionCore (.
 import Cap.Core.Utils (IsAnyValue (..), fetchGroup, requireClosed, requireMechanism)
 import Cap.Governance.ActionV1
 import Cap.Governance.Utils
-  ( Tally, Verdict (..), agreedRequest, atLeastVotes, consumeBallots, rule, voted
+  ( Tally, Verdict (..), atLeastVotes, consumeBallots, rule, voted
   , weighBallotsEqually )
 
 import Cap.Examples.MajorityVote.Ballot
@@ -121,7 +121,7 @@ template VoteResolver
         terms : ProposalTerms
       controller proposer
       do
-        require "a proposal is raised by a member of the body"
+        require "a proposal is raised by a member of the electorate"
           (Set.member proposer electorate)
         create Proposal with
           dso; operator; electorate; terms
@@ -142,9 +142,9 @@ template VoteResolver
 
 
 resolverKey : VoteResolver -> AuthenticKey
-resolverKey body = AuthenticKey with
-  authorities = Set.fromList [body.dso]
-  id = body.resolverId
+resolverKey rules = AuthenticKey with
+  authorities = Set.fromList [rules.dso]
+  id = rules.resolverId
 
 majorityOf : Decimal -> Tally Text Text
 majorityOf electorateSize casts =
@@ -154,11 +154,11 @@ majorityOf electorateSize casts =
 resolveMajority
   : VoteResolver -> ContractId VoteResolver -> ContractId Proposal -> [ContractId PrivateBallot]
   -> ExtraArgs -> Update ResolveResult
-resolveMajority body self proposalCid ballotCids extraArgs = do
+resolveMajority rules self proposalCid ballotCids extraArgs = do
   now <- getTime
   proposal <- fetch proposalCid
-  requireMechanism (resolverKey body) (coerceContractId self) majorityProcedureName proposal.mechanism
-  require "the proposal is on this body's electorate" (proposal.electorate == body.electorate)
+  requireMechanism (resolverKey rules) (coerceContractId self) majorityProcedureName proposal.mechanism
+  require "the proposal is on this resolver's electorate" (proposal.electorate == rules.electorate)
   let terms = proposal.terms
 
   presented <- fetchGroup proposal.mechanism ballotCids
@@ -169,22 +169,22 @@ resolveMajority body self proposalCid ballotCids extraArgs = do
       (b.opensAt == terms.entryClosesAt
         && b.closesAt == terms.votingClosesAt
         && b.expiresAt == terms.expiresAt)
-  (actionCid, _) <- agreedRequest ballots
-  require "the ballots vote on the proposal's action" (actionCid == terms.actionCid)
+  require "the ballots vote on the proposal's action"
+    (all ((== terms.actionCid) . (.actionCid)) ballots)
 
-  casts <- weighBallotsEqually Some body.electorate presented
+  casts <- weighBallotsEqually Some rules.electorate presented
   require "the presented ballots cover the roll" (Map.keys casts == sort proposal.roll)
   consumeBallots presented
 
-  let verdict = rule (atLeastVotes 1) (majorityOf (intToDecimal (Set.size body.electorate))) casts
+  let verdict = rule (atLeastVotes 1) (majorityOf (intToDecimal (Set.size rules.electorate))) casts
   created <- case verdict of
     Decided winner | winner == yay -> do
       result <- exercise terms.actionCid Action_AuthorizeExecution with
-        actors = [body.dso]
+        actors = [rules.dso]
         executionCore = ExecutionCore with
-          authorities = Set.fromList [body.dso]
+          authorities = Set.fromList [rules.dso]
           availableActions = Map.fromList
-            [(EA_Execute, map (:: []) (Set.toList body.electorate))]
+            [(EA_Execute, map (:: []) (Set.toList rules.electorate))]
           opensAt = terms.votingClosesAt
           cancelAt = terms.votingClosesAt
           expiresAt = Some terms.expiresAt
