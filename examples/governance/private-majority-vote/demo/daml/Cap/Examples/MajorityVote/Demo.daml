@@ -14,7 +14,7 @@ import Cap.Governance.Utils (Verdict (..))
 
 import Cap.Examples.MajorityVote.Ballot
 import Cap.Examples.MajorityVote.Config
-import Cap.Examples.MajorityVote.Resolver
+import Cap.Examples.MajorityVote.Governor
 
 import Cap.Examples.MajorityVote.Demo.Fixture
 
@@ -24,7 +24,7 @@ class Visible t where
 instance Visible PrivateBallot where
   isVisibleTo p cid = isSome <$> queryContractId p cid
 
-instance Visible VoteResolver where
+instance Visible Governor where
   isVisibleTo p cid = isSome <$> queryContractId p cid
 
 instance Visible Config where
@@ -47,14 +47,14 @@ cannotSee p cid = do
 
 visibleTo : Party -> Script [Text]
 visibleTo p = do
-  resolvers <- query @VoteResolver p
+  governors <- query @Governor p
   proposals <- query @Proposal p
   ballots <- query @PrivateBallot p
   configs <- query @Config p
   actions <- query @SetConfigAction p
   updates <- query @ConfigUpdate p
   pure $ sort $ concat
-    [ map (show . fst) resolvers
+    [ map (show . fst) governors
     , map (show . fst) proposals
     , map (show . fst) ballots
     , map (show . fst) configs
@@ -68,10 +68,10 @@ seesExactly p expected = do
   actual === sort expected
 
 public : Fixture -> [Text]
-public f = [show f.configCid, show f.actionCid, show f.resolverCid]
+public f = [show f.configCid, show f.actionCid, show f.governorCid]
 
 publicToOperator : Fixture -> [Text]
-publicToOperator f = [show f.actionCid, show f.resolverCid]
+publicToOperator f = [show f.actionCid, show f.governorCid]
 
 data Round = Round with
     fixture : Fixture
@@ -148,7 +148,7 @@ whoSeesWhat = do
   [(configCid, config)] <- query @Config f.dso
   config.setting === proposedSetting
 
-  let published = [show configCid, show f.actionCid, show f.resolverCid]
+  let published = [show configCid, show f.actionCid, show f.governorCid]
   f.dso `seesExactly` published
   f.alice `seesExactly` published
   f.operator `seesExactly` publicToOperator f
@@ -205,11 +205,11 @@ theOperatorCannotSkipTheCount = do
 
   runIssueMustFail f f.operator (forgedCore f)
 
-  submitMustFail f.operator $ createCmd VoteResolver with
+  submitMustFail f.operator $ createCmd Governor with
     dso = f.dso
     operator = f.operator
     electorate = Set.fromList [f.alice]
-    resolverId = resolverName
+    governorId = governorName
     expiresAt = now `addRelTime` days 10
 
   setting <- settingNow f

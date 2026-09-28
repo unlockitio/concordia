@@ -15,11 +15,11 @@ packages:
 - ./cap-auctions/interfaces/settlement
 - ./cap-auctions/utils
 - ./cap-auctions/funding
-- ./examples/governance/babydso/ans
-- ./examples/governance/babydso/config
-- ./examples/governance/babydso/rights
-- ./examples/governance/babydso/governance
-- ./examples/governance/babydso/action
+- ./examples/governance/babydso/impl/ans
+- ./examples/governance/babydso/impl/config
+- ./examples/governance/babydso/impl/rights
+- ./examples/governance/babydso/impl/governance
+- ./examples/governance/babydso/impl/action
 - ./examples/governance/babydso/demo
 - ./examples/governance/private-majority-vote/impl
 - ./examples/governance/private-majority-vote/demo

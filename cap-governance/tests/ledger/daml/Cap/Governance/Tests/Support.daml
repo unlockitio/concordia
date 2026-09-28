@@ -2,14 +2,11 @@
 
 module Cap.Governance.Tests.Support
   ( submitMustFailContaining
-  , noArgs
   ) where
 
 import DA.Action (unless)
 import qualified DA.Text as Text
 import Daml.Script
-
-import Splice.Api.Token.MetadataV1
 
 submitMustFailContaining : Show a => Text -> Party -> Commands a -> Script ()
 submitMustFailContaining expected actor cmds = do
@@ -21,6 +18,3 @@ submitMustFailContaining expected actor cmds = do
     requireContains actual =
       unless (expected `Text.isInfixOf` actual) $
         fail ("expected a failure containing " <> expected <> ", got " <> actual)
-
-noArgs : ExtraArgs
-noArgs = ExtraArgs with context = emptyChoiceContext; meta = emptyMetadata

@@ -49,16 +49,18 @@ shareOfTotalComparesTheVotedWeightWithTheTotal : Script ()
 shareOfTotalComparesTheVotedWeightWithTheTotal = do
   v <- votersIn "share-total"
   let casts = Map.fromList [(v.alice, cast 2.0 (Some "yes")), (v.bob, cast 2.0 None)]
-  shareOfTotal 0.5 4.0 casts === True
-  shareOfTotal 0.75 4.0 casts === False
-  shareOfTotal 0.5 0.0 casts === False
+  shareOfTotal 1 2 4.0 casts === True
+  shareOfTotal 3 4 4.0 casts === False
+  shareOfTotal 1 2 0.0 casts === False
+  shareOfTotal 1 0 4.0 casts === False
 
-shareOfTotalRoundsTheFractionBeforeMultiplying : Script ()
-shareOfTotalRoundsTheFractionBeforeMultiplying = do
-  v <- votersIn "share-rounding"
-  let casts = Map.fromList [(v.alice, cast 6.0 (Some "yes"))]
-  shareOfTotal (2.0 / 3.0) 9.0 casts === False
-  atLeastWeight (9.0 * 2.0 / 3.0) casts === True
+shareOfTotalMeetsAnExactTwoThirds : Script ()
+shareOfTotalMeetsAnExactTwoThirds = do
+  v <- votersIn "share-thirds"
+  shareOfTotal 2 3 9.0 (Map.fromList [(v.alice, cast 6.0 (Some "yes"))]) === True
+  shareOfTotal 2 3 9.0 (Map.fromList [(v.alice, cast 5.9 (Some "yes"))]) === False
+  shareOfTotal 2 3 10.0 (Map.fromList [(v.alice, cast 6.6666666667 (Some "yes"))]) === True
+  shareOfTotal 2 3 10.0 (Map.fromList [(v.alice, cast 6.6666666666 (Some "yes"))]) === False
 
 allOfAndAnyOfCombineQuorums : Script ()
 allOfAndAnyOfCombineQuorums = do
@@ -93,9 +95,18 @@ shareOfVotesNeedsExactlyOneOptionOverTheBar : Script ()
 shareOfVotesNeedsExactlyOneOptionOverTheBar = do
   v <- votersIn "share-votes"
   let casts = Map.fromList [(v.alice, cast 3.0 (Some "yes")), (v.bob, cast 1.0 (Some "no"))]
-  shareOfVotes 0.5 casts === Some "yes"
-  shareOfVotes 0.2 casts === None
-  shareOfVotes 0.9 casts === None
+  shareOfVotes 1 2 casts === Some "yes"
+  shareOfVotes 3 4 casts === Some "yes"
+  shareOfVotes 1 5 casts === None
+  shareOfVotes 9 10 casts === None
+  shareOfVotes 1 0 casts === None
+
+shareOfVotesMeetsAnExactTwoThirds : Script ()
+shareOfVotesMeetsAnExactTwoThirds = do
+  v <- votersIn "share-votes-thirds"
+  let casts = Map.fromList
+        [(v.alice, cast 2.0 (Some "yes")), (v.bob, cast 1.0 (Some "no"))]
+  shareOfVotes 2 3 casts === Some "yes"
 
 medianAveragesTheTwoMiddlesOnAnEvenCount : Script ()
 medianAveragesTheTwoMiddlesOnAnEvenCount = do

@@ -70,9 +70,10 @@ differently. `Cap.Governance.Utils.Count` provides common quorums
 `plurality`, `shareOfVotes`, `median`, `weightedMedian`), so an app builds its
 rule from these parts.
 
-Example: `rule (shareOfTotal 0.5 total) (shareOfVotes 0.66)`, where `total` is
+Example: `rule (shareOfTotal 1 2 total) (shareOfVotes 2 3)`, where `total` is
 the total weight of the electorate, requires half of that weight to vote, and
-one option to get at least 66% of the weight that voted.
+one option to get at least two thirds of the weight that voted. Shares are given
+as a numerator and a denominator so that a share like two thirds is exact.
 
 ### Pinning the state of a target and checking it again at execution
 

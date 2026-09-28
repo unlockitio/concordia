@@ -5,17 +5,15 @@ module Cap.Governance.Tests.Harness where
 import Prelude hiding (Action)
 
 import DA.Map (Map)
-import qualified DA.Map as Map
 import DA.Set (Set)
 import qualified DA.Set as Set
 
 import Splice.Api.Token.MetadataV1
 import Splice.Util (HasCheckedFetch (..))
 
-import Cap.Core.Types (AuthenticKey (..), ExecutionCore (..), Mechanism (..))
+import Cap.Core.Types (AuthenticKey (..), Mechanism (..))
 import Cap.Core.Utils (IsAnyValue (..), fetchCheckedAny, signedKey)
 import Cap.Governance.ActionV1
-import Cap.Governance.ExecutableV1
 import Cap.Governance.Types (Bind (..))
 import Cap.Governance.Utils
 
@@ -102,37 +100,8 @@ template DummyAction
 
       action_readStateImpl = readTarget
 
-      action_authorizeExecutionImpl _ arg = do
-        cid <- create DummyExecutable with
-          owner
-          core = arg.executionCore
-          binds = arg.binds
-          outcome = arg.outcome
-        pure Action_AuthorizeExecutionResult with
-          executionCids = [toInterfaceContractId cid]
-          meta = emptyMetadata
-
-template DummyExecutable
-  with
-    owner : Party
-    core : ExecutionCore
-    binds : Map AuthenticKey Bind
-    outcome : Optional AnyValue
-  where
-    signatory owner
-    observer concat (concat (Map.values core.availableActions))
-
-    interface instance Executable for DummyExecutable where
-      view = ExecutableView with
-        executionCore = core
-        binds
-        outcome
-
-      executable_executeImpl _ _ =
-        pure Executable_ExecuteResult with created = []; meta = emptyMetadata
-
-      executable_cancelImpl _ =
-        pure Executable_CancelResult with meta = emptyMetadata
+      action_authorizeExecutionImpl _ _ =
+        abort "the test action authorizes no execution"
 
 
 template Probe

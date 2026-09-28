@@ -83,8 +83,10 @@ atLeastVotes n casts = length (voted casts) >= n
 atLeastWeight : Decimal -> Quorum a
 atLeastWeight w casts = votedWeight casts >= w
 
-shareOfTotal : Decimal -> Decimal -> Quorum a
-shareOfTotal fraction total casts = total > 0.0 && votedWeight casts >= fraction * total
+shareOfTotal : Int -> Int -> Decimal -> Quorum a
+shareOfTotal numerator denominator total casts =
+  denominator > 0 && total > 0.0
+    && votedWeight casts * intToDecimal denominator >= intToDecimal numerator * total
 
 
 undecided : Tally a r
@@ -104,11 +106,14 @@ plurality casts =
     (option, best) :: rest | all (\(_, w) -> w < best) rest -> Some option
     _ -> None
 
-shareOfVotes : Ord a => Decimal -> Tally a a
-shareOfVotes fraction casts =
-  case [option | (option, w) <- Map.toList (weightPerOption casts), w >= fraction * votedWeight casts] of
-    [option] -> Some option
-    _ -> None
+shareOfVotes : Ord a => Int -> Int -> Tally a a
+shareOfVotes numerator denominator casts
+  | denominator <= 0 = None
+  | otherwise =
+      case [ option | (option, w) <- Map.toList (weightPerOption casts)
+                    , w * intToDecimal denominator >= intToDecimal numerator * votedWeight casts ] of
+        [option] -> Some option
+        _ -> None
 
 median : Tally Decimal Decimal
 median casts = case sort (map snd (voted casts)) of
