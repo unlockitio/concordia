@@ -9,12 +9,12 @@ import qualified DA.Map as Map
 import DA.Set (Set)
 import qualified DA.Set as Set
 import DA.TextMap (TextMap)
+import qualified DA.TextMap as TextMap
 
 import Splice.Api.Token.MetadataV1
 import Splice.Util (HasCheckedFetch (..), require)
 
 import Cap.Core.Types (AuthenticKey, Mechanism (..))
-import Cap.Core.Utils (requireOpen)
 import Cap.Governance.ActionV1 (Action)
 import Cap.Governance.Types (Bind)
 import Cap.Governance.Utils (IsBallot (..))
@@ -38,14 +38,10 @@ acceptsVote procedure vote = case vote of
   V_Confirm _ -> procedure == confirmationProcedureName
   V_Choice _ -> False
 
-data ProposalTerms = ProposalTerms
-  with
-    options : [Text]
-    actionCid : ContractId Action
-    entryClosesAt : Time
-    votingClosesAt : Time
-    expiresAt : Time
-  deriving (Eq, Show)
+sameParameters : [Vote] -> Bool
+sameParameters votes = case [map fst (TextMap.toList parameters) | V_Parameters parameters <- votes] of
+  [] -> True
+  first :: rest -> all (== first) rest
 
 
 template SharedBallot
@@ -53,15 +49,18 @@ template SharedBallot
     dso : Party
     svs : Set Party
     mechanism : Mechanism
-    terms : ProposalTerms
+    actionCid : ContractId Action
     weights : Map Party Decimal
     binds : Map AuthenticKey Bind
     votes : Map Party Vote
+    votingClosesAt : Time
+    expiresAt : Time
   where
     signatory dso
     observer Set.toList svs, Map.keys weights
 
     ensure all (acceptsVote mechanism.procedure) (Map.values votes)
+      && sameParameters (Map.values votes)
 
     choice SharedBallot_Cast : ContractId SharedBallot
       with
@@ -70,7 +69,7 @@ template SharedBallot
       controller voter
       do
         now <- getTime
-        requireOpen "the voting window is open" now terms.entryClosesAt (Some terms.votingClosesAt)
+        require "the voting window is open" (now < votingClosesAt)
         require "the voter has the right to vote: it holds weight in the snapshot"
           (voter `Map.member` weights)
         create this with votes = Map.insert voter vote votes
@@ -79,7 +78,7 @@ template SharedBallot
       controller dso
       do
         now <- getTime
-        require "the shared ballot has expired" (now >= terms.expiresAt)
+        require "the shared ballot has expired" (now >= expiresAt)
 
 instance HasCheckedFetch SharedBallot Mechanism where
   contractGroupId ballot = ballot.mechanism
@@ -87,7 +86,7 @@ instance HasCheckedFetch SharedBallot Mechanism where
 instance IsBallot SharedBallot Vote where
   castsOf ballot = fmap Some ballot.votes
   bindsOf ballot = ballot.binds
-  actionOf ballot = ballot.terms.actionCid
+  actionOf ballot = ballot.actionCid
   consume = archive
 
 

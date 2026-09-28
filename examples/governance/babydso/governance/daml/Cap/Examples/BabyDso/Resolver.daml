@@ -19,6 +19,7 @@ import Cap.Core.Types (AuthenticKey (..), ExecutionAction (..), ExecutionCore (.
 import Cap.Core.Utils
   ( IsAnyValue (..), fetchGroup, requireClosed, requireMechanism, signedKey )
 import Cap.Governance.ActionV1
+import Cap.Governance.ExecutableV1 (Executable)
 import Cap.Governance.Utils
   ( Cast (..), HasWeight (..), Quorum, Tally, Verdict (..), agreedRequest, atLeastVotes
   , atLeastWeight, consumeBallots, pinStatesWith, readWeights, rule, unanimous, weighBallots
@@ -28,10 +29,10 @@ import Cap.Examples.BabyDso.Rights
 import Cap.Examples.BabyDso.Submission
 
 
-data ResolveResult = ResolveResult
+data ResolveResult r = ResolveResult
   with
-    verdict : Verdict AnyValue
-    created : [AnyContractId]
+    verdict : Verdict r
+    executions : [ContractId Executable]
   deriving (Eq, Show)
 
 
@@ -50,25 +51,29 @@ template DsoResolver
 
     nonconsuming choice DsoResolver_OpenVote : ContractId SharedBallot
       with
-        requester : Party
+        proposer : Party
         mechanism : Mechanism
-        terms : ProposalTerms
+        actionCid : ContractId Action
+        vote : Vote
+        votingClosesAt : Time
+        expiresAt : Time
         weightSources : Map RightKey (ContractId SvWeightSource)
         targets : Map AuthenticKey AnyContractId
-      controller requester
+      controller proposer
       do
-        require "the requester is an sv" (requester `Set.member` svs)
         requireMechanism (resolverKey this) (coerceContractId self) weightedVoteProcedureName mechanism
         sourced <- readWeights weightKeys weightSources
         let weights = Map.fromListWithR (+) (Map.values sourced)
-        action <- fetch terms.actionCid
+        require "the proposer is a voter: it holds weight in the snapshot"
+          (proposer `Map.member` weights)
+        action <- fetch actionCid
         pinned <- pinStatesWith (action_readStateImpl action) (view action).binds targets
         create SharedBallot with
-          dso; svs; mechanism; terms; weights
+          dso; svs; mechanism; actionCid; votingClosesAt; expiresAt; weights
           binds = pinned
-          votes = Map.empty
+          votes = Map.singleton proposer vote
 
-    nonconsuming choice DsoResolver_ResolveVote : ResolveResult
+    nonconsuming choice DsoResolver_ResolveVote : ResolveResult (TextMap Decimal)
       with
         sv : Party
         mechanism : Mechanism
@@ -98,7 +103,7 @@ template DsoResolver
           dso; confirmer; mechanism; actionCid; vote; expiresAt
           binds = pinned
 
-    nonconsuming choice DsoResolver_ResolveConfirmations : ResolveResult
+    nonconsuming choice DsoResolver_ResolveConfirmations : ResolveResult AnyValue
       with
         sv : Party
         mechanism : Mechanism
@@ -123,28 +128,28 @@ requireResolvable rules self sv mechanism procedure = do
 instance HasCheckedFetch SvWeightSource RightKey where
   contractGroupId source = RightKey with
     authKey = signedKey source.name source
-    owner = source.rightOwner
+    sv = source.sv
 
 instance HasWeight SvWeightSource where
-  weightOf source = (source.rightOwner, source.weight)
+  weightOf source = (source.sv, source.weight)
 
 
 resolveWeightedVote
-  : DsoResolver -> [(ContractId SharedBallot, SharedBallot)] -> ExtraArgs -> Update ResolveResult
+  : DsoResolver -> [(ContractId SharedBallot, SharedBallot)] -> ExtraArgs
+  -> Update (ResolveResult (TextMap Decimal))
 resolveWeightedVote rules presented extraArgs = do
   ballot <- case presented of
     [(_, one)] -> pure one
     _ -> abort "the resolve presents more than one shared ballot"
   now <- getTime
-  let terms = ballot.terms
-  requireClosed "the voting window has closed" now terms.votingClosesAt
-  require "the proposal has not expired" (now < terms.expiresAt)
+  requireClosed "the voting window has closed" now ballot.votingClosesAt
+  require "the proposal has not expired" (now < ballot.expiresAt)
 
   (actionCid, binds) <- agreedRequest [ballot]
   casts <- weighBallots parametersOf ballot.weights presented
   consumeBallots presented
-  let verdict = rule (twoThirdsOf ballot.weights) (weightedMedianByField terms.options) casts
-  created <- case verdict of
+  let verdict = rule (twoThirdsOf ballot.weights) weightedMedianByField casts
+  executions <- case verdict of
     Decided winner -> do
       let opensAt = now `addRelTime` rules.executionDelay
       result <- exercise actionCid Action_AuthorizeExecution with
@@ -159,9 +164,9 @@ resolveWeightedVote rules presented extraArgs = do
         outcome = Some (toAnyValue winner)
         binds = binds
         extraArgs
-      pure (map coerceContractId result.executionCids)
+      pure result.executionCids
     _ -> pure []
-  pure ResolveResult with verdict = fmap toAnyValue verdict; created
+  pure ResolveResult with verdict; executions
 
 parametersOf : Vote -> Optional (TextMap Decimal)
 parametersOf (V_Parameters parameters) = Some parameters
@@ -170,15 +175,20 @@ parametersOf _ = None
 twoThirdsOf : Map Party Decimal -> Quorum a
 twoThirdsOf weights = atLeastWeight (sum (Map.values weights) * 2.0 / 3.0)
 
-weightedMedianByField : [Text] -> Tally (TextMap Decimal) (TextMap Decimal)
-weightedMedianByField fields casts = TextMap.fromList <$> forA fields (\field -> do
-  value <- weightedMedian
-    (fmap (\c -> Cast with weight = c.weight; vote = c.vote >>= TextMap.lookup field) casts)
-  pure (field, value))
+weightedMedianByField : Tally (TextMap Decimal) (TextMap Decimal)
+weightedMedianByField casts = case [parameters | Cast with vote = Some parameters <- Map.values casts] of
+  [] -> None
+  first :: _
+    | TextMap.null first -> None
+    | otherwise -> TextMap.fromList <$> forA (map fst (TextMap.toList first)) (\field -> do
+        value <- weightedMedian
+          (fmap (\c -> Cast with weight = c.weight; vote = c.vote >>= TextMap.lookup field) casts)
+        pure (field, value))
 
 
 resolveConfirmations
-  : DsoResolver -> Mechanism -> [ContractId SvConfirmation] -> ExtraArgs -> Update ResolveResult
+  : DsoResolver -> Mechanism -> [ContractId SvConfirmation] -> ExtraArgs
+  -> Update (ResolveResult AnyValue)
 resolveConfirmations rules mechanism confirmationCids extraArgs = do
   now <- getTime
   presented <- fetchGroup mechanism confirmationCids
@@ -206,7 +216,7 @@ resolveConfirmations rules mechanism confirmationCids extraArgs = do
     extraArgs
   pure ResolveResult with
     verdict = Decided outcome
-    created = map coerceContractId result.executionCids
+    executions = result.executionCids
 
 confirmedOf : Vote -> Optional AnyValue
 confirmedOf (V_Confirm value) = Some value
