@@ -22,7 +22,7 @@ ballot references the same `Mechanism`. `requireMechanism` checks that the
 mechanism names the governor where the outcome is decided and the procedure
 used.
 
-Example: a decentralized party has two open proposals on the same governor.
+**Example:** a decentralized party has two open proposals on the same governor.
 Without the group check, the party resolving proposal A could present ballots
 cast on proposal B. It could also list one ballot twice to double its votes.
 
@@ -36,7 +36,7 @@ the presented contract and compares the key it computes from its own
 signatories with the key the action names. `readWeights` does the same check
 for weight contracts.
 
-Example: a proposal changes a parameter on a contract A signed by the operator.
+**Example:** a proposal changes a parameter on a contract A signed by the operator.
 An attacker creates a contract B of the same template, signed only by
 themselves, and presents it as the target. Without the identity check, the
 execution acts on the attacker's copy and contract A never changes, even though
@@ -55,7 +55,7 @@ and voted for something the procedure counts. `weighBallots` and
 - a negative weight;
 - a vote that the procedure's decoder does not accept.
 
-Example: a ballot template carries votes of type `Approve | Reject | SetFee
+**Example:** a ballot template carries votes of type `Approve | Reject | SetFee
 Decimal`, and a yes/no procedure counts only `Approve` and `Reject`. 
 
 ### Quorums and tallies
@@ -70,7 +70,7 @@ differently. `Cap.Governance.Utils.Count` provides common quorums
 `plurality`, `shareOfVotes`, `median`, `weightedMedian`), so an app builds its
 rule from these parts.
 
-Example: `rule (shareOfTotal 0.5 total) (shareOfVotes 0.66)`, where `total` is
+**Example:** `rule (shareOfTotal 0.5 total) (shareOfVotes 0.66)`, where `total` is
 the total weight of the electorate, requires half of that weight to vote, and
 one option to get at least 66% of the weight that voted.
 
@@ -86,7 +86,7 @@ the target's live state with the pinned state using the action's
 `DriftPolicy`. It refuses the execution if the target changed in a way the
 policy does not allow.
 
-Example: a target's fee is 1%, and voters approve proposal A to raise it to 2%.
+**Example:** a target's fee is 1%, and voters approve proposal A to raise it to 2%.
 Before A executes, proposal B raises the fee to 3%. If A then executes, it
 lowers the fee from 3% to 2%, which nobody voted for. With the fee pinned at 1%
 and the `unchanged` policy, `checkTarget` sees that the fee is now 3% and
