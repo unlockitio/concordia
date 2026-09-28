@@ -26,8 +26,8 @@ import Cap.Examples.MajorityVote.Ballot
 import Cap.Examples.MajorityVote.Config
 import Cap.Examples.MajorityVote.Resolver
 
-bodyName : Text
-bodyName = "body-1"
+resolverName : Text
+resolverName = "resolver-1"
 
 proposalName : Text
 proposalName = "proposal-1"
@@ -71,16 +71,16 @@ setupAs ns = do
     dso; electorate; setting = openingSetting
   actionCid <- submit dso $ createCmd SetConfigAction with
     dso; operator; electorate; baseSetting = openingSetting; newSetting = proposedSetting
-  let body = VoteResolver with
+  let rules = VoteResolver with
         dso; operator; electorate
-        resolverId = bodyName
+        resolverId = resolverName
         expiresAt = now `addRelTime` days 10
-  resolverCid <- submit dso $ createCmd body
+  resolverCid <- submit dso $ createCmd rules
 
   let mechanism = Mechanism with
         resolver = AuthenticKey with
           authorities = Set.fromList [dso]
-          id = bodyName
+          id = resolverName
         resolverCid = None
         procedure = majorityProcedureName
         id = proposalName
@@ -108,7 +108,7 @@ liveProposal f = do
   proposals <- query @Proposal f.operator
   case [cid | (cid, p) <- proposals, p.mechanism == f.mechanism] of
     [cid] -> pure cid
-    _ -> fail "no live proposal on this body"
+    _ -> fail "no live proposal on this resolver"
 
 seat : Fixture -> Party -> Script (ContractId PrivateBallot)
 seat f voter = do

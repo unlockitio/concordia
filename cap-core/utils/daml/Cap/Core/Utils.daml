@@ -75,7 +75,7 @@ fetchGroup key cids = do
     pure (cid, contract)
 
 
--- | Checks that a mechanism names this body, is bound to no other rules
+-- | Checks that a mechanism names this resolver, is bound to no other rules
 -- contract, and names this procedure. The rules contract passes its own key,
 -- its own contract id, and the procedure its choice runs.
 requireMechanism : AuthenticKey -> AnyContractId -> Text -> Mechanism -> Update ()

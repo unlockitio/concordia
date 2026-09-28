@@ -18,7 +18,6 @@ import Splice.Api.Token.MetadataV1
 import Cap.Core.Types (AuthenticKey (..), Mechanism (..))
 import Cap.Governance.ActionV1 (Action)
 import Cap.Governance.ExecutableV1
-import Cap.Governance.Types (Bind (..))
 
 import Cap.Examples.BabyDso.Action
 import Cap.Examples.BabyDso.Ans
@@ -126,13 +125,6 @@ mechanismFor f procedure proposalId = Mechanism with
   resolverCid = Some (coerceContractId f.resolverCid)
   procedure
   id = proposalId
-
-openingAuthentic : Fixture -> Map AuthenticKey Bind
-openingAuthentic f = Map.fromList
-  [ ( configTargetKey f.amuletAuthority
-    , Bind with state = Some (amuletConfigState openingTransferFee openingEpoch); cid = None
-    )
-  ]
 
 currentTargetsOf : Fixture -> ContractId AmuletConfig -> ContractId AnsRules -> Targets
 currentTargetsOf f configCid ansCid = Targets with

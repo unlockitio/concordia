@@ -17,11 +17,11 @@ import Splice.Util (HasCheckedFetch (..), require)
 
 import Cap.Core.Types (AuthenticKey (..), ExecutionAction (..), ExecutionCore (..), Mechanism (..))
 import Cap.Core.Utils
-  ( IsAnyValue (..), fetchGroup, requireClosed, requireMechanism, signedKey )
+  ( IsAnyValue (..), allEqual, fetchGroup, orAbort, requireClosed, requireMechanism, signedKey )
 import Cap.Governance.ActionV1
 import Cap.Governance.ExecutableV1 (Executable)
 import Cap.Governance.Utils
-  ( Cast (..), HasWeight (..), Quorum, Tally, Verdict (..), agreedRequest, atLeastVotes
+  ( Cast (..), HasWeight (..), Quorum, Tally, Verdict (..), atLeastVotes
   , atLeastWeight, consumeBallots, pinStatesWith, readWeights, rule, unanimous, weighBallots
   , weighBallotsEqually, weightedMedian )
 
@@ -81,7 +81,8 @@ template DsoResolver
         extraArgs : ExtraArgs
       controller sv
       do
-        requireResolvable this self sv mechanism weightedVoteProcedureName
+        require "the resolver is an sv" (sv `Set.member` svs)
+        requireMechanism (resolverKey this) (coerceContractId self) weightedVoteProcedureName mechanism
         presented <- fetchGroup mechanism ballotCids
         resolveWeightedVote this presented extraArgs
 
@@ -111,18 +112,14 @@ template DsoResolver
         extraArgs : ExtraArgs
       controller sv
       do
-        requireResolvable this self sv mechanism confirmationProcedureName
+        require "the resolver is an sv" (sv `Set.member` svs)
+        requireMechanism (resolverKey this) (coerceContractId self) confirmationProcedureName mechanism
         resolveConfirmations this mechanism confirmationCids extraArgs
 
 resolverKey : DsoResolver -> AuthenticKey
 resolverKey rules = AuthenticKey with
   authorities = Set.fromList [rules.dso]
   id = rules.resolverId
-
-requireResolvable : DsoResolver -> ContractId DsoResolver -> Party -> Mechanism -> Text -> Update ()
-requireResolvable rules self sv mechanism procedure = do
-  require "the resolver is an sv" (sv `Set.member` rules.svs)
-  requireMechanism (resolverKey rules) (coerceContractId self) procedure mechanism
 
 
 instance HasCheckedFetch SvWeightSource RightKey where
@@ -145,7 +142,8 @@ resolveWeightedVote rules presented extraArgs = do
   requireClosed "the voting window has closed" now ballot.votingClosesAt
   require "the proposal has not expired" (now < ballot.expiresAt)
 
-  (actionCid, binds) <- agreedRequest [ballot]
+  let actionCid = ballot.actionCid
+      binds = ballot.binds
   casts <- weighBallots parametersOf ballot.weights presented
   consumeBallots presented
   let verdict = rule (twoThirdsOf ballot.weights) weightedMedianByField casts
@@ -194,7 +192,10 @@ resolveConfirmations rules mechanism confirmationCids extraArgs = do
   presented <- fetchGroup mechanism confirmationCids
   let confirmations = map snd presented
   require "no confirmation has expired" (all ((now <) . (.expiresAt)) confirmations)
-  (actionCid, binds) <- agreedRequest confirmations
+  actionCid <- orAbort "the confirmations ask for different actions"
+    (allEqual (map (.actionCid) confirmations))
+  binds <- orAbort "the confirmations have different binds"
+    (allEqual (map (.binds) confirmations))
   casts <- weighBallotsEqually confirmedOf rules.svs presented
   consumeBallots presented
   let verdict = rule (atLeastVotes (byzantineQuorum (Set.size rules.svs))) unanimous casts

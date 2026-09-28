@@ -18,7 +18,7 @@ import Cap.Governance.ActionV1
 import Cap.Governance.ExecutableV1
 import Cap.Governance.Types (Bind (..))
 import Cap.Governance.Utils
-  ( HasState (..), ReadTarget, checkTarget, mergeAuthentic, readState, requireSameKeys )
+  ( HasState (..), ReadTarget, checkTarget, mergeBinds, readState, requireSameKeys )
 
 
 configId : Text
@@ -98,16 +98,16 @@ template SetConfigAction
     interface instance Action for SetConfigAction where
       view = ActionView with
         authorizers = [[dso]]
-        binds = setConfigBindings dso baseSetting
+        binds = setConfigBinds dso baseSetting
         meta = emptyMetadata
 
       action_readStateImpl = readConfigTargets dso
 
       action_authorizeExecutionImpl _ arg = do
-        authentic <- mergeAuthentic (setConfigBindings dso baseSetting) arg.binds
+        binds <- mergeBinds (setConfigBinds dso baseSetting) arg.binds
         cid <- create ConfigUpdate with
           dso; newSetting
-          binds = authentic
+          binds
           core = arg.executionCore
           outcome = arg.outcome
         pure Action_AuthorizeExecutionResult with
@@ -115,6 +115,6 @@ template SetConfigAction
           meta = emptyMetadata
 
 
-setConfigBindings : Party -> Text -> Map AuthenticKey Bind
-setConfigBindings dso baseSetting = Map.fromList
+setConfigBinds : Party -> Text -> Map AuthenticKey Bind
+setConfigBinds dso baseSetting = Map.fromList
   [ (configTargetKey dso, Bind with state = Some (toAnyValue baseSetting); cid = None) ]

@@ -8,7 +8,7 @@ module Cap.Governance.Utils.Targets
   , ReadTarget
   , readState
   , readIdentity
-  , mergeAuthentic
+  , mergeBinds
 
     -- * Submission
   , pinStatesWith
@@ -66,9 +66,9 @@ readIdentity key cid = do
 -- with the parts it left open filled from the procedure's pins. Refuses a pin
 -- for a target the action does not name, and a pin that contradicts a part
 -- the action fixed.
-mergeAuthentic
+mergeBinds
   : Map AuthenticKey Bind -> Map AuthenticKey Bind -> Update (Map AuthenticKey Bind)
-mergeAuthentic fixed pinned = do
+mergeBinds fixed pinned = do
   forA_ (Map.keys pinned) $ \key ->
     require ("the action names the pinned target " <> show key)
       (Map.member key fixed)
