@@ -1,0 +1,45 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Core.Types
+  ( AuthenticKey (..)
+  , Mechanism (..)
+  , ExecutionAction (..)
+  , ExecutionCore (..)
+  ) where
+
+import DA.Map (Map)
+import DA.Set (Set)
+
+import Splice.Api.Token.MetadataV1
+
+
+data AuthenticKey = AuthenticKey
+  with
+    authorities : Set Party
+    id : Text
+  deriving (Eq, Show, Ord)
+
+data Mechanism = Mechanism
+  with
+    resolver : AuthenticKey
+    resolverCid : Optional AnyContractId
+    procedure : Text
+    id : Text
+  deriving (Eq, Show)
+
+data ExecutionAction
+  = EA_Execute
+  | EA_Cancel
+  | EA_Custom with
+      id : Text
+  deriving (Eq, Ord, Show)
+
+data ExecutionCore = ExecutionCore
+  with
+    authorities : Set Party
+    availableActions : Map ExecutionAction [[Party]]
+    opensAt : Time
+    cancelAt : Time
+    expiresAt : Optional Time
+    meta : Metadata
+  deriving (Eq, Show)

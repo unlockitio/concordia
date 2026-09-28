@@ -1,0 +1,80 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Governance.Utils.Ballots
+  ( IsBallot (..)
+  , weighBallotsEqually
+  , weighBallots
+  , consumeBallots
+  , agreedRequest
+  ) where
+
+import Prelude hiding (Action)
+
+import DA.Foldable (mapA_)
+import DA.List (unique)
+import DA.Map (Map)
+import qualified DA.Map as Map
+import DA.Set (Set)
+import qualified DA.Set as Set
+
+import Splice.Util (require)
+
+import Cap.Core.Types (AuthenticKey)
+import Cap.Core.Utils (allEqual, orAbort)
+import Cap.Governance.ActionV1 (Action)
+import Cap.Governance.Types (Bind)
+import Cap.Governance.Utils.Count (Cast (..), Casts)
+
+
+------------------  BALLOTS  ------------------
+-- Used by the choice that resolves a proposal, over the ballots presented to it.
+
+-- | What a resolution reads from a ballot: the votes it carries, by voter
+-- with 'None' for an abstention; the preconditions it pinned; the action it
+-- asks to authorize; and how the resolution retires it once counted.
+class IsBallot b v | b -> v where
+  castsOf : b -> Map Party (Optional v)
+  bindsOf : b -> Map AuthenticKey Bind
+  actionOf : b -> ContractId Action
+  consume : ContractId b -> Update ()
+
+-- | The casts of the presented ballots, each voter counting with weight 1.
+-- Refuses a voter appearing on two ballots, a vote of another kind than the
+-- procedure counts, and a voter outside the set.
+weighBallotsEqually
+  : IsBallot b v
+  => (v -> Optional a) -> Set Party -> [(ContractId b, b)] -> Update (Casts a)
+weighBallotsEqually narrow voters =
+  weighBallots narrow (Map.fromList [(voter, 1.0) | voter <- Set.toList voters])
+
+-- | The casts of the presented ballots, each voter counting with its weight
+-- in the map. Refuses a voter appearing on two ballots, a vote of another kind
+-- than the procedure counts, a voter missing from the map, and a negative weight.
+weighBallots
+  : IsBallot b v
+  => (v -> Optional a) -> Map Party Decimal -> [(ContractId b, b)] -> Update (Casts a)
+weighBallots narrow weights ballots = do
+  let pairs = concatMap (Map.toList . castsOf . snd) ballots
+  require "the presented ballots come from distinct voters" (unique (map fst pairs))
+  Map.fromList <$> forA pairs (\(voter, raw) -> do
+    vote <- case raw of
+      None -> pure None
+      Some v -> Some <$> orAbort
+        ("the vote of " <> show voter <> " is not of the kind this procedure counts")
+        (narrow v)
+    weight <- orAbort ("the voter " <> show voter <> " has no right to vote")
+      (Map.lookup voter weights)
+    require ("the weight of the voter " <> show voter <> " is not negative") (weight >= 0.0)
+    pure (voter, Cast with weight; vote))
+
+-- | Consumes every presented ballot, so it cannot be counted again.
+consumeBallots : IsBallot b v => [(ContractId b, b)] -> Update ()
+consumeBallots = mapA_ (consume . fst)
+
+-- | The action every presented ballot asks to authorize and the binds every
+-- one of them pinned, refusing ballots that disagree on either.
+agreedRequest : IsBallot b v => [b] -> Update (ContractId Action, Map AuthenticKey Bind)
+agreedRequest ballots = do
+  actionCid <- orAbort "the presented ballots ask for one action" (allEqual (map actionOf ballots))
+  binds <- orAbort "the presented ballots pin one set of targets" (allEqual (map bindsOf ballots))
+  pure (actionCid, binds)

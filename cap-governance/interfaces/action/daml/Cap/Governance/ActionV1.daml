@@ -1,0 +1,49 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Governance.ActionV1 where
+
+import Prelude hiding (Action)
+
+import DA.Map (Map)
+
+import Splice.Api.Token.MetadataV1
+import Splice.Util (require)
+
+import Cap.Core.Types (AuthenticKey, ExecutionCore)
+import Cap.Core.Utils (admitActors)
+import Cap.Governance.ExecutableV1 (Executable)
+import Cap.Governance.Types (Bind, ReadTarget)
+
+data ActionView = ActionView
+  with
+    authorizers : [[Party]]
+    binds : Map AuthenticKey Bind
+    meta : Metadata
+  deriving (Eq, Show)
+
+data Action_AuthorizeExecutionResult = Action_AuthorizeExecutionResult
+  with
+    executionCids : [ContractId Executable]
+    meta : Metadata
+  deriving (Eq, Show)
+
+
+interface Action where
+  viewtype ActionView
+
+  action_authorizeExecutionImpl : ContractId Action -> Action_AuthorizeExecution -> Update Action_AuthorizeExecutionResult
+
+  action_readStateImpl : ReadTarget
+
+  nonconsuming choice Action_AuthorizeExecution : Action_AuthorizeExecutionResult
+    with
+      actors : [Party]
+      executionCore : ExecutionCore
+      outcome : Optional AnyValue
+      binds : Map AuthenticKey Bind
+      extraArgs : ExtraArgs
+    controller actors
+    do
+      require "the actors are an authorizer set of this action"
+        (admitActors (view this).authorizers actors)
+      action_authorizeExecutionImpl this self (Action_AuthorizeExecution with ..)

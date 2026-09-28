@@ -1,0 +1,79 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Governance.ExecutableV1 where
+
+import DA.Map (Map)
+
+import Splice.Api.Token.MetadataV1
+import Splice.Util (require)
+
+import Cap.Core.Types (AuthenticKey, ExecutionAction (..), ExecutionCore (..))
+import Cap.Core.Utils (entitled, requireExpired, requireOpen)
+import Cap.Governance.Types (Bind)
+
+data ExecutableView = ExecutableView
+  with
+    executionCore : ExecutionCore
+    binds : Map AuthenticKey Bind
+    outcome : Optional AnyValue
+  deriving (Eq, Show)
+
+data Executable_ExecuteResult = Executable_ExecuteResult
+  with
+    created : [AnyContractId]
+    meta : Metadata
+  deriving (Eq, Show)
+
+data Executable_CancelResult = Executable_CancelResult
+  with
+    meta : Metadata
+  deriving (Eq, Show)
+
+data Executable_ExpireResult = Executable_ExpireResult
+  with
+    meta : Metadata
+  deriving (Eq, Show)
+
+interface Executable where
+  viewtype ExecutableView
+
+  executable_executeImpl
+    : Map AuthenticKey AnyContractId -> ExtraArgs -> Update Executable_ExecuteResult
+
+  executable_cancelImpl : Executable_Cancel -> Update Executable_CancelResult
+
+  choice Executable_Execute : Executable_ExecuteResult
+    with
+      actors : [Party]
+      targets : Map AuthenticKey AnyContractId
+      extraArgs : ExtraArgs
+    controller actors
+    do
+      let v = view this
+      now <- getTime
+      requireOpen "the execution window is open" now v.executionCore.opensAt v.executionCore.expiresAt
+      require "the actors are entitled to execute"
+        (entitled v.executionCore.availableActions EA_Execute actors)
+      executable_executeImpl this targets extraArgs
+
+  choice Executable_Cancel : Executable_CancelResult
+    with
+      actors : [Party]
+      extraArgs : ExtraArgs
+    controller actors
+    do
+      let v = view this
+      now <- getTime
+      requireOpen "the cancellation window is open" now v.executionCore.cancelAt None
+      require "the actors are entitled to cancel"
+        (entitled v.executionCore.availableActions EA_Cancel actors)
+      executable_cancelImpl this (Executable_Cancel with ..)
+
+  choice Executable_Expire : Executable_ExpireResult
+    with
+      actor : Party
+    controller actor
+    do
+      now <- getTime
+      requireExpired "the execution has expired" now (view this).executionCore.expiresAt
+      pure Executable_ExpireResult with meta = emptyMetadata

@@ -34,8 +34,8 @@ bundle `{A, B}` gives no price for `A` on its own, so whether an award is within
 bid is a question about bundles and belongs to the format. A reserve per bundle
 does not compose into a reserve per lot either.
 
-The cost of the narrow interface is limited to the bid. `Submittable`, `Resolver`
-and `Settlement` do not mention a lot, so a bundle-bid interface added later
+The cost of the narrow interface is limited to the bid. `Mechanism` and
+`Settlement` do not mention a lot, so a bundle-bid interface added later
 reuses them and duplicates only `OneLotBid`. The name carries the restriction so
 it appears when someone writes `interface instance OneLotBid`, not when a check
 fails at runtime.
@@ -94,7 +94,7 @@ price in `Quote`, so it is outside this interface anyway.
 
 `OneLotAuctionTerms` names what is being sold and on what schedule. It does not
 name the sale or the authority set, because `Mechanism` already does and every
-`OneLotBid` carries one — the interface requires `Submittable`. The sale is
+`OneLotBidView` carries one in its `mechanism` field. The sale is
 `mechanism.id` and the authority set is `mechanism.resolver.authorities`.
 
 ### Quotes are a disjunction of conjunctions
@@ -105,8 +105,8 @@ whose quotes compose: `[{price = 100, quantity = 5}, {price = 90, quantity = 3}]
 means 5 units at 100 and 3 at 90, and `quantityAt` sums the quotes at
 or better than a given price to get the cumulative demand there.
 
-`[[Party]]` already carries this reading in `availableActions` and in
-`Procedure.resolvers`, where `admitActors` admits a group if the actors cover
+`[[Party]]` already carries this reading in `availableActions`, where
+`admitActors` admits a group if the actors cover
 every party in it and admits the whole list if they cover some group. `[[Quote]]`
 reads the same way, so the interface has one convention for "any of these, all of
 that" rather than two.
@@ -285,7 +285,7 @@ path for that case.
 
 The `ExtraArgs` each registry call needs are not pinned. The caller supplies them
 at call time: the executor passes a settlement context to `Settlement_Settle`,
-and the resolver passes a cancel context to the release of losing bids. A call
+and the auction's resolve choice passes a cancel context to the release of losing bids. A call
 spanning two registries carries the union of both contexts, and each registry
 reads only the keys it owns. The contexts might hold contract ids a registry rotates,
 so pinning them in the terms would let them go stale between the award and

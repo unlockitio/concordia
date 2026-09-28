@@ -1,0 +1,229 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Auctions.OneLotBidV1 where
+
+import DA.Foldable (forA_)
+import DA.List (unique)
+
+import Splice.Api.Token.MetadataV1
+import Splice.Api.Token.AllocationV2 (Allocation, SettlementFactory)
+import Splice.Util (require)
+import qualified Splice.Api.Token.HoldingV2 as Holding
+import DA.Map (Map)
+import Cap.Core.Types (Mechanism)
+import Cap.Core.Utils (entitled, requireExpired, requireOpen)
+
+data Direction
+  = Forward
+  | Reverse
+  deriving (Eq, Show)
+
+data Lot = Lot
+  with
+    instrument : Holding.InstrumentId
+    amount : Decimal
+  deriving (Eq, Show)
+
+data OneLotAuctionTerms = OneLotAuctionTerms
+  with
+    direction : Direction
+    reserve : Decimal
+    entryClosesAt : Time
+    biddingClosesAt : Time
+    expiresAt : Time
+    lot : Lot
+    sellerPaymentAccount : Holding.Account
+    sellerLotAccount : Holding.Account
+    paymentSettleFactory : ContractId SettlementFactory
+    lotSettleFactory : ContractId SettlementFactory
+    payment : Holding.InstrumentId
+  deriving (Eq, Show)
+
+data BidAction
+  = BA_RequestAllocations
+  | BA_Finalize
+  | BA_Withdraw
+  | BA_Release
+  | BA_Custom with
+      id : Text
+  deriving (Eq, Ord, Show)
+
+data Quote = Quote
+  with
+    price : Decimal
+    quantity : Decimal
+  deriving (Eq, Show, Ord)
+
+data OneLotBidView = OneLotBidView
+  with
+    mechanism : Mechanism
+    terms : OneLotAuctionTerms
+    availableActions : Map BidAction [[Party]]
+    bidderPaymentAccount : Holding.Account
+    bidderLotAccount : Holding.Account
+    quotes : [[Quote]]
+    allocations : [ContractId Allocation]
+      -- ^ what the bidder has locked for this bid, in the order the format implies
+    meta : Metadata
+  deriving (Eq, Show)
+
+data OneLotBid_RequestAllocationsResult = OneLotBid_RequestAllocationsResult
+  with
+    requests : [AnyContractId]
+    meta : Metadata
+  deriving (Eq, Show)
+
+data OneLotBid_WithdrawResult = OneLotBid_WithdrawResult
+  with
+    bid : Optional (ContractId OneLotBid)
+    released : [ContractId Allocation]
+    meta : Metadata
+  deriving (Eq, Show)
+
+data OneLotBid_ReleaseResult = OneLotBid_ReleaseResult
+  with
+    released : [ContractId Allocation]
+    meta : Metadata
+  deriving (Eq, Show)
+
+data OneLotBid_ExpireResult = OneLotBid_ExpireResult
+  with
+    meta : Metadata
+  deriving (Eq, Show)
+
+interface OneLotBid where
+  viewtype OneLotBidView
+
+  oneLotBid_requestAllocationsImpl
+    : ContractId OneLotBid -> OneLotBid_RequestAllocations
+    -> Update OneLotBid_RequestAllocationsResult
+
+  oneLotBid_finalizeImpl
+    : ContractId OneLotBid -> OneLotBid_Finalize -> Update (ContractId OneLotBid)
+
+  oneLotBid_withdrawImpl
+    : ContractId OneLotBid -> OneLotBid_Withdraw -> Update OneLotBid_WithdrawResult
+
+  oneLotBid_releaseImpl
+    : ContractId OneLotBid -> OneLotBid_Release -> Update OneLotBid_ReleaseResult
+
+  oneLotBid_expireImpl
+    : ContractId OneLotBid -> OneLotBid_Expire -> Update OneLotBid_ExpireResult
+
+  nonconsuming choice OneLotBid_RequestAllocations : OneLotBid_RequestAllocationsResult
+    with
+      actors : [Party]
+      quotes : [[Quote]]
+      extraArgs : ExtraArgs
+    controller actors
+    do
+      let bv = view this
+      require "the actors are entitled to request allocations"
+        (entitled bv.availableActions BA_RequestAllocations actors)
+      now <- getTime
+      requireOpen "the bidding window is open"
+        now bv.terms.entryClosesAt (Some bv.terms.biddingClosesAt)
+      requireAlternatives "a request for allocations" bv.terms.lot quotes
+      require "some quote of the request meets the reserve"
+        (any (any (\q -> meetsReserve bv.terms.direction bv.terms.reserve q.price)) quotes)
+      oneLotBid_requestAllocationsImpl this self (OneLotBid_RequestAllocations with ..)
+
+  nonconsuming choice OneLotBid_Finalize : ContractId OneLotBid
+    with
+      actors : [Party]
+      quotes : [[Quote]]  -- ors of ands
+      allocations : [ContractId Allocation]
+      extraArgs : ExtraArgs
+    controller actors
+    do
+      let bv = view this
+      require "the actors are entitled to finalize"
+        (entitled bv.availableActions BA_Finalize actors)
+      now <- getTime
+      requireOpen "the bidding window is open"
+        now bv.terms.entryClosesAt (Some bv.terms.biddingClosesAt)
+      requireAlternatives "a bid" bv.terms.lot quotes
+      require "some quote of the bid meets the reserve"
+        (any (any (\q -> meetsReserve bv.terms.direction bv.terms.reserve q.price)) quotes)
+      oneLotBid_finalizeImpl this self (OneLotBid_Finalize with ..)
+
+  nonconsuming choice OneLotBid_Withdraw : OneLotBid_WithdrawResult
+    with
+      actors : [Party]
+      extraArgs : ExtraArgs
+    controller actors
+    do
+      let bv = view this
+      require "the actors are entitled to withdraw"
+        (entitled bv.availableActions BA_Withdraw actors)
+      now <- getTime
+      requireOpen "the bidding window is open"
+        now bv.terms.entryClosesAt (Some bv.terms.biddingClosesAt)
+      oneLotBid_withdrawImpl this self (OneLotBid_Withdraw with ..)
+
+  nonconsuming choice OneLotBid_Release : OneLotBid_ReleaseResult
+    with
+      actors : [Party]
+      extraArgs : ExtraArgs
+    controller actors
+    do
+      let bv = view this
+      require "the actors are entitled to release"
+        (entitled bv.availableActions BA_Release actors)
+      oneLotBid_releaseImpl this self (OneLotBid_Release with ..)
+
+  nonconsuming choice OneLotBid_Expire : OneLotBid_ExpireResult
+    with
+      actors : [Party]
+      extraArgs : ExtraArgs
+    controller actors
+    do
+      now <- getTime
+      requireExpired "the bid has expired" now (Some (view this).terms.expiresAt)
+      oneLotBid_expireImpl this self (OneLotBid_Expire with ..)
+
+
+acceptablePrice : Direction -> Decimal -> Decimal -> Bool
+acceptablePrice Forward quoted p = quoted >= p
+acceptablePrice Reverse quoted p = quoted <= p
+
+-- units this bid still wants at price p: quotes whose own price is at least as good as p
+quantityAt : Direction -> [Quote] -> Decimal -> Decimal
+quantityAt direction quotes p =
+  sum [q.quantity | q <- quotes, acceptablePrice direction q.price p]
+
+-- whether p clears the reserve: at or above it forward, at or below it reverse
+meetsReserve : Direction -> Decimal -> Decimal -> Bool
+meetsReserve direction reserve p = acceptablePrice direction p reserve
+
+totalQuantity : [Quote] -> Decimal
+totalQuantity quotes = sum (map (.quantity) quotes)
+
+maxQuantity : [[Quote]] -> Decimal
+maxQuantity alternatives = foldl max 0.0 (map totalQuantity alternatives)
+
+requireAlternatives : (CanAssert m, Action m) => Text -> Lot -> [[Quote]] -> m ()
+requireAlternatives what lot alternatives = do
+  require (what <> " names at least one alternative")
+    (not (null alternatives))
+  forA_ alternatives (requireQuotes (what <> " alternative") lot)
+
+requireQuotes : (CanAssert m, Action m) => Text -> Lot -> [Quote] -> m ()
+requireQuotes what lot quotes = do
+  require (what <> " names at least one quote")
+    (not (null quotes))
+  require (what <> " names each price at most once")
+    (unique (map (.price) quotes))
+  require (what <> " names a positive price and quantity for every quote")
+    (all (\q -> q.price > 0.0 && q.quantity > 0.0) quotes)
+  require (what <> " does not name more units than the lot holds")
+    (totalQuantity quotes <= lot.amount)
+
+
+awardWithinAlternative : Direction -> [Quote] -> [Quote] -> Bool
+awardWithinAlternative direction quotes awarded =
+  all (\a -> quantityAt direction awarded a.price <= quantityAt direction quotes a.price) awarded
+
+awardWithinQuotes : Direction -> [[Quote]] -> [Quote] -> Bool
+awardWithinQuotes direction alternatives awarded =
+  any (\quotes -> awardWithinAlternative direction quotes awarded) alternatives

@@ -1,0 +1,125 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Examples.BabyDso.Submission where
+
+import Prelude hiding (Action)
+
+import DA.Map (Map)
+import qualified DA.Map as Map
+import DA.Set (Set)
+import qualified DA.Set as Set
+import DA.TextMap (TextMap)
+
+import Splice.Api.Token.MetadataV1
+import Splice.Util (HasCheckedFetch (..), require)
+
+import Cap.Core.Types (AuthenticKey, Mechanism (..))
+import Cap.Core.Utils (requireOpen)
+import Cap.Governance.ActionV1 (Action)
+import Cap.Governance.Types (Bind)
+import Cap.Governance.Utils (IsBallot (..))
+
+
+confirmationProcedureName : Text
+confirmationProcedureName = "confirmation"
+
+weightedVoteProcedureName : Text
+weightedVoteProcedureName = "weighted-vote"
+
+data Vote
+  = V_Choice Int
+  | V_Confirm AnyValue
+  | V_Parameters (TextMap Decimal)
+  deriving (Eq, Show)
+
+acceptsVote : Text -> Vote -> Bool
+acceptsVote procedure vote = case vote of
+  V_Parameters _ -> procedure == weightedVoteProcedureName
+  V_Confirm _ -> procedure == confirmationProcedureName
+  V_Choice _ -> False
+
+data ProposalTerms = ProposalTerms
+  with
+    options : [Text]
+    actionCid : ContractId Action
+    entryClosesAt : Time
+    votingClosesAt : Time
+    expiresAt : Time
+  deriving (Eq, Show)
+
+
+template SharedBallot
+  with
+    dso : Party
+    svs : Set Party
+    mechanism : Mechanism
+    terms : ProposalTerms
+    weights : Map Party Decimal
+    binds : Map AuthenticKey Bind
+    votes : Map Party Vote
+  where
+    signatory dso
+    observer Set.toList svs, Map.keys weights
+
+    ensure all (acceptsVote mechanism.procedure) (Map.values votes)
+
+    choice SharedBallot_Cast : ContractId SharedBallot
+      with
+        voter : Party
+        vote : Vote
+      controller voter
+      do
+        now <- getTime
+        requireOpen "the voting window is open" now terms.entryClosesAt (Some terms.votingClosesAt)
+        require "the voter has the right to vote: it holds weight in the snapshot"
+          (voter `Map.member` weights)
+        create this with votes = Map.insert voter vote votes
+
+    choice SharedBallot_Expire : ()
+      controller dso
+      do
+        now <- getTime
+        require "the shared ballot has expired" (now >= terms.expiresAt)
+
+instance HasCheckedFetch SharedBallot Mechanism where
+  contractGroupId ballot = ballot.mechanism
+
+instance IsBallot SharedBallot Vote where
+  castsOf ballot = fmap Some ballot.votes
+  bindsOf ballot = ballot.binds
+  actionOf ballot = ballot.terms.actionCid
+  consume = archive
+
+
+template SvConfirmation
+  with
+    dso : Party
+    confirmer : Party
+    mechanism : Mechanism
+    actionCid : ContractId Action
+    vote : Vote
+    binds : Map AuthenticKey Bind
+    expiresAt : Time
+  where
+    signatory dso, confirmer
+
+    ensure acceptsVote mechanism.procedure vote
+
+    choice SvConfirmation_Consume : ()
+      controller dso
+      do pure ()
+
+    choice SvConfirmation_Expire : ()
+      controller dso
+      do
+        now <- getTime
+        require "the confirmation has expired" (now >= expiresAt)
+
+instance HasCheckedFetch SvConfirmation Mechanism where
+  contractGroupId confirmation = confirmation.mechanism
+
+instance IsBallot SvConfirmation Vote where
+  castsOf confirmation = Map.fromList [(confirmation.confirmer, Some confirmation.vote)]
+  bindsOf confirmation = confirmation.binds
+  actionOf confirmation = confirmation.actionCid
+  consume cid = exercise cid SvConfirmation_Consume

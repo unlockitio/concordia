@@ -1,0 +1,34 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Governance.Types
+  ( Bind (..)
+  , ReadTarget
+  , Verdict (..)
+  ) where
+
+import Splice.Api.Token.MetadataV1
+
+import Cap.Core.Types (AuthenticKey)
+
+
+data Bind = Bind
+  with
+    state : Optional AnyValue
+    cid : Optional AnyContractId
+  deriving (Eq, Show)
+
+-- | Reads a target named by a key: checks the contract is the one the key
+-- names and returns its state, or 'None' when it has none to pin. An action's
+-- 'action_readStateImpl' is a 'ReadTarget'.
+type ReadTarget = AuthenticKey -> AnyContractId -> Update (Optional AnyValue)
+
+data Verdict r
+  = Decided r
+  | Undecided
+  | Lapsed
+  deriving (Eq, Show)
+
+instance Functor Verdict where
+  fmap f (Decided r) = Decided (f r)
+  fmap _ Undecided = Undecided
+  fmap _ Lapsed = Lapsed

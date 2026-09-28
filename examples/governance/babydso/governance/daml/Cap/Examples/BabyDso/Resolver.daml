@@ -1,0 +1,218 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Examples.BabyDso.Resolver where
+
+import Prelude hiding (Action)
+
+import DA.Map (Map)
+import qualified DA.Map as Map
+import DA.Set (Set)
+import qualified DA.Set as Set
+import DA.TextMap (TextMap)
+import qualified DA.TextMap as TextMap
+import DA.Time (RelTime, addRelTime)
+
+import Splice.Api.Token.MetadataV1
+import Splice.Util (HasCheckedFetch (..), require)
+
+import Cap.Core.Types (AuthenticKey (..), ExecutionAction (..), ExecutionCore (..), Mechanism (..))
+import Cap.Core.Utils
+  ( IsAnyValue (..), fetchGroup, requireClosed, requireMechanism, signedKey )
+import Cap.Governance.ActionV1
+import Cap.Governance.Utils
+  ( Cast (..), HasWeight (..), Quorum, Tally, Verdict (..), agreedRequest, atLeastVotes
+  , atLeastWeight, consumeBallots, pinStatesWith, readWeights, rule, unanimous, weighBallots
+  , weighBallotsEqually, weightedMedian )
+
+import Cap.Examples.BabyDso.Rights
+import Cap.Examples.BabyDso.Submission
+
+
+data ResolveResult = ResolveResult
+  with
+    verdict : Verdict AnyValue
+    created : [AnyContractId]
+  deriving (Eq, Show)
+
+
+template DsoResolver
+  with
+    dso : Party
+    svs : Set Party
+    resolverId : Text
+    weightKeys : Set RightKey --  It says which sources count for which voter, but not how much + fixes the total weight
+    executionDelay : RelTime
+    executionWindow : RelTime
+    expiresAt : Time
+  where
+    signatory dso
+    observer Set.toList svs
+
+    nonconsuming choice DsoResolver_OpenVote : ContractId SharedBallot
+      with
+        requester : Party
+        mechanism : Mechanism
+        terms : ProposalTerms
+        weightSources : Map RightKey (ContractId SvWeightSource)
+        targets : Map AuthenticKey AnyContractId
+      controller requester
+      do
+        require "the requester is an sv" (requester `Set.member` svs)
+        requireMechanism (resolverKey this) (coerceContractId self) weightedVoteProcedureName mechanism
+        sourced <- readWeights weightKeys weightSources
+        let weights = Map.fromListWithR (+) (Map.values sourced)
+        action <- fetch terms.actionCid
+        pinned <- pinStatesWith (action_readStateImpl action) (view action).binds targets
+        create SharedBallot with
+          dso; svs; mechanism; terms; weights
+          binds = pinned
+          votes = Map.empty
+
+    nonconsuming choice DsoResolver_ResolveVote : ResolveResult
+      with
+        sv : Party
+        mechanism : Mechanism
+        ballotCids : [ContractId SharedBallot]
+        extraArgs : ExtraArgs
+      controller sv
+      do
+        requireResolvable this self sv mechanism weightedVoteProcedureName
+        presented <- fetchGroup mechanism ballotCids
+        resolveWeightedVote this presented extraArgs
+
+    nonconsuming choice DsoResolver_Confirm : ContractId SvConfirmation
+      with
+        confirmer : Party
+        mechanism : Mechanism
+        actionCid : ContractId Action
+        vote : Vote
+        targets : Map AuthenticKey AnyContractId
+        expiresAt : Time
+      controller confirmer
+      do
+        require "the confirmer is an sv" (confirmer `Set.member` svs)
+        requireMechanism (resolverKey this) (coerceContractId self) confirmationProcedureName mechanism
+        action <- fetch actionCid
+        pinned <- pinStatesWith (action_readStateImpl action) (view action).binds targets
+        create SvConfirmation with
+          dso; confirmer; mechanism; actionCid; vote; expiresAt
+          binds = pinned
+
+    nonconsuming choice DsoResolver_ResolveConfirmations : ResolveResult
+      with
+        sv : Party
+        mechanism : Mechanism
+        confirmationCids : [ContractId SvConfirmation]
+        extraArgs : ExtraArgs
+      controller sv
+      do
+        requireResolvable this self sv mechanism confirmationProcedureName
+        resolveConfirmations this mechanism confirmationCids extraArgs
+
+resolverKey : DsoResolver -> AuthenticKey
+resolverKey rules = AuthenticKey with
+  authorities = Set.fromList [rules.dso]
+  id = rules.resolverId
+
+requireResolvable : DsoResolver -> ContractId DsoResolver -> Party -> Mechanism -> Text -> Update ()
+requireResolvable rules self sv mechanism procedure = do
+  require "the resolver is an sv" (sv `Set.member` rules.svs)
+  requireMechanism (resolverKey rules) (coerceContractId self) procedure mechanism
+
+
+instance HasCheckedFetch SvWeightSource RightKey where
+  contractGroupId source = RightKey with
+    authKey = signedKey source.name source
+    owner = source.rightOwner
+
+instance HasWeight SvWeightSource where
+  weightOf source = (source.rightOwner, source.weight)
+
+
+resolveWeightedVote
+  : DsoResolver -> [(ContractId SharedBallot, SharedBallot)] -> ExtraArgs -> Update ResolveResult
+resolveWeightedVote rules presented extraArgs = do
+  ballot <- case presented of
+    [(_, one)] -> pure one
+    _ -> abort "the resolve presents more than one shared ballot"
+  now <- getTime
+  let terms = ballot.terms
+  requireClosed "the voting window has closed" now terms.votingClosesAt
+  require "the proposal has not expired" (now < terms.expiresAt)
+
+  (actionCid, binds) <- agreedRequest [ballot]
+  casts <- weighBallots parametersOf ballot.weights presented
+  consumeBallots presented
+  let verdict = rule (twoThirdsOf ballot.weights) (weightedMedianByField terms.options) casts
+  created <- case verdict of
+    Decided winner -> do
+      let opensAt = now `addRelTime` rules.executionDelay
+      result <- exercise actionCid Action_AuthorizeExecution with
+        actors = [rules.dso]
+        executionCore = ExecutionCore with
+          authorities = Set.fromList [rules.dso]
+          availableActions = Map.fromList [(EA_Execute, [[sv] | sv <- Set.toList rules.svs])]
+          opensAt
+          cancelAt = opensAt
+          expiresAt = Some (opensAt `addRelTime` rules.executionWindow)
+          meta = emptyMetadata
+        outcome = Some (toAnyValue winner)
+        binds = binds
+        extraArgs
+      pure (map coerceContractId result.executionCids)
+    _ -> pure []
+  pure ResolveResult with verdict = fmap toAnyValue verdict; created
+
+parametersOf : Vote -> Optional (TextMap Decimal)
+parametersOf (V_Parameters parameters) = Some parameters
+parametersOf _ = None
+
+twoThirdsOf : Map Party Decimal -> Quorum a
+twoThirdsOf weights = atLeastWeight (sum (Map.values weights) * 2.0 / 3.0)
+
+weightedMedianByField : [Text] -> Tally (TextMap Decimal) (TextMap Decimal)
+weightedMedianByField fields casts = TextMap.fromList <$> forA fields (\field -> do
+  value <- weightedMedian
+    (fmap (\c -> Cast with weight = c.weight; vote = c.vote >>= TextMap.lookup field) casts)
+  pure (field, value))
+
+
+resolveConfirmations
+  : DsoResolver -> Mechanism -> [ContractId SvConfirmation] -> ExtraArgs -> Update ResolveResult
+resolveConfirmations rules mechanism confirmationCids extraArgs = do
+  now <- getTime
+  presented <- fetchGroup mechanism confirmationCids
+  let confirmations = map snd presented
+  require "no confirmation has expired" (all ((now <) . (.expiresAt)) confirmations)
+  (actionCid, binds) <- agreedRequest confirmations
+  casts <- weighBallotsEqually confirmedOf rules.svs presented
+  consumeBallots presented
+  let verdict = rule (atLeastVotes (byzantineQuorum (Set.size rules.svs))) unanimous casts
+  outcome <- case verdict of
+    Decided outcome -> pure outcome
+    _ -> abort "too few svs confirmed one outcome"
+
+  result <- exercise actionCid Action_AuthorizeExecution with
+    actors = [rules.dso]
+    executionCore = ExecutionCore with
+      authorities = Set.fromList [rules.dso]
+      availableActions = Map.fromList [(EA_Execute, [[sv] | sv <- Set.toList rules.svs])]
+      opensAt = now
+      cancelAt = now
+      expiresAt = Some (now `addRelTime` rules.executionWindow)
+      meta = emptyMetadata
+    outcome = Some outcome
+    binds
+    extraArgs
+  pure ResolveResult with
+    verdict = Decided outcome
+    created = map coerceContractId result.executionCids
+
+confirmedOf : Vote -> Optional AnyValue
+confirmedOf (V_Confirm value) = Some value
+confirmedOf _ = None
+
+byzantineQuorum : Int -> Int
+byzantineQuorum voters =
+  let tolerated = floor (intToDecimal (voters - 1) / 3.0)
+  in ceiling (intToDecimal (voters + tolerated + 1) / 2.0)

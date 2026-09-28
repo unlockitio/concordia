@@ -8,7 +8,7 @@ import Splice.Api.Token.MetadataV1
 
 import qualified DA.Map as Map
 
-import Cap.Core.Utils (ExecutionAction (..), ExecutionCore (..))
+import Cap.Core.Types (ExecutionAction (..), ExecutionCore (..))
 import Cap.Auctions.OneLotBidV1 (OneLotAuctionTerms)
 import Cap.Auctions.SettlementV1
 import Cap.Auctions.Utils (sellerOf, oneLotSettlement)
@@ -30,7 +30,7 @@ template AuctionSettlement
 
     interface instance Settlement for AuctionSettlement where
       view = SettlementView with
-        core = ExecutionCore with
+        executionCore = ExecutionCore with
           authorities
           availableActions = Map.fromList [(EA_Execute, [Set.toList authorities])]
           opensAt

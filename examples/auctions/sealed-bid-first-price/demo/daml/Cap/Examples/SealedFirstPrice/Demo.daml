@@ -21,8 +21,7 @@ import Splice.TokenStandard.Utils (basicAccount, senderSide)
 import Splice.Testing.Utils
 import qualified Splice.Testing.TokenStandard.RegistryApiV2 as RegistryApi
 
-import Cap.Core.ResolverV1
-import Cap.Core.SubmittableV1
+import Cap.Core.Types (AuthenticKey (..), Mechanism (..))
 import Cap.Auctions.Funding (OneLotBidAllocationRequest)
 import Cap.Auctions.OneLotBidV1
 import Cap.Auctions.Utils (oneLotSettlement)
@@ -49,7 +48,7 @@ invitedBidders f = [f.alice, f.bob, f.carol]
 
 auctionMechanism : Set.Set Party -> Text -> Text -> ContractId Auction -> Mechanism
 auctionMechanism authorities resolverId saleId auctionCid = Mechanism with
-  resolver = ResolverKey with
+  resolver = AuthenticKey with
     authorities
     id = resolverId
   resolverCid = Some (coerceContractId auctionCid)
@@ -251,15 +250,11 @@ fundBid auction bidder price = do
   seatCid <- seatFor auction bidder
   submit bidder (submitBidCmd seatCid bidder price lotAmount allocations)
 
-presentationOf : OpenAuction -> [ContractId OneLotBid] -> [ContractId Submittable]
-presentationOf _ entries = map coerceContractId entries
-
-resolveCmd : OpenAuction -> [ContractId OneLotBid] -> ExtraArgs -> Commands Resolver_ResolveResult
+resolveCmd : OpenAuction -> [ContractId OneLotBid] -> ExtraArgs -> Commands AuctionResult
 resolveCmd auction entries ctx =
-  exerciseCmd (toInterfaceContractId @Resolver auction.auctionCid) Resolver_Resolve with
-    actors = [auction.fixture.operator]
+  exerciseCmd auction.auctionCid Auction_Resolve with
     mechanism = auction.mechanism
-    submittables = presentationOf auction entries
+    bidCids = entries
     extraArgs = ctx
 
 resolveDisclosures : OpenAuction -> Script Disclosures'
@@ -280,7 +275,7 @@ resolveContext auction = do
       values = mconcat (map (\c -> c.choiceContext.values) ctxs)
     meta = emptyMetadata
 
-runResolve : OpenAuction -> [ContractId OneLotBid] -> Script Resolver_ResolveResult
+runResolve : OpenAuction -> [ContractId OneLotBid] -> Script AuctionResult
 runResolve auction entries = do
   ds <- resolveDisclosures auction
   ctx <- resolveContext auction
@@ -293,10 +288,10 @@ runResolveMustFail auction entries = do
   submitMustFail (actAs auction.fixture.operator <> discloseMany' ds)
     (resolveCmd auction entries ctx)
 
-settlementOf' : Resolver_ResolveResult -> ContractId AuctionSettlement
-settlementOf' result = case result.created of
-  [cid] -> coerceContractId cid
-  _ -> error "the resolve minted no single settlement"
+settlementOf' : AuctionResult -> ContractId AuctionSettlement
+settlementOf' result = case result.settlementCid of
+  Some cid -> cid
+  None -> error "the resolve minted no single settlement"
 
 runSettle : OpenAuction -> ContractId AuctionSettlement -> Script Settlement_SettleResult
 runSettle auction settlementCid = do
@@ -414,7 +409,7 @@ whoSeesWhat = do
 
   setTime f.terms.biddingClosesAt
   result <- runResolve auction [aliceBid, bobBid, carolSeat]
-  result.verdict === V_Decided None
+  isSome result.settlementCid === True
 
   let settlementCid = settlementOf' result
   f.alice `sees` settlementCid
@@ -452,7 +447,7 @@ lotGoesToTheHighestPresentedBid = do
 
   setTime f.terms.biddingClosesAt
   result <- runResolve auction [aliceBid, bobBid, carolSeat]
-  result.verdict === V_Decided None
+  isSome result.settlementCid === True
   _ <- runSettle auction (settlementOf' result)
 
   alicePaid <- balanceOf f.alice f.terms.payment
@@ -497,7 +492,7 @@ settlementRunsThroughTheFactoriesTheTermsName = do
   setTime hf.terms.biddingClosesAt
 
   honestResult <- runResolve honest [aliceBid, bobSeat, carolSeat]
-  honestResult.verdict === V_Decided None
+  isSome honestResult.settlementCid === True
   _ <- runSettle honest (settlementOf' honestResult)
   honestSellerPaid <- balanceOf hf.seller hf.terms.payment
   honestSellerPaid === 100.0
@@ -525,7 +520,7 @@ settlementRunsThroughTheFactoriesTheTermsName = do
 
   setTime xf.terms.biddingClosesAt
   xResult <- runResolve hostile [xBid, xBobSeat, xCarolSeat]
-  xResult.verdict === V_Decided None
+  isSome xResult.settlementCid === True
 
   _ <- runSettle hostile (settlementOf' xResult)
 
@@ -605,7 +600,7 @@ aBidderCannotBlockTheSale = do
       extraArgs = ExtraArgs with context = bobCtx.choiceContext; meta = emptyMetadata)
 
   result <- runResolve auction [aliceBid, bobBid, carolSeat]
-  result.verdict === V_Decided None
+  isSome result.settlementCid === True
   let settlementCid = settlementOf' result
 
   bobRefunded <- unlockedBalanceOf f.bob f.terms.payment

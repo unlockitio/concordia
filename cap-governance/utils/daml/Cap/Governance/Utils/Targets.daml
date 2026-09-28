@@ -1,0 +1,204 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+{-# LANGUAGE AllowAmbiguousTypes #-}
+
+module Cap.Governance.Utils.Targets
+  ( -- * Action
+    HasState (..)
+  , ReadTarget
+  , readState
+  , readIdentity
+  , mergeAuthentic
+
+    -- * Submission
+  , pinStatesWith
+  , pinCidsWith
+
+    -- * Execution
+  , DriftPolicy
+  , unchanged
+  , anyDrift
+  , sameOn
+  , bothOf
+  , sameFields
+  , requireSameKeys
+  , checkTarget
+  , checkIdentity
+  ) where
+
+import DA.Foldable (forA_)
+import DA.Map (Map)
+import qualified DA.Map as Map
+import DA.Optional (catOptionals, fromOptional, isNone)
+import qualified DA.TextMap as TextMap
+
+import Splice.Api.Token.MetadataV1
+import Splice.Util (HasCheckedFetch, require)
+
+import Cap.Core.Types (AuthenticKey)
+import Cap.Core.Utils (IsAnyValue (..), fetchCheckedAny, orAbort)
+import Cap.Governance.Types (Bind (..), ReadTarget)
+
+
+------------------  ACTION  ------------------
+-- Used by an action to read the state of the targets it binds.
+
+-- | The state of a template that an action pins. The action's package writes
+-- the instance for each target it binds.
+class HasState t a | t -> a where
+  stateOf : t -> a
+
+readState
+  : forall t a. (HasFetch t, HasCheckedFetch t AuthenticKey, HasState t a, IsAnyValue a)
+  => ReadTarget
+readState key cid = do
+  (_, contract) <- fetchCheckedAny @t key cid
+  pure (Some (toAnyValue (stateOf contract)))
+
+readIdentity
+  : forall t. (HasFetch t, HasCheckedFetch t AuthenticKey)
+  => ReadTarget
+readIdentity key cid = do
+  _ <- fetchCheckedAny @t key cid
+  pure None
+
+-- | The binds an action authorizes an execution with: its own declared binds,
+-- with the parts it left open filled from the procedure's pins. Refuses a pin
+-- for a target the action does not name, and a pin that contradicts a part
+-- the action fixed.
+mergeAuthentic
+  : Map AuthenticKey Bind -> Map AuthenticKey Bind -> Update (Map AuthenticKey Bind)
+mergeAuthentic fixed pinned = do
+  forA_ (Map.keys pinned) $ \key ->
+    require ("the action names the pinned target " <> show key)
+      (Map.member key fixed)
+  Map.fromList <$> forA (Map.toList fixed) (\(key, given) -> do
+    let pin = fromOptional (Bind with state = None; cid = None) (Map.lookup key pinned)
+    require ("the procedure pins no state of " <> show key <> " that the action fixed")
+      (isNone given.state || isNone pin.state)
+    require ("the procedure pins no contract of " <> show key <> " that the action fixed")
+      (isNone given.cid || isNone pin.cid)
+    require ("the procedure pins no state of " <> show key <> ", whose contract the action fixed")
+      (isNone given.cid || isNone pin.state)
+    pure (key, Bind with
+      state = optional pin.state Some given.state
+      cid = optional pin.cid Some given.cid))
+
+
+------------------  SUBMISSION  ------------------
+-- Used by a ballot at cast time, or by a resolution, to pin targets. A pin is
+-- a precondition the submitters agree to: the execution only goes ahead while
+-- the target still satisfies it. These helpers pin the current state or
+-- contract; the parties submitting must be able to see every target they present.
+
+-- | Pins the state of every target the action left open, read through the
+-- given reader, and leaves open the targets the reader returns no state for.
+-- Every open target must be presented, and the keys of the presented targets
+-- must match keys the action binds.
+pinStatesWith
+  : ReadTarget -> Map AuthenticKey Bind -> Map AuthenticKey AnyContractId
+  -> Update (Map AuthenticKey Bind)
+pinStatesWith reader fixed targets = do
+  requireNamedTargets fixed targets
+  Map.fromList . catOptionals <$> forA (Map.keys (Map.filter open fixed)) (\key -> do
+    cid <- orAbort ("a target the action names was not presented: " <> show key)
+      (Map.lookup key targets)
+    state <- reader key cid
+    pure (fmap (\st -> (key, Bind with state = Some st; cid = None)) state))
+  where
+    open bind = isNone bind.state && isNone bind.cid
+
+-- | Pins the contract of every target whose contract the action left open:
+-- runs the reader for its identity check and records the presented cid.
+-- Every such target must be presented, and the keys of the presented targets
+-- must match keys the action binds.
+pinCidsWith
+  : ReadTarget -> Map AuthenticKey Bind -> Map AuthenticKey AnyContractId
+  -> Update (Map AuthenticKey Bind)
+pinCidsWith reader fixed targets = do
+  requireNamedTargets fixed targets
+  Map.fromList <$> forA (Map.keys (Map.filter (isNone . (.cid)) fixed)) (\key -> do
+    cid <- orAbort ("a target the action names was not presented: " <> show key)
+      (Map.lookup key targets)
+    _ <- reader key cid
+    pure (key, Bind with state = None; cid = Some cid))
+
+requireNamedTargets : Map AuthenticKey Bind -> Map AuthenticKey AnyContractId -> Update ()
+requireNamedTargets fixed targets =
+  forA_ (Map.keys targets) $ \key ->
+    require ("the action names the presented target " <> show key) (Map.member key fixed)
+
+
+------------------  EXECUTION  ------------------
+-- Used by an executable, in the action's package, to check each target it acts on.
+
+-- | Whether a target's live state still satisfies the state pinned for it,
+-- as @driftPolicy pinned live@.
+type DriftPolicy a = a -> a -> Bool
+
+unchanged : Eq a => DriftPolicy a
+unchanged = (==)
+
+anyDrift : DriftPolicy a
+anyDrift _ _ = True
+
+sameOn : Eq b => (a -> b) -> DriftPolicy a
+sameOn f pinned live = f pinned == f live
+
+bothOf : DriftPolicy a -> DriftPolicy a -> DriftPolicy a
+bothOf p q pinned live = p pinned live && q pinned live
+
+sameFields : [Text] -> DriftPolicy AnyValue
+sameFields names (AV_Map pinned) (AV_Map live) =
+  all (\name -> case (TextMap.lookup name pinned, TextMap.lookup name live) of
+    (Some a, Some b) -> a == b
+    _ -> False) names
+sameFields _ _ _ = False
+
+-- | Checks that the presented targets are exactly the bound ones: every bound
+-- target presented, and nothing presented that is not bound.
+requireSameKeys : (Ord k, Show k) => Map k a -> Map k b -> Update ()
+requireSameKeys pinned targets = do
+  forA_ (Map.keys pinned) $ \key ->
+    require ("the bound target " <> show key <> " was not presented")
+      (Map.member key targets)
+  require "every presented target is named by a binding"
+    (Map.size targets == Map.size pinned)
+
+-- | Checks one presented target against its bind: the pinned cid if any, the
+-- key, and the pinned state against the live 'stateOf' under the drift
+-- policy. Returns the checked contract to act on.
+checkTarget
+  : forall t a. (HasFetch t, HasCheckedFetch t AuthenticKey, HasState t a, IsAnyValue a)
+  => DriftPolicy a -> AuthenticKey -> Map AuthenticKey Bind -> Map AuthenticKey AnyContractId
+  -> Update (ContractId t, t)
+checkTarget driftPolicy key pinned targets = do
+  bind <- orAbort ("the target " <> show key <> " is not bound") (Map.lookup key pinned)
+  cid <- orAbort ("the bound target " <> show key <> " was not presented") (Map.lookup key targets)
+  require ("the contract presented for the target " <> show key
+      <> " is the one its bind pinned, when the bind pins one: presented " <> show cid
+      <> ", pinned " <> show bind.cid)
+    (optional True (== cid) bind.cid)
+  (typed, contract) <- fetchCheckedAny @t key cid
+  forA_ bind.state $ \raw -> do
+    pinnedState <- orAbort ("the pinned state of " <> show key <> " does not decode")
+      (fromAnyValue raw)
+    require ("the target " <> show key <> " no longer satisfies its bind")
+      (driftPolicy pinnedState (stateOf contract))
+  pure (typed, contract)
+
+-- | Checks one presented target bound by identity alone: the pinned cid if
+-- any, and the key. Returns the checked contract to act on.
+checkIdentity
+  : forall t. (HasFetch t, HasCheckedFetch t AuthenticKey)
+  => AuthenticKey -> Map AuthenticKey Bind -> Map AuthenticKey AnyContractId
+  -> Update (ContractId t, t)
+checkIdentity key pinned targets = do
+  bind <- orAbort ("the target " <> show key <> " is not bound") (Map.lookup key pinned)
+  cid <- orAbort ("the bound target " <> show key <> " was not presented") (Map.lookup key targets)
+  require ("the contract presented for the target " <> show key
+      <> " is the one its bind pinned, when the bind pins one: presented " <> show cid
+      <> ", pinned " <> show bind.cid)
+    (optional True (== cid) bind.cid)
+  require ("the target " <> show key <> " is bound by identity alone") (isNone bind.state)
+  fetchCheckedAny @t key cid

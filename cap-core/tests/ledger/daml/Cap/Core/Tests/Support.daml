@@ -1,0 +1,20 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Core.Tests.Support
+  ( submitMustFailContaining
+  ) where
+
+import DA.Action (unless)
+import qualified DA.Text as Text
+import Daml.Script
+
+submitMustFailContaining : Show a => Text -> Party -> Commands a -> Script ()
+submitMustFailContaining expected actor cmds = do
+  result <- trySubmit (actAs actor) cmds
+  case result of
+    Left err -> requireContains (show err)
+    Right value -> fail ("the command succeeded with " <> show value)
+  where
+    requireContains actual =
+      unless (expected `Text.isInfixOf` actual) $
+        fail ("expected a failure containing " <> expected <> ", got " <> actual)

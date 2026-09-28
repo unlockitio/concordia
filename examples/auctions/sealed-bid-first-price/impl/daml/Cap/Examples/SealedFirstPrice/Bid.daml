@@ -13,8 +13,8 @@ import qualified Splice.Api.Token.HoldingV2 as Holding
 import Splice.Util (require)
 import Splice.TokenStandard.Utils (regularAccountOwner)
 
-import Cap.Core.Utils (orAbort, single)
-import Cap.Core.SubmittableV1
+import Cap.Core.Types (Mechanism (..))
+import Cap.Core.Utils (authoritiesOf, orAbort, single)
 import Cap.Auctions.Funding
   ( OneLotBidAllocationRequest (..), bidderPaymentAllocation, bidderLotAllocation )
 import Cap.Auctions.OneLotBidV1
@@ -43,13 +43,9 @@ template AuctionBid
       controller Set.toList (authoritiesOf mechanism)
       do pure ()
 
-    interface instance Submittable for AuctionBid where
-      view = SubmittableView with
-        mechanism
-        meta = emptyMetadata
-
     interface instance OneLotBid for AuctionBid where
       view = OneLotBidView with
+        mechanism
         terms
         availableActions = Map.fromList $
           (BA_Release, [Set.toList (authoritiesOf mechanism)])

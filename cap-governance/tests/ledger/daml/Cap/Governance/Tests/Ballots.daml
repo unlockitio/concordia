@@ -1,0 +1,158 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Governance.Tests.Ballots where
+
+import Prelude hiding (Action)
+
+import DA.Assert ((===))
+import DA.Map (Map)
+import qualified DA.Map as Map
+import qualified DA.Set as Set
+import Daml.Script hiding (AnyContractId)
+
+import Cap.Core.Types (AuthenticKey (..), Mechanism (..))
+import Cap.Governance.ActionV1 (Action)
+import Cap.Governance.Types (Bind (..))
+import Cap.Governance.Utils (Cast (..))
+
+import Cap.Governance.Tests.Harness
+import Cap.Governance.Tests.Support
+
+
+data Env = Env with
+    owner : Party
+    alice : Party
+    bob : Party
+    probe : ContractId Probe
+    actionA : ContractId Action
+    actionB : ContractId Action
+
+setup : Text -> Script Env
+setup ns = do
+  owner <- allocateParty (ns <> "-owner")
+  alice <- allocateParty (ns <> "-alice")
+  bob <- allocateParty (ns <> "-bob")
+  probe <- submit owner $ createCmd Probe with owner
+  a <- submit owner $ createCmd DummyAction with
+    owner; readers = []; authorizers = [[owner]]; declared = Map.empty
+  b <- submit owner $ createCmd DummyAction with
+    owner; readers = []; authorizers = [[owner]]; declared = Map.empty
+  pure Env with actionA = toInterfaceContractId a; actionB = toInterfaceContractId b; ..
+
+mechanismOf : Party -> Mechanism
+mechanismOf owner = Mechanism with
+  resolver = AuthenticKey with authorities = Set.fromList [owner]; id = "body"
+  resolverCid = None
+  procedure = "vote"
+  id = "proposal"
+
+ballotWith
+  : Env -> ContractId Action -> Map AuthenticKey Bind -> [(Party, Optional Text)]
+  -> Script (ContractId Ballot)
+ballotWith env actionCid binds votes = submit env.owner $ createCmd Ballot with
+  owner = env.owner
+  mechanism = mechanismOf env.owner
+  actionCid
+  votes = Map.fromList votes
+  binds
+
+ballot : Env -> [(Party, Optional Text)] -> Script (ContractId Ballot)
+ballot env = ballotWith env env.actionA Map.empty
+
+
+weighBallotsAttachesWeightsAndKeepsAbstentions : Script ()
+weighBallotsAttachesWeightsAndKeepsAbstentions = do
+  env <- setup "weigh-ok"
+  b1 <- ballot env [(env.alice, Some "yes")]
+  b2 <- ballot env [(env.bob, None)]
+  casts <- submit env.owner $ exerciseCmd env.probe Probe_WeighBallots with
+    weights = Map.fromList [(env.alice, 2.0), (env.bob, 1.0)]
+    ballotCids = [b1, b2]
+  casts === Map.fromList
+    [ (env.alice, Cast with weight = 2.0; vote = Some "yes")
+    , (env.bob, Cast with weight = 1.0; vote = None) ]
+
+weighBallotsRefusesAVoterOnTwoBallots : Script ()
+weighBallotsRefusesAVoterOnTwoBallots = do
+  env <- setup "weigh-twice"
+  b1 <- ballot env [(env.alice, Some "yes")]
+  b2 <- ballot env [(env.alice, Some "no")]
+  submitMustFailContaining "the presented ballots come from distinct voters" env.owner $
+    exerciseCmd env.probe Probe_WeighBallots with
+      weights = Map.fromList [(env.alice, 1.0)]; ballotCids = [b1, b2]
+
+weighBallotsRefusesAVoteOfAnotherKind : Script ()
+weighBallotsRefusesAVoteOfAnotherKind = do
+  env <- setup "weigh-kind"
+  b1 <- ballot env [(env.alice, Some "bad")]
+  submitMustFailContaining "is not of the kind this procedure counts" env.owner $
+    exerciseCmd env.probe Probe_WeighBallots with
+      weights = Map.fromList [(env.alice, 1.0)]; ballotCids = [b1]
+
+weighBallotsRefusesAVoterWithoutWeight : Script ()
+weighBallotsRefusesAVoterWithoutWeight = do
+  env <- setup "weigh-missing"
+  b1 <- ballot env [(env.alice, Some "yes")]
+  submitMustFailContaining "has no right to vote" env.owner $
+    exerciseCmd env.probe Probe_WeighBallots with
+      weights = Map.fromList [(env.bob, 1.0)]; ballotCids = [b1]
+
+weighBallotsRefusesANegativeWeight : Script ()
+weighBallotsRefusesANegativeWeight = do
+  env <- setup "weigh-negative"
+  b1 <- ballot env [(env.alice, Some "yes")]
+  submitMustFailContaining "is not negative" env.owner $
+    exerciseCmd env.probe Probe_WeighBallots with
+      weights = Map.fromList [(env.alice, -1.0)]; ballotCids = [b1]
+
+weighBallotsEquallyGivesEveryVoterWeightOne : Script ()
+weighBallotsEquallyGivesEveryVoterWeightOne = do
+  env <- setup "equal-ok"
+  b1 <- ballot env [(env.alice, Some "yes"), (env.bob, Some "no")]
+  casts <- submit env.owner $ exerciseCmd env.probe Probe_WeighBallotsEqually with
+    voters = Set.fromList [env.alice, env.bob]; ballotCids = [b1]
+  casts === Map.fromList
+    [ (env.alice, Cast with weight = 1.0; vote = Some "yes")
+    , (env.bob, Cast with weight = 1.0; vote = Some "no") ]
+
+weighBallotsEquallyRefusesAVoterOutsideTheSet : Script ()
+weighBallotsEquallyRefusesAVoterOutsideTheSet = do
+  env <- setup "equal-outside"
+  b1 <- ballot env [(env.alice, Some "yes")]
+  submitMustFailContaining "has no right to vote" env.owner $
+    exerciseCmd env.probe Probe_WeighBallotsEqually with
+      voters = Set.fromList [env.bob]; ballotCids = [b1]
+
+agreedRequestReturnsTheSharedActionAndBinds : Script ()
+agreedRequestReturnsTheSharedActionAndBinds = do
+  env <- setup "agreed-ok"
+  b1 <- ballot env [(env.alice, Some "yes")]
+  b2 <- ballot env [(env.bob, Some "yes")]
+  result <- submit env.owner $ exerciseCmd env.probe Probe_AgreedRequest with ballotCids = [b1, b2]
+  result === (env.actionA, Map.empty)
+
+agreedRequestRefusesDifferentActions : Script ()
+agreedRequestRefusesDifferentActions = do
+  env <- setup "agreed-action"
+  b1 <- ballot env [(env.alice, Some "yes")]
+  b2 <- ballotWith env env.actionB Map.empty [(env.bob, Some "yes")]
+  submitMustFailContaining "the presented ballots ask for one action" env.owner $
+    exerciseCmd env.probe Probe_AgreedRequest with ballotCids = [b1, b2]
+
+agreedRequestRefusesDifferentBinds : Script ()
+agreedRequestRefusesDifferentBinds = do
+  env <- setup "agreed-binds"
+  let pinned = Map.fromList [(targetKey env.owner "t1", Bind with state = None; cid = None)]
+  b1 <- ballot env [(env.alice, Some "yes")]
+  b2 <- ballotWith env env.actionA pinned [(env.bob, Some "yes")]
+  submitMustFailContaining "the presented ballots pin one set of targets" env.owner $
+    exerciseCmd env.probe Probe_AgreedRequest with ballotCids = [b1, b2]
+
+consumeBallotsArchivesEveryBallot : Script ()
+consumeBallotsArchivesEveryBallot = do
+  env <- setup "consume"
+  b1 <- ballot env [(env.alice, Some "yes")]
+  b2 <- ballot env [(env.bob, Some "yes")]
+  submit env.owner $ exerciseCmd env.probe Probe_ConsumeBallots with ballotCids = [b1, b2]
+  remaining <- query @Ballot env.owner
+  remaining === []

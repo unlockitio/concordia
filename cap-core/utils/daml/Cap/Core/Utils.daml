@@ -1,0 +1,199 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Core.Utils
+  ( -- * Checked fetches
+    HasCheckedFetch (..)
+  , signedKey
+  , fetchCheckedAny
+  , fetchGroup
+
+    -- * Mechanisms
+  , requireMechanism
+  , authoritiesOf
+
+    -- * Admission
+  , admitActors
+  , entitled
+
+    -- * Windows
+  , isOpen
+  , requireOpen
+  , requireClosed
+  , requireBeforeOpen
+  , requireExpired
+
+    -- * Values
+  , IsAnyValue (..)
+
+    -- * Optionals
+  , orAbort
+  , single
+  , allEqual
+  , allAgreeBy
+  ) where
+
+import DA.List (unique)
+import DA.Map (Map)
+import qualified DA.Map as Map
+import DA.Set (Set)
+import qualified DA.Set as Set
+import DA.TextMap (TextMap)
+import DA.Time (RelTime)
+import qualified DA.Traversable as Traversable
+
+import Splice.Api.Token.MetadataV1
+import Splice.Util (HasCheckedFetch (..), fetchChecked, require)
+
+import Cap.Core.Types (AuthenticKey (..), Mechanism (..))
+
+
+-- | The key of a contract built from its actual signatories, for use in a
+-- 'HasCheckedFetch' instance so that 'fetchChecked' also checks who signed it.
+signedKey : HasSignatory t => Text -> t -> AuthenticKey
+signedKey id contract = AuthenticKey with authorities = Set.fromList (signatory contract); id
+
+-- | Fetches a contract named by an 'AnyContractId' as its concrete template and
+-- checks its key, returning the typed contract id with the contract.
+fetchCheckedAny
+  : (HasFetch t, HasCheckedFetch t k)
+  => k -> AnyContractId -> Update (ContractId t, t)
+fetchCheckedAny key cid = do
+  let typed = coerceContractId cid
+  contract <- fetchChecked key typed
+  pure (typed, contract)
+
+-- | Fetches a non-empty list of distinct contracts and checks that each one
+-- belongs to the given group key.
+fetchGroup
+  : (HasFetch t, HasCheckedFetch t k)
+  => k -> [ContractId t] -> Update [(ContractId t, t)]
+fetchGroup _ [] = fail "a resolution presents at least one contract"
+fetchGroup key cids = do
+  require "the presented contracts are distinct" (unique cids)
+  forA cids $ \cid -> do
+    contract <- fetchChecked key cid
+    pure (cid, contract)
+
+
+-- | Checks that a mechanism names this body, is bound to no other rules
+-- contract, and names this procedure. The rules contract passes its own key,
+-- its own contract id, and the procedure its choice runs.
+requireMechanism : AuthenticKey -> AnyContractId -> Text -> Mechanism -> Update ()
+requireMechanism rKey self procedure mechanism = do
+  require ("the mechanism names the ResolveKey " <> show rKey) (mechanism.resolver == rKey)
+  require "the mechanism is bound to no other rules contract"
+    (optional True (== self) mechanism.resolverCid)
+  require ("the mechanism names the procedure " <> procedure) (mechanism.procedure == procedure)
+
+authoritiesOf : Mechanism -> Set Party
+authoritiesOf mechanism = mechanism.resolver.authorities
+
+
+admitActors : [[Party]] -> [Party] -> Bool
+admitActors groups sigs =
+  any (all (`elem` sigs)) (filter (not . null) groups)
+
+entitled : Ord k => Map k [[Party]] -> k -> [Party] -> Bool
+entitled availableActions action actors =
+  case Map.lookup action availableActions of
+    None -> False
+    Some groups -> admitActors groups actors
+
+
+isOpen : Time -> Time -> Optional Time -> Bool
+isOpen now opensAt closesAt = now >= opensAt && optional True (now <) closesAt
+
+requireOpen : CanAssert m => Text -> Time -> Time -> Optional Time -> m ()
+requireOpen msg now opensAt closesAt = require msg (isOpen now opensAt closesAt)
+
+requireClosed : CanAssert m => Text -> Time -> Time -> m ()
+requireClosed msg now closesAt = require msg (now >= closesAt)
+
+requireBeforeOpen : CanAssert m => Text -> Time -> Time -> m ()
+requireBeforeOpen msg now opensAt = require msg (now < opensAt)
+
+requireExpired : Text -> Time -> Optional Time -> Update ()
+requireExpired msg now expiresAt = case expiresAt of
+  None -> abort "this contract has no expiry"
+  Some e -> require msg (now >= e)
+
+
+class IsAnyValue a where
+  toAnyValue : a -> AnyValue
+  fromAnyValue : AnyValue -> Optional a
+
+instance IsAnyValue AnyValue where
+  toAnyValue v = v
+  fromAnyValue v = Some v
+
+instance IsAnyValue Int where
+  toAnyValue = AV_Int
+  fromAnyValue (AV_Int v) = Some v
+  fromAnyValue _ = None
+
+instance IsAnyValue Decimal where
+  toAnyValue = AV_Decimal
+  fromAnyValue (AV_Decimal v) = Some v
+  fromAnyValue _ = None
+
+instance IsAnyValue Text where
+  toAnyValue = AV_Text
+  fromAnyValue (AV_Text v) = Some v
+  fromAnyValue _ = None
+
+instance IsAnyValue Bool where
+  toAnyValue = AV_Bool
+  fromAnyValue (AV_Bool v) = Some v
+  fromAnyValue _ = None
+
+instance IsAnyValue Party where
+  toAnyValue = AV_Party
+  fromAnyValue (AV_Party v) = Some v
+  fromAnyValue _ = None
+
+instance IsAnyValue Time where
+  toAnyValue = AV_Time
+  fromAnyValue (AV_Time v) = Some v
+  fromAnyValue _ = None
+
+instance IsAnyValue RelTime where
+  toAnyValue = AV_RelTime
+  fromAnyValue (AV_RelTime v) = Some v
+  fromAnyValue _ = None
+
+instance IsAnyValue Date where
+  toAnyValue = AV_Date
+  fromAnyValue (AV_Date v) = Some v
+  fromAnyValue _ = None
+
+instance IsAnyValue AnyContractId where
+  toAnyValue = AV_ContractId
+  fromAnyValue (AV_ContractId v) = Some v
+  fromAnyValue _ = None
+
+instance IsAnyValue a => IsAnyValue [a] where
+  toAnyValue vs = AV_List (map toAnyValue vs)
+  fromAnyValue (AV_List vs) = mapA fromAnyValue vs
+  fromAnyValue _ = None
+
+instance IsAnyValue a => IsAnyValue (TextMap a) where
+  toAnyValue vs = AV_Map (fmap toAnyValue vs)
+  fromAnyValue (AV_Map vs) = Traversable.mapA fromAnyValue vs
+  fromAnyValue _ = None
+
+
+-- | Unwrap an 'Optional', aborting with the given message when it is 'None'.
+orAbort : Text -> Optional a -> Update a
+orAbort msg None = abort msg
+orAbort _ (Some a) = pure a
+
+single : [a] -> Optional a
+single [a] = Some a
+single _ = None
+
+allEqual : Eq a => [a] -> Optional a
+allEqual = allAgreeBy (==)
+
+allAgreeBy : (a -> a -> Bool) -> [a] -> Optional a
+allAgreeBy agrees (a :: rest) | all (agrees a) rest = Some a
+allAgreeBy _ _ = None

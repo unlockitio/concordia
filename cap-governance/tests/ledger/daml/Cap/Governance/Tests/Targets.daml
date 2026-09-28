@@ -1,0 +1,263 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Governance.Tests.Targets where
+
+import DA.Assert ((===))
+import qualified DA.Map as Map
+import Daml.Script hiding (AnyContractId)
+
+import Splice.Api.Token.MetadataV1
+
+import Cap.Core.Types (AuthenticKey (..))
+import Cap.Core.Utils (IsAnyValue (..))
+import Cap.Governance.Types (Bind (..))
+
+import Cap.Governance.Tests.Harness
+import Cap.Governance.Tests.Support
+
+
+data Env = Env with
+    owner : Party
+    probe : ContractId Probe
+
+setup : Text -> Script Env
+setup ns = do
+  owner <- allocateParty (ns <> "-owner")
+  probe <- submit owner $ createCmd Probe with owner
+  pure Env with ..
+
+target : Env -> Text -> Int -> Script (ContractId Target)
+target env tag value = submit env.owner $ createCmd Target with
+  owner = env.owner; tag; value; readers = []
+
+keyOf : Env -> Text -> AuthenticKey
+keyOf env = targetKey env.owner
+
+emptyBind : Bind
+emptyBind = Bind with state = None; cid = None
+
+stateOf' : Int -> Bind
+stateOf' value = Bind with state = Some (toAnyValue value); cid = None
+
+cidOf : ContractId Target -> Bind
+cidOf cid = Bind with state = None; cid = Some (coerceContractId cid)
+
+
+pinStatesPinsTheOpenTargets : Script ()
+pinStatesPinsTheOpenTargets = do
+  env <- setup "pin-states"
+  t1 <- target env "t1" 5
+  t2 <- target env "t2" (-1)
+  pinned <- submit env.owner $ exerciseCmd env.probe Probe_PinStates with
+    fixed = Map.fromList [(keyOf env "t1", emptyBind), (keyOf env "t2", emptyBind)]
+    targets = Map.fromList [(keyOf env "t1", coerceContractId t1), (keyOf env "t2", coerceContractId t2)]
+  pinned === Map.fromList [(keyOf env "t1", stateOf' 5)]
+
+pinStatesSkipsTargetsTheActionFixed : Script ()
+pinStatesSkipsTargetsTheActionFixed = do
+  env <- setup "pin-fixed"
+  t1 <- target env "t1" 5
+  pinned <- submit env.owner $ exerciseCmd env.probe Probe_PinStates with
+    fixed = Map.fromList [(keyOf env "t1", stateOf' 3)]
+    targets = Map.fromList [(keyOf env "t1", coerceContractId t1)]
+  pinned === Map.empty
+
+pinStatesRefusesATargetTheActionDoesNotName : Script ()
+pinStatesRefusesATargetTheActionDoesNotName = do
+  env <- setup "pin-extra"
+  t1 <- target env "t1" 5
+  t2 <- target env "t2" 7
+  submitMustFailContaining "the action names the presented target" env.owner $
+    exerciseCmd env.probe Probe_PinStates with
+      fixed = Map.fromList [(keyOf env "t1", emptyBind)]
+      targets = Map.fromList [(keyOf env "t1", coerceContractId t1), (keyOf env "t2", coerceContractId t2)]
+
+pinCidsRefusesATargetTheActionDoesNotName : Script ()
+pinCidsRefusesATargetTheActionDoesNotName = do
+  env <- setup "pin-cids-extra"
+  t1 <- target env "t1" 5
+  t2 <- target env "t2" 7
+  submitMustFailContaining "the action names the presented target" env.owner $
+    exerciseCmd env.probe Probe_PinCids with
+      fixed = Map.fromList [(keyOf env "t1", emptyBind)]
+      targets = Map.fromList [(keyOf env "t1", coerceContractId t1), (keyOf env "t2", coerceContractId t2)]
+
+pinStatesRefusesAMissingTarget : Script ()
+pinStatesRefusesAMissingTarget = do
+  env <- setup "pin-missing"
+  submitMustFailContaining "a target the action names was not presented" env.owner $
+    exerciseCmd env.probe Probe_PinStates with
+      fixed = Map.fromList [(keyOf env "t1", emptyBind)]; targets = Map.empty
+
+pinCidsPinsThePresentedContract : Script ()
+pinCidsPinsThePresentedContract = do
+  env <- setup "pin-cids"
+  t1 <- target env "t1" 5
+  pinned <- submit env.owner $ exerciseCmd env.probe Probe_PinCids with
+    fixed = Map.fromList [(keyOf env "t1", emptyBind)]
+    targets = Map.fromList [(keyOf env "t1", coerceContractId t1)]
+  pinned === Map.fromList [(keyOf env "t1", cidOf t1)]
+
+pinCidsChecksTheKey : Script ()
+pinCidsChecksTheKey = do
+  env <- setup "pin-cids-key"
+  t2 <- target env "t2" 5
+  submitMustFailContaining "Contract group identifier mismatch" env.owner $
+    exerciseCmd env.probe Probe_PinCids with
+      fixed = Map.fromList [(keyOf env "t1", emptyBind)]
+      targets = Map.fromList [(keyOf env "t1", coerceContractId t2)]
+
+mergeAuthenticFillsTheOpenParts : Script ()
+mergeAuthenticFillsTheOpenParts = do
+  env <- setup "merge-ok"
+  merged <- submit env.owner $ exerciseCmd env.probe Probe_MergeAuthentic with
+    fixed = Map.fromList [(keyOf env "t1", emptyBind), (keyOf env "t2", emptyBind)]
+    pinned = Map.fromList [(keyOf env "t1", stateOf' 5)]
+  merged === Map.fromList [(keyOf env "t1", stateOf' 5), (keyOf env "t2", emptyBind)]
+
+mergeAuthenticRefusesAPinForAnUnknownTarget : Script ()
+mergeAuthenticRefusesAPinForAnUnknownTarget = do
+  env <- setup "merge-unknown"
+  submitMustFailContaining "the action names the pinned target" env.owner $
+    exerciseCmd env.probe Probe_MergeAuthentic with
+      fixed = Map.fromList [(keyOf env "t1", emptyBind)]
+      pinned = Map.fromList [(keyOf env "t9", stateOf' 5)]
+
+mergeAuthenticRefusesAStateOverAFixedState : Script ()
+mergeAuthenticRefusesAStateOverAFixedState = do
+  env <- setup "merge-state"
+  submitMustFailContaining "pins no state of" env.owner $
+    exerciseCmd env.probe Probe_MergeAuthentic with
+      fixed = Map.fromList [(keyOf env "t1", stateOf' 3)]
+      pinned = Map.fromList [(keyOf env "t1", stateOf' 5)]
+
+mergeAuthenticRefusesAContractOverAFixedContract : Script ()
+mergeAuthenticRefusesAContractOverAFixedContract = do
+  env <- setup "merge-cid"
+  t1 <- target env "t1" 5
+  t1b <- target env "t1" 6
+  submitMustFailContaining "pins no contract of" env.owner $
+    exerciseCmd env.probe Probe_MergeAuthentic with
+      fixed = Map.fromList [(keyOf env "t1", cidOf t1)]
+      pinned = Map.fromList [(keyOf env "t1", cidOf t1b)]
+
+mergeAuthenticRefusesAStateForAFixedContract : Script ()
+mergeAuthenticRefusesAStateForAFixedContract = do
+  env <- setup "merge-state-cid"
+  t1 <- target env "t1" 5
+  submitMustFailContaining "whose contract the action fixed" env.owner $
+    exerciseCmd env.probe Probe_MergeAuthentic with
+      fixed = Map.fromList [(keyOf env "t1", cidOf t1)]
+      pinned = Map.fromList [(keyOf env "t1", stateOf' 5)]
+
+requireSameKeysAcceptsExactlyTheBoundTargets : Script ()
+requireSameKeysAcceptsExactlyTheBoundTargets = do
+  env <- setup "same-keys"
+  t1 <- target env "t1" 5
+  t2 <- target env "t2" 5
+  let bound = Map.fromList [(keyOf env "t1", emptyBind)]
+  submit env.owner $ exerciseCmd env.probe Probe_RequireSameKeys with
+    bound; targets = Map.fromList [(keyOf env "t1", coerceContractId t1)]
+  submitMustFailContaining "was not presented" env.owner $
+    exerciseCmd env.probe Probe_RequireSameKeys with bound; targets = Map.empty
+  submitMustFailContaining "every presented target is named by a binding" env.owner $
+    exerciseCmd env.probe Probe_RequireSameKeys with
+      bound; targets = Map.fromList [(keyOf env "t1", coerceContractId t1), (keyOf env "t2", coerceContractId t2)]
+
+checkTargetAcceptsATargetThatStillHoldsItsPin : Script ()
+checkTargetAcceptsATargetThatStillHoldsItsPin = do
+  env <- setup "check-ok"
+  t1 <- target env "t1" 5
+  result <- submit env.owner $ exerciseCmd env.probe Probe_CheckTarget with
+    key = keyOf env "t1"
+    bound = Map.fromList [(keyOf env "t1", stateOf' 5)]
+    targets = Map.fromList [(keyOf env "t1", coerceContractId t1)]
+  result === t1
+
+checkTargetRefusesAnUnboundKey : Script ()
+checkTargetRefusesAnUnboundKey = do
+  env <- setup "check-unbound"
+  t1 <- target env "t1" 5
+  submitMustFailContaining "is not bound" env.owner $
+    exerciseCmd env.probe Probe_CheckTarget with
+      key = keyOf env "t1"; bound = Map.empty
+      targets = Map.fromList [(keyOf env "t1", coerceContractId t1)]
+
+checkTargetRefusesAMissingTarget : Script ()
+checkTargetRefusesAMissingTarget = do
+  env <- setup "check-missing"
+  submitMustFailContaining "was not presented" env.owner $
+    exerciseCmd env.probe Probe_CheckTarget with
+      key = keyOf env "t1"; bound = Map.fromList [(keyOf env "t1", emptyBind)]; targets = Map.empty
+
+checkTargetRefusesAnotherContractThanThePinnedOne : Script ()
+checkTargetRefusesAnotherContractThanThePinnedOne = do
+  env <- setup "check-cid"
+  t1 <- target env "t1" 5
+  t1b <- target env "t1" 5
+  submitMustFailContaining "is the one its bind pinned" env.owner $
+    exerciseCmd env.probe Probe_CheckTarget with
+      key = keyOf env "t1"
+      bound = Map.fromList [(keyOf env "t1", cidOf t1)]
+      targets = Map.fromList [(keyOf env "t1", coerceContractId t1b)]
+
+checkTargetRefusesAContractUnderAnotherKey : Script ()
+checkTargetRefusesAContractUnderAnotherKey = do
+  env <- setup "check-key"
+  t2 <- target env "t2" 5
+  submitMustFailContaining "Contract group identifier mismatch" env.owner $
+    exerciseCmd env.probe Probe_CheckTarget with
+      key = keyOf env "t1"
+      bound = Map.fromList [(keyOf env "t1", emptyBind)]
+      targets = Map.fromList [(keyOf env "t1", coerceContractId t2)]
+
+checkTargetRefusesAContractSignedByAnotherParty : Script ()
+checkTargetRefusesAContractSignedByAnotherParty = do
+  env <- setup "check-signer"
+  other <- allocateParty "check-signer-other"
+  forged <- submit other $ createCmd Target with owner = other; tag = "t1"; value = 5; readers = [env.owner]
+  submitMustFailContaining "Contract group identifier mismatch" env.owner $
+    exerciseCmd env.probe Probe_CheckTarget with
+      key = keyOf env "t1"
+      bound = Map.fromList [(keyOf env "t1", emptyBind)]
+      targets = Map.fromList [(keyOf env "t1", coerceContractId forged)]
+
+checkTargetRefusesADriftedState : Script ()
+checkTargetRefusesADriftedState = do
+  env <- setup "check-drift"
+  t1 <- target env "t1" 6
+  submitMustFailContaining "no longer satisfies its bind" env.owner $
+    exerciseCmd env.probe Probe_CheckTarget with
+      key = keyOf env "t1"
+      bound = Map.fromList [(keyOf env "t1", stateOf' 5)]
+      targets = Map.fromList [(keyOf env "t1", coerceContractId t1)]
+
+checkTargetRefusesAPinThatDoesNotDecode : Script ()
+checkTargetRefusesAPinThatDoesNotDecode = do
+  env <- setup "check-decode"
+  t1 <- target env "t1" 5
+  submitMustFailContaining "does not decode" env.owner $
+    exerciseCmd env.probe Probe_CheckTarget with
+      key = keyOf env "t1"
+      bound = Map.fromList [(keyOf env "t1", Bind with state = Some (AV_Text "x"); cid = None)]
+      targets = Map.fromList [(keyOf env "t1", coerceContractId t1)]
+
+checkIdentityAcceptsAnIdentityOnlyBind : Script ()
+checkIdentityAcceptsAnIdentityOnlyBind = do
+  env <- setup "identity-ok"
+  t1 <- target env "t1" 5
+  result <- submit env.owner $ exerciseCmd env.probe Probe_CheckIdentity with
+    key = keyOf env "t1"
+    bound = Map.fromList [(keyOf env "t1", emptyBind)]
+    targets = Map.fromList [(keyOf env "t1", coerceContractId t1)]
+  result === t1
+
+checkIdentityRefusesABindWithAPinnedState : Script ()
+checkIdentityRefusesABindWithAPinnedState = do
+  env <- setup "identity-state"
+  t1 <- target env "t1" 5
+  submitMustFailContaining "is bound by identity alone" env.owner $
+    exerciseCmd env.probe Probe_CheckIdentity with
+      key = keyOf env "t1"
+      bound = Map.fromList [(keyOf env "t1", stateOf' 5)]
+      targets = Map.fromList [(keyOf env "t1", coerceContractId t1)]
