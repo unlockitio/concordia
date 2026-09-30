@@ -83,7 +83,7 @@ template SharedBallot
 instance HasCheckedFetch SharedBallot Mechanism where
   contractGroupId ballot = ballot.mechanism
 
-instance IsBallot SharedBallot Vote where
+instance IsBallot SharedBallot Vote (ContractId Action) where
   castsOf ballot = fmap Some ballot.votes
   bindsOf ballot = ballot.binds
   actionOf ballot = ballot.actionCid
@@ -117,7 +117,7 @@ template SvConfirmation
 instance HasCheckedFetch SvConfirmation Mechanism where
   contractGroupId confirmation = confirmation.mechanism
 
-instance IsBallot SvConfirmation Vote where
+instance IsBallot SvConfirmation Vote (ContractId Action) where
   castsOf confirmation = Map.fromList [(confirmation.confirmer, Some confirmation.vote)]
   bindsOf confirmation = confirmation.binds
   actionOf confirmation = confirmation.actionCid

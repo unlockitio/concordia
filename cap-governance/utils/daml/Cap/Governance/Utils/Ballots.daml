@@ -7,8 +7,6 @@ module Cap.Governance.Utils.Ballots
   , consumeBallots
   ) where
 
-import Prelude hiding (Action)
-
 import DA.Foldable (mapA_)
 import DA.List (unique)
 import DA.Map (Map)
@@ -20,7 +18,6 @@ import Splice.Util (require)
 
 import Cap.Core.Types (AuthenticKey)
 import Cap.Core.Utils (orAbort)
-import Cap.Governance.ActionV1 (Action)
 import Cap.Governance.Types (Bind)
 import Cap.Governance.Utils.Count (Cast (..), Casts)
 
@@ -31,17 +28,17 @@ import Cap.Governance.Utils.Count (Cast (..), Casts)
 -- | What a resolution reads from a ballot: the votes it carries, by voter
 -- with 'None' for an abstention; the preconditions it pinned; the action it
 -- asks to authorize; and how the resolution retires it once counted.
-class IsBallot b v | b -> v where
+class IsBallot b v a | b -> v a where
   castsOf : b -> Map Party (Optional v)
   bindsOf : b -> Map AuthenticKey Bind
-  actionOf : b -> ContractId Action
+  actionOf : b -> a
   consume : ContractId b -> Update ()
 
 -- | The casts of the presented ballots, each voter counting with weight 1.
 -- Refuses a voter appearing on two ballots, a vote of another kind than the
 -- procedure counts, and a voter outside the set.
 weighBallotsEqually
-  : IsBallot b v
+  : IsBallot b v act
   => (v -> Optional a) -> Set Party -> [(ContractId b, b)] -> Update (Casts a)
 weighBallotsEqually narrow voters =
   weighBallots narrow (Map.fromList [(voter, 1.0) | voter <- Set.toList voters])
@@ -50,7 +47,7 @@ weighBallotsEqually narrow voters =
 -- in the map. Refuses a voter appearing on two ballots, a vote of another kind
 -- than the procedure counts, a voter missing from the map, and a negative weight.
 weighBallots
-  : IsBallot b v
+  : IsBallot b v act
   => (v -> Optional a) -> Map Party Decimal -> [(ContractId b, b)] -> Update (Casts a)
 weighBallots narrow weights ballots = do
   let pairs = concatMap (Map.toList . castsOf . snd) ballots
@@ -67,5 +64,5 @@ weighBallots narrow weights ballots = do
     pure (voter, Cast with weight; vote))
 
 -- | Consumes every presented ballot, so it cannot be counted again.
-consumeBallots : IsBallot b v => [(ContractId b, b)] -> Update ()
+consumeBallots : IsBallot b v act => [(ContractId b, b)] -> Update ()
 consumeBallots = mapA_ (consume . fst)
