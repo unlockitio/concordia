@@ -5,6 +5,8 @@ module Cap.Governance.Utils.Ballots
   , weighBallotsEqually
   , weighBallots
   , consumeBallots
+  , commonAction
+  , commonBinds
   ) where
 
 import DA.Foldable (mapA_)
@@ -17,7 +19,7 @@ import qualified DA.Set as Set
 import Splice.Util (require)
 
 import Cap.Core.Types (AuthenticKey)
-import Cap.Core.Utils (orAbort)
+import Cap.Core.Utils (allEqual, orAbort)
 import Cap.Governance.Types (Bind)
 import Cap.Governance.Utils.Count (Cast (..), Casts)
 
@@ -39,7 +41,7 @@ class IsBallot b v a | b -> v a where
 -- procedure counts, and a voter outside the set.
 weighBallotsEqually
   : IsBallot b v act
-  => (v -> Optional a) -> Set Party -> [(ContractId b, b)] -> Update (Casts a)
+  => (v -> Optional a) -> Set Party -> [b] -> Update (Casts a)
 weighBallotsEqually narrow voters =
   weighBallots narrow (Map.fromList [(voter, 1.0) | voter <- Set.toList voters])
 
@@ -48,9 +50,9 @@ weighBallotsEqually narrow voters =
 -- than the procedure counts, a voter missing from the map, and a negative weight.
 weighBallots
   : IsBallot b v act
-  => (v -> Optional a) -> Map Party Decimal -> [(ContractId b, b)] -> Update (Casts a)
+  => (v -> Optional a) -> Map Party Decimal -> [b] -> Update (Casts a)
 weighBallots narrow weights ballots = do
-  let pairs = concatMap (Map.toList . castsOf . snd) ballots
+  let pairs = concatMap (Map.toList . castsOf) ballots
   require "the presented ballots come from distinct voters" (unique (map fst pairs))
   Map.fromList <$> forA pairs (\(voter, raw) -> do
     vote <- case raw of
@@ -64,5 +66,19 @@ weighBallots narrow weights ballots = do
     pure (voter, Cast with weight; vote))
 
 -- | Consumes every presented ballot, so it cannot be counted again.
-consumeBallots : IsBallot b v act => [(ContractId b, b)] -> Update ()
-consumeBallots = mapA_ (consume . fst)
+consumeBallots : IsBallot b v act => [ContractId b] -> Update ()
+consumeBallots = mapA_ consume
+
+-- checks that all actions match and return the action 
+commonAction : (IsBallot b v act, Eq act) => [b] -> Update act
+commonAction ballots = do
+  require "at least one ballot is presented" (not (null ballots))
+  orAbort "the presented ballots ask for different actions"
+    (allEqual (map actionOf ballots))
+
+-- checks that all binds match and returns the binds. 
+commonBinds : IsBallot b v act => [b] -> Update (Map AuthenticKey Bind)
+commonBinds ballots = do
+  require "at least one ballot is presented" (not (null ballots))
+  orAbort "the presented ballots pin different binds"
+    (allEqual (map bindsOf ballots))

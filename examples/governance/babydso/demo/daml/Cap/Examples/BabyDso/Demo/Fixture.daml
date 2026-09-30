@@ -176,7 +176,7 @@ resolveVoteAs f sv ballotCid =
   submit (actAs sv <> readAs f.dso) $ exerciseCmd f.governorCid DsoGovernor_ResolveVote with
     sv
     mechanism = f.mechanism
-    ballotCids = [ballotCid]
+    ballotCid
     extraArgs = noArgs
 
 confirmAs : Fixture -> Party -> AnyValue -> Script (ContractId SvConfirmation)

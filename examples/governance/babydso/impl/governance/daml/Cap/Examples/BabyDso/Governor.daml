@@ -13,15 +13,15 @@ import qualified DA.TextMap as TextMap
 import DA.Time (RelTime, addRelTime)
 
 import Splice.Api.Token.MetadataV1
-import Splice.Util (HasCheckedFetch (..), require)
+import Splice.Util (HasCheckedFetch (..), fetchChecked, require)
 
 import Cap.Core.Types (AuthenticKey (..), ExecutionAction (..), ExecutionCore (..), Mechanism (..))
 import Cap.Core.Utils
-  ( IsAnyValue (..), allEqual, fetchGroup, orAbort, requireClosed, requireMechanism, signedKey )
+  ( IsAnyValue (..), fetchGroup, requireClosed, requireMechanism, signedKey )
 import Cap.Governance.ActionV1
 import Cap.Governance.ExecutableV1 (Executable)
 import Cap.Governance.Utils
-  ( Cast (..), HasWeight (..), Quorum, Tally, Verdict (..), atLeastVotes
+  ( Cast (..), HasWeight (..), Quorum, Tally, Verdict (..), atLeastVotes, commonAction, commonBinds
   , consumeBallots, pinStatesWith, readWeights, rule, shareOfTotal, unanimous, weighBallots
   , weighBallotsEqually, weightedMedian )
 
@@ -77,14 +77,15 @@ template DsoGovernor
       with
         sv : Party
         mechanism : Mechanism
-        ballotCids : [ContractId SharedBallot]
+        ballotCid : ContractId SharedBallot
         extraArgs : ExtraArgs
       controller sv
       do
         require "the resolving party is an sv" (sv `Set.member` svs)
         requireMechanism (governorKey this) (coerceContractId self) weightedVoteProcedureName mechanism
-        presented <- fetchGroup mechanism ballotCids
-        resolveWeightedVote this presented extraArgs
+        ballot <- fetchChecked mechanism ballotCid
+        archive ballotCid
+        resolveWeightedVote this ballot extraArgs
 
     nonconsuming choice DsoGovernor_Confirm : ContractId SvConfirmation
       with
@@ -132,20 +133,16 @@ instance HasWeight SvWeightSource where
 
 
 resolveWeightedVote
-  : DsoGovernor -> [(ContractId SharedBallot, SharedBallot)] -> ExtraArgs
+  : DsoGovernor -> SharedBallot -> ExtraArgs
   -> Update (ResolveResult (TextMap Decimal))
-resolveWeightedVote rules presented extraArgs = do
-  ballot <- case presented of
-    [(_, one)] -> pure one
-    _ -> abort "the resolve presents more than one shared ballot"
+resolveWeightedVote rules ballot extraArgs = do
   now <- getTime
   requireClosed "the voting window has closed" now ballot.votingClosesAt
   require "the proposal has not expired" (now < ballot.expiresAt)
 
   let actionCid = ballot.actionCid
       binds = ballot.binds
-  casts <- weighBallots parametersOf ballot.weights presented
-  consumeBallots presented
+  casts <- weighBallots parametersOf ballot.weights [ballot]
   let verdict = rule (twoThirdsOf ballot.weights) weightedMedianByField casts
   executions <- case verdict of
     Decided winner -> do
@@ -190,14 +187,12 @@ resolveConfirmations
 resolveConfirmations rules mechanism confirmationCids extraArgs = do
   now <- getTime
   presented <- fetchGroup mechanism confirmationCids
-  let confirmations = map snd presented
+  let (confirmationCids, confirmations) = unzip presented
   require "no confirmation has expired" (all ((now <) . (.expiresAt)) confirmations)
-  actionCid <- orAbort "the confirmations ask for different actions"
-    (allEqual (map (.actionCid) confirmations))
-  binds <- orAbort "the confirmations have different binds"
-    (allEqual (map (.binds) confirmations))
-  casts <- weighBallotsEqually confirmedOf rules.svs presented
-  consumeBallots presented
+  actionCid <- commonAction confirmations
+  binds <- commonBinds confirmations
+  casts <- weighBallotsEqually confirmedOf rules.svs confirmations
+  consumeBallots confirmationCids
   let verdict = rule (atLeastVotes (byzantineQuorum (Set.size rules.svs))) unanimous casts
   outcome <- case verdict of
     Decided outcome -> pure outcome
