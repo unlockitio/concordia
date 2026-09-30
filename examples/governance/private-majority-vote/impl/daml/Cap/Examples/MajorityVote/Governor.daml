@@ -17,7 +17,7 @@ import Cap.Core.Types (AuthenticKey (..), ExecutionAction (..), ExecutionCore (.
 import Cap.Core.Utils (IsAnyValue (..), fetchGroup, requireClosed, requireMechanism)
 import Cap.Governance.ActionV1
 import Cap.Governance.Utils
-  ( Tally, Verdict (..), atLeastVotes, consumeBallots, rule, voted
+  ( Tally, Verdict (..), atLeastVotes, commonAction, consumeBallots, rule, voted
   , weighBallotsEqually )
 
 import Cap.Examples.MajorityVote.Ballot
@@ -162,19 +162,19 @@ resolveMajority rules self proposalCid ballotCids extraArgs = do
   let terms = proposal.terms
 
   presented <- fetchGroup proposal.mechanism ballotCids
-  let ballots = map snd presented
+  let (cids, ballots) = unzip presented
   forA_ ballots $ \b -> do
     requireClosed "every presented ballot is closed for voting" now b.closesAt
     require "every ballot votes in the proposal's window"
       (b.opensAt == terms.entryClosesAt
         && b.closesAt == terms.votingClosesAt
         && b.expiresAt == terms.expiresAt)
-  require "the ballots vote on the proposal's action"
-    (all ((== terms.actionCid) . (.actionCid)) ballots)
+  action <- commonAction ballots
+  require "the ballots vote on the proposal's action" (action == terms.actionCid)
 
-  casts <- weighBallotsEqually Some rules.electorate presented
+  casts <- weighBallotsEqually Some rules.electorate ballots
   require "the presented ballots cover the roll" (Map.keys casts == sort proposal.roll)
-  consumeBallots presented
+  consumeBallots cids
 
   let verdict = rule (atLeastVotes 1) (majorityOf (intToDecimal (Set.size rules.electorate))) casts
   created <- case verdict of

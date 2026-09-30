@@ -117,7 +117,7 @@ template Probe
       controller owner
       do
         presented <- fetchBallots ballotCids
-        weighBallots narrowText weights presented
+        weighBallots narrowText weights (map snd presented)
 
     nonconsuming choice Probe_WeighBallotsEqually : Casts Text
       with
@@ -126,7 +126,7 @@ template Probe
       controller owner
       do
         presented <- fetchBallots ballotCids
-        weighBallotsEqually narrowText voters presented
+        weighBallotsEqually narrowText voters (map snd presented)
 
     nonconsuming choice Probe_ConsumeBallots : ()
       with
@@ -134,7 +134,7 @@ template Probe
       controller owner
       do
         presented <- fetchBallots ballotCids
-        consumeBallots presented
+        consumeBallots (map fst presented)
 
     nonconsuming choice Probe_ReadWeights : Map Text (Party, Decimal)
       with
