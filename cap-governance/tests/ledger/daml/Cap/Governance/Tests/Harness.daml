@@ -56,7 +56,7 @@ template Ballot
 instance HasCheckedFetch Ballot Mechanism where
   contractGroupId ballot = ballot.mechanism
 
-instance IsBallot Ballot Text where
+instance IsBallot Ballot Text (ContractId Action) where
   castsOf ballot = ballot.votes
   bindsOf ballot = ballot.binds
   actionOf ballot = ballot.actionCid

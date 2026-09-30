@@ -13,7 +13,5 @@ data-dependencies:
 - ../../cap-core/types/.daml/dist/cap-core-types-0.1.0.dar
 - ../../cap-core/utils/.daml/dist/cap-core-utils-0.1.0.dar
 - ../../cap-governance/types/.daml/dist/cap-governance-types-0.1.0.dar
-- ../../cap-governance/interfaces/executable/.daml/dist/cap-governance-executable-v1-0.1.0.dar
-- ../../cap-governance/interfaces/action/.daml/dist/cap-governance-action-v1-0.1.0.dar
 build-options:
   - --target=2.1

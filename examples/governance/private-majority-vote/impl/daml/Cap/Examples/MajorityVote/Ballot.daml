@@ -67,7 +67,7 @@ template PrivateBallot
 instance HasCheckedFetch PrivateBallot Mechanism where
   contractGroupId ballot = ballot.mechanism
 
-instance IsBallot PrivateBallot Text where
+instance IsBallot PrivateBallot Text (ContractId Action) where
   castsOf ballot = Map.fromList [(ballot.voter, ballot.vote)]
   bindsOf _ = Map.empty
   actionOf ballot = ballot.actionCid
