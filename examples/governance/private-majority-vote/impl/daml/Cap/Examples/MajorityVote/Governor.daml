@@ -136,9 +136,8 @@ template Governor
       with
         proposalCid : ContractId Proposal
         ballotCids : [ContractId PrivateBallot]
-        extraArgs : ExtraArgs
       controller operator
-      do resolveMajority this self proposalCid ballotCids extraArgs
+      do resolveMajority this self proposalCid ballotCids
 
 
 governorKey : Governor -> AuthenticKey
@@ -153,8 +152,8 @@ majorityOf electorateSize casts =
 
 resolveMajority
   : Governor -> ContractId Governor -> ContractId Proposal -> [ContractId PrivateBallot]
-  -> ExtraArgs -> Update ResolveResult
-resolveMajority rules self proposalCid ballotCids extraArgs = do
+  -> Update ResolveResult
+resolveMajority rules self proposalCid ballotCids = do
   now <- getTime
   proposal <- fetch proposalCid
   requireMechanism (governorKey rules) (coerceContractId self) majorityProcedureName proposal.mechanism
@@ -191,7 +190,7 @@ resolveMajority rules self proposalCid ballotCids extraArgs = do
           meta = emptyMetadata
         outcome = Some (toAnyValue winner)
         binds = Map.empty
-        extraArgs
+        extraArgs = ExtraArgs with context = emptyChoiceContext; meta = emptyMetadata
       pure (map coerceContractId result.executionCids)
     _ -> pure []
 

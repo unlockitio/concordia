@@ -177,7 +177,6 @@ resolveVoteAs f sv ballotCid =
     sv
     mechanism = f.mechanism
     ballotCid
-    extraArgs = noArgs
 
 confirmAs : Fixture -> Party -> AnyValue -> Script (ContractId SvConfirmation)
 confirmAs f confirmer confirmed =
@@ -195,7 +194,6 @@ resolveConfirmationsAs f sv confirmationCids =
   submit (actAs sv <> readAs f.dso) $ exerciseCmd f.governorCid DsoGovernor_ResolveConfirmations with
     sv; confirmationCids
     mechanism = f.confirmMechanism
-    extraArgs = noArgs
 
 executeCmd
   : Party -> ContractId Executable -> Map AuthenticKey AnyContractId

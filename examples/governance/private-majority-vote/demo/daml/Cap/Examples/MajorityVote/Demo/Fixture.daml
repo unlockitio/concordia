@@ -16,11 +16,10 @@ import Daml.Script
 import Splice.Api.Token.MetadataV1
 import qualified Splice.Api.Token.MetadataV1 as Meta
 
-import Cap.Core.Types (AuthenticKey (..), ExecutionAction (..), ExecutionCore (..), Mechanism (..))
+import Cap.Core.Types (AuthenticKey (..), Bind (..), ExecutionAction (..), ExecutionCore (..), Mechanism (..))
 import Cap.Core.Utils (IsAnyValue (..))
 import Cap.Governance.ActionV1 (Action, Action_AuthorizeExecution (..))
 import Cap.Governance.ExecutableV1
-import Cap.Governance.Types (Bind (..))
 
 import Cap.Examples.MajorityVote.Ballot
 import Cap.Examples.MajorityVote.Config
@@ -127,7 +126,6 @@ resolveCmd f ballotCids =
   exerciseCmd f.governorCid Governor_ResolveMajority with
     proposalCid = f.proposalCid
     ballotCids
-    extraArgs = noArgs
 
 runResolve : Fixture -> [ContractId PrivateBallot] -> Script ResolveResult
 runResolve f ballotCids = submit f.operator (resolveCmd f ballotCids)

@@ -5,7 +5,6 @@ packages:
 - ./cap-core/utils
 - ./cap-core/tests/unit
 - ./cap-core/tests/ledger
-- ./cap-governance/types
 - ./cap-governance/interfaces/executable
 - ./cap-governance/interfaces/action
 - ./cap-governance/utils

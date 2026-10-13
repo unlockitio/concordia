@@ -115,7 +115,7 @@ sequenceDiagram
     Note over AA,ANS: Execute, after opensAt
     SV2->>X: Executable_Execute — actors [SV2], targets
     X->>X: requireOpen, entitled EA_Execute, requireSameKeys
-    X->>CFG: checkTarget sameTransferFee — the transferFee field is unchanged
+    X->>CFG: checkTarget unchanged — the pinned transferFee is unchanged
     X->>ANS: checkIdentity — the contract id is unchanged
     X->>CFG: AmuletConfig_SetFee 0.05 — epoch 4
     X->>ANS: AnsRules_SetFee 2.0

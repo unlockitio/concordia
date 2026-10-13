@@ -127,6 +127,41 @@ decentralized party.
 `Executable` is an interface because it is what that call returns, and an
 executor app can execute it without knowing the action's package.
 
+The diagram shows how a governance app uses an action and its targets. The
+governance app never reads or changes a target directly. It reads targets
+through the action, and it holds their state only as `Binds`.
+
+```mermaid
+flowchart LR
+  subgraph GOV["Governance "]
+    Ballot["Ballot<br/>(vote + pins targets)"]
+    Governor["Governor<br/>(counts, decides outcome)"]
+  end
+
+  subgraph ACT["Action package"]
+    Action["Action<br/>view: authorizers, binds"]
+    Executable["Executable<br/>(execution window, entitled actors)"]
+  end
+
+  Targets["Targets<br/>any contract the action binds"]
+
+  Ballot -- "① action_readStateImpl<br/>pinStatesWith / pinCidsWith" --> Action
+  Action -. "reads state" .-> Targets
+  Governor -- "② Action_AuthorizeExecution<br/>outcome + binds" --> Action
+  Action -- "mergeBinds, creates" --> Executable
+  Executable -- "③ Executable_Execute<br/>checkTarget + DriftPolicy" --> Targets
+```
+
+1. When a ballot is cast or a proposal is resolved, the governance app reads the
+   targets through `action_readStateImpl`, using `pinStatesWith` or
+   `pinCidsWith`. The result is a `Bind` per target.
+2. The governor's procedure exercises `Action_AuthorizeExecution` with the
+   `outcome` (vote aggregation) and the pinned binds. The action merges them with its own binds
+   using `mergeBinds` and creates an `Executable`.
+3. An entitled actor exercises `Executable_Execute` and presents the targets.
+   `checkTarget` compares each target's live state with its pinned state using
+   the action's `DriftPolicy`, and the action then changes the targets.
+
 
 ### Ballots
 

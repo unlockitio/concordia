@@ -78,14 +78,13 @@ template DsoGovernor
         sv : Party
         mechanism : Mechanism
         ballotCid : ContractId SharedBallot
-        extraArgs : ExtraArgs
       controller sv
       do
         require "the resolving party is an sv" (sv `Set.member` svs)
         requireMechanism (governorKey this) (coerceContractId self) weightedVoteProcedureName mechanism
         ballot <- fetchChecked mechanism ballotCid
         archive ballotCid
-        resolveWeightedVote this ballot extraArgs
+        resolveWeightedVote this ballot
 
     nonconsuming choice DsoGovernor_Confirm : ContractId SvConfirmation
       with
@@ -110,12 +109,14 @@ template DsoGovernor
         sv : Party
         mechanism : Mechanism
         confirmationCids : [ContractId SvConfirmation]
-        extraArgs : ExtraArgs
       controller sv
       do
         require "the resolving party is an sv" (sv `Set.member` svs)
         requireMechanism (governorKey this) (coerceContractId self) confirmationProcedureName mechanism
-        resolveConfirmations this mechanism confirmationCids extraArgs
+        presented <- fetchGroup mechanism confirmationCids
+        let (cids, confirmations) = unzip presented
+        consumeBallots cids
+        resolveConfirmations this confirmations
 
 governorKey : DsoGovernor -> AuthenticKey
 governorKey rules = AuthenticKey with
@@ -133,9 +134,8 @@ instance HasWeight SvWeightSource where
 
 
 resolveWeightedVote
-  : DsoGovernor -> SharedBallot -> ExtraArgs
-  -> Update (ResolveResult (TextMap Decimal))
-resolveWeightedVote rules ballot extraArgs = do
+  : DsoGovernor -> SharedBallot -> Update (ResolveResult (TextMap Decimal))
+resolveWeightedVote rules ballot = do
   now <- getTime
   requireClosed "the voting window has closed" now ballot.votingClosesAt
   require "the proposal has not expired" (now < ballot.expiresAt)
@@ -158,7 +158,7 @@ resolveWeightedVote rules ballot extraArgs = do
           meta = emptyMetadata
         outcome = Some (toAnyValue winner)
         binds = binds
-        extraArgs
+        extraArgs = ExtraArgs with context = emptyChoiceContext; meta = emptyMetadata
       pure result.executionCids
     _ -> pure []
   pure ResolveResult with verdict; executions
@@ -182,17 +182,13 @@ weightedMedianByField casts = case [parameters | Cast with vote = Some parameter
 
 
 resolveConfirmations
-  : DsoGovernor -> Mechanism -> [ContractId SvConfirmation] -> ExtraArgs
-  -> Update (ResolveResult AnyValue)
-resolveConfirmations rules mechanism confirmationCids extraArgs = do
+  : DsoGovernor -> [SvConfirmation] -> Update (ResolveResult AnyValue)
+resolveConfirmations rules confirmations = do
   now <- getTime
-  presented <- fetchGroup mechanism confirmationCids
-  let (confirmationCids, confirmations) = unzip presented
   require "no confirmation has expired" (all ((now <) . (.expiresAt)) confirmations)
   actionCid <- commonAction confirmations
   binds <- commonBinds confirmations
   casts <- weighBallotsEqually confirmedOf rules.svs confirmations
-  consumeBallots confirmationCids
   let verdict = rule (atLeastVotes (byzantineQuorum (Set.size rules.svs))) unanimous casts
   outcome <- case verdict of
     Decided outcome -> pure outcome
@@ -209,7 +205,7 @@ resolveConfirmations rules mechanism confirmationCids extraArgs = do
       meta = emptyMetadata
     outcome = Some outcome
     binds
-    extraArgs
+    extraArgs = ExtraArgs with context = emptyChoiceContext; meta = emptyMetadata
   pure ResolveResult with
     verdict = Decided outcome
     executions = result.executionCids

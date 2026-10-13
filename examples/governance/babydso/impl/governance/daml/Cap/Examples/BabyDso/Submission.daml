@@ -14,9 +14,8 @@ import qualified DA.TextMap as TextMap
 import Splice.Api.Token.MetadataV1
 import Splice.Util (HasCheckedFetch (..), require)
 
-import Cap.Core.Types (AuthenticKey, Mechanism (..))
+import Cap.Core.Types (AuthenticKey, Bind, Mechanism (..))
 import Cap.Governance.ActionV1 (Action)
-import Cap.Governance.Types (Bind)
 import Cap.Governance.Utils (IsBallot (..))
 
 

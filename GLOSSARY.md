@@ -42,7 +42,7 @@ the decentralized party's authority ·
 are presented as a `Map AuthenticKey AnyContractId`. `Cap.Governance.Utils.Targets`.
 
 **Bind** — what must still be true of a target when the execution acts on it: a
-pinned state, a pinned contract id, or neither. `Bind` in `Cap.Governance.Types`.
+pinned state, a pinned contract id, or neither. `Bind` in `Cap.Core.Types`.
 
 **Pin** — filling an open part of a bind with the target's current state or
 contract id. `pinStatesWith` and `pinCidsWith` pin; `mergeBinds` merges the pins
@@ -81,4 +81,4 @@ nothing about which outcome won.
 
 **Verdict** — what a count concluded: `Decided`, `Undecided` when the tally
 reached nothing, or `Lapsed` when the quorum failed. `rule` combines a quorum
-and a tally into one. `Verdict` in `Cap.Governance.Types`.
+and a tally into one. `Verdict` in `Cap.Governance.Utils.Count`.
