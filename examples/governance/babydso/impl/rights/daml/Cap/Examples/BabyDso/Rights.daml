@@ -5,8 +5,6 @@ module Cap.Examples.BabyDso.Rights where
 import DA.Set (Set)
 import qualified DA.Set as Set
 
-import Cap.Core.Types (AuthenticKey (..))
-
 
 template SvWeightSource
   with
@@ -27,14 +25,3 @@ template SvWeightSource
       controller dso
       do create this with weight = newWeight
 
-
-data RightKey = RightKey
-  with
-    authKey : AuthenticKey
-    sv : Party
-  deriving (Eq, Ord, Show)
-
-sourceKey : Party -> Text -> AuthenticKey
-sourceKey dso name = AuthenticKey with
-  authorities = Set.fromList [dso]
-  id = name

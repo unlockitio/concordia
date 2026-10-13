@@ -144,6 +144,11 @@ targetsWith f configCid ansCid = Map.fromList
   ]
 
 
+sourceKey : Party -> Text -> AuthenticKey
+sourceKey dso name = AuthenticKey with
+  authorities = Set.fromList [dso]
+  id = name
+
 sourceKeyOf : Fixture -> Text -> Party -> RightKey
 sourceKeyOf f name sv = RightKey with authKey = sourceKey f.dso name; sv
 

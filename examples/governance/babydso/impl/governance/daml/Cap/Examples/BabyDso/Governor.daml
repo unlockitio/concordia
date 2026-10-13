@@ -124,6 +124,12 @@ governorKey rules = AuthenticKey with
   id = rules.governorId
 
 
+data RightKey = RightKey
+  with
+    authKey : AuthenticKey
+    sv : Party
+  deriving (Eq, Ord, Show)
+
 instance HasCheckedFetch SvWeightSource RightKey where
   contractGroupId source = RightKey with
     authKey = signedKey source.name source
