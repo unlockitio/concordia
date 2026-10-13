@@ -10,9 +10,8 @@ import qualified DA.Map as Map
 import qualified DA.Set as Set
 import Daml.Script hiding (AnyContractId)
 
-import Cap.Core.Types (AuthenticKey (..), Mechanism (..))
+import Cap.Core.Types (AuthenticKey (..), Bind (..), Mechanism (..))
 import Cap.Governance.ActionV1 (Action)
-import Cap.Governance.Types (Bind (..))
 import Cap.Governance.Utils (Cast (..))
 
 import Cap.Governance.Tests.Harness

@@ -135,8 +135,7 @@ firstOfTakesTheFirstTallyThatDecides : Script ()
 firstOfTakesTheFirstTallyThatDecides = do
   v <- votersIn "first-of"
   let casts = Map.fromList [(v.alice, cast 1.0 (Some "yes"))]
-  undecided casts === (None : Optional Text)
-  firstOf [undecided, unanimous] casts === Some "yes"
+  firstOf [const None, unanimous] casts === Some "yes"
   firstOf [] casts === (None : Optional Text)
 
 ruleCombinesTheQuorumAndTheTally : Script ()
@@ -148,8 +147,4 @@ ruleCombinesTheQuorumAndTheTally = do
   rule anyTurnout unanimous split === Undecided
   rule anyTurnout unanimous agreed === Decided "yes"
 
-verdictMapsOnlyTheDecidedValue : Script ()
-verdictMapsOnlyTheDecidedValue = do
-  fmap (<> "!") (Decided "yes") === Decided "yes!"
-  fmap (<> "!") Undecided === (Undecided : Verdict Text)
-  fmap (<> "!") Lapsed === (Lapsed : Verdict Text)
+

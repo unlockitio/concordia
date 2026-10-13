@@ -11,10 +11,9 @@ import qualified DA.Set as Set
 import Splice.Api.Token.MetadataV1
 import Splice.Util (HasCheckedFetch (..))
 
-import Cap.Core.Types (AuthenticKey (..), Mechanism (..))
+import Cap.Core.Types (AuthenticKey (..), Bind (..), Mechanism (..))
 import Cap.Core.Utils (IsAnyValue (..), fetchCheckedAny, signedKey)
 import Cap.Governance.ActionV1
-import Cap.Governance.Types (Bind (..))
 import Cap.Governance.Utils
 
 
@@ -117,7 +116,7 @@ template Probe
       controller owner
       do
         presented <- fetchBallots ballotCids
-        weighBallots narrowText weights presented
+        weighBallots narrowText weights (map snd presented)
 
     nonconsuming choice Probe_WeighBallotsEqually : Casts Text
       with
@@ -126,7 +125,7 @@ template Probe
       controller owner
       do
         presented <- fetchBallots ballotCids
-        weighBallotsEqually narrowText voters presented
+        weighBallotsEqually narrowText voters (map snd presented)
 
     nonconsuming choice Probe_ConsumeBallots : ()
       with
@@ -134,7 +133,7 @@ template Probe
       controller owner
       do
         presented <- fetchBallots ballotCids
-        consumeBallots presented
+        consumeBallots (map fst presented)
 
     nonconsuming choice Probe_ReadWeights : Map Text (Party, Decimal)
       with

@@ -8,9 +8,8 @@ import Daml.Script hiding (AnyContractId)
 
 import Splice.Api.Token.MetadataV1
 
-import Cap.Core.Types (AuthenticKey (..))
+import Cap.Core.Types (AuthenticKey (..), Bind (..))
 import Cap.Core.Utils (IsAnyValue (..))
-import Cap.Governance.Types (Bind (..))
 
 import Cap.Governance.Tests.Harness
 import Cap.Governance.Tests.Support

@@ -12,11 +12,10 @@ import qualified DA.Set as Set
 import Splice.Api.Token.MetadataV1
 import Splice.Util (HasCheckedFetch (..))
 
-import Cap.Core.Types (AuthenticKey (..), ExecutionCore)
+import Cap.Core.Types (AuthenticKey (..), Bind (..), ExecutionCore)
 import Cap.Core.Utils (IsAnyValue (..), signedKey)
 import Cap.Governance.ActionV1
 import Cap.Governance.ExecutableV1
-import Cap.Governance.Types (Bind (..))
 import Cap.Governance.Utils
   ( HasState (..), ReadTarget, checkTarget, mergeBinds, readState, requireSameKeys )
 

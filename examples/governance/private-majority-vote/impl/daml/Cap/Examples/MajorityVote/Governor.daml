@@ -17,7 +17,7 @@ import Cap.Core.Types (AuthenticKey (..), ExecutionAction (..), ExecutionCore (.
 import Cap.Core.Utils (IsAnyValue (..), fetchGroup, requireClosed, requireMechanism)
 import Cap.Governance.ActionV1
 import Cap.Governance.Utils
-  ( Tally, Verdict (..), atLeastVotes, consumeBallots, rule, voted
+  ( Tally, Verdict (..), atLeastVotes, commonAction, consumeBallots, rule, voted
   , weighBallotsEqually )
 
 import Cap.Examples.MajorityVote.Ballot
@@ -136,9 +136,8 @@ template Governor
       with
         proposalCid : ContractId Proposal
         ballotCids : [ContractId PrivateBallot]
-        extraArgs : ExtraArgs
       controller operator
-      do resolveMajority this self proposalCid ballotCids extraArgs
+      do resolveMajority this self proposalCid ballotCids
 
 
 governorKey : Governor -> AuthenticKey
@@ -153,8 +152,8 @@ majorityOf electorateSize casts =
 
 resolveMajority
   : Governor -> ContractId Governor -> ContractId Proposal -> [ContractId PrivateBallot]
-  -> ExtraArgs -> Update ResolveResult
-resolveMajority rules self proposalCid ballotCids extraArgs = do
+  -> Update ResolveResult
+resolveMajority rules self proposalCid ballotCids = do
   now <- getTime
   proposal <- fetch proposalCid
   requireMechanism (governorKey rules) (coerceContractId self) majorityProcedureName proposal.mechanism
@@ -162,19 +161,19 @@ resolveMajority rules self proposalCid ballotCids extraArgs = do
   let terms = proposal.terms
 
   presented <- fetchGroup proposal.mechanism ballotCids
-  let ballots = map snd presented
+  let (cids, ballots) = unzip presented
   forA_ ballots $ \b -> do
     requireClosed "every presented ballot is closed for voting" now b.closesAt
     require "every ballot votes in the proposal's window"
       (b.opensAt == terms.entryClosesAt
         && b.closesAt == terms.votingClosesAt
         && b.expiresAt == terms.expiresAt)
-  require "the ballots vote on the proposal's action"
-    (all ((== terms.actionCid) . (.actionCid)) ballots)
+  action <- commonAction ballots
+  require "the ballots vote on the proposal's action" (action == terms.actionCid)
 
-  casts <- weighBallotsEqually Some rules.electorate presented
+  casts <- weighBallotsEqually Some rules.electorate ballots
   require "the presented ballots cover the roll" (Map.keys casts == sort proposal.roll)
-  consumeBallots presented
+  consumeBallots cids
 
   let verdict = rule (atLeastVotes 1) (majorityOf (intToDecimal (Set.size rules.electorate))) casts
   created <- case verdict of
@@ -191,7 +190,7 @@ resolveMajority rules self proposalCid ballotCids extraArgs = do
           meta = emptyMetadata
         outcome = Some (toAnyValue winner)
         binds = Map.empty
-        extraArgs
+        extraArgs = ExtraArgs with context = emptyChoiceContext; meta = emptyMetadata
       pure (map coerceContractId result.executionCids)
     _ -> pure []
 

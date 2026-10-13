@@ -13,14 +13,13 @@ import qualified DA.TextMap as TextMap
 import Splice.Api.Token.MetadataV1
 import Splice.Util (HasCheckedFetch (..))
 
-import Cap.Core.Types (AuthenticKey (..), ExecutionCore (..))
-import Cap.Core.Utils (orAbort, signedKey)
+import Cap.Core.Types (AuthenticKey (..), Bind (..), ExecutionCore (..))
+import Cap.Core.Utils (IsAnyValue (..), orAbort, signedKey)
 import Cap.Governance.ActionV1
 import Cap.Governance.ExecutableV1
-import Cap.Governance.Types (Bind (..))
 import Cap.Governance.Utils
-  ( DriftPolicy, HasState (..), checkIdentity, checkTarget, mergeBinds
-  , readIdentity, readState, requireSameKeys, sameFields )
+  ( HasState (..), checkIdentity, checkTarget, mergeBinds
+  , readIdentity, readState, requireSameKeys, unchanged )
 
 import Cap.Examples.BabyDso.Ans
 import Cap.Examples.BabyDso.Config
@@ -48,14 +47,8 @@ instance HasCheckedFetch AmuletConfig AuthenticKey where
 instance HasCheckedFetch AnsRules AuthenticKey where
   contractGroupId = signedKey ansId
 
-instance HasState AmuletConfig AnyValue where
-  stateOf config = amuletConfigState config.transferFee config.epoch
-
-amuletConfigState : Decimal -> Int -> AnyValue
-amuletConfigState transferFee epoch = AV_Map (TextMap.fromList
-  [ (transferFeeField, AV_Decimal transferFee)
-  , ("epoch", AV_Int epoch)
-  ])
+instance HasState AmuletConfig Decimal where
+  stateOf config = config.transferFee
 
 
 template SetFeesAction
@@ -79,11 +72,11 @@ template SetFeesAction
         | otherwise = abort ("this action binds no target " <> show tkey)
 
       action_authorizeExecutionImpl _ arg = do
-        (transferFee, entryFee) <-
-          orAbort "the execution carries no fees this action can apply" (arg.outcome >>= feesOf)
+        fees <-
+          orAbort "the execution carries no fees this action can apply" (arg.outcome >>= fromAnyValue)
         binds <- mergeBinds (setFeesBinds amuletAuthority dso) arg.binds
         cid <- create FeeUpdate with
-          amuletAuthority; dso; transferFee; entryFee
+          amuletAuthority; dso; fees
           binds
           core = arg.executionCore
           outcome = arg.outcome
@@ -103,20 +96,31 @@ transferFeeField = "transferFee"
 entryFeeField : Text
 entryFeeField = "entryFee"
 
-feesOf : AnyValue -> Optional (Decimal, Decimal)
-feesOf (AV_Map fields) =
-  case (TextMap.lookup transferFeeField fields, TextMap.lookup entryFeeField fields) of
-    (Some (AV_Decimal transferFee), Some (AV_Decimal entryFee)) -> Some (transferFee, entryFee)
-    _ -> None
-feesOf _ = None
+data Fees = Fees
+  with
+    transferFee : Decimal
+    entryFee : Decimal
+  deriving (Eq, Show)
+
+instance IsAnyValue Fees where
+  toAnyValue fees = AV_Map (TextMap.fromList
+    [ (transferFeeField, toAnyValue fees.transferFee)
+    , (entryFeeField, toAnyValue fees.entryFee)
+    ])
+  fromAnyValue (AV_Map fields)
+    | map fst (TextMap.toList fields) /= [entryFeeField, transferFeeField] = None
+    | otherwise = do
+        transferFee <- TextMap.lookup transferFeeField fields >>= fromAnyValue
+        entryFee <- TextMap.lookup entryFeeField fields >>= fromAnyValue
+        pure Fees with ..
+  fromAnyValue _ = None
 
 
 template FeeUpdate
   with
     amuletAuthority : Party
     dso : Party
-    transferFee : Decimal
-    entryFee : Decimal
+    fees : Fees
     core : ExecutionCore
     binds : Map AuthenticKey Bind
     outcome : Optional AnyValue
@@ -134,16 +138,13 @@ template FeeUpdate
 
       executable_executeImpl targets _ = do
         requireSameKeys binds targets
-        (configCid, _) <- checkTarget @AmuletConfig sameTransferFee
+        (configCid, _) <- checkTarget @AmuletConfig unchanged
           (configTargetKey amuletAuthority) binds targets
         (ansCid, _) <- checkIdentity @AnsRules (ansTargetKey dso) binds targets
         updatedConfig <- exercise configCid
-          AmuletConfig_SetFee with newTransferFee = transferFee
+          AmuletConfig_SetFee with newTransferFee = fees.transferFee
         updatedAns <- exercise ansCid
-          AnsRules_SetFee with newEntryFee = entryFee
+          AnsRules_SetFee with newEntryFee = fees.entryFee
         pure Executable_ExecuteResult with
           created = [coerceContractId updatedConfig, coerceContractId updatedAns]
           meta = emptyMetadata
-
-sameTransferFee : DriftPolicy AnyValue
-sameTransferFee = sameFields [transferFeeField]

@@ -20,7 +20,6 @@ module Cap.Governance.Utils.Targets
   , anyDrift
   , sameOn
   , bothOf
-  , sameFields
   , requireSameKeys
   , checkTarget
   , checkIdentity
@@ -30,18 +29,21 @@ import DA.Foldable (forA_)
 import DA.Map (Map)
 import qualified DA.Map as Map
 import DA.Optional (catOptionals, fromOptional, isNone)
-import qualified DA.TextMap as TextMap
 
 import Splice.Api.Token.MetadataV1
 import Splice.Util (HasCheckedFetch, require)
 
-import Cap.Core.Types (AuthenticKey)
+import Cap.Core.Types (AuthenticKey, Bind (..))
 import Cap.Core.Utils (IsAnyValue (..), fetchCheckedAny, orAbort)
-import Cap.Governance.Types (Bind (..), ReadTarget)
 
 
 ------------------  ACTION  ------------------
 -- Used by an action to read the state of the targets it binds.
+
+-- | Reads a target named by a key: checks the contract is the one the key
+-- names and returns its state, or 'None' when it has none to pin. An action's
+-- 'action_readStateImpl' is a 'ReadTarget'.
+type ReadTarget = AuthenticKey -> AnyContractId -> Update (Optional AnyValue)
 
 -- | The state of a template that an action pins. The action's package writes
 -- the instance for each target it binds.
@@ -147,13 +149,6 @@ sameOn f pinned live = f pinned == f live
 
 bothOf : DriftPolicy a -> DriftPolicy a -> DriftPolicy a
 bothOf p q pinned live = p pinned live && q pinned live
-
-sameFields : [Text] -> DriftPolicy AnyValue
-sameFields names (AV_Map pinned) (AV_Map live) =
-  all (\name -> case (TextMap.lookup name pinned, TextMap.lookup name live) of
-    (Some a, Some b) -> a == b
-    _ -> False) names
-sameFields _ _ _ = False
 
 -- | Checks that the presented targets are exactly the bound ones: every bound
 -- target presented, and nothing presented that is not bound.

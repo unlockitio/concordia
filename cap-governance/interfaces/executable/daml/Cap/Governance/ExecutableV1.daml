@@ -7,9 +7,8 @@ import DA.Map (Map)
 import Splice.Api.Token.MetadataV1
 import Splice.Util (require)
 
-import Cap.Core.Types (AuthenticKey, ExecutionAction (..), ExecutionCore (..))
+import Cap.Core.Types (AuthenticKey, Bind, ExecutionAction (..), ExecutionCore (..))
 import Cap.Core.Utils (entitled, requireExpired, requireOpen)
-import Cap.Governance.Types (Bind)
 
 data ExecutableView = ExecutableView
   with

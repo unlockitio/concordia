@@ -89,6 +89,9 @@ authoritiesOf : Mechanism -> Set Party
 authoritiesOf mechanism = mechanism.resolver.authorities
 
 
+-- | Admits the actors when they include every party of some non-empty group.
+-- The actors may be a superset of the group: the group @[alice]@ admits the
+-- actors @[alice, bob]@.
 admitActors : [[Party]] -> [Party] -> Bool
 admitActors groups sigs =
   any (all (`elem` sigs)) (filter (not . null) groups)

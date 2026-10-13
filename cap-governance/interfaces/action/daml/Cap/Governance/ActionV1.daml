@@ -9,10 +9,9 @@ import DA.Map (Map)
 import Splice.Api.Token.MetadataV1
 import Splice.Util (require)
 
-import Cap.Core.Types (AuthenticKey, ExecutionCore)
+import Cap.Core.Types (AuthenticKey, Bind, ExecutionCore)
 import Cap.Core.Utils (admitActors)
 import Cap.Governance.ExecutableV1 (Executable)
-import Cap.Governance.Types (Bind, ReadTarget)
 
 data ActionView = ActionView
   with
@@ -33,7 +32,7 @@ interface Action where
 
   action_authorizeExecutionImpl : ContractId Action -> Action_AuthorizeExecution -> Update Action_AuthorizeExecutionResult
 
-  action_readStateImpl : ReadTarget
+  action_readStateImpl : AuthenticKey -> AnyContractId -> Update (Optional AnyValue)
 
   nonconsuming choice Action_AuthorizeExecution : Action_AuthorizeExecutionResult
     with

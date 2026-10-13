@@ -23,7 +23,6 @@ module Cap.Governance.Utils.Count
   , shareOfTotal
 
     -- * Tallies
-  , undecided
   , firstOf
   , unanimous
   , plurality
@@ -37,7 +36,6 @@ import DA.Map (Map)
 import qualified DA.Map as Map
 import DA.Optional (mapOptional)
 import Cap.Core.Utils (allEqual)
-import Cap.Governance.Types (Verdict (..))
 
 
 data Cast a = Cast
@@ -54,25 +52,26 @@ voted casts = [(c.weight, v) | c <- Map.values casts, Some v <- [c.vote]]
 votedWeight : Casts a -> Decimal
 votedWeight casts = sum (map fst (voted casts))
 
-
+-- Pass or fail
 type Quorum a = Casts a -> Bool
 
+-- Return value
 type Tally a r = Casts a -> Optional r
+
+data Verdict r
+  = Decided r
+  | Undecided
+  | Lapsed
+  deriving (Eq, Show)
 
 rule : Quorum a -> Tally a r -> Casts a -> Verdict r
 rule quorum tally casts
   | not (quorum casts) = Lapsed
   | otherwise = optional Undecided Decided (tally casts)
 
-
+-- Quorum predicates: the presented ballots meet the quorum or not.
 anyTurnout : Quorum a
 anyTurnout _ = True
-
-allOf : [Quorum a] -> Quorum a
-allOf quorums casts = all (\quorum -> quorum casts) quorums
-
-anyOf : [Quorum a] -> Quorum a
-anyOf quorums casts = any (\quorum -> quorum casts) quorums
 
 atLeastBallots : Int -> Quorum a
 atLeastBallots n casts = Map.size casts >= n
@@ -88,15 +87,14 @@ shareOfTotal numerator denominator total casts =
   denominator > 0 && total > 0.0
     && votedWeight casts * intToDecimal denominator >= intToDecimal numerator * total
 
+-- several Quorums
+allOf : [Quorum a] -> Quorum a
+allOf quorums casts = all (\quorum -> quorum casts) quorums
 
-undecided : Tally a r
-undecided _ = None
+anyOf : [Quorum a] -> Quorum a
+anyOf quorums casts = any (\quorum -> quorum casts) quorums
 
-firstOf : [Tally a r] -> Tally a r
-firstOf tallies casts = case mapOptional (\tally -> tally casts) tallies of
-  result :: _ -> Some result
-  [] -> None
-
+-- Tally predicates: the presented ballots yield a result or not.
 unanimous : Eq a => Tally a a
 unanimous casts = allEqual (map snd (voted casts))
 
@@ -138,3 +136,10 @@ crossingHalf half below ((w, value) :: rest)
 
 weightPerOption : Ord a => Casts a -> Map a Decimal
 weightPerOption casts = Map.fromListWithR (+) [(option, w) | (w, option) <- voted casts]
+
+
+-- several tallies
+firstOf : [Tally a r] -> Tally a r
+firstOf tallies casts = case mapOptional (\tally -> tally casts) tallies of
+  result :: _ -> Some result
+  [] -> None

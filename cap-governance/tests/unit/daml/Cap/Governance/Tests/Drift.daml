@@ -3,10 +3,7 @@
 module Cap.Governance.Tests.Drift where
 
 import DA.Assert ((===))
-import qualified DA.TextMap as TextMap
 import Daml.Script
-
-import Splice.Api.Token.MetadataV1 (AnyValue (..))
 
 import Cap.Governance.Utils.Targets
 
@@ -15,12 +12,6 @@ data Fees = Fees with
     transferFee : Decimal
     epoch : Int
   deriving (Eq, Show)
-
-feeState : Decimal -> Int -> AnyValue
-feeState transferFee epoch = AV_Map (TextMap.fromList
-  [ ("transferFee", AV_Decimal transferFee)
-  , ("epoch", AV_Int epoch)
-  ])
 
 unchangedNeedsTheSameState : Script ()
 unchangedNeedsTheSameState = do
@@ -42,19 +33,3 @@ bothOfNeedsBothPolicies = do
   policy (Fees 0.01 3) (Fees 0.01 3) === True
   policy (Fees 0.01 3) (Fees 0.01 4) === False
   policy (Fees 0.01 3) (Fees 0.02 3) === False
-
-sameFieldsComparesTheNamedFields : Script ()
-sameFieldsComparesTheNamedFields = do
-  sameFields ["transferFee"] (feeState 0.01 3) (feeState 0.01 4) === True
-  sameFields ["transferFee"] (feeState 0.01 3) (feeState 0.02 3) === False
-  sameFields ["transferFee", "epoch"] (feeState 0.01 3) (feeState 0.01 4) === False
-  sameFields [] (feeState 0.01 3) (feeState 0.02 4) === True
-
-sameFieldsRefusesAMissingField : Script ()
-sameFieldsRefusesAMissingField = do
-  sameFields ["entryFee"] (feeState 0.01 3) (feeState 0.01 3) === False
-
-sameFieldsRefusesAStateThatIsNotAMap : Script ()
-sameFieldsRefusesAStateThatIsNotAMap = do
-  sameFields ["transferFee"] (AV_Decimal 0.01) (AV_Decimal 0.01) === False
-  sameFields ["transferFee"] (feeState 0.01 3) (AV_Decimal 0.01) === False

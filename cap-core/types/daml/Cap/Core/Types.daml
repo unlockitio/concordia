@@ -5,6 +5,7 @@ module Cap.Core.Types
   , Mechanism (..)
   , ExecutionAction (..)
   , ExecutionCore (..)
+  , Bind (..)
   ) where
 
 import DA.Map (Map)
@@ -42,4 +43,10 @@ data ExecutionCore = ExecutionCore
     cancelAt : Time
     expiresAt : Optional Time
     meta : Metadata
+  deriving (Eq, Show)
+
+data Bind = Bind
+  with
+    state : Optional AnyValue
+    cid : Optional AnyContractId
   deriving (Eq, Show)
