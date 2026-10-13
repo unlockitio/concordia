@@ -1,0 +1,63 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Examples.BabyDso.ExecutionDemo where
+
+import DA.Assert ((===))
+import qualified DA.Map as Map
+import Daml.Script hiding (AnyContractId)
+
+import Cap.Governance.ExecutableV1 (Executable)
+
+import Cap.Examples.BabyDso.Action (ansTargetKey)
+import Cap.Examples.BabyDso.Config
+
+import Cap.Examples.BabyDso.Demo.Fixture
+
+
+approveFees : Fixture -> Script (ContractId Executable)
+approveFees f = do
+  opened <- openVoteAs f f.sv1 (feeVote 0.05 2.0)
+  withSv2 <- castAs f f.sv2 opened (feeVote 0.06 2.5)
+  ballotCid <- castAs f f.sv3 withSv2 (feeVote 0.09 4.0)
+  setTime f.terms.votingClosesAt
+  result <- resolveVoteAs f f.sv1 ballotCid
+  [execution] <- pure result.executions
+  Some pending <- queryInterfaceContractId f.sv2 execution
+  setTime pending.executionCore.opensAt
+  pure execution
+
+
+aDriftedFeeStopsBoth : Script ()
+aDriftedFeeStopsBoth = do
+  f <- setupAs "drift"
+  execution <- approveFees f
+
+  drifted <- submit f.amuletAuthority $ exerciseCmd f.configCid
+    AmuletConfig_SetFee with newTransferFee = 0.07
+
+  submitMustFailContaining "no longer satisfies its bind" f f.sv2 $
+    executeCmd f.sv2 execution (targetsWith f drifted f.ansCid)
+  feesNow f >>= (=== (0.07, openingEntryFee))
+
+anUnrelatedChangeIsAdmitted : Script ()
+anUnrelatedChangeIsAdmitted = do
+  f <- setupAs "unrelated"
+  execution <- approveFees f
+
+  bumped <- submit f.amuletAuthority $ exerciseCmd f.configCid
+    AmuletConfig_SetFee with newTransferFee = openingTransferFee
+
+  _ <- submit (actAs f.sv2 <> readAs f.dso) $
+    executeCmd f.sv2 execution (targetsWith f bumped f.ansCid)
+  feesNow f >>= (=== (0.05, 2.0))
+  [(_, config)] <- query @AmuletConfig f.amuletAuthority
+  config.epoch === openingEpoch + 2
+
+anOmittedTargetIsRefused : Script ()
+anOmittedTargetIsRefused = do
+  f <- setupAs "omitted"
+  execution <- approveFees f
+
+  submitMustFailContaining "was not presented" f f.sv2 $
+    executeCmd f.sv2 execution (Map.delete (ansTargetKey f.dso) (targetsOf f))
+  feesNow f >>= (=== (openingTransferFee, openingEntryFee))

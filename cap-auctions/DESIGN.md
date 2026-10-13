@@ -5,9 +5,10 @@
 The selling domain of CAP: two interfaces — `OneLotBid` and `Settlement` — that let an
 auction format, a token registry and a bidder be written without knowing each other.
 
-A bid is a `cap-core` `Submittable`, so an auction is a `Resolver` running a named
-`Procedure` (first-price, second-price, …) over the bids it collected. A settlement is a
-Token Standard Settlement batch.
+Every bid carries a `Mechanism`, which names the sale and the authorities running it.
+The auction is a template the format writes, signed by those authorities, and it
+resolves the bids in a choice of its own (`Auction_Resolve` in the sealed-bid example).
+A settlement is a Token Standard Settlement batch.
 
 Cap-auctions currently supports auctions with one lot from one seller. Formats that keep that shape( second price, a Dutch, multi-unit), need no new interface, only new templates implementing `OneLotBid`. Formats that outgrow it get a new interface **beside** `OneLotBid` (e.g. several lots and several sellers grows the terms and the award rule, while everything underneath carries over unchanged). 
 
@@ -30,24 +31,24 @@ format refuses `OneLotBid_Withdraw`.
 
 ```
 cap-auctions/
-├── Interfaces/
-│   ├── bid/                 OneLotBid (requires Submittable), OneLotAuctionTerms
+├── interfaces/
+│   ├── bid/                 OneLotBid, OneLotBidView (carrying mechanism), OneLotAuctionTerms
 │   │                        (carrying paymentSettleFactory and lotSettleFactory),
 │   │                        Direction, Lot, Quote
 │   └── settlement/          Settlement, SettlementBatch (legs, allocations, factoryCid),
 │                            SettlementView
-├── cap-auctions-utils/      oneLotSettlement, sellerOf, bidderOf, the committed
+├── utils/                   oneLotSettlement, sellerOf, bidderOf, the committed
 │                            allocation specs (committedAllocation,
 │                            fundingOneInstrumentAllocation, receivingAllocation),
 │                            paymentLeg, lotLeg, paymentLegId, lotLegId
-└── cap-auctions-funding/    OneLotBidAllocationRequest, an AllocationRequest carrying
+└── funding/                 OneLotBidAllocationRequest, an AllocationRequest carrying
                              the specifications a one-lot bid implies, plus
                              bidderPaymentAllocation and bidderLotAllocation
 
 examples/auctions/
 └── sealed-bid-first-price/            the operator holds the assets and the
     {impl,impostors,demo}              presentation: seller and bidders escrow up front,
-                                       the procedure picks the high quote and mints the
+                                       Auction_Resolve picks the high quote and mints the
                                        Settlement; no bidder authority at award.
 
 lib/                         vendored Token Standard DARs the interfaces bind to

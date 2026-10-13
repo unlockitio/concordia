@@ -1,0 +1,23 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Examples.BabyDso.Config where
+
+import DA.Set (Set)
+import qualified DA.Set as Set
+
+
+template AmuletConfig
+  with
+    amuletAuthority : Party
+    svs : Set Party
+    transferFee : Decimal
+    epoch : Int
+  where
+    signatory amuletAuthority
+    observer Set.toList svs
+
+    choice AmuletConfig_SetFee : ContractId AmuletConfig
+      with
+        newTransferFee : Decimal
+      controller amuletAuthority
+      do create this with transferFee = newTransferFee; epoch = epoch + 1

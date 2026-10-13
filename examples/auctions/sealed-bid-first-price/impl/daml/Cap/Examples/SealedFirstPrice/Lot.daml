@@ -5,7 +5,6 @@ module Cap.Examples.SealedFirstPrice.Lot where
 import DA.Foldable (forA_)
 import DA.List (sort, unique)
 import qualified DA.List.Total as Total
-import qualified DA.Map as Map
 import qualified DA.Set as Set
 
 import Splice.Api.Token.MetadataV1
@@ -14,9 +13,8 @@ import qualified Splice.Api.Token.AllocationV2 as Alloc
 import Splice.Util (require)
 import Splice.TokenStandard.Utils (receiverSide, senderSide)
 
-import Cap.Core.Utils (requireClosed)
-import Cap.Core.ResolverV1
-import Cap.Core.SubmittableV1
+import Cap.Core.Types (AuthenticKey (..), Mechanism (..))
+import Cap.Core.Utils (requireClosed, requireMechanism)
 import Cap.Auctions.OneLotBidV1
 import Cap.Auctions.SettlementV1 (SettlementBatch (..))
 import Cap.Auctions.Utils
@@ -28,6 +26,11 @@ import Cap.Examples.SealedFirstPrice.Settlement
 
 firstPriceProcedureName : Text
 firstPriceProcedureName = ""
+
+data AuctionResult = AuctionResult
+  with
+    settlementCid : Optional (ContractId AuctionSettlement)
+  deriving (Eq, Show)
 
 template Auction
   with
@@ -41,37 +44,36 @@ template Auction
     signatory Set.toList authorities <> [sellerOf terms]
     observer invited
 
-    interface instance Resolver for Auction where
-      view = ResolverView with
-        authorities
-        id = resolverId
-        expiresAt = Some terms.expiresAt
-        meta = emptyMetadata
-
-      procedures = Map.fromList
-        [(firstPriceProcedureName, firstPrice this)]
-
-firstPrice : Auction -> Procedure
-firstPrice auction = Procedure with
-  resolvers = [Set.toList auction.authorities]
-  resolve = resolveFirstPrice auction
+    choice Auction_Resolve : AuctionResult
+      with
+        mechanism : Mechanism
+        bidCids : [ContractId OneLotBid]
+        extraArgs : ExtraArgs
+      controller Set.toList authorities
+      do
+        requireMechanism (AuthenticKey with authorities; id = resolverId) (coerceContractId self)
+          firstPriceProcedureName mechanism
+        resolveFirstPrice this mechanism bidCids extraArgs
 
 resolveFirstPrice
   : Auction
-  -> ContractId Resolver
-  -> [(ContractId Submittable, Submittable)]
+  -> Mechanism
+  -> [ContractId OneLotBid]
   -> ExtraArgs
-  -> Update Resolver_ResolveResult
-resolveFirstPrice auction self presented resolveArgs = do
+  -> Update AuctionResult
+resolveFirstPrice auction mechanism bidCids resolveArgs = do
   let terms = auction.terms
   now <- getTime
   requireClosed "the bidding window is closed" now terms.biddingClosesAt
 
-  -- check participation 
-  cast@((_, anySeat) :: _) <- presentedAs @OneLotBid "a seat" presented
-  let saleId = (view (toInterface @Submittable anySeat)).mechanism.id
-  seats <- forA cast $ \(cid, b) -> do
+  -- check participation
+  require "a resolution presents at least one bid" (not (null bidCids))
+  require "the presented bids are distinct" (unique bidCids)
+  let saleId = mechanism.id
+  seats <- forA bidCids $ \cid -> do
+    b <- fetch cid
     let bv = view b
+    require "every presented bid belongs to this sale" (bv.mechanism == mechanism)
     require "every presented seat was opened on the seller's terms"
       (bv.terms == terms)
     require "every presented bid is signed by the bidder it names"
@@ -86,8 +88,8 @@ resolveFirstPrice auction self presented resolveArgs = do
       winning = Total.maximumOn (\(_, _, q) -> q.price) quoted
       awardedCid = fmap (\(cid, _, _) -> cid) winning
 
-  (verdict, created) <- case winning of
-    None -> pure (V_Lapsed, [])
+  settlementCid <- case winning of
+    None -> pure None
     Some (winnerCid, winner, award) -> do
       require "the award meets the seller's reserve"
         (meetsReserve terms.direction terms.reserve award.price)
@@ -124,7 +126,7 @@ resolveFirstPrice auction self presented resolveArgs = do
               factoryCid = terms.lotSettleFactory
           ]
       exercise (fromInterfaceContractId @AuctionBid winnerCid) AuctionBid_Close
-      pure (V_Decided None, [coerceContractId settlementCid])
+      pure (Some settlementCid)
 
   -- release the rest
   forA_ [cid | (cid, _) <- seats, Some cid /= awardedCid] $ \cid ->
@@ -132,11 +134,7 @@ resolveFirstPrice auction self presented resolveArgs = do
       actors = Set.toList auction.authorities
       extraArgs = resolveArgs
 
-  archive self
-  pure Resolver_ResolveResult with
-    verdict
-    created
-    meta = emptyMetadata
+  pure AuctionResult with settlementCid
 
 template AuctionProposal
   with

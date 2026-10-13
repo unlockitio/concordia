@@ -1,0 +1,98 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Core.Tests.Unit where
+
+import DA.Assert ((===))
+import DA.Date (Month (..), date)
+import qualified DA.Map as Map
+import qualified DA.TextMap as TextMap
+import DA.Time (addRelTime, days, hours, time)
+import Daml.Script
+
+import Splice.Api.Token.MetadataV1
+
+import Cap.Core.Utils
+
+
+t0 : Time
+t0 = time (date 2026 Jan 1) 0 0 0
+
+admitActorsAdmitsACoveredGroup : Script ()
+admitActorsAdmitsACoveredGroup = do
+  alice <- allocateParty "unit-admit-alice"
+  bob <- allocateParty "unit-admit-bob"
+  admitActors [[alice]] [alice] === True
+  admitActors [[alice, bob]] [alice, bob] === True
+  admitActors [[alice], [bob]] [bob] === True
+
+admitActorsRefusesAPartialGroup : Script ()
+admitActorsRefusesAPartialGroup = do
+  alice <- allocateParty "unit-partial-alice"
+  bob <- allocateParty "unit-partial-bob"
+  admitActors [[alice, bob]] [alice] === False
+  admitActors [[bob]] [alice] === False
+
+admitActorsIgnoresEmptyGroups : Script ()
+admitActorsIgnoresEmptyGroups = do
+  alice <- allocateParty "unit-empty-alice"
+  bob <- allocateParty "unit-empty-bob"
+  admitActors [] [alice] === False
+  admitActors [[]] [alice] === False
+  admitActors [[], [bob]] [bob] === True
+
+entitledLooksUpTheAction : Script ()
+entitledLooksUpTheAction = do
+  alice <- allocateParty "unit-entitled-alice"
+  bob <- allocateParty "unit-entitled-bob"
+  let actions = Map.fromList [("execute", [[alice]])]
+  entitled actions "execute" [alice] === True
+  entitled actions "execute" [bob] === False
+  entitled actions "cancel" [alice] === False
+
+isOpenHasAnInclusiveFloorAndAnExclusiveCeiling : Script ()
+isOpenHasAnInclusiveFloorAndAnExclusiveCeiling = do
+  let t1 = addRelTime t0 (days 1)
+  isOpen t0 t0 (Some t1) === True
+  isOpen t1 t0 (Some t1) === False
+  isOpen (addRelTime t0 (hours (-1))) t0 None === False
+  isOpen t1 t0 None === True
+
+singleNeedsExactlyOneElement : Script ()
+singleNeedsExactlyOneElement = do
+  single ([] : [Int]) === None
+  single [1 : Int] === Some 1
+  single [1, 2 : Int] === None
+
+allEqualNeedsANonEmptyAgreeingList : Script ()
+allEqualNeedsANonEmptyAgreeingList = do
+  allEqual ([] : [Int]) === None
+  allEqual [1, 1 : Int] === Some 1
+  allEqual [1, 2 : Int] === None
+
+allAgreeByComparesEveryElementWithTheFirst : Script ()
+allAgreeByComparesEveryElementWithTheFirst = do
+  allAgreeBy (<=) [1, 2, 3 : Int] === Some 1
+  allAgreeBy (<=) [3, 2, 1 : Int] === None
+
+isAnyValueRoundTrips : Script ()
+isAnyValueRoundTrips = do
+  alice <- allocateParty "unit-values-alice"
+  let texts = TextMap.fromList [("a", 1.0 : Decimal)]
+  fromAnyValue (toAnyValue (3 : Int)) === Some (3 : Int)
+  fromAnyValue (toAnyValue (1.5 : Decimal)) === Some (1.5 : Decimal)
+  fromAnyValue (toAnyValue ("x" : Text)) === Some ("x" : Text)
+  fromAnyValue (toAnyValue True) === Some True
+  fromAnyValue (toAnyValue alice) === Some alice
+  fromAnyValue (toAnyValue t0) === Some t0
+  fromAnyValue (toAnyValue (days 2)) === Some (days 2)
+  fromAnyValue (toAnyValue (date 2026 Jan 1)) === Some (date 2026 Jan 1)
+  fromAnyValue (toAnyValue [1, 2 : Int]) === Some [1, 2 : Int]
+  fromAnyValue (toAnyValue texts) === Some texts
+  fromAnyValue (AV_Int 1) === Some (AV_Int 1)
+
+isAnyValueRefusesAnotherKind : Script ()
+isAnyValueRefusesAnotherKind = do
+  (fromAnyValue (AV_Text "x") : Optional Int) === None
+  (fromAnyValue (AV_Int 1) : Optional Text) === None
+  (fromAnyValue (AV_List [AV_Int 1, AV_Text "x"]) : Optional [Int]) === None
+  (fromAnyValue (AV_Map (TextMap.fromList [("a", AV_Text "x")])) : Optional (TextMap.TextMap Decimal)) === None

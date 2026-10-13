@@ -6,7 +6,7 @@ correctly.
 
 The auction runs over a fixed set of invited bidders, named in `Auction.invited`
 before the seller accepts. Those bidders observe the `Auction`, so each is an
-informee of `Resolver_Resolve` and reads the bid presentation. A bidder reads no
+informee of `Auction_Resolve` and reads the bid presentation. A bidder reads no
 other bidder's quote, before or after settlement, and the losers read neither the
 winner nor the winning price.
 
@@ -81,7 +81,7 @@ a wallet take between them.
   transaction exercising both `AllocationFactory_Allocate` and
   `AllocationRequest_Accept`.
 - `OneLotBid_Finalize` puts the quotes and the two allocation contract ids on the
-  seat. It fetches each allocation and asserts `AllocationSpecification` are correct.
+  seat. It fetches each allocation, asserts its `AllocationSpecification` is the one the bid implies, and requires each to be signed by its instrument admin.
 
 The wallet reads nothing the auction wrote into `OneLotAuctionTerms`. Everything
 it needs — the settlement, the deadline, the instruments, the amounts, who may
@@ -172,7 +172,7 @@ sequenceDiagram
     B->>O: submits 60
     Note over S,B: bidding is closed, the lot is locked
 
-    O->>O: Resolver_Resolve — presents both bids and Carol's seat
+    O->>O: Auction_Resolve — presents both bids and Carol's seat
     O->>O: award at 100, the highest presented — first price, not second
     O-->>B: seal cancelled, 60 back, B pays nothing
 
@@ -213,13 +213,13 @@ sequenceDiagram
     Note over O: ✗ but it is not the cid the terms name
 
     Note over S,A: an honest auction on honest terms
-    O->>O: Resolver_Resolve — reads both factories off the terms
+    O->>O: Auction_Resolve — reads both factories off the terms
     Note over S,A: ✓ 100 to S, lot to A
 
     Note over S,A: an auction whose TERMS name the impostor
     S->>S: signs Auction over those terms
     A->>A: signs AuctionBid over those terms
-    O->>O: Resolver_Resolve
+    O->>O: Auction_Resolve
     Note over S,A: ✗ payment moves, lot does not — A pays for nothing
 ```
 
@@ -228,8 +228,8 @@ sequenceDiagram
 ## 4. `aBidderCannotBlockTheSale`
 
 Alice bids 100 and wins, Bob bids 60 and loses. Each tries the same five ways out
-of its own seat and allocation once bidding has closed, and Alice tries four more
-in the window between `Resolver_Resolve` and `Settlement_Settle`, where the
+of its own seat and allocation once bidding has closed, and Alice tries five more
+in the window between `Auction_Resolve` and `Settlement_Settle`, where the
 `AuctionSettlement` exists and her two allocations are still live.
 
 `OneLotBid_Expire` is the one choice on the seat with no entitlement check, so
@@ -260,7 +260,7 @@ sequenceDiagram
     A->>A: Allocation_Withdraw
     Note over A,B: ✗ the allocation is committed and its deadline has not passed
 
-    O->>O: Resolver_Resolve — A wins, B's allocation is cancelled
+    O->>O: Auction_Resolve — A wins, B's allocation is cancelled
     Note over B: 60 back; B holds nothing left to take back
 
     Note over A: the settlement exists, A's allocations are still live

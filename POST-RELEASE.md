@@ -7,17 +7,18 @@ downstream modules*: what can be built on CAP after the final milestone.
 
 ## Extension model
 
-The library splits every
-behaviour across three surfaces:
+The library splits every behaviour across three surfaces:
 
-- **Fixed choice bodies** — admission of every contract id, the completeness
-  cover, time window and fetch checks. An
-  extension inherits these guarantees and cannot weaken them.
-- **Interface methods** — what an implementation can define (e.g the tally, the
-  pricing rule, the drift policy). An extension is
-  the method bodies it supplies.
-- **The opt-in toolkit** — default method bodies and helpers. 
-	They are opt-in so they do not lock formats out.
+- **Interfaces with fixed choice bodies** — `Action`, `Executable`, `OneLotBid`
+  and `Settlement`. The fixed bodies check admission, windows and expiry. An
+  extension implements the interface methods and inherits these checks; it
+  cannot weaken them.
+- **Templates the app writes** — the governor, its procedures, the ballots and
+  the vote kinds in governance, and the auction contract in auctions. Each app
+  owns these, so each app can shape them.
+- **The opt-in toolkit** — type classes (`IsBallot`, `HasWeight`, `HasState`)
+  and helpers for fetching, pinning, weighing and counting. An app uses the
+  helpers it needs and writes its own code where one does not fit.
 
 Extension is deployment: new templates implementing the released interfaces,
 uploaded beside the released DARs. Nothing below re-opens a released interface
@@ -25,25 +26,33 @@ package.
 
 ## Extending a deployed system
 
-The cheapest tier: a system already running on CAP grows by pure deploys,
-often one new template or one new case in an application datatype. The BabyDso
-reference (`examples/BabyDso/cap-version`) demonstrates each of these.
+A system already running on CAP grows by deploying new templates or new app
+packages. The BabyDso example (`examples/governance/babydso`) shows each of
+these.
 
-- **A new governable target.** Any standing contract becomes governable with
-  an `interface instance Target`.
-- **Eligibility.** The participation right is the eligibility mechanism: an
-  empty `Submittable` minted only to eligible parties. Institutions bring
-  their own identity or KYC system and compose with this.
+- **A new governable target.** The owner of a contract writes an action that
+  names it by an `AuthenticKey`, and a `HasCheckedFetch` instance that computes
+  that key from the contract, usually with `signedKey`. The owner signs the
+  action, and a governor can then authorize changes to the contract without
+  depending on its package.
+- **Eligibility.** A voter's right to vote is a contract the app registers, read
+  through `HasWeight` and `readWeights`. Institutions bring their own identity
+  or KYC system and mint these contracts only to eligible parties.
 - **A drift policy per action.** Whether an approved outcome executes over a
-  target that changed since approval is declared per action.
-- **A timing profile.** Submission, resolution, and withdrawal windows are
-  three `Mechanism` hooks; `Cap.Core.Policies` and `Cap.Governance.Policies`
-  ship named policies, but an application may write its own.
+  target that changed since it was pinned is decided by the `DriftPolicy` the
+  action passes to `checkTarget`.
+- **A timing profile.** Voting windows are fields of the app's ballots.
+  Execution windows are the `opensAt`, `cancelAt` and `expiresAt` fields of the
+  `ExecutionCore` the governor sets when it authorizes an execution.
 
 ## New governance formats
 
-A new a Governance format can be created by adding a new decision rule to Tally. 
-Interfaces supporting vote delegation can also be implemented in the future. 
+A new governance format is a new procedure: a choice on the app's governor that
+counts its ballots with a quorum and a tally. `Quorum` and `Tally` are plain
+functions, so a format that needs a rule the toolkit does not have writes it and
+combines it with `rule`. A procedure that counts a new kind of vote adds a
+constructor to the app's vote type. Vote delegation can be built the same way in
+the future.
 
 ## New auction formats
 
@@ -82,22 +91,22 @@ of one per lot, or a single unit for withdrawal and expiry. This is a packaging
 change, and every check survives in a per-lot form.
 
 Either interface ships beside `OneLotBid` rather than re-opening it, and the core
-underneath is unchanged — one submittable per bid, funds allocated before
-casting, one close fixing the set of bids, and settlement through the Token
-Standard all carry over.
+underneath is unchanged — one contract per bid, funds allocated before bidding,
+one close fixing the set of bids, and settlement through the Token Standard all
+carry over.
 
-Continuous double auctions are the format that may reach further, into cap-core
-itself, because a submittable declares its mechanism when it is submitted.
+Continuous double auctions are the format that may reach further, into
+cap-core itself, because a bid names its `Mechanism` when it is created.
 
 ## New domains on cap-core
 
-The deepest tier, and the proposal's stated direction: `cap-core` is the
-foundation for further allocation-oriented modules. A new domain is a package
-beside `cap-governance` and `cap-auctions` where its interfaces require the core
-(`Mechanism`, `Submittable`, `Outcome`), its fixed bodies may reuse the
-shared checks. Each direction below is a further instantiation.
+`cap-core` is the foundation for further allocation-oriented modules. A new
+domain is a package beside `cap-governance` and `cap-auctions` that uses the
+core's stored types (`AuthenticKey`, `Mechanism`, `ExecutionCore`) and its
+checks, and defines interfaces only where code has to work with contracts from
+other packages. Each direction below is a further instantiation.
 
-| Direction | Submittables are | Resolution is | Outcomes are |
+| Direction | Inputs are | Resolution is | Outcomes are |
 | --- | --- | --- | --- |
 | Order matching | orders | the matching rule | matched trades |
 | Collateral allocation | pledges | the allocation rule | collateral commitments |
@@ -110,12 +119,12 @@ The released interface packages are frozen: each is its own `-v1` package, and
 an adopter depends only on the interfaces they implement. The library grows
 around them:
 
-- **Toolkit growth.** New opt-in helpers and default implementations as
-  adopters surface reusable patterns. Toolkit growth never constrains a
-  format; it only saves work.
-- **Extension constructors.** `ExtSubmittableState`, `ExtResolutionOutcome`,
-  and the metadata channels let result types grow without an interface major.
+- **Toolkit growth.** New opt-in helpers as adopters surface reusable patterns.
+  Toolkit growth never constrains a format; it only saves work.
+- **Open result fields.** Outcomes travel as `AnyValue`, and the choice results
+  and `ExecutionCore` carry a `meta` field, so they can grow without a new
+  interface version.
 - **A resolve-and-execute path.** A dedicated atomic path for the common case
-  where an outcome is created and executed in the resolving transaction.
+  where an outcome is authorized and executed in the resolving transaction.
 - **New interface packages.** New domains and new interface versions ship as
   additive packages.

@@ -1,0 +1,66 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Examples.BabyDso.Demo where
+
+import DA.Assert ((===))
+import DA.List (sort)
+import qualified DA.Map as Map
+import Daml.Script hiding (AnyContractId)
+
+import Cap.Governance.Utils (Verdict (..))
+
+import Cap.Examples.BabyDso.Config
+
+import Cap.Examples.BabyDso.Demo.Fixture
+
+
+svsSetBothFees : Script ()
+svsSetBothFees = do
+  f <- setupAs "happy"
+
+  opened <- openVoteAs f f.sv1 (feeVote 0.05 2.0)
+  Some ballot <- queryContractId f.sv1 opened
+  ballot.weights === Map.fromList [(f.sv1, 5.0), (f.sv2, 3.0), (f.sv3, 1.0)]
+
+  withSv2 <- castAs f f.sv2 opened (feeVote 0.06 2.5)
+  ballotCid <- castAs f f.sv3 withSv2 (feeVote 0.09 4.0)
+  Some cast <- queryContractId f.sv1 ballotCid
+  Map.keys cast.votes === sort [f.sv1, f.sv2, f.sv3]
+
+  setTime f.terms.votingClosesAt
+  result <- resolveVoteAs f f.sv1 ballotCid
+  result.verdict === Decided (feeParameters 0.05 2.0)
+  [execution] <- pure result.executions
+  queryContractId f.sv1 ballotCid >>= (=== None)
+
+  Some pending <- queryInterfaceContractId f.sv2 execution
+  setTime pending.executionCore.opensAt
+  executed <- executeAs f f.sv2 execution
+  length executed.created === 2
+  queryInterfaceContractId f.sv2 execution >>= (=== None)
+
+  feesNow f >>= (=== (0.05, 2.0))
+  [(_, config)] <- query @AmuletConfig f.amuletAuthority
+  config.epoch === openingEpoch + 1
+
+svsConfirmBothFees : Script ()
+svsConfirmBothFees = do
+  f <- setupAs "confirm"
+  let confirmed = feeValue 0.04 1.5
+
+  sv2Confirmation <- confirmAs f f.sv2 confirmed
+  sv3Confirmation <- confirmAs f f.sv3 confirmed
+
+  result <- resolveConfirmationsAs f f.sv1 [sv2Confirmation, sv3Confirmation]
+  result.verdict === Decided confirmed
+  [execution] <- pure result.executions
+  queryContractId f.dso sv2Confirmation >>= (=== None)
+  queryContractId f.dso sv3Confirmation >>= (=== None)
+
+  executed <- executeAs f f.sv1 execution
+  length executed.created === 2
+  queryInterfaceContractId f.sv1 execution >>= (=== None)
+
+  feesNow f >>= (=== (0.04, 1.5))
+  [(_, config)] <- query @AmuletConfig f.amuletAuthority
+  config.epoch === openingEpoch + 1

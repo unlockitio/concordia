@@ -1,0 +1,150 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Examples.BabyDso.Action where
+
+import Prelude hiding (Action)
+
+import DA.Map (Map)
+import qualified DA.Map as Map
+import DA.Set (Set)
+import qualified DA.Set as Set
+import qualified DA.TextMap as TextMap
+
+import Splice.Api.Token.MetadataV1
+import Splice.Util (HasCheckedFetch (..))
+
+import Cap.Core.Types (AuthenticKey (..), Bind (..), ExecutionCore (..))
+import Cap.Core.Utils (IsAnyValue (..), orAbort, signedKey)
+import Cap.Governance.ActionV1
+import Cap.Governance.ExecutableV1
+import Cap.Governance.Utils
+  ( HasState (..), checkIdentity, checkTarget, mergeBinds
+  , readIdentity, readState, requireSameKeys, unchanged )
+
+import Cap.Examples.BabyDso.Ans
+import Cap.Examples.BabyDso.Config
+
+
+configId : Text
+configId = "amulet-config"
+
+configTargetKey : Party -> AuthenticKey
+configTargetKey amuletAuthority = AuthenticKey with
+  authorities = Set.fromList [amuletAuthority]
+  id = configId
+
+ansId : Text
+ansId = "ans-rules"
+
+ansTargetKey : Party -> AuthenticKey
+ansTargetKey dso = AuthenticKey with
+  authorities = Set.fromList [dso]
+  id = ansId
+
+instance HasCheckedFetch AmuletConfig AuthenticKey where
+  contractGroupId = signedKey configId
+
+instance HasCheckedFetch AnsRules AuthenticKey where
+  contractGroupId = signedKey ansId
+
+instance HasState AmuletConfig Decimal where
+  stateOf config = config.transferFee
+
+
+template SetFeesAction
+  with
+    amuletAuthority : Party
+    dso : Party
+    svs : Set Party
+  where
+    signatory amuletAuthority
+    observer dso :: Set.toList svs
+
+    interface instance Action for SetFeesAction where
+      view = ActionView with
+        authorizers = [[dso]]
+        binds = setFeesBinds amuletAuthority dso
+        meta = emptyMetadata
+
+      action_readStateImpl tkey cid
+        | tkey == configTargetKey amuletAuthority = readState @AmuletConfig tkey cid
+        | tkey == ansTargetKey dso = readIdentity @AnsRules tkey cid
+        | otherwise = abort ("this action binds no target " <> show tkey)
+
+      action_authorizeExecutionImpl _ arg = do
+        fees <-
+          orAbort "the execution carries no fees this action can apply" (arg.outcome >>= fromAnyValue)
+        binds <- mergeBinds (setFeesBinds amuletAuthority dso) arg.binds
+        cid <- create FeeUpdate with
+          amuletAuthority; dso; fees
+          binds
+          core = arg.executionCore
+          outcome = arg.outcome
+        pure Action_AuthorizeExecutionResult with
+          executionCids = [toInterfaceContractId cid]
+          meta = emptyMetadata
+
+setFeesBinds : Party -> Party -> Map AuthenticKey Bind
+setFeesBinds amuletAuthority dso = Map.fromList
+  [ (configTargetKey amuletAuthority, Bind with state = None; cid = None)
+  , (ansTargetKey dso, Bind with state = None; cid = None)
+  ]
+
+transferFeeField : Text
+transferFeeField = "transferFee"
+
+entryFeeField : Text
+entryFeeField = "entryFee"
+
+data Fees = Fees
+  with
+    transferFee : Decimal
+    entryFee : Decimal
+  deriving (Eq, Show)
+
+instance IsAnyValue Fees where
+  toAnyValue fees = AV_Map (TextMap.fromList
+    [ (transferFeeField, toAnyValue fees.transferFee)
+    , (entryFeeField, toAnyValue fees.entryFee)
+    ])
+  fromAnyValue (AV_Map fields)
+    | map fst (TextMap.toList fields) /= [entryFeeField, transferFeeField] = None
+    | otherwise = do
+        transferFee <- TextMap.lookup transferFeeField fields >>= fromAnyValue
+        entryFee <- TextMap.lookup entryFeeField fields >>= fromAnyValue
+        pure Fees with ..
+  fromAnyValue _ = None
+
+
+template FeeUpdate
+  with
+    amuletAuthority : Party
+    dso : Party
+    fees : Fees
+    core : ExecutionCore
+    binds : Map AuthenticKey Bind
+    outcome : Optional AnyValue
+  where
+    signatory amuletAuthority, dso
+    observer concat (concat (Map.values core.availableActions))
+
+    interface instance Executable for FeeUpdate where
+      view = ExecutableView with
+        executionCore = core
+        binds
+        outcome
+
+      executable_cancelImpl _ = abort "this execution cannot be cancelled"
+
+      executable_executeImpl targets _ = do
+        requireSameKeys binds targets
+        (configCid, _) <- checkTarget @AmuletConfig unchanged
+          (configTargetKey amuletAuthority) binds targets
+        (ansCid, _) <- checkIdentity @AnsRules (ansTargetKey dso) binds targets
+        updatedConfig <- exercise configCid
+          AmuletConfig_SetFee with newTransferFee = fees.transferFee
+        updatedAns <- exercise ansCid
+          AnsRules_SetFee with newEntryFee = fees.entryFee
+        pure Executable_ExecuteResult with
+          created = [coerceContractId updatedConfig, coerceContractId updatedAns]
+          meta = emptyMetadata

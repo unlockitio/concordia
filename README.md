@@ -16,6 +16,21 @@ private inputs, a rule resolves those inputs into an outcome, and the outcome
 triggers a downstream executable action — atomically, with on-ledger authority.
 Auctions and governance are the two worked instances.
 
+## Milestone 3 — Governance Module Expansion
+
+M3 adds weighted voting to `cap-governance`: helpers for weighing ballots and
+counting them, helpers for checking targets at execution, and a weighted voting
+flow built on them.
+
+| M3 deliverable | Where to look |
+| --- | --- |
+| Weighted-vote implementation | [`examples/governance/babydso/impl`](examples/governance/babydso/impl) — weights read by [`Weights.daml`](cap-governance/utils/daml/Cap/Governance/Utils/Weights.daml) and attached to ballots by [`Ballots.daml`](cap-governance/utils/daml/Cap/Governance/Utils/Ballots.daml) · [sequence diagrams](examples/governance/DEMOS-happy.md#babydso) |
+| Quorum, threshold, and approval logic for supported governance formats | [`Count.daml`](cap-governance/utils/daml/Cap/Governance/Utils/Count.daml) — quorums (`atLeastVotes`, `atLeastWeight`, `shareOfTotal`), thresholds and tallies (`shareOfVotes`, `plurality`, `unanimous`, `weightedMedian`) combined by `rule` |
+| Downstream execution hooks for approved proposals | [`ActionV1`](cap-governance/interfaces/action/daml/Cap/Governance/ActionV1.daml) and [`ExecutableV1`](cap-governance/interfaces/executable/daml/Cap/Governance/ExecutableV1.daml) · [`Targets.daml`](cap-governance/utils/daml/Cap/Governance/Utils/Targets.daml) · drift checks in the BabyDso flow: [`BabyDso/ExecutionDemo.daml`](examples/governance/babydso/demo/daml/Cap/Examples/BabyDso/ExecutionDemo.daml) |
+| Daml Script and sandbox integration tests for supported governance formats | [`babydso/demo`](examples/governance/babydso/demo) and [`private-majority-vote/demo`](examples/governance/private-majority-vote/demo) — [how to run](#running-the-demos) · [`scripts/sandbox-test.sh`](scripts/sandbox-test.sh) — [how to run](#on-a-canton-sandbox) · library tests in [`cap-governance/tests`](cap-governance/tests) |
+
+M3 tracks as [issue #540](https://github.com/canton-foundation/canton-dev-fund/issues/540).
+
 ## Milestone 2 — first executable slices in both proving domains
 
 M2 adds one reference format per domain,
@@ -25,9 +40,9 @@ a Canton sandbox.
 
 | M2 deliverable | Where to look |
 | --- | --- |
-| Majority-vote reference slice on `cap-core` | [`examples/governance/private-majority-vote`](examples/governance/private-majority-vote) — [demos](examples/governance/private-majority-vote/DEMOS.md) |
+| Majority-vote reference slice on `cap-core` | [`examples/governance/private-majority-vote`](examples/governance/private-majority-vote) — [sequence diagrams](examples/governance/DEMOS-happy.md#private-majority-vote) |
 | Sealed-bid auction reference slice on `cap-core` | [`examples/auctions/sealed-bid-first-price`](examples/auctions/sealed-bid-first-price) — [demos](examples/auctions/sealed-bid-first-price/DEMOS.md) |
-| Private ballot handling demonstrated | `whoSeesWhat` — [governance demos](examples/governance/private-majority-vote/DEMOS.md) |
+| Private ballot handling demonstrated | `whoSeesWhat` in [`MajorityVote/Demo.daml`](examples/governance/private-majority-vote/demo/daml/Cap/Examples/MajorityVote/Demo.daml) |
 | Private bid handling demonstrated | `whoSeesWhat` — [auction demos](examples/auctions/sealed-bid-first-price/DEMOS.md) |
 | Daml Script demos for both slices | `.../private-majority-vote/demo`, `.../sealed-bid-first-price/demo` — [how to run](#running-the-demos) |
 | Sandbox integration tests for both slices | [`scripts/sandbox-test.sh`](scripts/sandbox-test.sh) — [how to run](#on-a-canton-sandbox) |
@@ -43,66 +58,74 @@ M2 tracks as [issue #539](https://github.com/canton-foundation/canton-dev-fund/i
 | Design document for `cap-core` | [`DESIGN.md`](DESIGN.md) |
 | First-release scope and out-of-scope items | [`SCOPE.md`](SCOPE.md) |
 | Extension points for downstream modules | [`POST-RELEASE.md`](POST-RELEASE.md) |
-| Prototype of a typical workflow on Canton sandbox | [`examples/governance/baby-dso`](examples/governance/baby-dso/DEMOS.md) |
+| Prototype of a typical workflow on Canton sandbox | [`examples/governance/babydso`](examples/governance/babydso) |
 
 M1 tracks as [issue #538](https://github.com/canton-foundation/canton-dev-fund/issues/538).
 
 ## Architecture at a glance
 
-Concordia is a **three-tier library**: domain-agnostic interfaces in `cap-core`,
-and per-domain standards that require them and add their own.
+Concordia has three tiers: a domain-agnostic core and two domains built on it.
+CAP defines an interface only where code works with a contract whose template it
+does not know at compile time. Everything else is stored types and helpers.
 
-- **`cap-core`** — `Submittable` (a private input, admitted by a declared check)
-  and `Resolver` (the mechanism: window, authority set, resolution), plus
-  `cap-core-utils`, the implementer's toolkit.
-- **`cap-governance`** — `Ballot`, `AuthenticTarget` (the state an execution acts
-  on, and what drift means for it), `Action` (an effect arriving from a package
-  deployed after the core), `Executable`.
-- **`cap-auctions`** — `OneLotBid`, `Settlement`, and a registry binding;
-  settlement composes with the Token Standard V2 rather than restating it.
+- **`cap-core`** — stored types (`AuthenticKey`, `Mechanism`, `ExecutionCore`)
+  and `cap-core-utils` (checked fetches, mechanism checks, admission, windows,
+  value conversion). It defines no interfaces.
+- **`cap-governance`** — the `Action` and `Executable` interfaces, the stored
+  type `Bind`, and `cap-governance-utils` with the modules `Targets` (pinning
+  targets, and checking them at execution under a `DriftPolicy` the action
+  supplies), `Ballots`, `Weights` and `Count` (quorums and tallies).
+- **`cap-auctions`** — the `OneLotBid` and `Settlement` interfaces, utils and
+  funding. Settlement composes with the Token Standard V2 rather than restating
+  it.
 
-A format author writes templates implementing the tiers they need. CAP sits
-**above** Canton's asset and settlement layer.
+A format author writes its own templates (rules contract, ballots, bids) and uses
+the helpers it needs. CAP sits above Canton's asset and settlement layer.
 
 ## Repository layout
 
 ```
 concordia/
 ├── cap-core/                          # Tier 1: domain-agnostic
-│   ├── Interfaces/{submittable,resolver}
-│   └── cap-core-utils/                #   admission, execution, patch, time, value
+│   ├── types/                         #   AuthenticKey, Mechanism, ExecutionCore
+│   ├── utils/                         #   checked fetches, mechanisms, admission, windows, values
+│   └── tests/{unit,ledger}
 ├── cap-governance/                    # Tier 2: governance
-│   ├── Interfaces/{binding,executable,action,ballot}
-│   └── cap-governance-utils/          #   drift, pinning, separable formats
+│   ├── types/                         #   Bind, ReadTarget, Verdict
+│   ├── interfaces/{action,executable}
+│   ├── utils/                         #   Targets, Ballots, Weights, Count
+│   └── tests/{unit,ledger}
 ├── cap-auctions/                      # Tier 2: auctions (Token Standard V2)
-│   ├── Interfaces/{bid,settlement}
-│   ├── cap-auctions-utils/
-│   └── cap-auctions-funding/
+│   ├── interfaces/{bid,settlement}
+│   ├── utils/                         #   settlement legs and allocations for a one-lot bid
+│   ├── funding/                       #   funding a bid through a Token Standard allocation request
+│   ├── DESIGN.md
+│   └── RATIONALE.md
 ├── examples/governance/
-│   ├── baby-dso/                      # M1: Splice DSO governance
-│   │   ├── plain/                     #   the shape being argued against
-│   │   └── cap/{ans,config,governance,action,demo}
+│   ├── babydso/                       # Splice DSO governance with weighted votes
+│   │                                  #   impl/{ans,config,rights,governance,action}, demo
 │   └── private-majority-vote/         # M2: private ballots, {impl,demo}
 ├── examples/auctions/
 │   └── sealed-bid-first-price/        # M2: private bids, {impl,impostors,demo}
-├── examples/lib/                       # vendored DARs only the examples need
+├── examples/lib/                      # vendored DARs only the examples need
 ├── lib/                               # vendored Token Standard DARs (prebuilt)
 ├── scripts/sandbox-test.sh            # sandbox integration run
+├── .github/workflows/ci.yml           # build and test on push and pull request to dev
 ├── multi-package.yaml                 # dpm workspace (build order)
-├── DESIGN.md                          # cap-core design (threat models inline)
-├── RATIONALE.md                       # why the design is not something else
+├── DESIGN.md                          # map of the design docs
+├── cap-governance-rationale.md        # cap-governance design decisions
 ├── SCOPE.md                           # first-release scope, capability → milestone
 ├── POST-RELEASE.md                    # extension points for downstream modules
+├── GLOSSARY.md                        # terms and where each is defined
 ├── CHANGELOG.md
 ├── LICENSE                            # Apache-2.0
 └── README.md                          # this file
 ```
 
-`cap-governance/DESIGN.md` and `cap-auctions/DESIGN.md` carry the tier-2 designs.
-[`RATIONALE.md`](RATIONALE.md) records why each of these shapes was chosen over
-the alternative, with the per-domain decisions in
-[`cap-governance/RATIONALE.md`](cap-governance/RATIONALE.md) and
-[`cap-auctions/RATIONALE.md`](cap-auctions/RATIONALE.md).
+[`cap-governance-rationale.md`](cap-governance-rationale.md) and
+[`cap-auctions/DESIGN.md`](cap-auctions/DESIGN.md) carry the tier-2 designs.
+[`cap-auctions/RATIONALE.md`](cap-auctions/RATIONALE.md) records the auction
+decisions.
 
 ## Building
 
@@ -125,11 +148,21 @@ dpm test --package-root examples/governance/private-majority-vote/demo
 # M2 — sealed-bid first price, all scripts ok
 dpm test --package-root examples/auctions/sealed-bid-first-price/demo
 
-# M1 — BabyDso on cap, all scripts ok
-dpm test --package-root examples/governance/baby-dso/cap/demo
+# BabyDso with weighted votes, all scripts ok
+dpm test --package-root examples/governance/babydso/demo
 ```
 
-Each `DEMOS.md` says what its scripts assert, and what they deliberately do not.
+The library tests run the same way:
+
+```bash
+dpm test --package-root cap-core/tests/unit
+dpm test --package-root cap-core/tests/ledger
+dpm test --package-root cap-governance/tests/unit
+dpm test --package-root cap-governance/tests/ledger
+```
+
+[`sealed-bid-first-price/DEMOS.md`](examples/auctions/sealed-bid-first-price/DEMOS.md)
+says what the auction scripts assert, and what they deliberately do not.
 
 ### On a Canton sandbox
 
@@ -159,7 +192,7 @@ The other demo DARs, same shape:
 
 ```
 examples/auctions/sealed-bid-first-price/demo/.daml/dist/cap-example-sealed-first-price-demo-0.1.0.dar
-examples/governance/baby-dso/cap/demo/.daml/dist/cap-example-babydso-demo-0.1.0.dar
+examples/governance/babydso/demo/.daml/dist/cap-example-babydso-demo-0.1.0.dar
 ```
 
 Expected: every script reports `SUCCESS`, in the same counts `dpm test` reports

@@ -22,54 +22,54 @@ broad set of use cases.
 
 ### cap-core
 
-The interface layer (`Submittable`, `Resolver`) and the opt-in toolkit
-(`cap-core-utils`: admission, execution, patch, time, value) — completeness,
-privacy, expiry, submission windows, and atomic downstream execution — all
-specified in [`DESIGN.md`](DESIGN.md).
+The stored types (`AuthenticKey`, `Mechanism`, `ExecutionCore`) and the opt-in
+toolkit (`cap-core-utils`: checked fetches, mechanism checks, admission, windows,
+value conversion). cap-core defines no interfaces, because nothing in it has to
+work with a contract whose template it does not know.
 
 | Capability | First release contains | Proven by | Milestone |
 |---|---|---|---:|
-| Interfaces | Interface layer | [interfaces](cap-core/Interfaces) | **M1** |
-| Toolkit | Opt-in toolkit | [cap-core-utils](cap-core/cap-core-utils) | **M1** |
+| Interfaces | Interface layer | [types](cap-core/types) | **M1** |
+| Toolkit | Opt-in toolkit | [cap-core-utils](cap-core/utils) | **M1** |
 | Interfaces | The same core carrying both domains | [governance slice](examples/governance/private-majority-vote) · [auction slice](examples/auctions/sealed-bid-first-price) | **M2** |
 
-**The scope for cap-core is deliberately narrow** — the interface layer is meant
-to be stable. First-release work on the core is extending the toolkit (opt-in
-helpers as the modules surface reusable patterns; never constrains a format,
-only saves work) and adapting the interfaces only on a proven need, weighed
-against the under-forcing/over-forcing asymmetry.
+The scope for cap-core is deliberately narrow. The stored types are shared by
+both domains and change only on a proven need. First-release work on the core is
+extending the toolkit with opt-in helpers as the modules surface reusable
+patterns; a helper never constrains a format, it only saves work.
 
 ### cap-governance 
 
 | Capability | First release contains | Proven by | Milestone |
 |---|---|---|---:|
-| Interfaces | Interface layer | [Interfaces](cap-governance/Interfaces/) | **M1** |
-| Interfaces | Opt-in toolkit | [Toolkit](cap-governance/cap-governance-utils) | **M1** |
-| Implementation | Splice-generalizable flow | [cap implementation](examples/governance/baby-dso/cap) | **M1** |
-| Demo | Splice-generalizable flow demos | [DEMOS.md](examples/governance/baby-dso/DEMOS.md) | **M1** |
+| Interfaces | Interface layer | [interfaces](cap-governance/interfaces/) | **M1** |
+| Interfaces | Opt-in toolkit | [Toolkit](cap-governance/utils) | **M1** |
+| Implementation | Splice-generalizable flow | [babydso](examples/governance/babydso) | **M1** |
+| Demo | Splice-generalizable flow demos | [babydso/demo](examples/governance/babydso/demo) | **M1** |
 | Implementation | Private votes reference flow | [private-majority-vote/impl](examples/governance/private-majority-vote/impl) | **M2** |
-| Demo | Private votes reference flow demo | [private-majority-vote/DEMOS.md](examples/governance/private-majority-vote/DEMOS.md) | **M2** |
+| Demo | Private votes reference flow demo | [private-majority-vote/demo](examples/governance/private-majority-vote/demo) | **M2** |
 | Demo | Demo scripts and sandbox integration run | [demo package](examples/governance/private-majority-vote/demo) · [sandbox-test.sh](scripts/sandbox-test.sh) | **M2** |
-| Toolkit | Separable quorum and tally rules | [Count](cap-governance/cap-governance-utils/daml/Cap/Governance/Utils/Internal/Count.daml) | **M3** |
-| Toolkit | Default implementations for downstream execution hooks (tbd) | sandbox tests | **M3** |
-| Interfaces | Generalized weighted ballots logic | code | **M3** |
-| Implementation | Weighted voting flow | code | **M3** |
-| Demo | Weighted voting flow demo | sandbox prototype | **M3** |
+| Toolkit | Separable quorum and tally rules | [Count](cap-governance/utils/daml/Cap/Governance/Utils/Count.daml) | **M3** |
+| Toolkit | Default implementations for downstream execution hooks | [Targets](cap-governance/utils/daml/Cap/Governance/Utils/Targets.daml) · [tests](cap-governance/tests) | **M3** |
+| Interfaces | Generalized weighted ballots logic | [Ballots](cap-governance/utils/daml/Cap/Governance/Utils/Ballots.daml) · [Weights](cap-governance/utils/daml/Cap/Governance/Utils/Weights.daml) | **M3** |
+| Implementation | Weighted voting flow | [babydso](examples/governance/babydso) | **M3** |
+| Demo | Weighted voting flow demo | [babydso/demo](examples/governance/babydso/demo) · [sandbox-test.sh](scripts/sandbox-test.sh) | **M3** |
 | Implementation | A prototype frontend + backend driving the governance flow | code | **M5** |
 | Demo | A prototype frontend + backend driving the governance flow demo | end-to-end tests | **M5** |
 
 
-The interface layer is `Ballot`, `AuthenticTarget`, `Action` and `Executable`;
-it already drives a Splice-shaped flow end-to-end (the M1 BabyDso reference),
-and M2 confirms the same interfaces hold when votes stay private through
-resolution. Weighted voting *might* require new interfaces.
+The interface layer is `Action` and `Executable`. Ballots and governors are
+templates each app writes, read through the toolkit's type classes (`IsBallot`,
+`HasWeight`, `HasState`). The same two interfaces drive the Splice-shaped
+BabyDso flow and the private majority vote, and weighted voting needed no new
+interface.
 
 ### cap-auctions 
 
 | Capability | First release contains | Proven by | Milestone |
 |---|---|---|---:|
-| Interfaces | interface layer | [Interfaces](cap-auctions/Interfaces/) | **M1** |
-| Toolkit | opt-in toolkit | [cap-auctions-utils](cap-auctions/cap-auctions-utils) | **M2** |
+| Interfaces | interface layer | [interfaces](cap-auctions/interfaces/) | **M1** |
+| Toolkit | opt-in toolkit | [cap-auctions-utils](cap-auctions/utils) | **M2** |
 | Implementation | sealed-bid first-price | [sealed-bid-first-price/impl](examples/auctions/sealed-bid-first-price/impl) | **M2** |
 | Demo | sealed-bid first-price demo | [DEMOS.md](examples/auctions/sealed-bid-first-price/DEMOS.md) | **M2** |
 | Demo | Demo scripts and sandbox integration run | [demo package](examples/auctions/sealed-bid-first-price/demo) · [sandbox-test.sh](scripts/sandbox-test.sh) | **M2** |
@@ -86,9 +86,10 @@ skeleton. A bid names the payment its bidder funded before casting — a Token
 Standard `Allocation`, the standard's own artifact — and records what it says,
 so a pricing rule reads the funding off the bid. One close bars casting and
 withdrawing alike, so the set of bids is fixed the moment bidding ends and each
-one is irrevocable from then. A lot is a submittable too: the seller's offer,
-admitted by the check that admits the bids, so a resolution mints the seller's
-side and nothing before it does. A sale publishes its executors before bidding
+one is irrevocable from then. The seller locks the lot through a Token Standard
+allocation when accepting the sale, checked against the terms the same way the
+bids' allocations are, so the lot is committed before any bid is placed. A sale
+publishes its executors before bidding
 opens, so a bidder reads who can move their funds before committing any; a
 format that names none of the parties an award moves assets to or from makes
 that award unwithholdable once a resolution has reached it. Settlement runs through
