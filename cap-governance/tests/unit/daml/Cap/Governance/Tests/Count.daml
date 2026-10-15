@@ -23,51 +23,58 @@ votersIn ns = do
   dave <- allocateParty (ns <> "-dave")
   pure Voters with ..
 
-cast : Decimal -> Optional a -> Cast a
+cast : Decimal -> Vote a -> Cast a
 cast weight vote = Cast with weight; vote
 
 
-votedSkipsAbstentions : Script ()
-votedSkipsAbstentions = do
-  v <- votersIn "voted"
-  let casts = Map.fromList [(v.alice, cast 2.0 (Some "yes")), (v.bob, cast 3.0 None)]
-  voted casts === [(2.0, "yes")]
+weightedVotesSkipsAbsentVotersAndAbstentions : Script ()
+weightedVotesSkipsAbsentVotersAndAbstentions = do
+  v <- votersIn "weighted-votes"
+  let casts = Map.fromList
+        [(v.alice, cast 2.0 (Voted "yes")), (v.bob, cast 3.0 Abstained), (v.carol, cast 4.0 Absent)]
+  weightedVotes casts === [("yes", 2.0)]
   votedWeight casts === 2.0
+  presentWeight casts === 5.0
 
-quorumsCountBallotsVotesOrWeight : Script ()
-quorumsCountBallotsVotesOrWeight = do
+quorumsCountPresenceVotesOrWeight : Script ()
+quorumsCountPresenceVotesOrWeight = do
   v <- votersIn "quorums"
-  let casts = Map.fromList [(v.alice, cast 1.0 (Some "yes")), (v.bob, cast 1.0 None)]
+  let casts = Map.fromList
+        [(v.alice, cast 1.0 (Voted "yes")), (v.bob, cast 1.0 Abstained), (v.carol, cast 1.0 Absent)]
   anyTurnout casts === True
-  atLeastBallots 2 casts === True
+  atLeastPresent 2 casts === True
+  atLeastPresent 3 casts === False
   atLeastVotes 2 casts === False
   atLeastVotes 1 casts === True
-  atLeastWeight 1.0 casts === True
-  atLeastWeight 1.5 casts === False
+  atLeastVotedWeight 1.0 casts === True
+  atLeastVotedWeight 1.5 casts === False
 
-shareOfTotalComparesTheVotedWeightWithTheTotal : Script ()
-shareOfTotalComparesTheVotedWeightWithTheTotal = do
+atLeastShareOfTotalComparesThePresentWeightWithTheEligibleWeight : Script ()
+atLeastShareOfTotalComparesThePresentWeightWithTheEligibleWeight = do
   v <- votersIn "share-total"
-  let casts = Map.fromList [(v.alice, cast 2.0 (Some "yes")), (v.bob, cast 2.0 None)]
-  shareOfTotal 1 2 4.0 casts === True
-  shareOfTotal 3 4 4.0 casts === False
-  shareOfTotal 1 2 0.0 casts === False
-  shareOfTotal 1 0 4.0 casts === False
+  let casts = Map.fromList
+        [(v.alice, cast 1.0 (Voted "yes")), (v.bob, cast 1.0 Abstained), (v.carol, cast 2.0 Absent)]
+  atLeastShareOfTotal 1 2 casts === True
+  atLeastShareOfTotal 3 4 casts === False
+  atLeastShareOfTotal 1 0 casts === False
+  atLeastShareOfTotal 1 2 (Map.fromList [(v.alice, cast 0.0 (Voted "yes"))]) === False
 
-shareOfTotalMeetsAnExactTwoThirds : Script ()
-shareOfTotalMeetsAnExactTwoThirds = do
+atLeastShareOfTotalMeetsAnExactTwoThirds : Script ()
+atLeastShareOfTotalMeetsAnExactTwoThirds = do
   v <- votersIn "share-thirds"
-  shareOfTotal 2 3 9.0 (Map.fromList [(v.alice, cast 6.0 (Some "yes"))]) === True
-  shareOfTotal 2 3 9.0 (Map.fromList [(v.alice, cast 5.9 (Some "yes"))]) === False
-  shareOfTotal 2 3 10.0 (Map.fromList [(v.alice, cast 6.6666666667 (Some "yes"))]) === True
-  shareOfTotal 2 3 10.0 (Map.fromList [(v.alice, cast 6.6666666666 (Some "yes"))]) === False
+  let eligible present absent =
+        Map.fromList [(v.alice, cast present (Voted "yes")), (v.bob, cast absent Absent)]
+  atLeastShareOfTotal 2 3 (eligible 6.0 3.0) === True
+  atLeastShareOfTotal 2 3 (eligible 5.9 3.1) === False
+  atLeastShareOfTotal 2 3 (eligible 6.6666666667 3.3333333333) === True
+  atLeastShareOfTotal 2 3 (eligible 6.6666666666 3.3333333334) === False
 
 allOfAndAnyOfCombineQuorums : Script ()
 allOfAndAnyOfCombineQuorums = do
   v <- votersIn "combine"
-  let casts = Map.fromList [(v.alice, cast 1.0 (Some "yes"))]
-  allOf [atLeastVotes 1, atLeastWeight 5.0] casts === False
-  anyOf [atLeastVotes 1, atLeastWeight 5.0] casts === True
+  let casts = Map.fromList [(v.alice, cast 1.0 (Voted "yes"))]
+  allOf [atLeastVotes 1, atLeastVotedWeight 5.0] casts === False
+  anyOf [atLeastVotes 1, atLeastVotedWeight 5.0] casts === True
   allOf [] casts === True
   anyOf [] casts === False
 
@@ -75,26 +82,26 @@ unanimousNeedsEveryVoteToAgree : Script ()
 unanimousNeedsEveryVoteToAgree = do
   v <- votersIn "unanimous"
   unanimous (Map.fromList
-    [(v.alice, cast 1.0 (Some "yes")), (v.bob, cast 1.0 (Some "yes")), (v.carol, cast 1.0 None)])
+    [(v.alice, cast 1.0 (Voted "yes")), (v.bob, cast 1.0 (Voted "yes")), (v.carol, cast 1.0 Abstained)])
     === Some "yes"
-  unanimous (Map.fromList [(v.alice, cast 1.0 (Some "yes")), (v.bob, cast 1.0 (Some "no"))])
+  unanimous (Map.fromList [(v.alice, cast 1.0 (Voted "yes")), (v.bob, cast 1.0 (Voted "no"))])
     === None
-  unanimous (Map.fromList [(v.alice, cast 1.0 (None : Optional Text))]) === None
+  unanimous (Map.fromList [(v.alice, cast 1.0 (Abstained : Vote Text))]) === None
 
 pluralityPicksTheHeaviestOption : Script ()
 pluralityPicksTheHeaviestOption = do
   v <- votersIn "plurality"
   plurality (Map.fromList
-    [(v.alice, cast 3.0 (Some "yes")), (v.bob, cast 1.0 (Some "no")), (v.carol, cast 1.0 (Some "no"))])
+    [(v.alice, cast 3.0 (Voted "yes")), (v.bob, cast 1.0 (Voted "no")), (v.carol, cast 1.0 (Voted "no"))])
     === Some "yes"
-  plurality (Map.fromList [(v.alice, cast 2.0 (Some "yes")), (v.bob, cast 2.0 (Some "no"))])
+  plurality (Map.fromList [(v.alice, cast 2.0 (Voted "yes")), (v.bob, cast 2.0 (Voted "no"))])
     === None
-  plurality (Map.fromList [(v.alice, cast 1.0 (None : Optional Text))]) === None
+  plurality (Map.fromList [(v.alice, cast 1.0 (Abstained : Vote Text))]) === None
 
 shareOfVotesNeedsExactlyOneOptionOverTheBar : Script ()
 shareOfVotesNeedsExactlyOneOptionOverTheBar = do
   v <- votersIn "share-votes"
-  let casts = Map.fromList [(v.alice, cast 3.0 (Some "yes")), (v.bob, cast 1.0 (Some "no"))]
+  let casts = Map.fromList [(v.alice, cast 3.0 (Voted "yes")), (v.bob, cast 1.0 (Voted "no"))]
   shareOfVotes 1 2 casts === Some "yes"
   shareOfVotes 3 4 casts === Some "yes"
   shareOfVotes 1 5 casts === None
@@ -105,46 +112,46 @@ shareOfVotesMeetsAnExactTwoThirds : Script ()
 shareOfVotesMeetsAnExactTwoThirds = do
   v <- votersIn "share-votes-thirds"
   let casts = Map.fromList
-        [(v.alice, cast 2.0 (Some "yes")), (v.bob, cast 1.0 (Some "no"))]
+        [(v.alice, cast 2.0 (Voted "yes")), (v.bob, cast 1.0 (Voted "no"))]
   shareOfVotes 2 3 casts === Some "yes"
 
 medianAveragesTheTwoMiddlesOnAnEvenCount : Script ()
 medianAveragesTheTwoMiddlesOnAnEvenCount = do
   v <- votersIn "median"
   median (Map.fromList
-    [(v.alice, cast 5.0 (Some 1.0)), (v.bob, cast 1.0 (Some 3.0)), (v.carol, cast 1.0 (Some 2.0))])
+    [(v.alice, cast 5.0 (Voted 1.0)), (v.bob, cast 1.0 (Voted 3.0)), (v.carol, cast 1.0 (Voted 2.0))])
     === Some 2.0
   median (Map.fromList
-    [ (v.alice, cast 1.0 (Some 1.0)), (v.bob, cast 1.0 (Some 2.0))
-    , (v.carol, cast 1.0 (Some 3.0)), (v.dave, cast 1.0 (Some 4.0)) ])
+    [ (v.alice, cast 1.0 (Voted 1.0)), (v.bob, cast 1.0 (Voted 2.0))
+    , (v.carol, cast 1.0 (Voted 3.0)), (v.dave, cast 1.0 (Voted 4.0)) ])
     === Some 2.5
-  median (Map.fromList [(v.alice, cast 1.0 None)]) === None
+  median (Map.fromList [(v.alice, cast 1.0 Abstained)]) === None
 
 weightedMedianTakesTheValueThatCrossesHalfTheWeight : Script ()
 weightedMedianTakesTheValueThatCrossesHalfTheWeight = do
   v <- votersIn "weighted-median"
   weightedMedian (Map.fromList
-    [(v.alice, cast 1.0 (Some 1.0)), (v.bob, cast 1.0 (Some 2.0)), (v.carol, cast 5.0 (Some 10.0))])
+    [(v.alice, cast 1.0 (Voted 1.0)), (v.bob, cast 1.0 (Voted 2.0)), (v.carol, cast 5.0 (Voted 10.0))])
     === Some 10.0
   weightedMedian (Map.fromList
-    [(v.alice, cast 1.0 (Some 1.0)), (v.bob, cast 0.0 (Some 100.0))])
+    [(v.alice, cast 1.0 (Voted 1.0)), (v.bob, cast 0.0 (Voted 100.0))])
     === Some 1.0
-  weightedMedian (Map.fromList [(v.alice, cast 1.0 None)]) === None
+  weightedMedian (Map.fromList [(v.alice, cast 1.0 Abstained)]) === None
 
 firstOfTakesTheFirstTallyThatDecides : Script ()
 firstOfTakesTheFirstTallyThatDecides = do
   v <- votersIn "first-of"
-  let casts = Map.fromList [(v.alice, cast 1.0 (Some "yes"))]
+  let casts = Map.fromList [(v.alice, cast 1.0 (Voted "yes"))]
   firstOf [const None, unanimous] casts === Some "yes"
   firstOf [] casts === (None : Optional Text)
 
-ruleCombinesTheQuorumAndTheTally : Script ()
-ruleCombinesTheQuorumAndTheTally = do
-  v <- votersIn "rule"
-  let agreed = Map.fromList [(v.alice, cast 1.0 (Some "yes")), (v.bob, cast 1.0 (Some "yes"))]
-      split = Map.fromList [(v.alice, cast 1.0 (Some "yes")), (v.bob, cast 1.0 (Some "no"))]
-  rule (atLeastVotes 5) unanimous agreed === Lapsed
-  rule anyTurnout unanimous split === Undecided
-  rule anyTurnout unanimous agreed === Decided "yes"
+decideCombinesTheQuorumAndTheTally : Script ()
+decideCombinesTheQuorumAndTheTally = do
+  v <- votersIn "decide"
+  let agreed = Map.fromList [(v.alice, cast 1.0 (Voted "yes")), (v.bob, cast 1.0 (Voted "yes"))]
+      split = Map.fromList [(v.alice, cast 1.0 (Voted "yes")), (v.bob, cast 1.0 (Voted "no"))]
+  decide (atLeastVotes 5) unanimous agreed === Lapsed
+  decide anyTurnout unanimous split === Undecided
+  decide anyTurnout unanimous agreed === Decided "yes"
 
 

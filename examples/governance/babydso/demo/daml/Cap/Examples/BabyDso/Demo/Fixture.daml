@@ -16,7 +16,7 @@ import Daml.Script hiding (AnyContractId)
 
 import Splice.Api.Token.MetadataV1
 
-import Cap.Core.Types (AuthenticKey (..), Mechanism (..))
+import Cap.Core.Types (AuthenticKey (..), ResolutionRef (..))
 import Cap.Governance.ActionV1 (Action)
 import Cap.Governance.ExecutableV1
 
@@ -61,9 +61,9 @@ data Fixture = Fixture with
     ansCid : ContractId AnsRules
     actionCid : ContractId SetFeesAction
     governorCid : ContractId DsoGovernor
-    weightSources : Map RightKey (ContractId SvWeightSource)
-    mechanism : Mechanism
-    confirmMechanism : Mechanism
+    rightCids : Map RightKey (ContractId SvWeightSource)
+    resolution : ResolutionRef
+    confirmResolution : ResolutionRef
     terms : VoteTerms
 
 
@@ -96,24 +96,24 @@ setupWith ns sourcesFor = do
     (\(name, sv, weight) -> do
       cid <- submit dso $ createCmd SvWeightSource with dso; svs; name; sv; weight
       pure ((RightKey with authKey = sourceKey dso name; sv), cid))
-  let weightSources = Map.fromList created
+  let rightCids = Map.fromList created
   governorCid <- submit dso $ createCmd DsoGovernor with
     dso; svs
     governorId = bodyId
-    weightKeys = Set.fromList (Map.keys weightSources)
+    rightKeys = Set.fromList (Map.keys rightCids)
     executionDelay = hours 2
     executionWindow = days 1
     expiresAt = now `addRelTime` days 30
 
-  let mechanismFor procedure id = Mechanism with
+  let resolutionFor mechanism id = ResolutionRef with
         resolver = AuthenticKey with
           authorities = Set.fromList [dso]
           id = bodyId
         resolverCid = Some (coerceContractId governorCid)
-        procedure
+        mechanism
         id
-      mechanism = mechanismFor weightedVoteProcedureName proposalId
-      confirmMechanism = mechanismFor confirmationProcedureName confirmationId
+      resolution = resolutionFor weightedVoteMechanismName proposalId
+      confirmResolution = resolutionFor confirmationMechanismName confirmationId
       terms = VoteTerms with
         votingClosesAt = now `addRelTime` hours 1
         expiresAt = now `addRelTime` days 2
@@ -127,18 +127,18 @@ feeParameters transferFee entryFee = TextMap.fromList
   , (entryFeeField, entryFee)
   ]
 
-feeVote : Decimal -> Decimal -> Vote
+feeVote : Decimal -> Decimal -> DsoVote
 feeVote transferFee entryFee = V_Parameters (feeParameters transferFee entryFee)
 
 feeValue : Decimal -> Decimal -> AnyValue
 feeValue transferFee entryFee = AV_Map (fmap AV_Decimal (feeParameters transferFee entryFee))
 
-targetsOf : Fixture -> Map AuthenticKey AnyContractId
-targetsOf f = targetsWith f f.configCid f.ansCid
+targetCidsOf : Fixture -> Map AuthenticKey AnyContractId
+targetCidsOf f = targetCidsWith f f.configCid f.ansCid
 
-targetsWith
+targetCidsWith
   : Fixture -> ContractId AmuletConfig -> ContractId AnsRules -> Map AuthenticKey AnyContractId
-targetsWith f configCid ansCid = Map.fromList
+targetCidsWith f configCid ansCid = Map.fromList
   [ (configTargetKey f.amuletAuthority, coerceContractId configCid)
   , (ansTargetKey f.dso, coerceContractId ansCid)
   ]
@@ -154,25 +154,25 @@ sourceKeyOf f name sv = RightKey with authKey = sourceKey f.dso name; sv
 
 
 openVoteCmd
-  : Fixture -> Party -> Vote -> Map RightKey (ContractId SvWeightSource)
+  : Fixture -> Party -> DsoVote -> Map RightKey (ContractId SvWeightSource)
   -> Commands (ContractId SharedBallot)
-openVoteCmd f proposer vote weightSources =
+openVoteCmd f proposer vote rightCids =
   exerciseCmd f.governorCid DsoGovernor_OpenVote with
-    proposer; vote; weightSources
-    mechanism = f.mechanism
+    proposer; vote; rightCids
+    resolution = f.resolution
     actionCid = toInterfaceContractId @Action f.actionCid
     votingClosesAt = f.terms.votingClosesAt
     expiresAt = f.terms.expiresAt
-    targets = targetsOf f
+    targetCids = targetCidsOf f
 
-openVoteAs : Fixture -> Party -> Vote -> Script (ContractId SharedBallot)
+openVoteAs : Fixture -> Party -> DsoVote -> Script (ContractId SharedBallot)
 openVoteAs f proposer vote =
-  submit (actAs proposer <> readAs f.dso) (openVoteCmd f proposer vote f.weightSources)
+  submit (actAs proposer <> readAs f.dso) (openVoteCmd f proposer vote f.rightCids)
 
-castCmd : Party -> ContractId SharedBallot -> Vote -> Commands (ContractId SharedBallot)
+castCmd : Party -> ContractId SharedBallot -> DsoVote -> Commands (ContractId SharedBallot)
 castCmd voter ballotCid vote = exerciseCmd ballotCid SharedBallot_Cast with voter; vote
 
-castAs : Fixture -> Party -> ContractId SharedBallot -> Vote -> Script (ContractId SharedBallot)
+castAs : Fixture -> Party -> ContractId SharedBallot -> DsoVote -> Script (ContractId SharedBallot)
 castAs f voter ballotCid vote = submit (actAs voter <> readAs f.dso) (castCmd voter ballotCid vote)
 
 resolveVoteAs
@@ -180,17 +180,17 @@ resolveVoteAs
 resolveVoteAs f sv ballotCid =
   submit (actAs sv <> readAs f.dso) $ exerciseCmd f.governorCid DsoGovernor_ResolveVote with
     sv
-    mechanism = f.mechanism
+    resolution = f.resolution
     ballotCid
 
 confirmAs : Fixture -> Party -> AnyValue -> Script (ContractId SvConfirmation)
 confirmAs f confirmer confirmed =
   submit (actAs confirmer <> readAs f.dso) $ exerciseCmd f.governorCid DsoGovernor_Confirm with
     confirmer
-    mechanism = f.confirmMechanism
+    resolution = f.confirmResolution
     actionCid = toInterfaceContractId @Action f.actionCid
     vote = V_Confirm confirmed
-    targets = targetsOf f
+    targetCids = targetCidsOf f
     expiresAt = f.terms.expiresAt
 
 resolveConfirmationsAs
@@ -198,20 +198,20 @@ resolveConfirmationsAs
 resolveConfirmationsAs f sv confirmationCids =
   submit (actAs sv <> readAs f.dso) $ exerciseCmd f.governorCid DsoGovernor_ResolveConfirmations with
     sv; confirmationCids
-    mechanism = f.confirmMechanism
+    resolution = f.confirmResolution
 
 executeCmd
   : Party -> ContractId Executable -> Map AuthenticKey AnyContractId
   -> Commands Executable_ExecuteResult
-executeCmd sv executionCid targets =
+executeCmd sv executionCid targetCids =
   exerciseCmd executionCid Executable_Execute with
     actors = [sv]
-    targets
+    targetCids
     extraArgs = noArgs
 
 executeAs : Fixture -> Party -> ContractId Executable -> Script Executable_ExecuteResult
 executeAs f sv executionCid =
-  submit (actAs sv <> readAs f.dso) (executeCmd sv executionCid (targetsOf f))
+  submit (actAs sv <> readAs f.dso) (executeCmd sv executionCid (targetCidsOf f))
 
 
 feesNow : Fixture -> Script (Decimal, Decimal)

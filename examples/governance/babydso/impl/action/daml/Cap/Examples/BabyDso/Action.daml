@@ -13,12 +13,12 @@ import qualified DA.TextMap as TextMap
 import Splice.Api.Token.MetadataV1
 import Splice.Util (HasCheckedFetch (..))
 
-import Cap.Core.Types (AuthenticKey (..), Bind (..), ExecutionCore (..))
+import Cap.Core.Types (AuthenticKey (..), Snapshot (..), ExecutionCore (..))
 import Cap.Core.Utils (IsAnyValue (..), orAbort, signedKey)
 import Cap.Governance.ActionV1
 import Cap.Governance.ExecutableV1
 import Cap.Governance.Utils
-  ( HasState (..), checkIdentity, checkTarget, mergeBinds
+  ( HasState (..), checkIdentity, checkTarget, mergeSnapshots
   , readIdentity, readState, requireSameKeys, unchanged )
 
 import Cap.Examples.BabyDso.Ans
@@ -63,31 +63,31 @@ template SetFeesAction
     interface instance Action for SetFeesAction where
       view = ActionView with
         authorizers = [[dso]]
-        binds = setFeesBinds amuletAuthority dso
+        targets = setFeesTargets amuletAuthority dso
         meta = emptyMetadata
 
       action_readStateImpl tkey cid
         | tkey == configTargetKey amuletAuthority = readState @AmuletConfig tkey cid
         | tkey == ansTargetKey dso = readIdentity @AnsRules tkey cid
-        | otherwise = abort ("this action binds no target " <> show tkey)
+        | otherwise = abort ("this action names no target " <> show tkey)
 
       action_authorizeExecutionImpl _ arg = do
         fees <-
           orAbort "the execution carries no fees this action can apply" (arg.outcome >>= fromAnyValue)
-        binds <- mergeBinds (setFeesBinds amuletAuthority dso) arg.binds
+        snapshots <- mergeSnapshots (setFeesTargets amuletAuthority dso) arg.snapshots
         cid <- create FeeUpdate with
           amuletAuthority; dso; fees
-          binds
+          snapshots
           core = arg.executionCore
           outcome = arg.outcome
         pure Action_AuthorizeExecutionResult with
           executionCids = [toInterfaceContractId cid]
           meta = emptyMetadata
 
-setFeesBinds : Party -> Party -> Map AuthenticKey Bind
-setFeesBinds amuletAuthority dso = Map.fromList
-  [ (configTargetKey amuletAuthority, Bind with state = None; cid = None)
-  , (ansTargetKey dso, Bind with state = None; cid = None)
+setFeesTargets : Party -> Party -> Map AuthenticKey Snapshot
+setFeesTargets amuletAuthority dso = Map.fromList
+  [ (configTargetKey amuletAuthority, Snapshot with state = None; cid = None)
+  , (ansTargetKey dso, Snapshot with state = None; cid = None)
   ]
 
 transferFeeField : Text
@@ -122,7 +122,7 @@ template FeeUpdate
     dso : Party
     fees : Fees
     core : ExecutionCore
-    binds : Map AuthenticKey Bind
+    snapshots : Map AuthenticKey Snapshot
     outcome : Optional AnyValue
   where
     signatory amuletAuthority, dso
@@ -131,16 +131,16 @@ template FeeUpdate
     interface instance Executable for FeeUpdate where
       view = ExecutableView with
         executionCore = core
-        binds
+        snapshots
         outcome
 
       executable_cancelImpl _ = abort "this execution cannot be cancelled"
 
-      executable_executeImpl targets _ = do
-        requireSameKeys binds targets
+      executable_executeImpl targetCids _ = do
+        requireSameKeys snapshots targetCids
         (configCid, _) <- checkTarget @AmuletConfig unchanged
-          (configTargetKey amuletAuthority) binds targets
-        (ansCid, _) <- checkIdentity @AnsRules (ansTargetKey dso) binds targets
+          (configTargetKey amuletAuthority) snapshots targetCids
+        (ansCid, _) <- checkIdentity @AnsRules (ansTargetKey dso) snapshots targetCids
         updatedConfig <- exercise configCid
           AmuletConfig_SetFee with newTransferFee = fees.transferFee
         updatedAns <- exercise ansCid

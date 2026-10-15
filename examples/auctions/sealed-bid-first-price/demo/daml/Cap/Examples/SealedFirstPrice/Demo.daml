@@ -21,7 +21,7 @@ import Splice.TokenStandard.Utils (basicAccount, senderSide)
 import Splice.Testing.Utils
 import qualified Splice.Testing.TokenStandard.RegistryApiV2 as RegistryApi
 
-import Cap.Core.Types (AuthenticKey (..), Mechanism (..))
+import Cap.Core.Types (AuthenticKey (..), ResolutionRef (..))
 import Cap.Auctions.Funding (OneLotBidAllocationRequest)
 import Cap.Auctions.OneLotBidV1
 import Cap.Auctions.Utils (oneLotSettlement)
@@ -38,7 +38,7 @@ import Cap.Examples.SealedFirstPrice.Demo.Fixture
 
 data OpenAuction = OpenAuction with
     fixture : Fixture
-    mechanism : Mechanism
+    resolution : ResolutionRef
     auctionCid : ContractId Auction
     seats : [(Party, ContractId AuctionBid)]
     disclosures : Disclosures'
@@ -46,13 +46,13 @@ data OpenAuction = OpenAuction with
 invitedBidders : Fixture -> [Party]
 invitedBidders f = [f.alice, f.bob, f.carol]
 
-auctionMechanism : Set.Set Party -> Text -> Text -> ContractId Auction -> Mechanism
-auctionMechanism authorities resolverId saleId auctionCid = Mechanism with
+auctionResolution : Set.Set Party -> Text -> Text -> ContractId Auction -> ResolutionRef
+auctionResolution authorities resolverId saleId auctionCid = ResolutionRef with
   resolver = AuthenticKey with
     authorities
     id = resolverId
   resolverCid = Some (coerceContractId auctionCid)
-  procedure = firstPriceProcedureName
+  mechanism = firstPriceMechanismName
   id = saleId
 
 openAuction : Text -> Script OpenAuction
@@ -107,20 +107,20 @@ openAuctionWith ns retermsFor = do
     exerciseCmd proposalCid AuctionProposal_Accept with
       sellerLotAllocationCid
       sellerPaymentAllocationCid
-  let mechanism = auctionMechanism f.authorities f.resolverId f.saleId auctionCid
+  let resolution = auctionResolution f.authorities f.resolverId f.saleId auctionCid
 
   seats <- forA (invitedBidders f) $ \p -> do
     cid <- submit f.operator $ createCmd AuctionBid with
       terms = f.terms
       bidderPaymentAccount = basicAccount p
       bidderLotAccount = basicAccount p
-      mechanism
+      resolution
       quotes = []
       allocations = []
     pure (p, cid)
 
   pure OpenAuction with
-    fixture; mechanism; auctionCid; seats; disclosures
+    fixture; resolution; auctionCid; seats; disclosures
 
 seatFor : OpenAuction -> Party -> Script (ContractId OneLotBid)
 seatFor auction p = case lookup p auction.seats of
@@ -253,7 +253,7 @@ fundBid auction bidder price = do
 resolveCmd : OpenAuction -> [ContractId OneLotBid] -> ExtraArgs -> Commands AuctionResult
 resolveCmd auction entries ctx =
   exerciseCmd auction.auctionCid Auction_Resolve with
-    mechanism = auction.mechanism
+    resolution = auction.resolution
     bidCids = entries
     extraArgs = ctx
 

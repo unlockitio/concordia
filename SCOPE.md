@@ -22,8 +22,8 @@ broad set of use cases.
 
 ### cap-core
 
-The stored types (`AuthenticKey`, `Mechanism`, `ExecutionCore`) and the opt-in
-toolkit (`cap-core-utils`: checked fetches, mechanism checks, admission, windows,
+The stored types (`AuthenticKey`, `ResolutionRef`, `ExecutionCore`) and the opt-in
+toolkit (`cap-core-utils`: checked fetches, resolution checks, admission, windows,
 value conversion). cap-core defines no interfaces, because nothing in it has to
 work with a contract whose template it does not know.
 
@@ -51,7 +51,7 @@ patterns; a helper never constrains a format, it only saves work.
 | Demo | Demo scripts and sandbox integration run | [demo package](examples/governance/private-majority-vote/demo) · [sandbox-test.sh](scripts/sandbox-test.sh) | **M2** |
 | Toolkit | Separable quorum and tally rules | [Count](cap-governance/utils/daml/Cap/Governance/Utils/Count.daml) | **M3** |
 | Toolkit | Default implementations for downstream execution hooks | [Targets](cap-governance/utils/daml/Cap/Governance/Utils/Targets.daml) · [tests](cap-governance/tests) | **M3** |
-| Interfaces | Generalized weighted ballots logic | [Ballots](cap-governance/utils/daml/Cap/Governance/Utils/Ballots.daml) · [Weights](cap-governance/utils/daml/Cap/Governance/Utils/Weights.daml) | **M3** |
+| Interfaces | Generalized weighted ballots logic | [Ballots](cap-governance/utils/daml/Cap/Governance/Utils/Ballots.daml) · [VotingRights](cap-governance/utils/daml/Cap/Governance/Utils/VotingRights.daml) | **M3** |
 | Implementation | Weighted voting flow | [babydso](examples/governance/babydso) | **M3** |
 | Demo | Weighted voting flow demo | [babydso/demo](examples/governance/babydso/demo) · [sandbox-test.sh](scripts/sandbox-test.sh) | **M3** |
 | Implementation | A prototype frontend + backend driving the governance flow | code | **M5** |
@@ -60,7 +60,7 @@ patterns; a helper never constrains a format, it only saves work.
 
 The interface layer is `Action` and `Executable`. Ballots and governors are
 templates each app writes, read through the toolkit's type classes (`IsBallot`,
-`HasWeight`, `HasState`). The same two interfaces drive the Splice-shaped
+`HasVotingRights`, `HasState`). The same two interfaces drive the Splice-shaped
 BabyDso flow and the private majority vote, and weighted voting needed no new
 interface.
 

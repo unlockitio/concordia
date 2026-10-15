@@ -2,10 +2,11 @@
 
 module Cap.Core.Types
   ( AuthenticKey (..)
-  , Mechanism (..)
+  , ResolutionRef (..)
   , ExecutionAction (..)
   , ExecutionCore (..)
-  , Bind (..)
+  , Snapshot (..)
+  , TargetReader
   ) where
 
 import DA.Map (Map)
@@ -20,11 +21,11 @@ data AuthenticKey = AuthenticKey
     id : Text
   deriving (Eq, Show, Ord)
 
-data Mechanism = Mechanism
+data ResolutionRef = ResolutionRef
   with
     resolver : AuthenticKey
     resolverCid : Optional AnyContractId
-    procedure : Text
+    mechanism : Text
     id : Text
   deriving (Eq, Show)
 
@@ -40,13 +41,17 @@ data ExecutionCore = ExecutionCore
     authorities : Set Party
     availableActions : Map ExecutionAction [[Party]]
     opensAt : Time
-    cancelAt : Time
+    cancelAfter : Time
     expiresAt : Optional Time
     meta : Metadata
   deriving (Eq, Show)
 
-data Bind = Bind
+data Snapshot = Snapshot
   with
     state : Optional AnyValue
     cid : Optional AnyContractId
   deriving (Eq, Show)
+
+-- | Reads a target named by a key: checks the contract is the one the key
+-- names and returns its state, or None when it has none to snapshot. 
+type TargetReader = AuthenticKey -> AnyContractId -> Update (Optional AnyValue)

@@ -170,7 +170,7 @@ theCountCoversTheElectorate = do
   submitMustFail f.operator $ createCmd PrivateBallot with
     operator = f.operator
     voter = f.alice
-    mechanism = f.mechanism
+    resolution = f.resolution
     actionCid = f.terms.actionCid
     opensAt = f.terms.entryClosesAt
     closesAt = f.terms.votingClosesAt
@@ -179,7 +179,7 @@ theCountCoversTheElectorate = do
   submitMustFail (actAs f.dso <> actAs f.operator) $ createCmd PrivateBallot with
     operator = f.operator
     voter = f.alice
-    mechanism = f.mechanism
+    resolution = f.resolution
     actionCid = f.terms.actionCid
     opensAt = f.terms.entryClosesAt
     closesAt = f.terms.votingClosesAt
@@ -188,7 +188,7 @@ theCountCoversTheElectorate = do
   submitMustFail f.operator $ createCmd PrivateBallot with
     operator = f.operator
     voter = f.alice
-    mechanism = f.mechanism
+    resolution = f.resolution
     actionCid = f.terms.actionCid
     opensAt = f.terms.entryClosesAt
     closesAt = f.terms.votingClosesAt

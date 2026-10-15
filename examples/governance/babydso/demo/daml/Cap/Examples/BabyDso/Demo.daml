@@ -20,7 +20,7 @@ svsSetBothFees = do
 
   opened <- openVoteAs f f.sv1 (feeVote 0.05 2.0)
   Some ballot <- queryContractId f.sv1 opened
-  ballot.weights === Map.fromList [(f.sv1, 5.0), (f.sv2, 3.0), (f.sv3, 1.0)]
+  ballot.openingWeights === Map.fromList [(f.sv1, 5.0), (f.sv2, 3.0), (f.sv3, 1.0)]
 
   withSv2 <- castAs f f.sv2 opened (feeVote 0.06 2.5)
   ballotCid <- castAs f f.sv3 withSv2 (feeVote 0.09 4.0)

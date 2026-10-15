@@ -5,13 +5,14 @@ module Cap.Governance.Tests.Harness where
 import Prelude hiding (Action)
 
 import DA.Map (Map)
+import qualified DA.Map as Map
 import DA.Set (Set)
 import qualified DA.Set as Set
 
 import Splice.Api.Token.MetadataV1
 import Splice.Util (HasCheckedFetch (..))
 
-import Cap.Core.Types (AuthenticKey (..), Bind (..), Mechanism (..))
+import Cap.Core.Types (AuthenticKey (..), Snapshot (..), ResolutionRef (..))
 import Cap.Core.Utils (IsAnyValue (..), fetchCheckedAny, signedKey)
 import Cap.Governance.ActionV1
 import Cap.Governance.Utils
@@ -36,7 +37,7 @@ instance HasCheckedFetch Target AuthenticKey where
 instance HasState Target Int where
   stateOf target = target.value
 
-readTarget : ReadTarget
+readTarget : TargetReader
 readTarget key cid = do
   (_, target) <- fetchCheckedAny @Target key cid
   pure (if target.value < 0 then None else Some (toAnyValue (stateOf target)))
@@ -45,24 +46,24 @@ readTarget key cid = do
 template Ballot
   with
     owner : Party
-    mechanism : Mechanism
+    resolution : ResolutionRef
     actionCid : ContractId Action
     votes : Map Party (Optional Text)
-    binds : Map AuthenticKey Bind
+    snapshots : Map AuthenticKey Snapshot
   where
     signatory owner
 
-instance HasCheckedFetch Ballot Mechanism where
-  contractGroupId ballot = ballot.mechanism
+instance HasCheckedFetch Ballot ResolutionRef where
+  contractGroupId ballot = ballot.resolution
 
-instance IsBallot Ballot Text (ContractId Action) where
-  castsOf ballot = ballot.votes
-  bindsOf ballot = ballot.binds
+instance IsBallot Ballot Text where
+  votesOf ballot = fmap (optional Abstained Voted) ballot.votes
+  snapshotsOf ballot = ballot.snapshots
   actionOf ballot = ballot.actionCid
   consume = archive
 
-narrowText : Text -> Optional Text
-narrowText vote = if vote == "bad" then None else Some vote
+textVoteOf : Text -> Optional Text
+textVoteOf vote =if vote == "bad" then None else Some vote
 
 
 template Weight
@@ -77,8 +78,23 @@ template Weight
 instance HasCheckedFetch Weight Text where
   contractGroupId weight = weight.tag
 
-instance HasWeight Weight where
-  weightOf weight = (weight.holder, weight.amount)
+instance HasVotingRights Weight where
+  rightsOf weight = Map.singleton weight.holder weight.amount
+
+
+template WeightsContract
+  with
+    owner : Party
+    tag : Text
+    weights : Map Party Decimal
+  where
+    signatory owner
+
+instance HasCheckedFetch WeightsContract Text where
+  contractGroupId contract = contract.tag
+
+instance HasVotingRights WeightsContract where
+  rightsOf contract = contract.weights
 
 
 template DummyAction
@@ -86,7 +102,7 @@ template DummyAction
     owner : Party
     readers : [Party]
     authorizers : [[Party]]
-    declared : Map AuthenticKey Bind
+    targets : Map AuthenticKey Snapshot
   where
     signatory owner
     observer readers
@@ -94,7 +110,7 @@ template DummyAction
     interface instance Action for DummyAction where
       view = ActionView with
         authorizers
-        binds = declared
+        targets
         meta = emptyMetadata
 
       action_readStateImpl = readTarget
@@ -109,23 +125,23 @@ template Probe
   where
     signatory owner
 
-    nonconsuming choice Probe_WeighBallots : Casts Text
+    nonconsuming choice Probe_WeightedCastsOf : Casts Text
       with
         weights : Map Party Decimal
         ballotCids : [ContractId Ballot]
       controller owner
       do
         presented <- fetchBallots ballotCids
-        weighBallots narrowText weights (map snd presented)
+        weightedCastsOf textVoteOf weights (map snd presented)
 
-    nonconsuming choice Probe_WeighBallotsEqually : Casts Text
+    nonconsuming choice Probe_CastsOf : Casts Text
       with
         voters : Set Party
         ballotCids : [ContractId Ballot]
       controller owner
       do
         presented <- fetchBallots ballotCids
-        weighBallotsEqually narrowText voters (map snd presented)
+        castsOf textVoteOf voters (map snd presented)
 
     nonconsuming choice Probe_ConsumeBallots : ()
       with
@@ -135,56 +151,109 @@ template Probe
         presented <- fetchBallots ballotCids
         consumeBallots (map fst presented)
 
-    nonconsuming choice Probe_ReadWeights : Map Text (Party, Decimal)
+    nonconsuming choice Probe_FetchVotingRights : Map Text (Map Party Decimal)
       with
-        registered : Set Text
-        sources : Map Text (ContractId Weight)
+        rightKeys : Set Text
+        rightCids : Map Text (ContractId Weight)
       controller owner
-      do readWeights registered sources
+      do fetchVotingRights rightKeys rightCids
 
-    nonconsuming choice Probe_PinStates : Map AuthenticKey Bind
+    nonconsuming choice Probe_FetchWeightsPerContract : Map Party Decimal
       with
-        fixed : Map AuthenticKey Bind
-        targets : Map AuthenticKey AnyContractId
+        rightKeys : Set Text
+        rightCids : Map Text (ContractId Weight)
       controller owner
-      do pinStatesWith readTarget fixed targets
+      do fetchWeightsPerContract rightKeys rightCids
 
-    nonconsuming choice Probe_PinCids : Map AuthenticKey Bind
+    nonconsuming choice Probe_FetchWeightsPerWeightsContract : Map Party Decimal
       with
-        fixed : Map AuthenticKey Bind
-        targets : Map AuthenticKey AnyContractId
+        rightKeys : Set Text
+        rightCids : Map Text (ContractId WeightsContract)
       controller owner
-      do pinCidsWith readTarget fixed targets
+      do fetchWeightsPerContract rightKeys rightCids
 
-    nonconsuming choice Probe_MergeBinds : Map AuthenticKey Bind
+    nonconsuming choice Probe_FetchWeightsFromOneContract : Map Party Decimal
       with
-        fixed : Map AuthenticKey Bind
-        pinned : Map AuthenticKey Bind
+        rightsKey : Text
+        rightsCid : ContractId WeightsContract
       controller owner
-      do mergeBinds fixed pinned
+      do fetchWeightsFromOneContract rightsKey rightsCid
+
+    nonconsuming choice Probe_FetchVotersFromOneContract : Set Party
+      with
+        rightsKey : Text
+        rightsCid : ContractId WeightsContract
+      controller owner
+      do fetchVotersFromOneContract rightsKey rightsCid
+
+    nonconsuming choice Probe_FetchVotersPerContract : Set Party
+      with
+        rightKeys : Set Text
+        rightCids : Map Text (ContractId Weight)
+      controller owner
+      do fetchVotersPerContract rightKeys rightCids
+
+    nonconsuming choice Probe_SnapshotStates : Map AuthenticKey Snapshot
+      with
+        targets : Map AuthenticKey Snapshot
+        targetCids : Map AuthenticKey AnyContractId
+      controller owner
+      do snapshotStatesWith readTarget targets targetCids
+
+    nonconsuming choice Probe_SnapshotCids : Map AuthenticKey Snapshot
+      with
+        targets : Map AuthenticKey Snapshot
+        targetCids : Map AuthenticKey AnyContractId
+      controller owner
+      do snapshotCidsWith readTarget targets targetCids
+
+    nonconsuming choice Probe_SnapshotStatesOfAction : Map AuthenticKey Snapshot
+      with
+        actionCid : ContractId Action
+        targetCids : Map AuthenticKey AnyContractId
+      controller owner
+      do
+        action <- fetch actionCid
+        snapshotStates action targetCids
+
+    nonconsuming choice Probe_SnapshotCidsOfAction : Map AuthenticKey Snapshot
+      with
+        actionCid : ContractId Action
+        targetCids : Map AuthenticKey AnyContractId
+      controller owner
+      do
+        action <- fetch actionCid
+        snapshotCids action targetCids
+
+    nonconsuming choice Probe_MergeSnapshots : Map AuthenticKey Snapshot
+      with
+        targets : Map AuthenticKey Snapshot
+        taken : Map AuthenticKey Snapshot
+      controller owner
+      do mergeSnapshots targets taken
 
     nonconsuming choice Probe_RequireSameKeys : ()
       with
-        bound : Map AuthenticKey Bind
-        targets : Map AuthenticKey AnyContractId
+        snapshots : Map AuthenticKey Snapshot
+        targetCids : Map AuthenticKey AnyContractId
       controller owner
-      do requireSameKeys bound targets
+      do requireSameKeys snapshots targetCids
 
     nonconsuming choice Probe_CheckTarget : ContractId Target
       with
         key : AuthenticKey
-        bound : Map AuthenticKey Bind
-        targets : Map AuthenticKey AnyContractId
+        snapshots : Map AuthenticKey Snapshot
+        targetCids : Map AuthenticKey AnyContractId
       controller owner
-      do fst <$> checkTarget @Target (==) key bound targets
+      do fst <$> checkTarget @Target (==) key snapshots targetCids
 
     nonconsuming choice Probe_CheckIdentity : ContractId Target
       with
         key : AuthenticKey
-        bound : Map AuthenticKey Bind
-        targets : Map AuthenticKey AnyContractId
+        snapshots : Map AuthenticKey Snapshot
+        targetCids : Map AuthenticKey AnyContractId
       controller owner
-      do fst <$> checkIdentity @Target key bound targets
+      do fst <$> checkIdentity @Target key snapshots targetCids
 
 fetchBallots : [ContractId Ballot] -> Update [(ContractId Ballot, Ballot)]
 fetchBallots = mapA (\cid -> do

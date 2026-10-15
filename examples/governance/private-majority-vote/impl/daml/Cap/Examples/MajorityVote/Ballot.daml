@@ -9,10 +9,10 @@ import DA.Optional (isNone, isSome)
 
 import Splice.Util (HasCheckedFetch (..), require)
 
-import Cap.Core.Types (Mechanism)
+import Cap.Core.Types (ResolutionRef)
 import Cap.Core.Utils (requireExpired, requireOpen)
 import Cap.Governance.ActionV1 (Action)
-import Cap.Governance.Utils (IsBallot (..))
+import Cap.Governance.Utils (IsBallot (..), Vote (..))
 
 yay : Text
 yay = "yay"
@@ -24,7 +24,7 @@ template PrivateBallot
   with
     operator : Party
     voter : Party
-    mechanism : Mechanism
+    resolution : ResolutionRef
     actionCid : ContractId Action
     opensAt : Time
     closesAt : Time
@@ -64,11 +64,11 @@ template PrivateBallot
       do pure ()
 
 
-instance HasCheckedFetch PrivateBallot Mechanism where
-  contractGroupId ballot = ballot.mechanism
+instance HasCheckedFetch PrivateBallot ResolutionRef where
+  contractGroupId ballot = ballot.resolution
 
-instance IsBallot PrivateBallot Text (ContractId Action) where
-  castsOf ballot = Map.fromList [(ballot.voter, ballot.vote)]
-  bindsOf _ = Map.empty
+instance IsBallot PrivateBallot Text where
+  votesOf ballot = Map.fromList [(ballot.voter, optional Absent Voted ballot.vote)]
+  snapshotsOf _ = Map.empty
   actionOf ballot = ballot.actionCid
   consume cid = exercise cid PrivateBallot_Consume

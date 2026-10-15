@@ -14,30 +14,30 @@ import qualified DA.TextMap as TextMap
 import Splice.Api.Token.MetadataV1
 import Splice.Util (HasCheckedFetch (..), require)
 
-import Cap.Core.Types (AuthenticKey, Bind, Mechanism (..))
+import Cap.Core.Types (AuthenticKey, Snapshot, ResolutionRef (..))
 import Cap.Governance.ActionV1 (Action)
-import Cap.Governance.Utils (IsBallot (..))
+import Cap.Governance.Utils (IsBallot (..), Vote (..))
 
 
-confirmationProcedureName : Text
-confirmationProcedureName = "confirmation"
+confirmationMechanismName : Text
+confirmationMechanismName = "confirmation"
 
-weightedVoteProcedureName : Text
-weightedVoteProcedureName = "weighted-vote"
+weightedVoteMechanismName : Text
+weightedVoteMechanismName = "weighted-vote"
 
-data Vote
+data DsoVote
   = V_Choice Int
   | V_Confirm AnyValue
   | V_Parameters (TextMap Decimal)
   deriving (Eq, Show)
 
-acceptsVote : Text -> Vote -> Bool
-acceptsVote procedure vote = case vote of
-  V_Parameters _ -> procedure == weightedVoteProcedureName
-  V_Confirm _ -> procedure == confirmationProcedureName
+acceptsVote : Text -> DsoVote -> Bool
+acceptsVote mechanism vote = case vote of
+  V_Parameters _ -> mechanism == weightedVoteMechanismName
+  V_Confirm _ -> mechanism == confirmationMechanismName
   V_Choice _ -> False
 
-sameParameters : [Vote] -> Bool
+sameParameters : [DsoVote] -> Bool
 sameParameters votes = case [map fst (TextMap.toList parameters) | V_Parameters parameters <- votes] of
   [] -> True
   first :: rest -> all (== first) rest
@@ -47,30 +47,30 @@ template SharedBallot
   with
     dso : Party
     svs : Set Party
-    mechanism : Mechanism
+    resolution : ResolutionRef
     actionCid : ContractId Action
-    weights : Map Party Decimal
-    binds : Map AuthenticKey Bind
-    votes : Map Party Vote
+    openingWeights : Map Party Decimal
+    snapshots : Map AuthenticKey Snapshot
+    votes : Map Party DsoVote
     votingClosesAt : Time
     expiresAt : Time
   where
     signatory dso
-    observer Set.toList svs, Map.keys weights
+    observer Set.toList svs, Map.keys openingWeights
 
-    ensure all (acceptsVote mechanism.procedure) (Map.values votes)
+    ensure all (acceptsVote resolution.mechanism) (Map.values votes)
       && sameParameters (Map.values votes)
 
     choice SharedBallot_Cast : ContractId SharedBallot
       with
         voter : Party
-        vote : Vote
+        vote : DsoVote
       controller voter
       do
         now <- getTime
         require "the voting window is open" (now < votingClosesAt)
-        require "the voter has the right to vote: it holds weight in the snapshot"
-          (voter `Map.member` weights)
+        require "the voter has the right to vote: it holds weight at opening"
+          (voter `Map.member` openingWeights)
         create this with votes = Map.insert voter vote votes
 
     choice SharedBallot_Expire : ()
@@ -79,12 +79,12 @@ template SharedBallot
         now <- getTime
         require "the shared ballot has expired" (now >= expiresAt)
 
-instance HasCheckedFetch SharedBallot Mechanism where
-  contractGroupId ballot = ballot.mechanism
+instance HasCheckedFetch SharedBallot ResolutionRef where
+  contractGroupId ballot = ballot.resolution
 
-instance IsBallot SharedBallot Vote (ContractId Action) where
-  castsOf ballot = fmap Some ballot.votes
-  bindsOf ballot = ballot.binds
+instance IsBallot SharedBallot DsoVote where
+  votesOf ballot = fmap Voted ballot.votes
+  snapshotsOf ballot = ballot.snapshots
   actionOf ballot = ballot.actionCid
   consume = archive
 
@@ -93,15 +93,15 @@ template SvConfirmation
   with
     dso : Party
     confirmer : Party
-    mechanism : Mechanism
+    resolution : ResolutionRef
     actionCid : ContractId Action
-    vote : Vote
-    binds : Map AuthenticKey Bind
+    vote : DsoVote
+    snapshots : Map AuthenticKey Snapshot
     expiresAt : Time
   where
     signatory dso, confirmer
 
-    ensure acceptsVote mechanism.procedure vote
+    ensure acceptsVote resolution.mechanism vote
 
     choice SvConfirmation_Consume : ()
       controller dso
@@ -113,11 +113,11 @@ template SvConfirmation
         now <- getTime
         require "the confirmation has expired" (now >= expiresAt)
 
-instance HasCheckedFetch SvConfirmation Mechanism where
-  contractGroupId confirmation = confirmation.mechanism
+instance HasCheckedFetch SvConfirmation ResolutionRef where
+  contractGroupId confirmation = confirmation.resolution
 
-instance IsBallot SvConfirmation Vote (ContractId Action) where
-  castsOf confirmation = Map.fromList [(confirmation.confirmer, Some confirmation.vote)]
-  bindsOf confirmation = confirmation.binds
+instance IsBallot SvConfirmation DsoVote where
+  votesOf confirmation = Map.fromList [(confirmation.confirmer, Voted confirmation.vote)]
+  snapshotsOf confirmation = confirmation.snapshots
   actionOf confirmation = confirmation.actionCid
   consume cid = exercise cid SvConfirmation_Consume

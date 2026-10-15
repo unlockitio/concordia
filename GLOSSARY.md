@@ -13,12 +13,18 @@ id. A checked fetch compares the key a contract computes from its own
 signatories with the key the caller expects. `AuthenticKey` in `Cap.Core.Types`;
 `signedKey` and `fetchCheckedAny` in `Cap.Core.Utils`.
 
-**Mechanism** — names the resolver, the procedure and the proposal a ballot or
-bid belongs to. The resolver is the contract that resolves the proposal: a
-governor in cap-governance, an auction in cap-auctions. `resolver` is its key
-and `resolverCid` optionally pins its contract id. A procedure fetches its
-ballots by the mechanism.
-`Mechanism` in `Cap.Core.Types`; `fetchGroup` and `requireMechanism` in
+**Mechanism** — the rule a resolver runs to turn ballots or bids into an
+outcome: a voting rule on a governor, an auction format on an auction. The
+resolver implements each mechanism as a choice and names it by a `Text`.
+`ResolutionRef.mechanism`.
+
+**Resolution ref** — names the resolver, the mechanism and the proposal a
+ballot or bid belongs to. The resolver is the contract that resolves the
+proposal: a governor in cap-governance, an auction in cap-auctions. `resolver`
+is its key and `resolverCid` optionally pins its contract id. The choice that
+runs the mechanism fetches its ballots by the resolution ref. Resolution here
+means the act of resolving, not the adopted outcome.
+`ResolutionRef` in `Cap.Core.Types`; `fetchGroup` and `requireResolvedBy` in
 `Cap.Core.Utils`.
 
 **Execution core** — who may execute or cancel an authorized execution or a
@@ -31,48 +37,64 @@ settlement, and when. `ExecutionCore` in `Cap.Core.Types`.
 ## cap-governance
 
 **Decentralized party** — the parties that sign a governor and govern through
-it. `Mechanism.resolver.authorities`.
+it. `ResolutionRef.resolver.authorities`.
 
 **Governor** — the resolver of a governance app: a template the app writes,
-signed by the decentralized party. Each procedure is a choice on it, run under
+signed by the decentralized party. Each mechanism is a choice on it, run under
 the decentralized party's authority ·
 [Governor](cap-governance-rationale.md#governor).
 
 **Target** — a contract a decision acts on, named by an `AuthenticKey`. Targets
 are presented as a `Map AuthenticKey AnyContractId`. `Cap.Governance.Utils.Targets`.
 
-**Bind** — what must still be true of a target when the execution acts on it: a
-pinned state, a pinned contract id, or neither. `Bind` in `Cap.Core.Types`.
+**Snapshot** — what must still be true of a target when the execution acts on
+it: a recorded state, a recorded contract id, or neither. `Snapshot` in
+`Cap.Core.Types`.
 
-**Pin** — filling an open part of a bind with the target's current state or
-contract id. `pinStatesWith` and `pinCidsWith` pin; `mergeBinds` merges the pins
-into the action's binds. `Cap.Governance.Utils.Targets`.
+**Taking a snapshot** — filling an open part of an action's target with the
+target's current state or contract id. `snapshotStates` and `snapshotCids` take
+snapshots for an action (`snapshotStatesWith` and `snapshotCidsWith` with a
+reader you supply); `mergeSnapshots` merges them into the action's targets.
+`Cap.Governance.Utils.Targets`.
 
-**Drift** — the change a target is allowed between being pinned and being acted
+**Drift** — the change a target is allowed between its snapshot and being acted
 on, judged by a policy the action supplies. `DriftPolicy` and `checkTarget` in
 `Cap.Governance.Utils.Targets`.
 
 **Action** — implemented by the owner of a target to let a decentralized party authorize
-changes to it. It declares its binds and authorizers and reads its targets'
-state for pinning. `Action` in `Cap.Governance.ActionV1` ·
+changes to it. It declares its targets and authorizers and reads its targets'
+state for snapshots. `Action` in `Cap.Governance.ActionV1` ·
 [Action and Executable](cap-governance-rationale.md#action-and-executable).
 
-**Executable** — an authorized execution, carrying the binds it was authorized
-under and the outcome. `Executable` in `Cap.Governance.ExecutableV1`.
+**Executable** — an authorized execution, carrying the snapshots it was
+authorized under and the outcome. `Executable` in `Cap.Governance.ExecutableV1`.
 
 **Ballot** — a template the app writes that carries votes for one proposal. The
 library reads it through `IsBallot`. `IsBallot` in
 `Cap.Governance.Utils.Ballots` · [Ballots](cap-governance-rationale.md#ballots).
 
-**Weight** — how much a voter's vote counts, read from contracts the app
-registers. `HasWeight` and `readWeights` in `Cap.Governance.Utils.Weights`.
+**Voting right** — a contract the app registers that gives one or more holders
+the right to vote, each with a weight. A contract can carry one right or
+several. `HasVotingRights` and `fetchVotingRights` in
+`Cap.Governance.Utils.VotingRights`.
+
+**Weight** — how much a voter's vote counts: the sum of the weights of the
+voting rights the voter holds. `fetchWeightsPerContract` reads them from one
+contract per key, and `fetchWeightsFromOneContract` from a single contract.
+`fetchVotersPerContract` and `fetchVotersFromOneContract` return the holders
+with a positive weight, for one vote per voter. In
+`Cap.Governance.Utils.VotingRights`.
 
 ## Counting
 
 Exported from `Cap.Governance.Utils.Count`.
 
-**Cast** — one voter's weight and vote. A vote of `None` is an abstention.
-`Casts` maps each voter to their cast.
+**Vote** — what a cast records for a voter: `Absent` when no vote was
+presented, `Abstained` when the voter took part without choosing an option, or
+`Voted` with the option.
+
+**Cast** — one voter's weight and `Vote`. `Casts` maps every eligible
+voter to their cast.
 
 **Quorum** — whether the turnout is enough for the tally to bind. Decides
 nothing about which outcome won.
@@ -80,5 +102,5 @@ nothing about which outcome won.
 **Tally** — what the votes concluded, or nothing.
 
 **Verdict** — what a count concluded: `Decided`, `Undecided` when the tally
-reached nothing, or `Lapsed` when the quorum failed. `rule` combines a quorum
+reached nothing, or `Lapsed` when the quorum failed. `decide` combines a quorum
 and a tally into one. `Verdict` in `Cap.Governance.Utils.Count`.

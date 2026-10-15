@@ -2,82 +2,94 @@
 
 module Cap.Governance.Utils.Ballots
   ( IsBallot (..)
-  , weighBallotsEqually
-  , weighBallots
+  , castsOf
+  , weightedCastsOf
   , consumeBallots
-  , commonAction
-  , commonBinds
+  , agreedAction
+  , agreedSnapshots
   ) where
 
-import DA.Foldable (mapA_)
+import Prelude hiding (Action)
+
+import DA.Foldable (forA_, mapA_)
 import DA.List (unique)
 import DA.Map (Map)
 import qualified DA.Map as Map
+import DA.Optional (fromOptional)
 import DA.Set (Set)
 import qualified DA.Set as Set
 
 import Splice.Util (require)
 
-import Cap.Core.Types (AuthenticKey, Bind)
-import Cap.Core.Utils (allEqual, orAbort)
-import Cap.Governance.Utils.Count (Cast (..), Casts)
+import Cap.Core.Types (AuthenticKey, Snapshot)
+import Cap.Core.Utils (uniformValue, orAbort)
+import Cap.Governance.ActionV1 (Action)
+import Cap.Governance.Utils.Count (Cast (..), Casts, Vote (..))
 
 
 ------------------  BALLOTS  ------------------
 -- Used by the choice that resolves a proposal, over the ballots presented to it.
 
--- | What a resolution reads from a ballot: the votes it carries, by voter
--- with 'None' for an abstention; the preconditions it pinned; the action it
--- asks to authorize; and how the resolution retires it once counted.
-class IsBallot b v a | b -> v a where
-  castsOf : b -> Map Party (Optional v)
-  bindsOf : b -> Map AuthenticKey Bind
-  actionOf : b -> a
+-- | What a resolution reads from a ballot: the votes it carries, by voter;
+-- the snapshots it took; the action it asks to authorize; and how the
+-- resolution retires it once counted.
+class IsBallot b v | b -> v where
+  votesOf : b -> Map Party (Vote v)
+  snapshotsOf : b -> Map AuthenticKey Snapshot
+  actionOf : b -> ContractId Action
   consume : ContractId b -> Update ()
 
--- | The casts of the presented ballots, each voter counting with weight 1.
--- Refuses: a voter appearing on two ballots, a vote of another kind than the
--- procedure counts, and a voter outside the set.
-weighBallotsEqually
-  : IsBallot b v act
+-- | The casts of every eligible voter in the set, with equal weights: every
+-- voter gets weight 1, and a voter with no presented vote is Absent.
+-- voteOf returns the vote as the kind the mechanism counts, or None for
+-- another kind. Refuses: a voter appearing on two ballots, a vote of another
+-- kind than the mechanism counts, and a voter outside the set.
+castsOf
+  : IsBallot b v
   => (v -> Optional a) -> Set Party -> [b] -> Update (Casts a)
-weighBallotsEqually narrow voters =
-  weighBallots narrow (Map.fromList [(voter, 1.0) | voter <- Set.toList voters])
+castsOf voteOf voters =
+  weightedCastsOf voteOf (Map.fromList [(voter, 1.0) | voter <- Set.toList voters])
 
--- | The casts of the presented ballots, each voter counting with its weight
--- in the map. Refuses: a voter appearing on two ballots, a vote of another kind
--- than the procedure counts, a voter missing from the map, and a negative weight.
-weighBallots
-  : IsBallot b v act
+-- | The casts of every eligible voter in the map, each counting with its
+-- weight; a voter with no presented vote is Absent. voteOf returns the
+-- vote as the kind the mechanism counts, or None for another kind. Refuses:
+-- a voter appearing on two ballots, a vote of another kind than the mechanism
+-- counts, a voter missing from the map, and a negative weight.
+weightedCastsOf
+  : IsBallot b v
   => (v -> Optional a) -> Map Party Decimal -> [b] -> Update (Casts a)
-weighBallots narrow weights ballots = do
-  let pairs = concatMap (Map.toList . castsOf) ballots
+weightedCastsOf voteOf weights ballots = do
+  let pairs = concatMap (Map.toList . votesOf) ballots
   require "the presented ballots come from distinct voters" (unique (map fst pairs))
-  Map.fromList <$> forA pairs (\(voter, raw) -> do
-    vote <- case raw of
-      None -> pure None
-      Some v -> Some <$> orAbort
-        ("the vote of " <> show voter <> " is not of the kind this procedure counts")
-        (narrow v)
-    weight <- orAbort ("the voter " <> show voter <> " has no right to vote")
-      (Map.lookup voter weights)
+  forA_ (Map.toList weights) $ \(voter, weight) ->
     require ("the weight of the voter " <> show voter <> " is not negative") (weight >= 0.0)
-    pure (voter, Cast with weight; vote))
+  presented <- Map.fromList <$> forA pairs (\(voter, raw) -> do
+    require ("the voter " <> show voter <> " has no right to vote") (Map.member voter weights)
+    vote <- case raw of
+      Voted v -> Voted <$> orAbort
+        ("the vote of " <> show voter <> " is not of the kind this mechanism counts")
+        (voteOf v)
+      Abstained -> pure Abstained
+      Absent -> pure Absent
+    pure (voter, vote))
+  pure (Map.fromList
+    [ (voter, Cast with weight; vote = fromOptional Absent (Map.lookup voter presented))
+    | (voter, weight) <- Map.toList weights ])
 
 -- | Consumes every presented ballot, so it cannot be counted again.
-consumeBallots : IsBallot b v act => [ContractId b] -> Update ()
+consumeBallots : IsBallot b v => [ContractId b] -> Update ()
 consumeBallots = mapA_ consume
 
 -- checks that all actions match and return the action 
-commonAction : (IsBallot b v act, Eq act) => [b] -> Update act
-commonAction ballots = do
+agreedAction : IsBallot b v => [b] -> Update (ContractId Action)
+agreedAction ballots = do
   require "at least one ballot is presented" (not (null ballots))
   orAbort "the presented ballots ask for different actions"
-    (allEqual (map actionOf ballots))
+    (uniformValue (map actionOf ballots))
 
--- checks that all binds match and returns the binds. 
-commonBinds : IsBallot b v act => [b] -> Update (Map AuthenticKey Bind)
-commonBinds ballots = do
+-- checks that all snapshots match and returns the snapshots.
+agreedSnapshots : IsBallot b v => [b] -> Update (Map AuthenticKey Snapshot)
+agreedSnapshots ballots = do
   require "at least one ballot is presented" (not (null ballots))
-  orAbort "the presented ballots pin different binds"
-    (allEqual (map bindsOf ballots))
+  orAbort "the presented ballots carry different snapshots"
+    (uniformValue (map snapshotsOf ballots))

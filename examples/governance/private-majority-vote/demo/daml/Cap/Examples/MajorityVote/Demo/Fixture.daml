@@ -16,7 +16,7 @@ import Daml.Script
 import Splice.Api.Token.MetadataV1
 import qualified Splice.Api.Token.MetadataV1 as Meta
 
-import Cap.Core.Types (AuthenticKey (..), Bind (..), ExecutionAction (..), ExecutionCore (..), Mechanism (..))
+import Cap.Core.Types (AuthenticKey (..), Snapshot (..), ExecutionAction (..), ExecutionCore (..), ResolutionRef (..))
 import Cap.Core.Utils (IsAnyValue (..))
 import Cap.Governance.ActionV1 (Action, Action_AuthorizeExecution (..))
 import Cap.Governance.ExecutableV1
@@ -49,7 +49,7 @@ data Fixture = Fixture with
     electorate : Set Party
     governorCid : ContractId Governor
     proposalCid : ContractId Proposal
-    mechanism : Mechanism
+    resolution : ResolutionRef
     configCid : ContractId Config
     actionCid : ContractId SetConfigAction
     terms : ProposalTerms
@@ -70,18 +70,18 @@ setupAs ns = do
     dso; electorate; setting = openingSetting
   actionCid <- submit dso $ createCmd SetConfigAction with
     dso; operator; electorate; baseSetting = openingSetting; newSetting = proposedSetting
-  let rules = Governor with
+  let governor = Governor with
         dso; operator; electorate
         governorId = governorName
         expiresAt = now `addRelTime` days 10
-  governorCid <- submit dso $ createCmd rules
+  governorCid <- submit dso $ createCmd governor
 
-  let mechanism = Mechanism with
+  let resolution = ResolutionRef with
         resolver = AuthenticKey with
           authorities = Set.fromList [dso]
           id = governorName
         resolverCid = None
-        procedure = majorityProcedureName
+        mechanism = majorityMechanismName
         id = proposalName
       terms = ProposalTerms with
         actionCid = toInterfaceContractId @Action actionCid
@@ -98,14 +98,14 @@ setupAs ns = do
 
   pure Fixture with ..
 
-presentedTargets : Fixture -> ContractId Config -> Map AuthenticKey Meta.AnyContractId
-presentedTargets f configCid = Map.fromList
+presentedTargetCids : Fixture -> ContractId Config -> Map AuthenticKey Meta.AnyContractId
+presentedTargetCids f configCid = Map.fromList
   [(configTargetKey f.dso, coerceContractId configCid)]
 
 liveProposal : Fixture -> Script (ContractId Proposal)
 liveProposal f = do
   proposals <- query @Proposal f.operator
-  case [cid | (cid, p) <- proposals, p.mechanism == f.mechanism] of
+  case [cid | (cid, p) <- proposals, p.resolution == f.resolution] of
     [cid] -> pure cid
     _ -> fail "no live proposal on this governor"
 
@@ -113,7 +113,7 @@ seat : Fixture -> Party -> Script (ContractId PrivateBallot)
 seat f voter = do
   proposalCid <- liveProposal f
   invitations <- query @BallotInvitation voter
-  case [cid | (cid, iv) <- invitations, iv.voter == voter, iv.mechanism == f.mechanism] of
+  case [cid | (cid, iv) <- invitations, iv.voter == voter, iv.resolution == f.resolution] of
     [cid] -> submit voter (exerciseCmd cid BallotInvitation_Accept with proposalCid)
     _ -> fail "that voter holds no invitation on this proposal"
 
@@ -153,7 +153,7 @@ runExecute f configCid executionCid = do
   _ <- submit f.alice $
     exerciseCmd executionCid Executable_Execute with
       actors = [f.alice]
-      targets = presentedTargets f configCid
+      targetCids = presentedTargetCids f configCid
       extraArgs = noArgs
   pure ()
 
@@ -162,7 +162,7 @@ forgedCore f = ExecutionCore with
   authorities = Set.fromList [f.dso]
   availableActions = Map.fromList [(EA_Execute, [[f.operator]])]
   opensAt = f.terms.votingClosesAt
-  cancelAt = f.terms.votingClosesAt
+  cancelAfter = f.terms.votingClosesAt
   expiresAt = Some f.terms.expiresAt
   meta = emptyMetadata
 
@@ -173,13 +173,13 @@ runIssueMustFail f actor core =
       actors = [actor]
       executionCore = core
       outcome = Some (toAnyValue yay)
-      binds = configBind f.dso openingSetting
+      snapshots = configSnapshots f.dso openingSetting
       extraArgs = noArgs
 
 
-configBind : Party -> Text -> Map AuthenticKey Bind
-configBind dso setting = Map.fromList
+configSnapshots : Party -> Text -> Map AuthenticKey Snapshot
+configSnapshots dso setting = Map.fromList
   [ ( configTargetKey dso
-    , Bind with state = Some (toAnyValue setting); cid = None
+    , Snapshot with state = Some (toAnyValue setting); cid = None
     )
   ]

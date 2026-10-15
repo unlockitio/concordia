@@ -18,9 +18,9 @@ unchangedNeedsTheSameState = do
   unchanged (Fees 0.01 3) (Fees 0.01 3) === True
   unchanged (Fees 0.01 3) (Fees 0.01 4) === False
 
-anyDriftAcceptsEveryState : Script ()
-anyDriftAcceptsEveryState = do
-  anyDrift (Fees 0.01 3) (Fees 0.02 4) === True
+allowAnyDriftAcceptsEveryState : Script ()
+allowAnyDriftAcceptsEveryState = do
+  allowAnyDrift (Fees 0.01 3) (Fees 0.02 4) === True
 
 sameOnComparesOnlyTheProjection : Script ()
 sameOnComparesOnlyTheProjection = do

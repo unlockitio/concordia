@@ -63,16 +63,11 @@ singleNeedsExactlyOneElement = do
   single [1 : Int] === Some 1
   single [1, 2 : Int] === None
 
-allEqualNeedsANonEmptyAgreeingList : Script ()
-allEqualNeedsANonEmptyAgreeingList = do
-  allEqual ([] : [Int]) === None
-  allEqual [1, 1 : Int] === Some 1
-  allEqual [1, 2 : Int] === None
-
-allAgreeByComparesEveryElementWithTheFirst : Script ()
-allAgreeByComparesEveryElementWithTheFirst = do
-  allAgreeBy (<=) [1, 2, 3 : Int] === Some 1
-  allAgreeBy (<=) [3, 2, 1 : Int] === None
+uniformValueNeedsANonEmptyUniformList : Script ()
+uniformValueNeedsANonEmptyUniformList = do
+  uniformValue ([] : [Int]) === None
+  uniformValue [1, 1 : Int] === Some 1
+  uniformValue [1, 2 : Int] === None
 
 isAnyValueRoundTrips : Script ()
 isAnyValueRoundTrips = do

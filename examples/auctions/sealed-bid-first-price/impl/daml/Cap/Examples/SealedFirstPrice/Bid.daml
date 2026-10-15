@@ -13,7 +13,7 @@ import qualified Splice.Api.Token.HoldingV2 as Holding
 import Splice.Util (require)
 import Splice.TokenStandard.Utils (regularAccountOwner)
 
-import Cap.Core.Types (Mechanism (..))
+import Cap.Core.Types (ResolutionRef (..))
 import Cap.Core.Utils (authoritiesOf, orAbort, single)
 import Cap.Auctions.Funding
   ( OneLotBidAllocationRequest (..), bidderPaymentAllocation, bidderLotAllocation )
@@ -25,11 +25,11 @@ template AuctionBid
     terms : OneLotAuctionTerms
     bidderPaymentAccount : Holding.Account
     bidderLotAccount : Holding.Account
-    mechanism : Mechanism
+    resolution : ResolutionRef
     quotes : [Quote]
     allocations : [ContractId Alloc.Allocation]
   where
-    signatory Set.toList (authoritiesOf mechanism)
+    signatory Set.toList (authoritiesOf resolution)
            <> [regularAccountOwner bidderPaymentAccount | not (null quotes)]
     observer regularAccountOwner bidderPaymentAccount
 
@@ -40,15 +40,15 @@ template AuctionBid
         _ -> False
 
     choice AuctionBid_Close : ()
-      controller Set.toList (authoritiesOf mechanism)
+      controller Set.toList (authoritiesOf resolution)
       do pure ()
 
     interface instance OneLotBid for AuctionBid where
       view = OneLotBidView with
-        mechanism
+        resolution
         terms
         availableActions = Map.fromList $
-          (BA_Release, [Set.toList (authoritiesOf mechanism)])
+          (BA_Release, [Set.toList (authoritiesOf resolution)])
             :: [ (action, [[regularAccountOwner bidderPaymentAccount]])
                | null quotes
                , action <- [BA_RequestAllocations, BA_Finalize]
@@ -65,7 +65,7 @@ template AuctionBid
           orAbort "this format takes a single alternative" (single arg.quotes)
         let bv = view (toInterface @OneLotBid this)
         cid <- create OneLotBidAllocationRequest with
-          mechanism
+          resolution
           bid = bv with quotes = [submitted]
           requestedAt = now
         pure OneLotBid_RequestAllocationsResult with
@@ -85,7 +85,7 @@ template AuctionBid
             [ bidderPaymentAllocation submittedBid (concat submittedBid.quotes)
             , bidderLotAllocation submittedBid ])
         require "the allocations are scoped to this auction"
-          (all (\v -> v.settlement == oneLotSettlement mechanism.id (authoritiesOf mechanism))
+          (all (\v -> v.settlement == oneLotSettlement resolution.id (authoritiesOf resolution))
             presented)
         require "each allocation is signed by its instrument admin"
           (all (\a -> (view a).allocation.admin `elem` signatory a) presentedC)
@@ -95,7 +95,7 @@ template AuctionBid
 
       oneLotBid_releaseImpl self arg = do
         archive self
-        let actors = (oneLotSettlement mechanism.id (authoritiesOf mechanism)).executors
+        let actors = (oneLotSettlement resolution.id (authoritiesOf resolution)).executors
         forA_ allocations $ \cid ->
           exercise cid Alloc.Allocation_Cancel with
             actors

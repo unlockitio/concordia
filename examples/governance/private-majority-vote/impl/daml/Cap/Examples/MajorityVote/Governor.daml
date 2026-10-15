@@ -13,12 +13,12 @@ import qualified DA.Set as Set
 import Splice.Api.Token.MetadataV1
 import Splice.Util (require)
 
-import Cap.Core.Types (AuthenticKey (..), ExecutionAction (..), ExecutionCore (..), Mechanism (..))
-import Cap.Core.Utils (IsAnyValue (..), fetchGroup, requireClosed, requireMechanism)
+import Cap.Core.Types (AuthenticKey (..), ExecutionAction (..), ExecutionCore (..), ResolutionRef (..))
+import Cap.Core.Utils (IsAnyValue (..), fetchGroup, requireClosed, requireResolvedBy)
 import Cap.Governance.ActionV1
 import Cap.Governance.Utils
-  ( Tally, Verdict (..), atLeastVotes, commonAction, consumeBallots, rule, voted
-  , weighBallotsEqually )
+  ( Tally, Verdict (..), atLeastVotes, agreedAction, consumeBallots, decide, weightedVotes
+  , castsOf )
 
 import Cap.Examples.MajorityVote.Ballot
 
@@ -30,8 +30,8 @@ data ProposalTerms = ProposalTerms
     expiresAt : Time
   deriving (Eq, Show)
 
-majorityProcedureName : Text
-majorityProcedureName = "majority"
+majorityMechanismName : Text
+majorityMechanismName = "majority"
 
 data ResolveResult = ResolveResult
   with
@@ -44,7 +44,7 @@ template Proposal
   with
     dso : Party
     operator : Party
-    mechanism : Mechanism
+    resolution : ResolutionRef
     electorate : Set Party
     terms : ProposalTerms
     roll : [Party]
@@ -59,7 +59,7 @@ template Proposal
         require "invitations are issued before the entry window closes"
           (now < terms.entryClosesAt)
         forA (Set.toList electorate) $ \voter ->
-          create BallotInvitation with dso; operator; voter; mechanism
+          create BallotInvitation with dso; operator; voter; resolution
 
     choice Proposal_Join : ContractId Proposal
       with
@@ -80,7 +80,7 @@ template BallotInvitation
     dso : Party
     operator : Party
     voter : Party
-    mechanism : Mechanism
+    resolution : ResolutionRef
   where
     signatory dso, operator
     observer voter
@@ -92,10 +92,10 @@ template BallotInvitation
       do
         proposal <- fetch proposalCid
         require "the invitation and the proposal name one round"
-          (proposal.mechanism == mechanism)
+          (proposal.resolution == resolution)
         _ <- exercise proposalCid Proposal_Join with voter
         create PrivateBallot with
-          operator; voter; mechanism
+          operator; voter; resolution
           actionCid = proposal.terms.actionCid
           opensAt = proposal.terms.entryClosesAt
           closesAt = proposal.terms.votingClosesAt
@@ -125,10 +125,10 @@ template Governor
           (Set.member proposer electorate)
         create Proposal with
           dso; operator; electorate; terms
-          mechanism = Mechanism with
+          resolution = ResolutionRef with
             resolver = governorKey this
             resolverCid = None
-            procedure = majorityProcedureName
+            mechanism = majorityMechanismName
             id = proposalId
           roll = []
 
@@ -141,26 +141,26 @@ template Governor
 
 
 governorKey : Governor -> AuthenticKey
-governorKey rules = AuthenticKey with
-  authorities = Set.fromList [rules.dso]
-  id = rules.governorId
+governorKey governor = AuthenticKey with
+  authorities = Set.fromList [governor.dso]
+  id = governor.governorId
 
 majorityOf : Decimal -> Tally Text Text
 majorityOf electorateSize casts =
-  let for = sum [weight | (weight, option) <- voted casts, option == yay]
+  let for = sum [weight | (option, weight) <- weightedVotes casts, option == yay]
   in Some (if for > 0.5 * electorateSize then yay else nay)
 
 resolveMajority
   : Governor -> ContractId Governor -> ContractId Proposal -> [ContractId PrivateBallot]
   -> Update ResolveResult
-resolveMajority rules self proposalCid ballotCids = do
+resolveMajority governor self proposalCid ballotCids = do
   now <- getTime
   proposal <- fetch proposalCid
-  requireMechanism (governorKey rules) (coerceContractId self) majorityProcedureName proposal.mechanism
-  require "the proposal is on this governor's electorate" (proposal.electorate == rules.electorate)
+  requireResolvedBy (governorKey governor) (coerceContractId self) majorityMechanismName proposal.resolution
+  require "the proposal is on this governor's electorate" (proposal.electorate == governor.electorate)
   let terms = proposal.terms
 
-  presented <- fetchGroup proposal.mechanism ballotCids
+  presented <- fetchGroup proposal.resolution ballotCids
   let (cids, ballots) = unzip presented
   forA_ ballots $ \b -> do
     requireClosed "every presented ballot is closed for voting" now b.closesAt
@@ -168,28 +168,28 @@ resolveMajority rules self proposalCid ballotCids = do
       (b.opensAt == terms.entryClosesAt
         && b.closesAt == terms.votingClosesAt
         && b.expiresAt == terms.expiresAt)
-  action <- commonAction ballots
+  action <- agreedAction ballots
   require "the ballots vote on the proposal's action" (action == terms.actionCid)
 
-  casts <- weighBallotsEqually Some rules.electorate ballots
-  require "the presented ballots cover the roll" (Map.keys casts == sort proposal.roll)
+  casts <- castsOf Some governor.electorate ballots
+  require "the presented ballots cover the roll" (sort (map (.voter) ballots) == sort proposal.roll)
   consumeBallots cids
 
-  let verdict = rule (atLeastVotes 1) (majorityOf (intToDecimal (Set.size rules.electorate))) casts
+  let verdict = decide (atLeastVotes 1) (majorityOf (intToDecimal (Set.size governor.electorate))) casts
   created <- case verdict of
     Decided winner | winner == yay -> do
       result <- exercise terms.actionCid Action_AuthorizeExecution with
-        actors = [rules.dso]
+        actors = [governor.dso]
         executionCore = ExecutionCore with
-          authorities = Set.fromList [rules.dso]
+          authorities = Set.fromList [governor.dso]
           availableActions = Map.fromList
-            [(EA_Execute, map (:: []) (Set.toList rules.electorate))]
+            [(EA_Execute, map (:: []) (Set.toList governor.electorate))]
           opensAt = terms.votingClosesAt
-          cancelAt = terms.votingClosesAt
+          cancelAfter = terms.votingClosesAt
           expiresAt = Some terms.expiresAt
           meta = emptyMetadata
         outcome = Some (toAnyValue winner)
-        binds = Map.empty
+        snapshots = Map.empty
         extraArgs = ExtraArgs with context = emptyChoiceContext; meta = emptyMetadata
       pure (map coerceContractId result.executionCids)
     _ -> pure []

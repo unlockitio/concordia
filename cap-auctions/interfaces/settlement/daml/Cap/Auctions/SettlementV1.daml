@@ -83,7 +83,7 @@ interface Settlement where
     do
       let v = view this
       now <- getTime
-      requireOpen "the cancellation window is open" now v.executionCore.cancelAt None
+      requireOpen "the cancellation window is open" now v.executionCore.cancelAfter None
       require "the actors are entitled to cancel"
         (entitled v.executionCore.availableActions EA_Cancel actors)
       settlement_cancelImpl this (Settlement_Cancel with actors; extraArgs)

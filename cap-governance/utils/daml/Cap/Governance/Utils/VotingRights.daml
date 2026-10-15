@@ -1,0 +1,73 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Governance.Utils.VotingRights
+  ( HasVotingRights (..)
+  , fetchVotingRights
+  , fetchWeightsPerContract
+  , fetchVotersPerContract
+  , fetchWeightsFromOneContract
+  , fetchVotersFromOneContract
+  ) where
+
+import DA.Foldable (forA_)
+import DA.Map (Map)
+import qualified DA.Map as Map
+import DA.Set (Set)
+import qualified DA.Set as Set
+
+import Splice.Util (HasCheckedFetch, fetchChecked, require)
+
+
+------------------  VOTING RIGHTS  ------------------
+-- Used by a governor to read voting weight from contracts whose templates it knows.
+
+-- | The voting rights a contract carries: each holder and its weight.
+class HasVotingRights t where
+  rightsOf : t -> Map Party Decimal
+
+-- | Fetches the contracts in rightCids and checks them against rightKeys,
+-- which the governor stores. Returns the voting rights under each key: each
+-- holder and its weight. It does not add up the weight of each holder! Because
+-- a holder can have rights in several contracts.
+fetchVotingRights
+  : (HasFetch t, HasCheckedFetch t k, HasVotingRights t, Ord k)
+  => Set k -> Map k (ContractId t) -> Update (Map k (Map Party Decimal))
+fetchVotingRights rightKeys rightCids = do
+  require "the presented voting rights are exactly the ones under the right keys"
+    (Map.keys rightCids == Set.toList rightKeys)
+  Map.fromList <$> forA (Map.toList rightCids) (\(rkey, cid) -> do
+    contract <- fetchChecked rkey cid
+    let rights = rightsOf contract
+    forA_ (Map.toList rights) $ \(holder, weight) ->
+      require ("the weight of " <> show holder <> " is not negative") (weight >= 0.0)
+    pure (rkey, rights))
+
+
+-- Rights spread over several contracts, one contract per key.
+fetchWeightsPerContract
+  : (HasFetch t, HasCheckedFetch t k, HasVotingRights t, Ord k)
+  => Set k -> Map k (ContractId t) -> Update (Map Party Decimal)
+fetchWeightsPerContract rightKeys rightCids = do
+  rights <- fetchVotingRights rightKeys rightCids
+  pure (Map.fromListWithR (+) (concatMap Map.toList (Map.values rights)))
+
+fetchVotersPerContract
+  : (HasFetch t, HasCheckedFetch t k, HasVotingRights t, Ord k)
+  => Set k -> Map k (ContractId t) -> Update (Set Party)
+fetchVotersPerContract rightKeys rightCids = do
+  weights <- fetchWeightsPerContract rightKeys rightCids
+  pure (Set.fromList [voter | (voter, weight) <- Map.toList weights, weight > 0.0])
+
+
+-- All rights in the same contract
+fetchWeightsFromOneContract
+  : (HasFetch t, HasCheckedFetch t k, HasVotingRights t, Ord k)
+  => k -> ContractId t -> Update (Map Party Decimal)
+fetchWeightsFromOneContract rightsKey rightsCid =
+  fetchWeightsPerContract (Set.singleton rightsKey) (Map.singleton rightsKey rightsCid)
+
+fetchVotersFromOneContract
+  : (HasFetch t, HasCheckedFetch t k, HasVotingRights t, Ord k)
+  => k -> ContractId t -> Update (Set Party)
+fetchVotersFromOneContract rightsKey rightsCid =
+  fetchVotersPerContract (Set.singleton rightsKey) (Map.singleton rightsKey rightsCid)

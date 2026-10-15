@@ -57,7 +57,7 @@ committedAllocation instrument account deadline reserving =
     committed = True
     meta = emptyMetadata
 
--- | The delivering side: funds `amount` of the instrument for settlement.
+-- | The delivering side: funds amount of the instrument for settlement.
 fundingOneInstrumentAllocation
   : Holding.InstrumentId -> Holding.Account -> Time -> Decimal -> Alloc.AllocationSpecification
 fundingOneInstrumentAllocation instrument account deadline amount =

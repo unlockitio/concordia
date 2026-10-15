@@ -12,12 +12,12 @@ import qualified DA.Set as Set
 import Splice.Api.Token.MetadataV1
 import Splice.Util (HasCheckedFetch (..))
 
-import Cap.Core.Types (AuthenticKey (..), Bind (..), ExecutionCore)
+import Cap.Core.Types (AuthenticKey (..), Snapshot (..), ExecutionCore)
 import Cap.Core.Utils (IsAnyValue (..), signedKey)
 import Cap.Governance.ActionV1
 import Cap.Governance.ExecutableV1
 import Cap.Governance.Utils
-  ( HasState (..), ReadTarget, checkTarget, mergeBinds, readState, requireSameKeys )
+  ( HasState (..), TargetReader, checkTarget, mergeSnapshots, readState, requireSameKeys )
 
 
 configId : Text
@@ -50,10 +50,10 @@ instance HasCheckedFetch Config AuthenticKey where
 instance HasState Config Text where
   stateOf config = config.setting
 
-readConfigTargets : Party -> ReadTarget
+readConfigTargets : Party -> TargetReader
 readConfigTargets dso key cid
   | key == configTargetKey dso = readState @Config key cid
-  | otherwise = abort ("this action binds no target " <> show key)
+  | otherwise = abort ("this action names no target " <> show key)
 
 
 template ConfigUpdate
@@ -61,7 +61,7 @@ template ConfigUpdate
     dso : Party
     newSetting : Text
     core : ExecutionCore
-    binds : Map AuthenticKey Bind
+    snapshots : Map AuthenticKey Snapshot
     outcome : Optional AnyValue
   where
     signatory dso
@@ -70,14 +70,14 @@ template ConfigUpdate
     interface instance Executable for ConfigUpdate where
       view = ExecutableView with
         executionCore = core
-        binds
+        snapshots
         outcome
 
       executable_cancelImpl _ = abort "this execution cannot be cancelled"
 
-      executable_executeImpl targets _ = do
-        requireSameKeys binds targets
-        (configCid, _) <- checkTarget @Config (==) (configTargetKey dso) binds targets
+      executable_executeImpl targetCids _ = do
+        requireSameKeys snapshots targetCids
+        (configCid, _) <- checkTarget @Config (==) (configTargetKey dso) snapshots targetCids
         updated <- exercise configCid Config_Set with newSetting
         pure Executable_ExecuteResult with
           created = [coerceContractId updated]
@@ -97,16 +97,16 @@ template SetConfigAction
     interface instance Action for SetConfigAction where
       view = ActionView with
         authorizers = [[dso]]
-        binds = setConfigBinds dso baseSetting
+        targets = setConfigTargets dso baseSetting
         meta = emptyMetadata
 
       action_readStateImpl = readConfigTargets dso
 
       action_authorizeExecutionImpl _ arg = do
-        binds <- mergeBinds (setConfigBinds dso baseSetting) arg.binds
+        snapshots <- mergeSnapshots (setConfigTargets dso baseSetting) arg.snapshots
         cid <- create ConfigUpdate with
           dso; newSetting
-          binds
+          snapshots
           core = arg.executionCore
           outcome = arg.outcome
         pure Action_AuthorizeExecutionResult with
@@ -114,6 +114,6 @@ template SetConfigAction
           meta = emptyMetadata
 
 
-setConfigBinds : Party -> Text -> Map AuthenticKey Bind
-setConfigBinds dso baseSetting = Map.fromList
-  [ (configTargetKey dso, Bind with state = Some (toAnyValue baseSetting); cid = None) ]
+setConfigTargets : Party -> Text -> Map AuthenticKey Snapshot
+setConfigTargets dso baseSetting = Map.fromList
+  [ (configTargetKey dso, Snapshot with state = Some (toAnyValue baseSetting); cid = None) ]

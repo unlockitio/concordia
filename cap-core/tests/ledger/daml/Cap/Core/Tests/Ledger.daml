@@ -10,7 +10,7 @@ import Daml.Script hiding (AnyContractId)
 
 import Splice.Api.Token.MetadataV1 (AnyContractId)
 
-import Cap.Core.Types (AuthenticKey (..), Mechanism (..))
+import Cap.Core.Types (AuthenticKey (..), ResolutionRef (..))
 import Cap.Core.Utils
 
 import Cap.Core.Tests.Support
@@ -57,13 +57,13 @@ template Probe
       controller owner
       do fst <$> fetchCheckedAny @SignedTarget key cid
 
-    nonconsuming choice Probe_RequireMechanism : ()
+    nonconsuming choice Probe_RequireResolvedBy : ()
       with
         key : AuthenticKey
-        procedure : Text
-        mechanism : Mechanism
+        mechanism : Text
+        resolution : ResolutionRef
       controller owner
-      do requireMechanism key (coerceContractId self) procedure mechanism
+      do requireResolvedBy key (coerceContractId self) mechanism resolution
 
     nonconsuming choice Probe_RequireOpen : ()
       with
@@ -92,11 +92,11 @@ resolverKey party = AuthenticKey with authorities = Set.fromList [party]; id = "
 signedKeyOf : Party -> Text -> AuthenticKey
 signedKeyOf party id = AuthenticKey with authorities = Set.fromList [party]; id
 
-mechanismOf : Party -> Optional AnyContractId -> Text -> Mechanism
-mechanismOf party resolverCid procedure = Mechanism with
+resolutionOf : Party -> Optional AnyContractId -> Text -> ResolutionRef
+resolutionOf party resolverCid mechanism = ResolutionRef with
   resolver = resolverKey party
   resolverCid
-  procedure
+  mechanism
   id = "proposal"
 
 setupProbe : Text -> Script (Party, ContractId Probe)
@@ -160,42 +160,42 @@ fetchCheckedAnyRefusesAnotherSigner = do
     exerciseCmd probe Probe_FetchCheckedAny with
       key = signedKeyOf owner "signed"; cid = coerceContractId signed
 
-requireMechanismAcceptsAnUnboundMechanism : Script ()
-requireMechanismAcceptsAnUnboundMechanism = do
-  (owner, probe) <- setupProbe "mechanism-unbound"
-  submit owner $ exerciseCmd probe Probe_RequireMechanism with
-    key = resolverKey owner; procedure = "vote"; mechanism = mechanismOf owner None "vote"
+requireResolvedByAcceptsAnUnboundResolution : Script ()
+requireResolvedByAcceptsAnUnboundResolution = do
+  (owner, probe) <- setupProbe "resolution-unbound"
+  submit owner $ exerciseCmd probe Probe_RequireResolvedBy with
+    key = resolverKey owner; mechanism = "vote"; resolution = resolutionOf owner None "vote"
 
-requireMechanismAcceptsAMechanismBoundToThisContract : Script ()
-requireMechanismAcceptsAMechanismBoundToThisContract = do
-  (owner, probe) <- setupProbe "mechanism-bound"
-  submit owner $ exerciseCmd probe Probe_RequireMechanism with
-    key = resolverKey owner; procedure = "vote"
-    mechanism = mechanismOf owner (Some (coerceContractId probe)) "vote"
+requireResolvedByAcceptsAResolutionBoundToThisContract : Script ()
+requireResolvedByAcceptsAResolutionBoundToThisContract = do
+  (owner, probe) <- setupProbe "resolution-bound"
+  submit owner $ exerciseCmd probe Probe_RequireResolvedBy with
+    key = resolverKey owner; mechanism = "vote"
+    resolution = resolutionOf owner (Some (coerceContractId probe)) "vote"
 
-requireMechanismRefusesAnotherBody : Script ()
-requireMechanismRefusesAnotherBody = do
-  (owner, probe) <- setupProbe "mechanism-resolver"
-  other <- allocateParty "mechanism-resolver-other"
-  submitMustFailContaining "the mechanism names the ResolveKey" owner $
-    exerciseCmd probe Probe_RequireMechanism with
-      key = resolverKey owner; procedure = "vote"; mechanism = mechanismOf other None "vote"
+requireResolvedByRefusesAnotherResolver : Script ()
+requireResolvedByRefusesAnotherResolver = do
+  (owner, probe) <- setupProbe "resolution-resolver"
+  other <- allocateParty "resolution-resolver-other"
+  submitMustFailContaining "the resolution names the resolver" owner $
+    exerciseCmd probe Probe_RequireResolvedBy with
+      key = resolverKey owner; mechanism = "vote"; resolution = resolutionOf other None "vote"
 
-requireMechanismRefusesAnotherRulesContract : Script ()
-requireMechanismRefusesAnotherRulesContract = do
-  (owner, probe) <- setupProbe "mechanism-rules"
+requireResolvedByRefusesAnotherRulesContract : Script ()
+requireResolvedByRefusesAnotherRulesContract = do
+  (owner, probe) <- setupProbe "resolution-rules"
   otherProbe <- submit owner $ createCmd Probe with owner
-  submitMustFailContaining "the mechanism is bound to no other rules contract" owner $
-    exerciseCmd probe Probe_RequireMechanism with
-      key = resolverKey owner; procedure = "vote"
-      mechanism = mechanismOf owner (Some (coerceContractId otherProbe)) "vote"
+  submitMustFailContaining "the resolution is bound to no other resolver contract" owner $
+    exerciseCmd probe Probe_RequireResolvedBy with
+      key = resolverKey owner; mechanism = "vote"
+      resolution = resolutionOf owner (Some (coerceContractId otherProbe)) "vote"
 
-requireMechanismRefusesAnotherProcedure : Script ()
-requireMechanismRefusesAnotherProcedure = do
-  (owner, probe) <- setupProbe "mechanism-procedure"
-  submitMustFailContaining "the mechanism names the procedure vote" owner $
-    exerciseCmd probe Probe_RequireMechanism with
-      key = resolverKey owner; procedure = "vote"; mechanism = mechanismOf owner None "confirm"
+requireResolvedByRefusesAnotherMechanism : Script ()
+requireResolvedByRefusesAnotherMechanism = do
+  (owner, probe) <- setupProbe "resolution-mechanism"
+  submitMustFailContaining "the resolution names the mechanism vote" owner $
+    exerciseCmd probe Probe_RequireResolvedBy with
+      key = resolverKey owner; mechanism = "vote"; resolution = resolutionOf owner None "confirm"
 
 requireOpenChecksTheWindow : Script ()
 requireOpenChecksTheWindow = do

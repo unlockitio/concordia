@@ -9,14 +9,14 @@ import DA.Map (Map)
 import Splice.Api.Token.MetadataV1
 import Splice.Util (require)
 
-import Cap.Core.Types (AuthenticKey, Bind, ExecutionCore)
+import Cap.Core.Types (AuthenticKey, Snapshot, ExecutionCore, TargetReader)
 import Cap.Core.Utils (admitActors)
 import Cap.Governance.ExecutableV1 (Executable)
 
 data ActionView = ActionView
   with
     authorizers : [[Party]]
-    binds : Map AuthenticKey Bind
+    targets : Map AuthenticKey Snapshot -- actions can optionally snapshot the state of their targets
     meta : Metadata
   deriving (Eq, Show)
 
@@ -32,14 +32,14 @@ interface Action where
 
   action_authorizeExecutionImpl : ContractId Action -> Action_AuthorizeExecution -> Update Action_AuthorizeExecutionResult
 
-  action_readStateImpl : AuthenticKey -> AnyContractId -> Update (Optional AnyValue)
+  action_readStateImpl : TargetReader
 
   nonconsuming choice Action_AuthorizeExecution : Action_AuthorizeExecutionResult
     with
       actors : [Party]
       executionCore : ExecutionCore
       outcome : Optional AnyValue
-      binds : Map AuthenticKey Bind
+      snapshots : Map AuthenticKey Snapshot
       extraArgs : ExtraArgs
     controller actors
     do

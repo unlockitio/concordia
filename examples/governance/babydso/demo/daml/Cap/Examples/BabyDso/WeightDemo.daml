@@ -15,20 +15,20 @@ import Cap.Examples.BabyDso.Rights
 import Cap.Examples.BabyDso.Demo.Fixture
 
 
--- Snapshot: which weight counts, and when
---------------------------------------------
+-- Opening weights: which weight counts, and when
+-------------------------------------------------
 
 aWeightChangeAfterOpeningDoesNotCount : Script ()
 aWeightChangeAfterOpeningDoesNotCount = do
   f <- setupAs "later-weight"
   opened <- openVoteAs f f.sv2 (feeVote 0.06 2.5)
 
-  Some sv3Source <- pure (Map.lookup (sourceKeyOf f "sv3-a" f.sv3) f.weightSources)
+  Some sv3Source <- pure (Map.lookup (sourceKeyOf f "sv3-a" f.sv3) f.rightCids)
   _ <- submit f.dso $ exerciseCmd sv3Source SvWeightSource_SetWeight with newWeight = 10.0
 
   ballotCid <- castAs f f.sv3 opened (feeVote 0.09 4.0)
   Some ballot <- queryContractId f.sv3 ballotCid
-  Map.lookup f.sv3 ballot.weights === Some 1.0
+  Map.lookup f.sv3 ballot.openingWeights === Some 1.0
 
   setTime f.terms.votingClosesAt
   result <- resolveVoteAs f f.sv1 ballotCid
@@ -37,18 +37,18 @@ aWeightChangeAfterOpeningDoesNotCount = do
 aStaleWeightSourceIsRefusedAtOpening : Script ()
 aStaleWeightSourceIsRefusedAtOpening = do
   f <- setupAs "stale"
-  Some sv3Source <- pure (Map.lookup (sourceKeyOf f "sv3-a" f.sv3) f.weightSources)
+  Some sv3Source <- pure (Map.lookup (sourceKeyOf f "sv3-a" f.sv3) f.rightCids)
   _ <- submit f.dso $ exerciseCmd sv3Source SvWeightSource_SetWeight with newWeight = 10.0
 
   submitMustFail (actAs f.sv1 <> readAs f.dso) $
-    openVoteCmd f f.sv1 (feeVote 0.05 2.0) f.weightSources
+    openVoteCmd f f.sv1 (feeVote 0.05 2.0) f.rightCids
 
 aMissingWeightSourceIsRefusedAtOpening : Script ()
 aMissingWeightSourceIsRefusedAtOpening = do
   f <- setupAs "missing"
-  submitMustFailContaining "the presented weight contracts are exactly the registered ones" f f.sv1 $
+  submitMustFailContaining "the presented voting rights are exactly the ones under the right keys" f f.sv1 $
     openVoteCmd f f.sv1 (feeVote 0.05 2.0)
-      (Map.delete (sourceKeyOf f "sv2-a" f.sv2) f.weightSources)
+      (Map.delete (sourceKeyOf f "sv2-a" f.sv2) f.rightCids)
 
 aWeightSourceAddedAfterTheGovernorIsRefused : Script ()
 aWeightSourceAddedAfterTheGovernorIsRefused = do
@@ -59,17 +59,17 @@ aWeightSourceAddedAfterTheGovernorIsRefused = do
     name = "sv3-b"
     sv = f.sv3
     weight = 4.0
-  submitMustFailContaining "the presented weight contracts are exactly the registered ones" f f.sv1 $
+  submitMustFailContaining "the presented voting rights are exactly the ones under the right keys" f f.sv1 $
     openVoteCmd f f.sv1 (feeVote 0.05 2.0)
-      (Map.insert (sourceKeyOf f "sv3-b" f.sv3) added f.weightSources)
+      (Map.insert (sourceKeyOf f "sv3-b" f.sv3) added f.rightCids)
 
 aWeightSourceUnderAnotherNameIsRefused : Script ()
 aWeightSourceUnderAnotherNameIsRefused = do
   f <- setupAs "renamed"
-  Some sv2Source <- pure (Map.lookup (sourceKeyOf f "sv2-a" f.sv2) f.weightSources)
+  Some sv2Source <- pure (Map.lookup (sourceKeyOf f "sv2-a" f.sv2) f.rightCids)
   submitMustFailContaining "Contract group identifier mismatch" f f.sv1 $
     openVoteCmd f f.sv1 (feeVote 0.05 2.0)
-      (Map.insert (sourceKeyOf f "sv3-a" f.sv3) sv2Source f.weightSources)
+      (Map.insert (sourceKeyOf f "sv3-a" f.sv3) sv2Source f.rightCids)
 
 aWeightSourceUnderAnotherSvIsRefused : Script ()
 aWeightSourceUnderAnotherSvIsRefused = do
@@ -82,7 +82,7 @@ aWeightSourceUnderAnotherSvIsRefused = do
     weight = 3.0
   submitMustFailContaining "Contract group identifier mismatch" f f.sv1 $
     openVoteCmd f f.sv1 (feeVote 0.05 2.0)
-      (Map.insert (sourceKeyOf f "sv1-a" f.sv1) misowned f.weightSources)
+      (Map.insert (sourceKeyOf f "sv1-a" f.sv1) misowned f.rightCids)
 
 
 -- Rights: who can take part
@@ -96,7 +96,7 @@ aZeroWeightSvCanOpenAVote = do
 
   opened <- openVoteAs f f.sv3 (feeVote 0.20 9.0)
   Some ballot <- queryContractId f.sv3 opened
-  Map.lookup f.sv3 ballot.weights === Some 0.0
+  Map.lookup f.sv3 ballot.openingWeights === Some 0.0
 
   withSv1 <- castAs f f.sv1 opened (feeVote 0.05 2.0)
   ballotCid <- castAs f f.sv2 withSv1 (feeVote 0.06 2.5)
@@ -122,7 +122,7 @@ aVotersWeightSourcesAddUp = do
   f <- setupAs "add-up"
   opened <- openVoteAs f f.sv1 (feeVote 0.05 2.0)
   Some ballot <- queryContractId f.sv1 opened
-  Map.lookup f.sv1 ballot.weights === Some 5.0
+  Map.lookup f.sv1 ballot.openingWeights === Some 5.0
 
   ballotCid <- castAs f f.sv3 opened (feeVote 0.09 4.0)
   setTime f.terms.votingClosesAt

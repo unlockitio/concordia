@@ -13,11 +13,11 @@ The library splits every behaviour across three surfaces:
   and `Settlement`. The fixed bodies check admission, windows and expiry. An
   extension implements the interface methods and inherits these checks; it
   cannot weaken them.
-- **Templates the app writes** — the governor, its procedures, the ballots and
+- **Templates the app writes** — the governor, its mechanisms, the ballots and
   the vote kinds in governance, and the auction contract in auctions. Each app
   owns these, so each app can shape them.
-- **The opt-in toolkit** — type classes (`IsBallot`, `HasWeight`, `HasState`)
-  and helpers for fetching, pinning, weighing and counting. An app uses the
+- **The opt-in toolkit** — type classes (`IsBallot`, `HasVotingRights`, `HasState`)
+  and helpers for fetching, taking snapshots, weighing and counting. An app uses the
   helpers it needs and writes its own code where one does not fit.
 
 Extension is deployment: new templates implementing the released interfaces,
@@ -36,21 +36,21 @@ these.
   action, and a governor can then authorize changes to the contract without
   depending on its package.
 - **Eligibility.** A voter's right to vote is a contract the app registers, read
-  through `HasWeight` and `readWeights`. Institutions bring their own identity
+  through `HasVotingRights` and `fetchVotingRights`. Institutions bring their own identity
   or KYC system and mint these contracts only to eligible parties.
 - **A drift policy per action.** Whether an approved outcome executes over a
-  target that changed since it was pinned is decided by the `DriftPolicy` the
+  target that changed since its snapshot is decided by the `DriftPolicy` the
   action passes to `checkTarget`.
 - **A timing profile.** Voting windows are fields of the app's ballots.
-  Execution windows are the `opensAt`, `cancelAt` and `expiresAt` fields of the
+  Execution windows are the `opensAt`, `cancelAfter` and `expiresAt` fields of the
   `ExecutionCore` the governor sets when it authorizes an execution.
 
 ## New governance formats
 
-A new governance format is a new procedure: a choice on the app's governor that
+A new governance format is a new mechanism: a choice on the app's governor that
 counts its ballots with a quorum and a tally. `Quorum` and `Tally` are plain
 functions, so a format that needs a rule the toolkit does not have writes it and
-combines it with `rule`. A procedure that counts a new kind of vote adds a
+combines it with `decide`. A mechanism that counts a new kind of vote adds a
 constructor to the app's vote type. Vote delegation can be built the same way in
 the future.
 
@@ -66,10 +66,10 @@ changing.
 
 **Several lots and several sellers** carries on the released interfaces only as
 bids that are won independently — one `OneLotBid` contract per lot, all naming
-the same `Mechanism`. Anything that binds the lots together needs a new bid
+the same `ResolutionRef`. Anything that binds the lots together needs a new bid
 interface. Nothing ties a resolution to a single set of terms, so each bid
 carries its own `lot`, `reserve`, seller accounts and settlement factories, and the
-procedure groups the presented bids by lot. A shared `saleId` settles them
+mechanism groups the presented bids by lot. A shared `saleId` settles them
 together. This is a deployment pattern on the released interfaces, not an
 addition to them; `cap-auctions/RATIONALE.md` sets out how it works and what it
 leaves out.
@@ -96,13 +96,13 @@ one close fixing the set of bids, and settlement through the Token Standard all
 carry over.
 
 Continuous double auctions are the format that may reach further, into
-cap-core itself, because a bid names its `Mechanism` when it is created.
+cap-core itself, because a bid names its `ResolutionRef` when it is created.
 
 ## New domains on cap-core
 
 `cap-core` is the foundation for further allocation-oriented modules. A new
 domain is a package beside `cap-governance` and `cap-auctions` that uses the
-core's stored types (`AuthenticKey`, `Mechanism`, `ExecutionCore`) and its
+core's stored types (`AuthenticKey`, `ResolutionRef`, `ExecutionCore`) and its
 checks, and defines interfaces only where code has to work with contracts from
 other packages. Each direction below is a further instantiation.
 

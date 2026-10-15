@@ -13,8 +13,8 @@ import qualified Splice.Api.Token.AllocationV2 as Alloc
 import Splice.Util (require)
 import Splice.TokenStandard.Utils (receiverSide, senderSide)
 
-import Cap.Core.Types (AuthenticKey (..), Mechanism (..))
-import Cap.Core.Utils (requireClosed, requireMechanism)
+import Cap.Core.Types (AuthenticKey (..), ResolutionRef (..))
+import Cap.Core.Utils (requireClosed, requireResolvedBy)
 import Cap.Auctions.OneLotBidV1
 import Cap.Auctions.SettlementV1 (SettlementBatch (..))
 import Cap.Auctions.Utils
@@ -24,8 +24,8 @@ import Cap.Auctions.Utils
 import Cap.Examples.SealedFirstPrice.Bid
 import Cap.Examples.SealedFirstPrice.Settlement
 
-firstPriceProcedureName : Text
-firstPriceProcedureName = ""
+firstPriceMechanismName : Text
+firstPriceMechanismName = ""
 
 data AuctionResult = AuctionResult
   with
@@ -46,22 +46,22 @@ template Auction
 
     choice Auction_Resolve : AuctionResult
       with
-        mechanism : Mechanism
+        resolution : ResolutionRef
         bidCids : [ContractId OneLotBid]
         extraArgs : ExtraArgs
       controller Set.toList authorities
       do
-        requireMechanism (AuthenticKey with authorities; id = resolverId) (coerceContractId self)
-          firstPriceProcedureName mechanism
-        resolveFirstPrice this mechanism bidCids extraArgs
+        requireResolvedBy (AuthenticKey with authorities; id = resolverId) (coerceContractId self)
+          firstPriceMechanismName resolution
+        resolveFirstPrice this resolution bidCids extraArgs
 
 resolveFirstPrice
   : Auction
-  -> Mechanism
+  -> ResolutionRef
   -> [ContractId OneLotBid]
   -> ExtraArgs
   -> Update AuctionResult
-resolveFirstPrice auction mechanism bidCids resolveArgs = do
+resolveFirstPrice auction resolution bidCids resolveArgs = do
   let terms = auction.terms
   now <- getTime
   requireClosed "the bidding window is closed" now terms.biddingClosesAt
@@ -69,11 +69,11 @@ resolveFirstPrice auction mechanism bidCids resolveArgs = do
   -- check participation
   require "a resolution presents at least one bid" (not (null bidCids))
   require "the presented bids are distinct" (unique bidCids)
-  let saleId = mechanism.id
+  let saleId = resolution.id
   seats <- forA bidCids $ \cid -> do
     b <- fetch cid
     let bv = view b
-    require "every presented bid belongs to this sale" (bv.mechanism == mechanism)
+    require "every presented bid belongs to this sale" (bv.resolution == resolution)
     require "every presented seat was opened on the seller's terms"
       (bv.terms == terms)
     require "every presented bid is signed by the bidder it names"

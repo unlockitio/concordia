@@ -15,13 +15,13 @@ contract created inside that command's transaction.
 
 `babydso` models a small DSO that changes two fees in one execution. The
 transfer fee lives on `AmuletConfig`, signed by `amuletAuthority`, and the entry
-fee lives on `AnsRules`, signed by `dso`. `SetFeesAction` binds both contracts,
+fee lives on `AnsRules`, signed by `dso`. `SetFeesAction` names both contracts as targets,
 so an execution updates both fees or neither.
 
 The SVs vote on one `SharedBallot` with weights read from `SvWeightSource`
-contracts. `DsoGovernor_OpenVote` snapshots the weights and pins the state of
+contracts. `DsoGovernor_OpenVote` reads the weights and takes a snapshot of
 both targets when the vote opens. `DsoGovernor_ResolveVote` requires two thirds
-of the snapshot weight and takes the weighted median of each fee field. The
+of the opening weight and takes the weighted median of each fee field. The
 governor then calls `Action_AuthorizeExecution`, which creates a `FeeUpdate`
 that any single SV can execute after `executionDelay`.
 
@@ -48,7 +48,7 @@ sequenceDiagram
     participant T as AmuletConfig + AnsRules
 
     SV1->>R: DsoGovernor_OpenVote — (0.05, 2.0)
-    R->>B: create — weight snapshot, pinned target state
+    R->>B: create — weights, target snapshots
     SV2->>B: SharedBallot_Cast — (0.06, 2.5)
     SV3->>B: SharedBallot_Cast — (0.09, 4.0)
     SV1->>R: DsoGovernor_ResolveVote
@@ -60,7 +60,7 @@ sequenceDiagram
 
 ### Long version
 
-The long version adds the setup, the weight snapshot and target pinning, the quorum and median rule, and the drift checks at execution.
+The long version adds the setup, the weights read at opening and the target snapshots, the quorum and median rule, and the drift checks at execution.
 
 ```mermaid
 sequenceDiagram
@@ -82,19 +82,19 @@ sequenceDiagram
 
     Note over AA,ANS: Setup
     AA->>CFG: create AmuletConfig — transferFee 0.03, epoch 3
-    AA->>ACT: create SetFeesAction — authorizers [[dso]], binds config and ANS
+    AA->>ACT: create SetFeesAction — authorizers [[dso]], targets config and ANS
     DSO->>ANS: create AnsRules — entryFee 2.0
     DSO->>DSO: create SvWeightSource × 4 — sv1-a 3.0, sv1-b 2.0, sv2-a 3.0, sv3-a 1.0
-    DSO->>R: create DsoGovernor — weightKeys, executionDelay 2h, executionWindow 1d
+    DSO->>R: create DsoGovernor — rightKeys, executionDelay 2h, executionWindow 1d
 
     Note over AA,ANS: Open the vote
-    SV1->>R: DsoGovernor_OpenVote — vote (0.05, 2.0), weightSources, targets
-    R->>R: requireMechanism — procedure "weighted-vote"
-    R->>R: readWeights — SV1 5.0, SV2 3.0, SV3 1.0
-    R->>ACT: fetch, then pinStatesWith action_readStateImpl
-    ACT->>CFG: readState — pins transferFee and epoch
-    ACT->>ANS: readIdentity — pins the contract id
-    R->>B: create SharedBallot — weights, binds, votes {SV1}
+    SV1->>R: DsoGovernor_OpenVote — vote (0.05, 2.0), rightCids, targetCids
+    R->>R: requireResolvedBy — mechanism "weighted-vote"
+    R->>R: fetchWeightsPerContract — SV1 5.0, SV2 3.0, SV3 1.0
+    R->>ACT: fetch, then snapshotStatesWith action_readStateImpl
+    ACT->>CFG: readState — snapshot of transferFee and epoch
+    ACT->>ANS: readIdentity — snapshot of the contract id
+    R->>B: create SharedBallot — weights, snapshots, votes {SV1}
 
     Note over AA,ANS: Cast, before votingClosesAt
     SV2->>B: SharedBallot_Cast — (0.06, 2.5)
@@ -103,19 +103,19 @@ sequenceDiagram
     B->>B: archive and recreate with SV3's vote
 
     Note over AA,ANS: Resolve, after votingClosesAt
-    SV1->>R: DsoGovernor_ResolveVote — mechanism, [ballotCid]
-    R->>B: fetchGroup, requireClosed, weighBallots
+    SV1->>R: DsoGovernor_ResolveVote — resolution, [ballotCid]
+    R->>B: fetchGroup, requireClosed, weightedCastsOf
     R->>B: consumeBallots — archive
-    R->>R: rule twoThirdsOf weightedMedianByField — 9.0 cast of 6.0 needed
+    R->>R: decide (atLeastShareOfTotal 2 3) weightedMedianByField — 9.0 cast of 6.0 needed
     Note over R: Decided (transferFee 0.05, entryFee 2.0)
-    R->>ACT: Action_AuthorizeExecution — actors [dso], outcome, binds from the ballot
+    R->>ACT: Action_AuthorizeExecution — actors [dso], outcome, snapshots from the ballot
     ACT->>X: create FeeUpdate — opensAt now + 2h, executors = each SV alone
     R-->>SV1: ResolveResult — verdict, [FeeUpdate]
 
     Note over AA,ANS: Execute, after opensAt
-    SV2->>X: Executable_Execute — actors [SV2], targets
+    SV2->>X: Executable_Execute — actors [SV2], targetCids
     X->>X: requireOpen, entitled EA_Execute, requireSameKeys
-    X->>CFG: checkTarget unchanged — the pinned transferFee is unchanged
+    X->>CFG: checkTarget unchanged — the snapshot transferFee is unchanged
     X->>ANS: checkIdentity — the contract id is unchanged
     X->>CFG: AmuletConfig_SetFee 0.05 — epoch 4
     X->>ANS: AnsRules_SetFee 2.0
@@ -196,7 +196,7 @@ sequenceDiagram
 
     Note over DSO,CFG: Propose and invite, before entryClosesAt
     A->>R: Governor_Propose — proposalId, terms
-    R->>P: create Proposal — procedure "majority", roll []
+    R->>P: create Proposal — mechanism "majority", roll []
     OP->>P: Proposal_Invite
     P->>I: create BallotInvitation × 3 — signed by dso and operator
 
@@ -215,19 +215,19 @@ sequenceDiagram
 
     Note over DSO,CFG: Resolve, after votingClosesAt
     OP->>R: Governor_ResolveMajority — proposalCid, three ballots
-    R->>P: fetch, requireMechanism
+    R->>P: fetch, requireResolvedBy
     R->>BL: fetchGroup, requireClosed, check the ballot windows and actionCid
-    R->>R: weighBallotsEqually — the ballots cover the roll
+    R->>R: castsOf — the ballots cover the roll
     R->>BL: consumeBallots — PrivateBallot_Consume
-    R->>R: rule majorityOf — 2 yay of 3
+    R->>R: decide majorityOf — 2 yay of 3
     Note over R: Decided yay
     R->>ACT: Action_AuthorizeExecution — actors [dso], outcome yay
-    ACT->>X: create ConfigUpdate — binds Config at "sync-a", executors = each voter alone
+    ACT->>X: create ConfigUpdate — snapshot of Config at "sync-a", executors = each voter alone
     R->>P: archive
     R-->>OP: ResolveResult — verdict, [ConfigUpdate]
 
     Note over DSO,CFG: Execute, after votingClosesAt
-    A->>X: Executable_Execute — actors [Alice], targets {config}
+    A->>X: Executable_Execute — actors [Alice], targetCids {config}
     X->>X: requireOpen, entitled EA_Execute, requireSameKeys
     X->>CFG: checkTarget (==) — setting is still "sync-a"
     X->>CFG: Config_Set "sync-b"

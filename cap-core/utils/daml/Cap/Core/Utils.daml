@@ -7,8 +7,8 @@ module Cap.Core.Utils
   , fetchCheckedAny
   , fetchGroup
 
-    -- * Mechanisms
-  , requireMechanism
+    -- * Resolutions
+  , requireResolvedBy
   , authoritiesOf
 
     -- * Admission
@@ -28,8 +28,7 @@ module Cap.Core.Utils
     -- * Optionals
   , orAbort
   , single
-  , allEqual
-  , allAgreeBy
+  , uniformValue
   ) where
 
 import DA.List (unique)
@@ -44,15 +43,15 @@ import qualified DA.Traversable as Traversable
 import Splice.Api.Token.MetadataV1
 import Splice.Util (HasCheckedFetch (..), fetchChecked, require)
 
-import Cap.Core.Types (AuthenticKey (..), Mechanism (..))
+import Cap.Core.Types (AuthenticKey (..), ResolutionRef (..))
 
 
 -- | The key of a contract built from its actual signatories, for use in a
--- 'HasCheckedFetch' instance so that 'fetchChecked' also checks who signed it.
+-- HasCheckedFetch instance so that fetchChecked also checks who signed it.
 signedKey : HasSignatory t => Text -> t -> AuthenticKey
 signedKey id contract = AuthenticKey with authorities = Set.fromList (signatory contract); id
 
--- | Fetches a contract named by an 'AnyContractId' as its concrete template and
+-- | Fetches a contract named by an AnyContractId as its concrete template and
 -- checks its key, returning the typed contract id with the contract.
 fetchCheckedAny
   : (HasFetch t, HasCheckedFetch t k)
@@ -75,23 +74,23 @@ fetchGroup key cids = do
     pure (cid, contract)
 
 
--- | Checks that a mechanism names this resolver, is bound to no other rules
--- contract, and names this procedure. The rules contract passes its own key,
--- its own contract id, and the procedure its choice runs.
-requireMechanism : AuthenticKey -> AnyContractId -> Text -> Mechanism -> Update ()
-requireMechanism rKey self procedure mechanism = do
-  require ("the mechanism names the ResolveKey " <> show rKey) (mechanism.resolver == rKey)
-  require "the mechanism is bound to no other rules contract"
-    (optional True (== self) mechanism.resolverCid)
-  require ("the mechanism names the procedure " <> procedure) (mechanism.procedure == procedure)
+-- | Checks that a resolution names this resolver, is bound to no other resolver
+-- contract, and names this mechanism. The resolver passes its own key, its own
+-- contract id, and the mechanism its choice runs.
+requireResolvedBy : AuthenticKey -> AnyContractId -> Text -> ResolutionRef -> Update ()
+requireResolvedBy rKey self mechanism resolution = do
+  require ("the resolution names the resolver " <> show rKey) (resolution.resolver == rKey)
+  require "the resolution is bound to no other resolver contract"
+    (optional True (== self) resolution.resolverCid)
+  require ("the resolution names the mechanism " <> mechanism) (resolution.mechanism == mechanism)
 
-authoritiesOf : Mechanism -> Set Party
-authoritiesOf mechanism = mechanism.resolver.authorities
+authoritiesOf : ResolutionRef -> Set Party
+authoritiesOf resolution = resolution.resolver.authorities
 
 
 -- | Admits the actors when they include every party of some non-empty group.
--- The actors may be a superset of the group: the group @[alice]@ admits the
--- actors @[alice, bob]@.
+-- The actors may be a superset of the group: the group [alice] admits the
+-- actors [alice, bob].
 admitActors : [[Party]] -> [Party] -> Bool
 admitActors groups sigs =
   any (all (`elem` sigs)) (filter (not . null) groups)
@@ -185,7 +184,7 @@ instance IsAnyValue a => IsAnyValue (TextMap a) where
   fromAnyValue _ = None
 
 
--- | Unwrap an 'Optional', aborting with the given message when it is 'None'.
+-- | Unwrap an Optional, aborting with the given message when it is None.
 orAbort : Text -> Optional a -> Update a
 orAbort msg None = abort msg
 orAbort _ (Some a) = pure a
@@ -194,9 +193,6 @@ single : [a] -> Optional a
 single [a] = Some a
 single _ = None
 
-allEqual : Eq a => [a] -> Optional a
-allEqual = allAgreeBy (==)
-
-allAgreeBy : (a -> a -> Bool) -> [a] -> Optional a
-allAgreeBy agrees (a :: rest) | all (agrees a) rest = Some a
-allAgreeBy _ _ = None
+uniformValue : Eq a => [a] -> Optional a
+uniformValue (a :: rest) | all (== a) rest = Some a
+uniformValue _ = None

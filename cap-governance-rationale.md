@@ -14,13 +14,13 @@ described below with the reason it is needed.
 
 ### Fetching and grouping ballots by proposal
 
-A procedure must count only the ballots of the proposal it resolves, and each
+A mechanism must count only the ballots of the proposal it resolves, and each
 ballot only once. The resolving party chooses which ballots to present, so the
-procedure must refuse a ballot from another proposal and a ballot presented
-twice. `fetchGroup` fetches the ballots, refuses duplicates and checks that each
-ballot references the same `Mechanism`. `requireMechanism` checks that the
-mechanism names the governor where the outcome is decided and the procedure
-used.
+choice that runs the mechanism must refuse a ballot from another proposal and a
+ballot presented twice. `fetchGroup` fetches the ballots, refuses duplicates and
+checks that each ballot references the same `ResolutionRef`. `requireResolvedBy`
+checks that the resolution ref names the governor where the outcome is decided
+and the mechanism used.
 
 **Example:** a decentralized party has two open proposals on the same governor.
 Without the group check, the party resolving proposal A could present ballots
@@ -33,63 +33,70 @@ each target by an `AuthenticKey`, which is the set of signatories plus an id. A
 contract id by itself cannot prove who signed the contract. Any party can create
 a contract of the same template with the same fields. `fetchCheckedAny` fetches
 the presented contract and compares the key it computes from its own
-signatories with the key the action names. `readWeights` does the same check
-for weight contracts.
+signatories with the key the action names. `fetchVotingRights` does the same check
+for the contracts that carry voting rights.
 
 **Example:** a proposal changes a parameter on a contract A signed by the operator.
 An attacker creates a contract B of the same template, signed only by
 themselves, and presents it as the target. Without the identity check, the
 execution acts on the attacker's copy and contract A never changes, even though
-the proposal counts as executed. The same risk applies to weights: a
-self-signed weight contract would give its creator voting power they don't
-have.
+the proposal counts as executed. The same risk applies to voting rights: a
+self-signed voting-right contract would give its creator voting power they
+don't have.
 
 ### Admitting votes
 
 A vote counts only if its voter has the right to vote, has not voted already,
-and voted for something the procedure counts. `weighBallots` and
-`weighBallotsEqually` refuse:
+and voted for something the mechanism counts. `weightedCastsOf` and
+`castsOf` refuse:
 
 - a voter who appears on two ballots;
 - a voter with no weight;
 - a negative weight;
-- a vote that the procedure's decoder does not accept.
+- a vote that the mechanism's `voteOf` does not accept.
 
 **Example:** a ballot template carries votes of type `Approve | Reject | SetFee
-Decimal`, and a yes/no procedure counts only `Approve` and `Reject`. 
+Decimal`, and a yes/no mechanism counts only `Approve` and `Reject`. 
 
 ### Quorums and tallies
 
 Every governance app decides two things: whether enough voters took part
-(`Quorum`), and what the votes concluded (`Tally`). `rule` combines them into a
+(`Quorum`), and what the votes concluded (`Tally`). `decide` combines them into a
 `Verdict`: `Lapsed` when the quorum fails, `Undecided` when the tally reaches
 nothing, and `Decided` otherwise. They are kept separate because low turnout
 and a split vote are different outcomes, and an app may handle them
 differently. `Cap.Governance.Utils.Count` provides common quorums
-(`atLeastBallots`, `atLeastWeight`, `shareOfTotal`) and tallies (`unanimous`,
-`plurality`, `shareOfVotes`, `median`, `weightedMedian`), so an app builds its
-rule from these parts.
+(`atLeastPresent`, `atLeastVotes`, `atLeastVotedWeight`, `atLeastShareOfTotal`)
+and tallies (`unanimous`, `plurality`, `shareOfVotes`, `median`,
+`weightedMedian`), so an app builds its rule from these parts.
 
-**Example:** `rule (shareOfTotal 0.5 total) (shareOfVotes 0.66)`, where `total` is
-the total weight of the electorate, requires half of that weight to vote, and
-one option to get at least two thirds of the weight that voted. Shares are given
-as a numerator and a denominator so that a share like two thirds is exact.
+`Casts` holds one cast per eligible voter. Each cast's `vote` is `Absent`
+when no vote was presented for the voter, `Abstained` when the voter took part
+without choosing an option, or `Voted` with the option. Quorums can count
+abstentions as turnout, and tallies only see `Voted`, because an abstention is
+part of the turnout but not of the result.
 
-### Pinning the state of a target and checking it again at execution
+**Example:** `decide (atLeastShareOfTotal 1 2) (shareOfVotes 2 3)` requires the
+voters present, abstentions included, to hold half of the eligible voters' weight, and
+one option to get at least two thirds of the weight of the votes. Shares are
+given as a numerator and a denominator so that a share like two thirds is exact.
+
+### Taking a snapshot of a target and checking it again at execution
 
 A target can change between the vote and the execution, and voters approved the
-change against the state they saw. A `Bind` records, per target, the state or
-contract id the decision was made against. An action can fix parts of its binds
-when it is created. `pinStatesWith` and `pinCidsWith` fill the parts the action
-left open with the target's current state or contract id, and `mergeBinds`
-merges those pins into the action's binds. At execution, `checkTarget` compares
-the target's live state with the pinned state using the action's
+change against the state they saw. A `Snapshot` records, per target, the state
+or contract id the decision was made against. An action declares its `targets`
+when it is created and can fix parts of their snapshots then. `snapshotStates`
+and `snapshotCids` fill the parts the action left open with the target's current
+state or contract id, and `mergeSnapshots` merges those snapshots into the
+action's targets. At execution, `checkTarget` compares the target's live state
+with the snapshot state using the action's
 `DriftPolicy`. It refuses the execution if the target changed in a way the
 policy does not allow.
 
 **Example:** a target's fee is 1%, and voters approve proposal A to raise it to 2%.
 Before A executes, proposal B raises the fee to 3%. If A then executes, it
-lowers the fee from 3% to 2%, which nobody voted for. With the fee pinned at 1%
+lowers the fee from 3% to 2%, which nobody voted for. With a snapshot of the fee at 1%
 and the `unchanged` policy, `checkTarget` sees that the fee is now 3% and
 refuses A.
 
@@ -100,7 +107,7 @@ lowers the withdrawal limit to 5,000, A still executes, because the fee is
 still 1%. A drift policy only decides whether the execution goes ahead. To keep
 B's change, A's execution must write only the fields A changes, for example
 with Splice's `patch`, which applies the fields that differ between the new and
-the pinned state to the live state.
+the snapshot state to the live state.
 
 
 ## When CAP uses an interface
@@ -118,8 +125,8 @@ and one action contract can be used by several governance mechanisms.
 
 `Action` is an interface because a governor calls it on contracts written by
 someone else. The owner of a target signs an action that names the
-decentralized party in `authorizers`, and the governor's procedure exercises
-`Action_AuthorizeExecution` on it. The procedure's code is written without
+decentralized party in `authorizers`, and the governor's choice that runs the
+mechanism exercises `Action_AuthorizeExecution` on it. That choice is written without
 knowing the action's package. The action's signatories don't have to be the
 governor's signatories, so a target owner can delegate authority over it to a
 decentralized party.
@@ -129,37 +136,37 @@ executor app can execute it without knowing the action's package.
 
 The diagram shows how a governance app uses an action and its targets. The
 governance app never reads or changes a target directly. It reads targets
-through the action, and it holds their state only as `Binds`.
+through the action, and it holds their state only as `Snapshot`s.
 
 ```mermaid
 flowchart LR
   subgraph GOV["Governance "]
-    Ballot["Ballot<br/>(vote + pins targets)"]
+    Ballot["Ballot<br/>(vote + target snapshots)"]
     Governor["Governor<br/>(counts, decides outcome)"]
   end
 
   subgraph ACT["Action package"]
-    Action["Action<br/>view: authorizers, binds"]
+    Action["Action<br/>view: authorizers, targets"]
     Executable["Executable<br/>(execution window, entitled actors)"]
   end
 
-  Targets["Targets<br/>any contract the action binds"]
+  Targets["Targets<br/>any contract the action names"]
 
-  Ballot -- "① action_readStateImpl<br/>pinStatesWith / pinCidsWith" --> Action
+  Ballot -- "① action_readStateImpl<br/>snapshotStates / snapshotCids" --> Action
   Action -. "reads state" .-> Targets
-  Governor -- "② Action_AuthorizeExecution<br/>outcome + binds" --> Action
-  Action -- "mergeBinds, creates" --> Executable
+  Governor -- "② Action_AuthorizeExecution<br/>outcome + snapshots" --> Action
+  Action -- "mergeSnapshots, creates" --> Executable
   Executable -- "③ Executable_Execute<br/>checkTarget + DriftPolicy" --> Targets
 ```
 
 1. When a ballot is cast or a proposal is resolved, the governance app reads the
-   targets through `action_readStateImpl`, using `pinStatesWith` or
-   `pinCidsWith`. The result is a `Bind` per target.
-2. The governor's procedure exercises `Action_AuthorizeExecution` with the
-   `outcome` (vote aggregation) and the pinned binds. The action merges them with its own binds
-   using `mergeBinds` and creates an `Executable`.
-3. An entitled actor exercises `Executable_Execute` and presents the targets.
-   `checkTarget` compares each target's live state with its pinned state using
+   targets through `action_readStateImpl`, using `snapshotStates` or
+   `snapshotCids`. The result is a `Snapshot` per target.
+2. The governor's choice that runs the mechanism exercises `Action_AuthorizeExecution` with the
+   `outcome` (vote aggregation) and the snapshots. The action merges them into its own targets
+   using `mergeSnapshots` and creates an `Executable`.
+3. An entitled actor exercises `Executable_Execute` and presents the target
+   contracts (`targetCids`). `checkTarget` compares each target's live state with its snapshot using
    the action's `DriftPolicy`, and the action then changes the targets.
 
 
@@ -177,7 +184,7 @@ It would also have these costs:
 - The interface's package is frozen, so every ballot has to fit one view. A
   shared ballot, a per-voter confirmation and a sealed vote have different
   shapes, and fields outside the view are not reachable through the interface.
-- A procedure taking `ContractId Ballot` accepts any template that implements
+- A choice taking `ContractId Ballot` accepts any template that implements
   the interface. A vote is only as trustworthy as the template that created it,
   because the template's signatories, `ensure` clause and cast choice decide who
   can vote and for what. A governor that accepts the interface has to decide
@@ -186,7 +193,7 @@ It would also have these costs:
 
 `IsBallot` in `Cap.Governance.Utils.Ballots` lets the library work with any
 ballot template without an interface. It gives the library a ballot's casts,
-its binds, the action it asks to authorize, and how to consume it. An app writes
+its snapshots, the action it asks to authorize, and how to consume it. An app writes
 one instance per ballot template.
 
 We chose not to define a `Ballot` interface because we think the common case is
@@ -201,7 +208,8 @@ resolution on a governor whose template it does not know. The removed
 
 - a generic entry point, `Resolver_Resolve`;
 - a `procedures` map, looked up by name;
-- `Submittable`, which carried a `Mechanism` to that entry point.
+- `Submittable`, which carried a `ResolutionRef` (then named `Mechanism`) to
+  that entry point.
 
 That would allow, without depending on the called governor's package:
 
@@ -214,12 +222,12 @@ It would also have these costs:
 - A generic entry point takes the presented contracts and `extraArgs` in a
   generic form. A client still has to know the governor's format to build them,
   so the entry point is generic only in its signature.
-- Procedures are found by a `Text` name instead of being typed choices, so a
+- Mechanisms are found by a `Text` name instead of being typed choices, so a
   wrong name or wrong arguments fail at run time.
 - The interface's package is frozen, so every governor's resolution has to fit
   one signature.
 
-Without an interface, each procedure is a named choice on the governor, with
+Without an interface, each mechanism is a named choice on the governor, with
 typed arguments. The cost is that a client or contract that resolves proposals
 has to depend on the governor's package.
 

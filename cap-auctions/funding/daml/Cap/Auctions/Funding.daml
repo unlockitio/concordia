@@ -14,7 +14,7 @@ import Splice.TokenStandard.Utils
 
 import qualified Splice.Api.Token.AllocationV2 as Alloc
 
-import Cap.Core.Types (Mechanism)
+import Cap.Core.Types (ResolutionRef)
 import Cap.Core.Utils (authoritiesOf)
 import Cap.Auctions.OneLotBidV1 (OneLotBidView, Quote)
 import Cap.Auctions.Utils
@@ -22,11 +22,11 @@ import Cap.Auctions.Utils
 
 template OneLotBidAllocationRequest
   with
-    mechanism : Mechanism
+    resolution : ResolutionRef
     bid : OneLotBidView -- could be generalized to any bid type actually
     requestedAt : Time
   where
-    signatory Set.toList (authoritiesOf mechanism) <> [bidderOf bid]
+    signatory Set.toList (authoritiesOf resolution) <> [bidderOf bid]
     observer regularAccountParties bid.bidderPaymentAccount
           <> regularAccountParties bid.bidderLotAccount
 
@@ -35,7 +35,7 @@ template OneLotBidAllocationRequest
     interface instance AllocReq.AllocationRequest for OneLotBidAllocationRequest where
       view = AllocReq.AllocationRequestView with
         originalRequestCid = None
-        settlement = oneLotSettlement mechanism.id (authoritiesOf mechanism)
+        settlement = oneLotSettlement resolution.id (authoritiesOf resolution)
         allocations = [bidderPaymentAllocation bid (concat bid.quotes), bidderLotAllocation bid]
         requestedAt
         settleAt = Some bid.terms.expiresAt
@@ -53,7 +53,7 @@ template OneLotBidAllocationRequest
 
       allocationRequest_withdrawImpl self arg = do
         archiveAndCheckActors self arg.actors
-          [(oneLotSettlement mechanism.id (authoritiesOf mechanism)).executors]
+          [(oneLotSettlement resolution.id (authoritiesOf resolution)).executors]
         pure AllocReq.AllocationRequest_WithdrawResult with meta = emptyMetadata
 
       allocationRequest_acceptExtraObservers _ = []

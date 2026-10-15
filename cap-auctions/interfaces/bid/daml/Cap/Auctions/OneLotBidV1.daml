@@ -10,7 +10,7 @@ import Splice.Api.Token.AllocationV2 (Allocation, SettlementFactory)
 import Splice.Util (require)
 import qualified Splice.Api.Token.HoldingV2 as Holding
 import DA.Map (Map)
-import Cap.Core.Types (Mechanism)
+import Cap.Core.Types (ResolutionRef)
 import Cap.Core.Utils (entitled, requireExpired, requireOpen)
 
 data Direction
@@ -56,7 +56,7 @@ data Quote = Quote
 
 data OneLotBidView = OneLotBidView
   with
-    mechanism : Mechanism
+    resolution : ResolutionRef
     terms : OneLotAuctionTerms
     availableActions : Map BidAction [[Party]]
     bidderPaymentAccount : Holding.Account

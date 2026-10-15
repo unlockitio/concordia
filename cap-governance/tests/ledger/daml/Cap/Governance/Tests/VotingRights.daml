@@ -1,0 +1,135 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Governance.Tests.VotingRights where
+
+import DA.Assert ((===))
+import qualified DA.Map as Map
+import qualified DA.Set as Set
+import Daml.Script
+
+import Cap.Governance.Tests.Harness
+import Cap.Governance.Tests.Support
+
+
+data Env = Env with
+    owner : Party
+    alice : Party
+    bob : Party
+    probe : ContractId Probe
+
+setup : Text -> Script Env
+setup ns = do
+  owner <- allocateParty (ns <> "-owner")
+  alice <- allocateParty (ns <> "-alice")
+  bob <- allocateParty (ns <> "-bob")
+  probe <- submit owner $ createCmd Probe with owner
+  pure Env with ..
+
+weight : Env -> Text -> Party -> Decimal -> Script (ContractId Weight)
+weight env tag holder amount = submit env.owner $ createCmd Weight with
+  owner = env.owner; tag; holder; amount
+
+
+fetchVotingRightsReadsTheRegisteredContracts : Script ()
+fetchVotingRightsReadsTheRegisteredContracts = do
+  env <- setup "weights-ok"
+  w1 <- weight env "w1" env.alice 2.0
+  w2 <- weight env "w2" env.bob 1.0
+  result <- submit env.owner $ exerciseCmd env.probe Probe_FetchVotingRights with
+    rightKeys = Set.fromList ["w1", "w2"]
+    rightCids = Map.fromList [("w1", w1), ("w2", w2)]
+  result === Map.fromList
+    [("w1", Map.fromList [(env.alice, 2.0)]), ("w2", Map.fromList [(env.bob, 1.0)])]
+
+fetchVotingRightsRefusesAMissingContract : Script ()
+fetchVotingRightsRefusesAMissingContract = do
+  env <- setup "weights-missing"
+  w1 <- weight env "w1" env.alice 2.0
+  submitMustFailContaining "exactly the ones under the right keys" env.owner $
+    exerciseCmd env.probe Probe_FetchVotingRights with
+      rightKeys = Set.fromList ["w1", "w2"]; rightCids = Map.fromList [("w1", w1)]
+
+fetchVotingRightsRefusesAnExtraContract : Script ()
+fetchVotingRightsRefusesAnExtraContract = do
+  env <- setup "weights-extra"
+  w1 <- weight env "w1" env.alice 2.0
+  w2 <- weight env "w2" env.bob 1.0
+  submitMustFailContaining "exactly the ones under the right keys" env.owner $
+    exerciseCmd env.probe Probe_FetchVotingRights with
+      rightKeys = Set.fromList ["w1"]; rightCids = Map.fromList [("w1", w1), ("w2", w2)]
+
+fetchVotingRightsRefusesAContractUnderAnotherKey : Script ()
+fetchVotingRightsRefusesAContractUnderAnotherKey = do
+  env <- setup "weights-key"
+  w2 <- weight env "w2" env.bob 1.0
+  submitMustFailContaining "Contract group identifier mismatch" env.owner $
+    exerciseCmd env.probe Probe_FetchVotingRights with
+      rightKeys = Set.fromList ["w1"]; rightCids = Map.fromList [("w1", w2)]
+
+fetchVotingRightsRefusesANegativeWeight : Script ()
+fetchVotingRightsRefusesANegativeWeight = do
+  env <- setup "weights-negative"
+  w1 <- weight env "w1" env.alice (-1.0)
+  submitMustFailContaining "is not negative" env.owner $
+    exerciseCmd env.probe Probe_FetchVotingRights with
+      rightKeys = Set.fromList ["w1"]; rightCids = Map.fromList [("w1", w1)]
+
+fetchWeightsPerContractAddsUpTheRightsOfEachVoter : Script ()
+fetchWeightsPerContractAddsUpTheRightsOfEachVoter = do
+  env <- setup "voter-weights"
+  w1 <- weight env "w1" env.alice 2.0
+  w2 <- weight env "w2" env.bob 1.0
+  w3 <- weight env "w3" env.alice 0.5
+  result <- submit env.owner $ exerciseCmd env.probe Probe_FetchWeightsPerContract with
+    rightKeys = Set.fromList ["w1", "w2", "w3"]
+    rightCids = Map.fromList [("w1", w1), ("w2", w2), ("w3", w3)]
+  result === Map.fromList [(env.alice, 2.5), (env.bob, 1.0)]
+
+fetchVotersPerContractKeepsEveryVoterWithWeight : Script ()
+fetchVotersPerContractKeepsEveryVoterWithWeight = do
+  env <- setup "voters"
+  w1 <- weight env "w1" env.alice 2.0
+  w2 <- weight env "w2" env.alice 3.0
+  w3 <- weight env "w3" env.bob 0.0
+  result <- submit env.owner $ exerciseCmd env.probe Probe_FetchVotersPerContract with
+    rightKeys = Set.fromList ["w1", "w2", "w3"]
+    rightCids = Map.fromList [("w1", w1), ("w2", w2), ("w3", w3)]
+  result === Set.fromList [env.alice]
+
+fetchWeightsPerContractAddsUpRightsAcrossContracts : Script ()
+fetchWeightsPerContractAddsUpRightsAcrossContracts = do
+  env <- setup "registries"
+  r1 <- submit env.owner $ createCmd WeightsContract with
+    owner = env.owner; tag = "r1"; weights = Map.fromList [(env.alice, 2.0), (env.bob, 1.0)]
+  r2 <- submit env.owner $ createCmd WeightsContract with
+    owner = env.owner; tag = "r2"; weights = Map.fromList [(env.alice, 0.5)]
+  result <- submit env.owner $ exerciseCmd env.probe Probe_FetchWeightsPerWeightsContract with
+    rightKeys = Set.fromList ["r1", "r2"]
+    rightCids = Map.fromList [("r1", r1), ("r2", r2)]
+  result === Map.fromList [(env.alice, 2.5), (env.bob, 1.0)]
+
+fetchWeightsFromOneContractReadsEveryHolder : Script ()
+fetchWeightsFromOneContractReadsEveryHolder = do
+  env <- setup "one-contract-weights"
+  r1 <- submit env.owner $ createCmd WeightsContract with
+    owner = env.owner; tag = "r1"; weights = Map.fromList [(env.alice, 2.0), (env.bob, 1.0)]
+  result <- submit env.owner $ exerciseCmd env.probe Probe_FetchWeightsFromOneContract with
+    rightsKey = "r1"; rightsCid = r1
+  result === Map.fromList [(env.alice, 2.0), (env.bob, 1.0)]
+
+fetchWeightsFromOneContractRefusesAnotherKey : Script ()
+fetchWeightsFromOneContractRefusesAnotherKey = do
+  env <- setup "one-contract-key"
+  r1 <- submit env.owner $ createCmd WeightsContract with
+    owner = env.owner; tag = "r1"; weights = Map.fromList [(env.alice, 2.0)]
+  submitMustFailContaining "Contract group identifier mismatch" env.owner $
+    exerciseCmd env.probe Probe_FetchWeightsFromOneContract with rightsKey = "r2"; rightsCid = r1
+
+fetchVotersFromOneContractKeepsEveryHolderWithWeight : Script ()
+fetchVotersFromOneContractKeepsEveryHolderWithWeight = do
+  env <- setup "one-contract-voters"
+  r1 <- submit env.owner $ createCmd WeightsContract with
+    owner = env.owner; tag = "r1"; weights = Map.fromList [(env.alice, 2.0), (env.bob, 0.0)]
+  result <- submit env.owner $ exerciseCmd env.probe Probe_FetchVotersFromOneContract with
+    rightsKey = "r1"; rightsCid = r1
+  result === Set.fromList [env.alice]
