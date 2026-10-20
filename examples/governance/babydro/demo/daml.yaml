@@ -9,6 +9,8 @@ dependencies:
 - daml-stdlib
 - daml-script
 data-dependencies:
+- ../../../../../cips/cn-credentials-standard/demo/interface/.daml/dist/canton-network-credentials-interfaces-0.2.0.dar
+- ../../../../../cips/cn-credentials-standard/demo/model/.daml/dist/canton-network-credentials-demo-0.1.0.dar
 - ../../../../lib/splice-api-token-metadata-v1-1.0.0.dar
 - ../../../../lib/splice-util-0.1.7.dar
 - ../../../../cap-core/types/.daml/dist/cap-core-types-0.1.0.dar

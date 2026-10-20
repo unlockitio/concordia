@@ -1,16 +1,18 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
-# BabyDRO: name dispute walkthrough
+# BabyDRO: canton.name governance walkthrough
 
-This standalone Daml example models one designated canonical `NameRegistry`. An allowlisted registrar registers a name and can challenge an existing record with a reason. Three registry operators cast individual on-ledger votes; two distinct approvals for the same outcome permit an operator to resolve. Deliberation and evidence exchange happen off ledger. Uphold removes the contested name and preserves the dispute's reason in the audit history; dismiss removes only the selected dispute and leaves the registration and other disputes intact. A separate registry instance cannot exercise choices on the canonical registry or change its record.
+The CIPs credentials demo owns name requests, registry-issued credentials and their lifecycle. Concordia owns only (1) a dispute process yielding a ruling between two registries' conflicting canton.name claims and (2) admission and removal of registries entitled to dispute. A ruling does **not** change a name credential. Each affected registry follows by its own action on its own CIPs-owned state; the demo archives the losing registry's credential as that registry, and separately records follow acknowledgements. An acknowledgement alone does not prove the external credential action: the journey asserts both contract states.
 
-The naming CIP draft in [PR #209](https://github.com/canton-foundation/cips/pull/209) motivates the naming dispute demonstration. The fixed three-operator electorate, two-of-three threshold, allowlist, vote representation, registry selection, and audit layout are **local demonstration assumptions**, not assertions that the draft mandates these details. This is a ledger-state voting analogue, not cryptographic threshold signing or inter-registry arbitration. An integrator must designate and retain the canonical registry contract ID across consuming choices; this example does not implement a global discovery service or enforce unique registry creation across independent parties. The owner signs registry replacements in the exercise transaction under Daml authorization semantics.
-
-From the repository root:
+The source of the name model is in-flight work on the CIPs branch `cip/canton-network-credentials-standard`, consumed as local DAR dependencies, **not** a verified pinned reproducible SHA. Build the CIPs DARs first from `../cips/cn-credentials-standard/demo` with `dpm build --all`. Then, from this repository root:
 
 ```sh
 dpm build --all
+dpm test --package-root examples/governance/babydro/demo
 dpm script --dar examples/governance/babydro/demo/.daml/dist/cap-example-babydro-demo-0.1.0.dar --all --ide-ledger
+./scripts/sandbox-test.sh
 ```
 
-The scripts cover uphold, dismiss with another live dispute, one-vote insufficiency, duplicate/outsider votes, unauthorized registration/challenge, and independence of a second registry. They are the consumer-facing ledger workflow tests for this example. The built DAR runs with `dpm script --ide-ledger` without recompiling data-dependency interfaces. On this SDK installation `dpm test --package-root examples/governance/babydro/demo` fails during interface compilation for `daml-prim` / `daml-stdlib`; the existing private-majority-vote demo fails in the same way. The IDE ledger run executes the built scripts and their assertions, but does not establish behavior on a Canton sandbox.
+The relative DAR paths assume `cips` and `concordia` are siblings, and cannot resolve in a standalone Concordia checkout. Build the sibling CIPs packages before building Concordia; no CIPs source or DAR is vendored here. For a standalone build, supply the CIPs DARs in the same relative layout (without modifying the sources) or change the local dependency paths deliberately. The sandbox runner uploads the built demo DAR and its transitive dependencies.
+
+The naming proposal is [canton-foundation/cips draft PR #209](https://github.com/canton-foundation/cips/pull/209), which has **no assigned CIP number**. The draft motivates dispute governance; it does not prescribe the voting, membership, or credential follow mechanism implemented here. Demo-local choices: three initial registry operators, two distinct votes from current members for each ruling or membership change (an off-ledger k-of-n analogue, **not cryptographic threshold signing**), party-based entitlement, a case ID and reason supplied by the disputer, and explicit follow acknowledgements. Governance cannot verify the existence or truth of a claimed name in CIPs state when a dispute is opened; the journey demonstrates the intended ordering and checks two conflicting issued credentials and other unaffected credentials. Admission can enlarge the electorate; the threshold remains two as a local simplification. Removing a member with an open case or an unfollowed ruling is rejected.

@@ -3,96 +3,204 @@
 module Cap.Examples.BabyDro.Demo where
 
 import DA.Assert ((===))
-import qualified DA.Map as Map
+import DA.NonEmpty (NonEmpty(..))
 import qualified DA.Set as Set
+import qualified DA.TextMap as TextMap
+import DA.Time (addRelTime, days)
 import Daml.Script
-
+import qualified Splice.Api.Token.MetadataV1 as Metadata
+import Canton.Network.Credentials.Demo
+import Canton.Network.Credentials.DemoNames
+import Canton.Network.Credentials.V1
 import Cap.Examples.BabyDro.Registry
 
-setup : Text -> Script (Party, Party, Party, Party, Party, Party, ContractId NameRegistry)
-setup label = do
-  owner <- allocateParty (label <> "-owner")
-  alice <- allocateParty (label <> "-alice")
-  bob <- allocateParty (label <> "-bob")
-  carol <- allocateParty (label <> "-carol")
-  registrar <- allocateParty (label <> "-registrar")
-  outsider <- allocateParty (label <> "-outsider")
-  cid <- submit owner $ createCmd NameRegistry with
-    owner
-    registryId = label
-    registrars = Set.singleton registrar
-    operators = Set.fromList [alice, bob, carol]
-    records = Map.empty
-    disputes = []
-    votes = []
-    audit = []
-  pure (owner, alice, bob, carol, registrar, outsider, cid)
+consortium : Party -> Party -> Party -> Script (ContractId Consortium)
+consortium a b c = submit a $ createCmd Consortium with
+  founder = a
+  members = Set.fromList [a, b, c]
+  motions = []
+  openCases = []
+  ballots = []
+  rulings = []
 
-register : Party -> ContractId NameRegistry -> Party -> Text -> Script (ContractId NameRegistry)
-register registrar cid holder name = submit registrar $ exerciseCmd cid NameRegistry_Register with registrar; name; holder
+state : Party -> ContractId Consortium -> Script Consortium
+state party cid = do
+  Some value <- queryContractId party cid
+  pure value
 
-challenge : Party -> ContractId NameRegistry -> Text -> Text -> Text -> Script (ContractId NameRegistry)
-challenge registrar cid disputeId name reason = submit registrar $ exerciseCmd cid NameRegistry_Challenge with registrar; disputeId; name; reason
+propose : Party -> ContractId Consortium -> Membership -> Script (ContractId Consortium)
+propose proposer cid proposal = submit proposer $ exerciseCmd cid ProposeMembership with proposer; proposal
 
-cast : Party -> ContractId NameRegistry -> Text -> Decision -> Script (ContractId NameRegistry)
-cast operator cid disputeId decision = submit operator $ exerciseCmd cid NameRegistry_Cast with operator; disputeId; decision
+membershipVote : Party -> ContractId Consortium -> Membership -> Script (ContractId Consortium)
+membershipVote voter cid proposal = submit voter $ exerciseCmd cid VoteMembership with voter; proposal
 
-resolve : Party -> ContractId NameRegistry -> Text -> Decision -> Script (ContractId NameRegistry)
-resolve operator cid disputeId decision = submit operator $ exerciseCmd cid NameRegistry_Resolve with operator; disputeId; decision
+enact : Party -> ContractId Consortium -> Membership -> Script (ContractId Consortium)
+enact enactor cid proposal = submit enactor $ exerciseCmd cid EnactMembership with enactor; proposal
 
-state : Party -> ContractId NameRegistry -> Script NameRegistry
-state owner cid = do
-  Some registry <- queryContractId owner cid
-  pure registry
+open : Party -> ContractId Consortium -> Party -> Script (ContractId Consortium)
+open disputer cid otherRegistry = submit disputer $ exerciseCmd cid OpenDispute with
+  disputer; caseId = "case-one"; name = "shared"; otherRegistry; reason = "competing claims"
 
-upholdArchivesWithReason : Script ()
-upholdArchivesWithReason = do
-  (owner, alice, bob, _, registrar, _, initial) <- setup "uphold"
-  registered <- register registrar initial alice "example.canton"
-  disputed <- challenge registrar registered "case-1" "example.canton" "prior claim"
-  first <- cast alice disputed "case-1" Uphold
-  submitMustFail alice $ exerciseCmd first NameRegistry_Resolve with operator = alice; disputeId = "case-1"; decision = Uphold
-  second <- cast bob first "case-1" Uphold
-  final <- resolve alice second "case-1" Uphold
-  result <- state owner final
-  Map.lookup "example.canton" result.records === None
-  result.audit === [Audit "case-1" "example.canton" "prior claim" Uphold]
+vote : Party -> ContractId Consortium -> Decision -> Script (ContractId Consortium)
+vote voter cid decision = submit voter $ exerciseCmd cid VoteDispute with voter; caseId = "case-one"; decision
 
-dismissPreservesOtherDisputes : Script ()
-dismissPreservesOtherDisputes = do
-  (owner, alice, bob, _, registrar, _, initial) <- setup "dismiss"
-  registered <- register registrar initial alice "example.canton"
-  first <- challenge registrar registered "case-1" "example.canton" "claim A"
-  second <- challenge registrar first "case-2" "example.canton" "claim B"
-  voted <- cast alice second "case-1" Dismiss
-  approved <- cast bob voted "case-1" Dismiss
-  final <- resolve bob approved "case-1" Dismiss
-  result <- state owner final
-  Map.member "example.canton" result.records === True
-  map (.disputeId) result.disputes === ["case-2"]
-  result.audit === [Audit "case-1" "example.canton" "claim A" Dismiss]
+rule : Party -> ContractId Consortium -> Decision -> Script (ContractId Consortium)
+rule issuer cid decision = submit issuer $ exerciseCmd cid IssueRuling with issuer; caseId = "case-one"; decision
 
-unauthorizedAndIndependent : Script ()
-unauthorizedAndIndependent = do
-  (owner, alice, bob, _, registrar, outsider, initial) <- setup "canonical"
-  submitMustFail outsider $ exerciseCmd initial NameRegistry_Register with registrar = outsider; name = "name"; holder = outsider
-  canonical <- register registrar initial alice "name"
-  submitMustFail outsider $ exerciseCmd canonical NameRegistry_Challenge with registrar = outsider; disputeId = "bad"; name = "name"; reason = "claim"
-  submitMustFail registrar $ exerciseCmd canonical NameRegistry_Challenge with registrar; disputeId = "empty"; name = "name"; reason = ""
-  disputed <- challenge registrar canonical "case" "name" "claim"
-  submitMustFail outsider $ exerciseCmd disputed NameRegistry_Cast with operator = outsider; disputeId = "case"; decision = Uphold
-  voted <- cast alice disputed "case" Uphold
-  submitMustFail alice $ exerciseCmd voted NameRegistry_Cast with operator = alice; disputeId = "case"; decision = Uphold
-  submitMustFail alice $ exerciseCmd voted NameRegistry_Resolve with operator = alice; disputeId = "case"; decision = Uphold
-  (otherOwner, _, _, _, otherRegistrar, _, otherInitial) <- setup "independent"
-  other <- register otherRegistrar otherInitial outsider "name"
-  otherState <- state otherOwner other
-  Map.member "name" otherState.records === True
-  canonicalState <- state owner voted
-  map (.disputeId) canonicalState.disputes === ["case"]
-  approved <- cast bob voted "case" Uphold
-  final <- resolve bob approved "case" Uphold
-  finalState <- state owner final
-  Map.member "name" finalState.records === False
-  unchanged <- state otherOwner other
-  Map.member "name" unchanged.records === True
+follow : Party -> ContractId Consortium -> Script (ContractId Consortium)
+follow registry cid = submit registry $ exerciseCmd cid AcknowledgeFollow with registry; caseId = "case-one"
+
+nameCredential : Party -> Party -> Text -> Time -> CredentialView
+nameCredential admin subject name now = CredentialView with
+  id = Some ("urn:babydro:" <> name)
+  credentialTypes = ["VerifiableCredential", "DemoPartyName"]
+  issuer = W3C_VC_Identifier_Party admin
+  validFrom = Some now
+  validUntil = Some (addRelTime now (days 180))
+  credentialSubject = NonEmpty (CredentialSubject
+    (Some (W3C_VC_Identifier_Party subject))
+    (TextMap.fromList [("demo.example/name", Metadata.AV_Text name)])) []
+  holders = []
+  anchorers = NonEmpty admin []
+
+register : Party -> Party -> Text -> Time -> Script (ContractId DemoCredential)
+register admin subject name now = do
+  factory <- submit admin $ createCmd DemoCredentialRegistryFactory with
+    registryAdminParty = admin; anchorers = NonEmpty admin []
+  let registration = RegisteredCredentialView admin now (Some (addRelTime now (days 12))) TextMap.empty
+  request <- submit subject $ createCmd DemoNameRequest with
+    applicant = subject; registryAdmin = admin; name
+    credential = nameCredential admin subject name now
+    registration
+  issued <- submit admin $ exerciseCmd request DemoNameRequest_AcceptAsRegistryIssued with
+    factory = toInterfaceContractId @CredentialRegistryFactory factory
+  pure (fromInterfaceContractId @DemoCredential @RegisteredCredential issued)
+
+active : Party -> ContractId DemoCredential -> Script Bool
+active party cid = do
+  result <- queryContractId party cid
+  pure (result /= None)
+
+-- One ordered consumer journey, using the CIPs-owned contracts throughout.
+journey : Script ()
+journey = script do
+  a <- allocateParty "registry-a"
+  b <- allocateParty "registry-b"
+  c <- allocateParty "registry-c"
+  newcomer <- allocateParty "registry-new"
+  loser <- allocateParty "claimant-b"
+  now <- getTime
+  initial <- consortium a b c
+  before <- state a initial
+  Set.size before.members === 3
+  let admission = Admit newcomer
+  proposed <- propose a initial admission
+  submitMustFail a $ exerciseCmd proposed EnactMembership with enactor = a; proposal = admission
+  supported <- membershipVote b proposed admission
+  admitted <- enact a supported admission
+  afterAdmission <- state a admitted
+  Set.member newcomer afterAdmission.members === True
+
+  -- Separate registries approve two conflicting claims, alongside unaffected names.
+  first <- register a a "shared" now
+  second <- register b loser "shared" now
+  unrelatedA <- register a a "unrelated" now
+  unrelatedB <- register b loser "another" now
+  isActive <- active a first
+  isActive === True
+  isActive <- active b second
+  isActive === True
+  isActive <- active a unrelatedA
+  isActive === True
+  isActive <- active b unrelatedB
+  isActive === True
+
+  disputed <- open a admitted b
+  pending <- state a disputed
+  length pending.openCases === 1
+  oneVote <- vote a disputed KeepFirst
+  submitMustFail a $ exerciseCmd oneVote IssueRuling with issuer = a; caseId = "case-one"; decision = KeepFirst
+  twoVotes <- vote c oneVote KeepFirst
+  ruled <- rule c twoVotes KeepFirst
+  -- Governance produces a ruling, without archiving either CIPs credential.
+  isActive <- active a first
+  isActive === True
+  isActive <- active b second
+  isActive === True
+  result <- state a ruled
+  map (.decision) result.rulings === [KeepFirst]
+  map (Set.size . (.followedBy)) result.rulings === [0]
+
+  -- Each registry follows by its own operation on its own CIPs-owned state.
+  followedA <- follow a ruled
+  isActive <- active b second
+  isActive === True
+  _ <- submit b $ exerciseCmd (toInterfaceContractId @Credential second) Credential_ArchiveAsAnchorers
+  followedB <- follow b followedA
+  complete <- state a followedB
+  map (Set.size . (.followedBy)) complete.rulings === [2]
+  isActive <- active a first
+  isActive === True
+  isActive <- active b second
+  isActive === False
+  isActive <- active a unrelatedA
+  isActive === True
+  isActive <- active b unrelatedB
+  isActive === True
+
+  -- Removal of dispute entitlement is a second, independently voted process.
+  let removal = Remove newcomer
+  removalProposed <- propose b followedB removal
+  submitMustFail b $ exerciseCmd removalProposed EnactMembership with enactor = b; proposal = removal
+  removalVoted <- membershipVote c removalProposed removal
+  removed <- enact b removalVoted removal
+  final <- state a removed
+  Set.member newcomer final.members === False
+  isActive <- active a unrelatedA
+  isActive === True
+  isActive <- active b unrelatedB
+  isActive === True
+
+membershipAuthorization : Script ()
+membershipAuthorization = script do
+  a <- allocateParty "member-a"
+  b <- allocateParty "member-b"
+  c <- allocateParty "member-c"
+  outsider <- allocateParty "outsider"
+  other <- allocateParty "other-outsider"
+  cid <- consortium a b c
+  submitMustFail outsider $ exerciseCmd cid ProposeMembership with proposer = outsider; proposal = Admit outsider
+  proposed <- propose a cid (Admit outsider)
+  submitMustFail outsider $ exerciseCmd proposed VoteMembership with voter = outsider; proposal = Admit outsider
+  submitMustFail outsider $ exerciseCmd proposed EnactMembership with enactor = outsider; proposal = Admit outsider
+  submitMustFail a $ exerciseCmd proposed EnactMembership with enactor = a; proposal = Admit outsider
+  approved <- membershipVote b proposed (Admit outsider)
+  admitted <- enact a approved (Admit outsider)
+  submitMustFail other $ exerciseCmd admitted ProposeMembership with proposer = other; proposal = Remove a
+  proposedRemoval <- propose a admitted (Remove outsider)
+  submitMustFail other $ exerciseCmd proposedRemoval EnactMembership with enactor = other; proposal = Remove outsider
+  submitMustFail a $ exerciseCmd proposedRemoval EnactMembership with enactor = a; proposal = Remove outsider
+  approvedRemoval <- membershipVote c proposedRemoval (Remove outsider)
+  final <- enact a approvedRemoval (Remove outsider)
+  finalState <- state a final
+  Set.member outsider finalState.members === False
+
+unauthorizedDispute : Script ()
+unauthorizedDispute = script do
+  a <- allocateParty "member-a"
+  b <- allocateParty "member-b"
+  c <- allocateParty "member-c"
+  outsider <- allocateParty "outsider"
+  cid <- consortium a b c
+  submitMustFail outsider $ exerciseCmd cid OpenDispute with
+    disputer = outsider; caseId = "case-one"; name = "shared"; otherRegistry = b; reason = "claim"
+  submitMustFail a $ exerciseCmd cid OpenDispute with
+    disputer = a; caseId = "case-one"; name = "shared"; otherRegistry = outsider; reason = "claim"
+  disputed <- open a cid b
+  submitMustFail outsider $ exerciseCmd disputed VoteDispute with voter = outsider; caseId = "case-one"; decision = KeepFirst
+  one <- vote a disputed KeepFirst
+  submitMustFail a $ exerciseCmd one IssueRuling with issuer = a; caseId = "case-one"; decision = KeepFirst
+  submitMustFail outsider $ exerciseCmd one IssueRuling with issuer = outsider; caseId = "case-one"; decision = KeepFirst
+  two <- vote b one KeepFirst
+  ruled <- rule a two KeepFirst
+  submitMustFail outsider $ exerciseCmd ruled AcknowledgeFollow with registry = outsider; caseId = "case-one"

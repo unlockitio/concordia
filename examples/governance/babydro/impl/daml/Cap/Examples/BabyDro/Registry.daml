@@ -2,114 +2,153 @@
 
 module Cap.Examples.BabyDro.Registry where
 
-import DA.Map (Map)
-import qualified DA.Map as Map
 import DA.Set (Set)
 import qualified DA.Set as Set
 
--- A deployment designates one registry CID as canonical. Another registry is
--- independent and cannot mutate the designated registry's state.
-data NameRecord = NameRecord with
-    name : Text
-    holder : Party
-  deriving (Eq, Show)
+-- Entitlement and dispute decisions only. Name credentials live in the CIPs model.
+data Decision = KeepFirst | KeepSecond deriving (Eq, Show)
 
-data Dispute = Dispute with
-    disputeId : Text
+data Case = Case with
+    caseId : Text
     name : Text
-    registrar : Party
+    firstRegistry : Party
+    secondRegistry : Party
     reason : Text
   deriving (Eq, Show)
 
-data Decision = Uphold | Dismiss deriving (Eq, Show)
-
-data Vote = Vote with
-    disputeId : Text
-    operator : Party
+data Ballot = Ballot with
+    voter : Party
     decision : Decision
   deriving (Eq, Show)
 
-data Audit = Audit with
-    disputeId : Text
-    name : Text
-    reason : Text
-    outcome : Decision
+data Ruling = Ruling with
+    dispute : Case
+    decision : Decision
+    followedBy : Set Party
   deriving (Eq, Show)
 
-template NameRegistry
+data Membership = Admit Party | Remove Party deriving (Eq, Show)
+
+data Motion = Motion with
+    proposal : Membership
+    supporters : Set Party
+  deriving (Eq, Show)
+
+template Consortium
   with
-    owner : Party
-    registryId : Text
-    registrars : Set Party
-    operators : Set Party
-    records : Map Text NameRecord
-    disputes : [Dispute]
-    votes : [Vote]
-    audit : [Audit]
+    founder : Party
+    members : Set Party
+    motions : [Motion]
+    openCases : [Case]
+    ballots : [(Text, Ballot)]
+    rulings : [Ruling]
   where
-    signatory owner
-    observer Set.toList registrars <> Set.toList operators
+    signatory founder
+    observer Set.toList members
+    ensure Set.size members >= 2
 
-    ensure Set.size operators == 3
-
-    choice NameRegistry_Register : ContractId NameRegistry
+    choice ProposeMembership : ContractId Consortium
       with
-        registrar : Party
-        name : Text
-        holder : Party
-      controller registrar
+        proposer : Party
+        proposal : Membership
+      controller proposer
       do
-        assertMsg "registrar is not allowlisted" (Set.member registrar registrars)
-        assertMsg "name is already registered" (not (Map.member name records))
-        create this with records = Map.insert name (NameRecord name holder) records
+        assertMsg "only members propose" (Set.member proposer members)
+        assertMsg "proposal already open" (not (any (\m -> m.proposal == proposal) motions))
+        case proposal of
+          Admit target -> assertMsg "already entitled" (not (Set.member target members))
+          Remove target -> assertMsg "not entitled" (Set.member target members)
+        create this with motions = Motion proposal (Set.singleton proposer) :: motions
 
-    choice NameRegistry_Challenge : ContractId NameRegistry
+    choice VoteMembership : ContractId Consortium
       with
-        registrar : Party
-        disputeId : Text
-        name : Text
-        reason : Text
-      controller registrar
+        voter : Party
+        proposal : Membership
+      controller voter
       do
-        assertMsg "registrar is not allowlisted" (Set.member registrar registrars)
-        assertMsg "name is not registered here" (Map.member name records)
-        assertMsg "reason is required" (reason /= "")
-        assertMsg "dispute id is already used" (not (any (\d -> d.disputeId == disputeId) disputes || any (\a -> a.disputeId == disputeId) audit))
-        create this with disputes = Dispute disputeId name registrar reason :: disputes
-
-    choice NameRegistry_Cast : ContractId NameRegistry
-      with
-        operator : Party
-        disputeId : Text
-        decision : Decision
-      controller operator
-      do
-        assertMsg "voter is not a registry operator" (Set.member operator operators)
-        assertMsg "unknown dispute" (any (\d -> d.disputeId == disputeId) disputes)
-        assertMsg "operator already voted on dispute" (not (any (\v -> v.disputeId == disputeId && v.operator == operator) votes))
-        create this with votes = Vote disputeId operator decision :: votes
-
-    choice NameRegistry_Resolve : ContractId NameRegistry
-      with
-        operator : Party
-        disputeId : Text
-        decision : Decision
-      controller operator
-      do
-        assertMsg "resolver is not a registry operator" (Set.member operator operators)
-        dispute <- case filter (\d -> d.disputeId == disputeId) disputes of
+        assertMsg "only members vote" (Set.member voter members)
+        motion <- case filter (\m -> m.proposal == proposal) motions of
           [one] -> pure one
-          _ -> abort "unknown dispute"
-        let supporters = filter (\v -> v.disputeId == disputeId && v.decision == decision) votes
-        assertMsg "two distinct approvals are required" (length supporters >= 2)
-        let remaining = filter (\d -> d.disputeId /= disputeId) disputes
-            remainingVotes = filter (\v -> v.disputeId /= disputeId) votes
-            newRecords = case decision of
-              Uphold -> Map.delete dispute.name records
-              Dismiss -> records
-            entry = Audit disputeId dispute.name dispute.reason decision
+          _ -> abort "unknown membership proposal"
+        assertMsg "member already voted" (not (Set.member voter motion.supporters))
+        let replacement = motion with supporters = Set.insert voter motion.supporters
+        create this with motions = replacement :: filter (\m -> m.proposal /= proposal) motions
+
+    choice EnactMembership : ContractId Consortium
+      with
+        enactor : Party
+        proposal : Membership
+      controller enactor
+      do
+        assertMsg "only members enact" (Set.member enactor members)
+        motion <- case filter (\m -> m.proposal == proposal) motions of
+          [one] -> pure one
+          _ -> abort "unknown membership proposal"
+        assertMsg "two current members must approve" (Set.size (Set.intersection members motion.supporters) >= 2)
+        updated <- case proposal of
+          Admit target -> pure (Set.insert target members)
+          Remove target -> do
+            assertMsg "cannot remove member with an open case" (not (any (\c -> c.firstRegistry == target || c.secondRegistry == target) openCases))
+            assertMsg "cannot remove member with an unfollowed ruling" (not (any (\r -> (r.dispute.firstRegistry == target || r.dispute.secondRegistry == target) && Set.size r.followedBy < 2) rulings))
+            pure (Set.delete target members)
+        assertMsg "at least two members remain" (Set.size updated >= 2)
+        create this with members = updated; motions = filter (\m -> m.proposal /= proposal) motions
+
+    choice OpenDispute : ContractId Consortium
+      with
+        disputer : Party
+        caseId : Text
+        name : Text
+        otherRegistry : Party
+        reason : Text
+      controller disputer
+      do
+        assertMsg "only entitled registries dispute" (Set.member disputer members && Set.member otherRegistry members && disputer /= otherRegistry)
+        assertMsg "reason and name required" (reason /= "" && name /= "")
+        assertMsg "case id already used" (not (any (\c -> c.caseId == caseId) openCases || any (\r -> r.dispute.caseId == caseId) rulings))
+        create this with openCases = Case caseId name disputer otherRegistry reason :: openCases
+
+    choice VoteDispute : ContractId Consortium
+      with
+        voter : Party
+        caseId : Text
+        decision : Decision
+      controller voter
+      do
+        assertMsg "only members vote" (Set.member voter members)
+        assertMsg "unknown case" (any (\c -> c.caseId == caseId) openCases)
+        assertMsg "already voted" (not (any (\(id, b) -> id == caseId && b.voter == voter) ballots))
+        create this with ballots = (caseId, Ballot voter decision) :: ballots
+
+    choice IssueRuling : ContractId Consortium
+      with
+        issuer : Party
+        caseId : Text
+        decision : Decision
+      controller issuer
+      do
+        assertMsg "only members issue rulings" (Set.member issuer members)
+        disputed <- case filter (\c -> c.caseId == caseId) openCases of
+          [one] -> pure one
+          _ -> abort "unknown case"
+        let supporters = [b.voter | (id, b) <- ballots, id == caseId, b.decision == decision, Set.member b.voter members]
+        assertMsg "two distinct current votes required" (length supporters >= 2)
         create this with
-          records = newRecords
-          disputes = remaining
-          votes = remainingVotes
-          audit = entry :: audit
+          openCases = filter (\c -> c.caseId /= caseId) openCases
+          ballots = filter (\(id, _) -> id /= caseId) ballots
+          rulings = Ruling disputed decision Set.empty :: rulings
+
+    -- This is an acknowledgement, not an operation on the CIPs credential.
+    choice AcknowledgeFollow : ContractId Consortium
+      with
+        registry : Party
+        caseId : Text
+      controller registry
+      do
+        ruling <- case filter (\r -> r.dispute.caseId == caseId) rulings of
+          [one] -> pure one
+          _ -> abort "unknown ruling"
+        assertMsg "only case registries follow" (registry == ruling.dispute.firstRegistry || registry == ruling.dispute.secondRegistry)
+        assertMsg "already followed" (not (Set.member registry ruling.followedBy))
+        let updated = ruling with followedBy = Set.insert registry ruling.followedBy
+        create this with rulings = updated :: filter (\r -> r.dispute.caseId /= caseId) rulings
