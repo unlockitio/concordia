@@ -1,0 +1,98 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Examples.BabyDro.Demo where
+
+import DA.Assert ((===))
+import qualified DA.Map as Map
+import qualified DA.Set as Set
+import Daml.Script
+
+import Cap.Examples.BabyDro.Registry
+
+setup : Text -> Script (Party, Party, Party, Party, Party, Party, ContractId NameRegistry)
+setup label = do
+  owner <- allocateParty (label <> "-owner")
+  alice <- allocateParty (label <> "-alice")
+  bob <- allocateParty (label <> "-bob")
+  carol <- allocateParty (label <> "-carol")
+  registrar <- allocateParty (label <> "-registrar")
+  outsider <- allocateParty (label <> "-outsider")
+  cid <- submit owner $ createCmd NameRegistry with
+    owner
+    registryId = label
+    registrars = Set.singleton registrar
+    operators = Set.fromList [alice, bob, carol]
+    records = Map.empty
+    disputes = []
+    votes = []
+    audit = []
+  pure (owner, alice, bob, carol, registrar, outsider, cid)
+
+register : Party -> ContractId NameRegistry -> Party -> Text -> Script (ContractId NameRegistry)
+register registrar cid holder name = submit registrar $ exerciseCmd cid NameRegistry_Register with registrar; name; holder
+
+challenge : Party -> ContractId NameRegistry -> Text -> Text -> Text -> Script (ContractId NameRegistry)
+challenge registrar cid disputeId name reason = submit registrar $ exerciseCmd cid NameRegistry_Challenge with registrar; disputeId; name; reason
+
+cast : Party -> ContractId NameRegistry -> Text -> Decision -> Script (ContractId NameRegistry)
+cast operator cid disputeId decision = submit operator $ exerciseCmd cid NameRegistry_Cast with operator; disputeId; decision
+
+resolve : Party -> ContractId NameRegistry -> Text -> Decision -> Script (ContractId NameRegistry)
+resolve operator cid disputeId decision = submit operator $ exerciseCmd cid NameRegistry_Resolve with operator; disputeId; decision
+
+state : Party -> ContractId NameRegistry -> Script NameRegistry
+state owner cid = do
+  Some registry <- queryContractId owner cid
+  pure registry
+
+upholdArchivesWithReason : Script ()
+upholdArchivesWithReason = do
+  (owner, alice, bob, _, registrar, _, initial) <- setup "uphold"
+  registered <- register registrar initial alice "example.canton"
+  disputed <- challenge registrar registered "case-1" "example.canton" "prior claim"
+  first <- cast alice disputed "case-1" Uphold
+  submitMustFail alice $ exerciseCmd first NameRegistry_Resolve with operator = alice; disputeId = "case-1"; decision = Uphold
+  second <- cast bob first "case-1" Uphold
+  final <- resolve alice second "case-1" Uphold
+  result <- state owner final
+  Map.lookup "example.canton" result.records === None
+  result.audit === [Audit "case-1" "example.canton" "prior claim" Uphold]
+
+dismissPreservesOtherDisputes : Script ()
+dismissPreservesOtherDisputes = do
+  (owner, alice, bob, _, registrar, _, initial) <- setup "dismiss"
+  registered <- register registrar initial alice "example.canton"
+  first <- challenge registrar registered "case-1" "example.canton" "claim A"
+  second <- challenge registrar first "case-2" "example.canton" "claim B"
+  voted <- cast alice second "case-1" Dismiss
+  approved <- cast bob voted "case-1" Dismiss
+  final <- resolve bob approved "case-1" Dismiss
+  result <- state owner final
+  Map.member "example.canton" result.records === True
+  map (.disputeId) result.disputes === ["case-2"]
+  result.audit === [Audit "case-1" "example.canton" "claim A" Dismiss]
+
+unauthorizedAndIndependent : Script ()
+unauthorizedAndIndependent = do
+  (owner, alice, bob, _, registrar, outsider, initial) <- setup "canonical"
+  submitMustFail outsider $ exerciseCmd initial NameRegistry_Register with registrar = outsider; name = "name"; holder = outsider
+  canonical <- register registrar initial alice "name"
+  submitMustFail outsider $ exerciseCmd canonical NameRegistry_Challenge with registrar = outsider; disputeId = "bad"; name = "name"; reason = "claim"
+  submitMustFail registrar $ exerciseCmd canonical NameRegistry_Challenge with registrar; disputeId = "empty"; name = "name"; reason = ""
+  disputed <- challenge registrar canonical "case" "name" "claim"
+  submitMustFail outsider $ exerciseCmd disputed NameRegistry_Cast with operator = outsider; disputeId = "case"; decision = Uphold
+  voted <- cast alice disputed "case" Uphold
+  submitMustFail alice $ exerciseCmd voted NameRegistry_Cast with operator = alice; disputeId = "case"; decision = Uphold
+  submitMustFail alice $ exerciseCmd voted NameRegistry_Resolve with operator = alice; disputeId = "case"; decision = Uphold
+  (otherOwner, _, _, _, otherRegistrar, _, otherInitial) <- setup "independent"
+  other <- register otherRegistrar otherInitial outsider "name"
+  otherState <- state otherOwner other
+  Map.member "name" otherState.records === True
+  canonicalState <- state owner voted
+  map (.disputeId) canonicalState.disputes === ["case"]
+  approved <- cast bob voted "case" Uphold
+  final <- resolve bob approved "case" Uphold
+  finalState <- state owner final
+  Map.member "name" finalState.records === False
+  unchanged <- state otherOwner other
+  Map.member "name" unchanged.records === True

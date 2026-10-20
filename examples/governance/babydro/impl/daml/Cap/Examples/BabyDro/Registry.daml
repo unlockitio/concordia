@@ -1,0 +1,115 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Examples.BabyDro.Registry where
+
+import DA.Map (Map)
+import qualified DA.Map as Map
+import DA.Set (Set)
+import qualified DA.Set as Set
+
+-- A deployment designates one registry CID as canonical. Another registry is
+-- independent and cannot mutate the designated registry's state.
+data NameRecord = NameRecord with
+    name : Text
+    holder : Party
+  deriving (Eq, Show)
+
+data Dispute = Dispute with
+    disputeId : Text
+    name : Text
+    registrar : Party
+    reason : Text
+  deriving (Eq, Show)
+
+data Decision = Uphold | Dismiss deriving (Eq, Show)
+
+data Vote = Vote with
+    disputeId : Text
+    operator : Party
+    decision : Decision
+  deriving (Eq, Show)
+
+data Audit = Audit with
+    disputeId : Text
+    name : Text
+    reason : Text
+    outcome : Decision
+  deriving (Eq, Show)
+
+template NameRegistry
+  with
+    owner : Party
+    registryId : Text
+    registrars : Set Party
+    operators : Set Party
+    records : Map Text NameRecord
+    disputes : [Dispute]
+    votes : [Vote]
+    audit : [Audit]
+  where
+    signatory owner
+    observer Set.toList registrars <> Set.toList operators
+
+    ensure Set.size operators == 3
+
+    choice NameRegistry_Register : ContractId NameRegistry
+      with
+        registrar : Party
+        name : Text
+        holder : Party
+      controller registrar
+      do
+        assertMsg "registrar is not allowlisted" (Set.member registrar registrars)
+        assertMsg "name is already registered" (not (Map.member name records))
+        create this with records = Map.insert name (NameRecord name holder) records
+
+    choice NameRegistry_Challenge : ContractId NameRegistry
+      with
+        registrar : Party
+        disputeId : Text
+        name : Text
+        reason : Text
+      controller registrar
+      do
+        assertMsg "registrar is not allowlisted" (Set.member registrar registrars)
+        assertMsg "name is not registered here" (Map.member name records)
+        assertMsg "reason is required" (reason /= "")
+        assertMsg "dispute id is already used" (not (any (\d -> d.disputeId == disputeId) disputes || any (\a -> a.disputeId == disputeId) audit))
+        create this with disputes = Dispute disputeId name registrar reason :: disputes
+
+    choice NameRegistry_Cast : ContractId NameRegistry
+      with
+        operator : Party
+        disputeId : Text
+        decision : Decision
+      controller operator
+      do
+        assertMsg "voter is not a registry operator" (Set.member operator operators)
+        assertMsg "unknown dispute" (any (\d -> d.disputeId == disputeId) disputes)
+        assertMsg "operator already voted on dispute" (not (any (\v -> v.disputeId == disputeId && v.operator == operator) votes))
+        create this with votes = Vote disputeId operator decision :: votes
+
+    choice NameRegistry_Resolve : ContractId NameRegistry
+      with
+        operator : Party
+        disputeId : Text
+        decision : Decision
+      controller operator
+      do
+        assertMsg "resolver is not a registry operator" (Set.member operator operators)
+        dispute <- case filter (\d -> d.disputeId == disputeId) disputes of
+          [one] -> pure one
+          _ -> abort "unknown dispute"
+        let supporters = filter (\v -> v.disputeId == disputeId && v.decision == decision) votes
+        assertMsg "two distinct approvals are required" (length supporters >= 2)
+        let remaining = filter (\d -> d.disputeId /= disputeId) disputes
+            remainingVotes = filter (\v -> v.disputeId /= disputeId) votes
+            newRecords = case decision of
+              Uphold -> Map.delete dispute.name records
+              Dismiss -> records
+            entry = Audit disputeId dispute.name dispute.reason decision
+        create this with
+          records = newRecords
+          disputes = remaining
+          votes = remainingVotes
+          audit = entry :: audit
