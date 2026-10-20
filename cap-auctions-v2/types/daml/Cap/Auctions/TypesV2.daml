@@ -1,0 +1,60 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Auctions.TypesV2
+  ( Direction (..)
+  , Quote (..)
+  , RequestedAllocation (..)
+  , AllocationTerms (..)
+  , AuctionTerms (..)
+  , SettlementBatch (..)
+  ) where
+
+import DA.Map (Map)
+
+import Splice.Api.Token.AllocationV2 (Allocation, AllocationSpecification, FinalizedAllocation, SettlementFactory, TransferLeg)
+import Splice.Api.Token.HoldingV2 (InstrumentId)
+import Splice.Api.Token.MetadataV1 (ExtraArgs)
+
+data Direction
+  = Forward
+  | Reverse
+  deriving (Eq, Show)
+
+data Quote = Quote
+  with
+    price : Decimal
+    quantity : Decimal
+  deriving (Eq, Show, Ord)
+
+data RequestedAllocation = RequestedAllocation
+  with
+    specification : AllocationSpecification
+    allocationCid : Optional (ContractId Allocation)
+  deriving (Eq, Show)
+
+data AllocationTerms = AllocationTerms
+  with
+    settlementDeadline : Time
+    committed : Bool
+  deriving (Eq, Show)
+
+data AuctionTerms = AuctionTerms
+  with
+    direction : Direction
+    lots : Map InstrumentId Decimal
+    payment : InstrumentId
+    sellerAllocations : Map InstrumentId RequestedAllocation
+    settleFactories : Map Party (ContractId SettlementFactory)
+    allocationTerms : AllocationTerms
+    biddingOpensAt : Time
+    biddingClosesAt : Time
+    expiresAt : Time
+  deriving (Eq, Show)
+
+data SettlementBatch = SettlementBatch
+  with
+    factoryCid : ContractId SettlementFactory
+    legs : [TransferLeg]
+    allocations : [FinalizedAllocation]
+    extraArgs : ExtraArgs
+  deriving (Eq, Show)

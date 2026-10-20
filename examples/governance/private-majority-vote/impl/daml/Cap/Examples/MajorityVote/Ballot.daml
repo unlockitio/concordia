@@ -9,7 +9,7 @@ import DA.Optional (isNone, isSome)
 
 import Splice.Util (HasCheckedFetch (..), require)
 
-import Cap.Core.Types (ResolutionRef)
+import Cap.Core.Types (ResolutionInfo)
 import Cap.Core.Utils (requireExpired, requireOpen)
 import Cap.Governance.ActionV1 (Action)
 import Cap.Governance.Utils (IsBallot (..), Vote (..))
@@ -24,7 +24,7 @@ template PrivateBallot
   with
     operator : Party
     voter : Party
-    resolution : ResolutionRef
+    resolution : ResolutionInfo
     actionCid : ContractId Action
     opensAt : Time
     closesAt : Time
@@ -64,7 +64,7 @@ template PrivateBallot
       do pure ()
 
 
-instance HasCheckedFetch PrivateBallot ResolutionRef where
+instance HasCheckedFetch PrivateBallot ResolutionInfo where
   contractGroupId ballot = ballot.resolution
 
 instance IsBallot PrivateBallot Text where

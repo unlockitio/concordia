@@ -66,7 +66,7 @@ changing.
 
 **Several lots and several sellers** carries on the released interfaces only as
 bids that are won independently — one `OneLotBid` contract per lot, all naming
-the same `ResolutionRef`. Anything that binds the lots together needs a new bid
+the same `ResolutionInfo`. Anything that binds the lots together needs a new bid
 interface. Nothing ties a resolution to a single set of terms, so each bid
 carries its own `lot`, `reserve`, seller accounts and settlement factories, and the
 mechanism groups the presented bids by lot. A shared `saleId` settles them
@@ -96,13 +96,13 @@ one close fixing the set of bids, and settlement through the Token Standard all
 carry over.
 
 Continuous double auctions are the format that may reach further, into
-cap-core itself, because a bid names its `ResolutionRef` when it is created.
+cap-core itself, because a bid names its `ResolutionInfo` when it is created.
 
 ## New domains on cap-core
 
 `cap-core` is the foundation for further allocation-oriented modules. A new
 domain is a package beside `cap-governance` and `cap-auctions` that uses the
-core's stored types (`AuthenticKey`, `ResolutionRef`, `ExecutionCore`) and its
+core's stored types (`AuthenticKey`, `ResolutionInfo`, `ExecutionCore`) and its
 checks, and defines interfaces only where code has to work with contracts from
 other packages. Each direction below is a further instantiation.
 

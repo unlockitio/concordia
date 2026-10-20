@@ -34,6 +34,7 @@ oneLotSettlement saleId authorities = Alloc.SettlementInfo with
   cid = None
   meta = emptyMetadata
 
+-- these force regularAccountOwner as bidders and seller (single party accounts)
 sellerOf : OneLotAuctionTerms -> Party
 sellerOf terms = regularAccountOwner terms.sellerLotAccount
 

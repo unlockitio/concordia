@@ -16,7 +16,7 @@ import Daml.Script
 import Splice.Api.Token.MetadataV1
 import qualified Splice.Api.Token.MetadataV1 as Meta
 
-import Cap.Core.Types (AuthenticKey (..), Snapshot (..), ExecutionAction (..), ExecutionCore (..), ResolutionRef (..))
+import Cap.Core.Types (AuthenticKey (..), Snapshot (..), ExecutionAction (..), ExecutionCore (..), ResolutionInfo (..))
 import Cap.Core.Utils (IsAnyValue (..))
 import Cap.Governance.ActionV1 (Action, Action_AuthorizeExecution (..))
 import Cap.Governance.ExecutableV1
@@ -49,7 +49,7 @@ data Fixture = Fixture with
     electorate : Set Party
     governorCid : ContractId Governor
     proposalCid : ContractId Proposal
-    resolution : ResolutionRef
+    resolution : ResolutionInfo
     configCid : ContractId Config
     actionCid : ContractId SetConfigAction
     terms : ProposalTerms
@@ -76,7 +76,7 @@ setupAs ns = do
         expiresAt = now `addRelTime` days 10
   governorCid <- submit dso $ createCmd governor
 
-  let resolution = ResolutionRef with
+  let resolution = ResolutionInfo with
         resolver = AuthenticKey with
           authorities = Set.fromList [dso]
           id = governorName

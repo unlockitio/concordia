@@ -55,7 +55,7 @@ demos share a ledger contract.
 `openAuction` then opens one auction on those terms. The seller mints and
 allocates its lot and payment allocations, the operator proposes
 `AuctionProposal`, and the seller accepts it into an `Auction` — which is
-the resolver, so the resolution ref is pinned to that contract id. The operator
+the resolver, so the resolution info is pinned to that contract id. The operator
 then creates one empty `AuctionBid` seat per invited bidder. Nothing has been
 bid yet; the demos take it from there, opening bidding with
 `setTime f.terms.entryClosesAt` and resolving after

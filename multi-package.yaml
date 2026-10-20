@@ -14,6 +14,12 @@ packages:
 - ./cap-auctions/interfaces/settlement
 - ./cap-auctions/utils
 - ./cap-auctions/funding
+- ./cap-auctions-v2/types
+- ./cap-auctions-v2/utils
+- ./cap-auctions-v2/interfaces/settlement
+- ./cap-auctions-v2/interfaces/sale-proposal
+- ./cap-auctions-v2/interfaces/bid
+- ./cap-auctions-v2/interfaces/per-lot-quotes
 - ./examples/governance/babydso/impl/ans
 - ./examples/governance/babydso/impl/config
 - ./examples/governance/babydso/impl/rights

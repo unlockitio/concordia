@@ -1,0 +1,106 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Auctions.SaleProposalV2 where
+
+import DA.Map (Map)
+
+import Splice.Api.Token.MetadataV1
+import Splice.Api.Token.AllocationV2 (Allocation)
+import Splice.Api.Token.HoldingV2 (InstrumentId)
+import Splice.Util (require)
+import Cap.Core.Types (ResolutionInfo)
+import Cap.Core.Utils (entitled, requireExpired)
+import Cap.Auctions.TypesV2 (AuctionTerms)
+
+data SaleProposalAction
+  = SPA_Accept
+  | SPA_Reject
+  | SPA_Withdraw
+  | SPA_Custom with
+      id : Text
+  deriving (Eq, Ord, Show)
+
+data SaleProposalView = SaleProposalView
+  with
+    resolution : ResolutionInfo
+    terms : AuctionTerms
+    acceptBefore : Time
+    availableActions : Map SaleProposalAction [[Party]]
+    meta : Metadata
+  deriving (Eq, Show)
+
+data SaleProposal_AcceptResult = SaleProposal_AcceptResult
+  with
+    sale : AnyContractId -- should be auction and optional ?
+    meta : Metadata
+  deriving (Eq, Show)
+
+data SaleProposal_RejectResult = SaleProposal_RejectResult
+  with
+    meta : Metadata
+  deriving (Eq, Show)
+
+data SaleProposal_WithdrawResult = SaleProposal_WithdrawResult
+  with
+    meta : Metadata
+  deriving (Eq, Show)
+
+data SaleProposal_ExpireResult = SaleProposal_ExpireResult
+  with
+    meta : Metadata
+  deriving (Eq, Show)
+
+interface SaleProposal where
+  viewtype SaleProposalView
+
+  saleProposal_acceptImpl
+    : ContractId SaleProposal -> SaleProposal_Accept -> Update SaleProposal_AcceptResult
+
+  saleProposal_rejectImpl
+    : ContractId SaleProposal -> SaleProposal_Reject -> Update SaleProposal_RejectResult
+
+  saleProposal_withdrawImpl
+    : ContractId SaleProposal -> SaleProposal_Withdraw -> Update SaleProposal_WithdrawResult
+
+  choice SaleProposal_Accept : SaleProposal_AcceptResult
+    with
+      actors : [Party]
+      allocations : Map InstrumentId (ContractId Allocation)
+      extraArgs : ExtraArgs
+    controller actors
+    do
+      let v = view this
+      require "the actors are entitled to accept"
+        (entitled v.availableActions SPA_Accept actors)
+      now <- getTime
+      require "the proposal is open for acceptance" (now < v.acceptBefore)
+      saleProposal_acceptImpl this self (SaleProposal_Accept with ..)
+
+  choice SaleProposal_Reject : SaleProposal_RejectResult
+    with
+      actors : [Party]
+      extraArgs : ExtraArgs
+    controller actors
+    do
+      require "the actors are entitled to reject"
+        (entitled (view this).availableActions SPA_Reject actors)
+      saleProposal_rejectImpl this self (SaleProposal_Reject with ..)
+
+  choice SaleProposal_Withdraw : SaleProposal_WithdrawResult
+    with
+      actors : [Party]
+      extraArgs : ExtraArgs
+    controller actors
+    do
+      require "the actors are entitled to withdraw"
+        (entitled (view this).availableActions SPA_Withdraw actors)
+      saleProposal_withdrawImpl this self (SaleProposal_Withdraw with ..)
+
+  choice SaleProposal_Expire : SaleProposal_ExpireResult
+    with
+      actor : Party
+    controller actor
+    do
+      now <- getTime
+      requireExpired "the proposal has expired" now (Some (view this).acceptBefore)
+      pure SaleProposal_ExpireResult with meta = emptyMetadata

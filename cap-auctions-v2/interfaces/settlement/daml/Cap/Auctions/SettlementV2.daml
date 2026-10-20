@@ -1,0 +1,93 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Auctions.SettlementV2 where
+
+import DA.List (unique)
+import DA.Map (Map)
+
+import Splice.Api.Token.MetadataV1
+import qualified Splice.Api.Token.AllocationV2 as Alloc
+import Splice.Util (require)
+import Cap.Core.Types (ExecutionAction (..), ExecutionCore, ResolutionInfo)
+import Cap.Core.Utils (entitled, requireExpired, requireOpen)
+import Cap.Auctions.TypesV2 (SettlementBatch)
+import Cap.Auctions.UtilsV2 (releaseAllocation, settleBatch)
+
+data SettlementView = SettlementView
+  with
+    executionCore : ExecutionCore
+    resolution : ResolutionInfo
+    batches : [SettlementBatch]
+    released : [ContractId Alloc.Allocation]
+    meta : Metadata
+  deriving (Eq, Show)
+
+data Settlement_SettleResult = Settlement_SettleResult
+  with
+    batches : [Alloc.SettlementFactory_SettleBatchResult]
+    released : [Alloc.AllocationResult]
+    meta : Metadata
+  deriving (Eq, Show)
+
+data Settlement_CancelResult = Settlement_CancelResult
+  with
+    released : [ContractId Alloc.Allocation]
+    meta : Metadata
+  deriving (Eq, Show)
+
+data Settlement_ExpireResult = Settlement_ExpireResult
+  with
+    meta : Metadata
+  deriving (Eq, Show)
+
+
+interface Settlement where
+  viewtype SettlementView
+
+  settlement_cancelImpl : Settlement_Cancel -> Update Settlement_CancelResult
+
+  choice Settlement_Settle : Settlement_SettleResult
+    with
+      actors : [Party]
+      batchExtraArgs : [ExtraArgs]
+      releaseExtraArgs : [ExtraArgs]
+    controller actors
+    do
+      let v = view this
+      now <- getTime
+      requireOpen "the settlement window is open" now v.executionCore.opensAt v.executionCore.expiresAt
+      require "the actors are entitled to settle"
+        (entitled v.executionCore.availableActions EA_Execute actors)
+      require "the settlement settles or releases at least one allocation"
+        (not (null v.batches && null v.released))
+      require "every allocation is settled or released at most once"
+        (unique ([fa.allocationCid | b <- v.batches, fa <- b.allocations] <> v.released))
+      require "one extra args is given per batch" (length batchExtraArgs == length v.batches)
+      require "one extra args is given per released allocation" (length releaseExtraArgs == length v.released)
+      batches <- forA (zip v.batches batchExtraArgs) $ \(b, extraArgs) ->
+        settleBatch v.resolution b with extraArgs
+      released <- forA (zip v.released releaseExtraArgs) $ \(cid, extraArgs) ->
+        releaseAllocation v.resolution cid extraArgs
+      pure Settlement_SettleResult with batches; released; meta = emptyMetadata
+
+  choice Settlement_Cancel : Settlement_CancelResult
+    with
+      actors : [Party]
+      releaseExtraArgs : Map (ContractId Alloc.Allocation) ExtraArgs
+    controller actors
+    do
+      let v = view this
+      now <- getTime
+      requireOpen "the cancellation window is open" now v.executionCore.cancelAfter None
+      require "the actors are entitled to cancel"
+        (entitled v.executionCore.availableActions EA_Cancel actors)
+      settlement_cancelImpl this (Settlement_Cancel with actors; releaseExtraArgs)
+
+  choice Settlement_Expire : Settlement_ExpireResult
+    with
+      actor : Party
+    controller actor
+    do
+      now <- getTime
+      requireExpired "the settlement has expired" now (view this).executionCore.expiresAt
+      pure Settlement_ExpireResult with meta = emptyMetadata

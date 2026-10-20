@@ -13,7 +13,7 @@ import qualified DA.Set as Set
 import Splice.Api.Token.MetadataV1
 import Splice.Util (require)
 
-import Cap.Core.Types (AuthenticKey (..), ExecutionAction (..), ExecutionCore (..), ResolutionRef (..))
+import Cap.Core.Types (AuthenticKey (..), ExecutionAction (..), ExecutionCore (..), ResolutionInfo (..))
 import Cap.Core.Utils (IsAnyValue (..), fetchGroup, requireClosed, requireResolvedBy)
 import Cap.Governance.ActionV1
 import Cap.Governance.Utils
@@ -44,7 +44,7 @@ template Proposal
   with
     dso : Party
     operator : Party
-    resolution : ResolutionRef
+    resolution : ResolutionInfo
     electorate : Set Party
     terms : ProposalTerms
     roll : [Party]
@@ -80,7 +80,7 @@ template BallotInvitation
     dso : Party
     operator : Party
     voter : Party
-    resolution : ResolutionRef
+    resolution : ResolutionInfo
   where
     signatory dso, operator
     observer voter
@@ -125,7 +125,7 @@ template Governor
           (Set.member proposer electorate)
         create Proposal with
           dso; operator; electorate; terms
-          resolution = ResolutionRef with
+          resolution = ResolutionInfo with
             resolver = governorKey this
             resolverCid = None
             mechanism = majorityMechanismName

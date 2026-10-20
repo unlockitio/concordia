@@ -15,7 +15,7 @@ import DA.Time (RelTime, addRelTime)
 import Splice.Api.Token.MetadataV1
 import Splice.Util (HasCheckedFetch (..), fetchChecked, require)
 
-import Cap.Core.Types (AuthenticKey (..), ExecutionAction (..), ExecutionCore (..), ResolutionRef (..))
+import Cap.Core.Types (AuthenticKey (..), ExecutionAction (..), ExecutionCore (..), ResolutionInfo (..))
 import Cap.Core.Utils
   ( IsAnyValue (..), fetchGroup, requireClosed, requireResolvedBy, signedKey )
 import Cap.Governance.ActionV1
@@ -53,7 +53,7 @@ template DsoGovernor
     nonconsuming choice DsoGovernor_OpenVote : ContractId SharedBallot
       with
         proposer : Party
-        resolution : ResolutionRef
+        resolution : ResolutionInfo
         actionCid : ContractId Action
         rightCids : Map RightKey (ContractId SvWeightSource)
         targetCids : Map AuthenticKey AnyContractId
@@ -76,7 +76,7 @@ template DsoGovernor
     nonconsuming choice DsoGovernor_ResolveVote : ResolveResult (TextMap Decimal)
       with
         sv : Party
-        resolution : ResolutionRef
+        resolution : ResolutionInfo
         ballotCid : ContractId SharedBallot
       controller sv
       do
@@ -89,7 +89,7 @@ template DsoGovernor
     nonconsuming choice DsoGovernor_Confirm : ContractId SvConfirmation
       with
         confirmer : Party
-        resolution : ResolutionRef
+        resolution : ResolutionInfo
         actionCid : ContractId Action
         vote : DsoVote
         targetCids : Map AuthenticKey AnyContractId
@@ -107,7 +107,7 @@ template DsoGovernor
     nonconsuming choice DsoGovernor_ResolveConfirmations : ResolveResult AnyValue
       with
         sv : Party
-        resolution : ResolutionRef
+        resolution : ResolutionInfo
         confirmationCids : [ContractId SvConfirmation]
       controller sv
       do

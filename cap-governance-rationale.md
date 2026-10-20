@@ -18,8 +18,8 @@ A mechanism must count only the ballots of the proposal it resolves, and each
 ballot only once. The resolving party chooses which ballots to present, so the
 choice that runs the mechanism must refuse a ballot from another proposal and a
 ballot presented twice. `fetchGroup` fetches the ballots, refuses duplicates and
-checks that each ballot references the same `ResolutionRef`. `requireResolvedBy`
-checks that the resolution ref names the governor where the outcome is decided
+checks that each ballot references the same `ResolutionInfo`. `requireResolvedBy`
+checks that the resolution info names the governor where the outcome is decided
 and the mechanism used.
 
 **Example:** a decentralized party has two open proposals on the same governor.
@@ -208,7 +208,7 @@ resolution on a governor whose template it does not know. The removed
 
 - a generic entry point, `Resolver_Resolve`;
 - a `procedures` map, looked up by name;
-- `Submittable`, which carried a `ResolutionRef` (then named `Mechanism`) to
+- `Submittable`, which carried a `ResolutionInfo` (then named `Mechanism`) to
   that entry point.
 
 That would allow, without depending on the called governor's package:

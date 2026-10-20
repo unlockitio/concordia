@@ -1,0 +1,172 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Auctions.BidV2 where
+
+import DA.Map (Map)
+
+import Splice.Api.Token.MetadataV1
+import Splice.Api.Token.AllocationV2 (Allocation, AllocationSpecification)
+import Splice.Api.Token.HoldingV2 (InstrumentId)
+import Splice.Util (require)
+import Cap.Core.Types (ResolutionInfo)
+import Cap.Core.Utils (entitled, requireExpired)
+
+import Cap.Auctions.TypesV2 (AuctionTerms, RequestedAllocation)
+
+data BidProposalAction
+  = BPA_Withdraw
+  -- add enter and rename the choice to accept
+  | BPA_Custom with
+      id : Text
+  deriving (Eq, Ord, Show)
+
+data BidProposalView = BidProposalView
+  with
+    resolution : ResolutionInfo
+    terms : AuctionTerms
+    invited : Optional [Party]
+    availableActions : Map BidProposalAction [[Party]]
+    meta : Metadata
+  deriving (Eq, Show)
+
+data BidProposal_WithdrawResult = BidProposal_WithdrawResult
+  with
+    meta : Metadata
+  deriving (Eq, Show)
+
+data BidProposal_ExpireResult = BidProposal_ExpireResult
+  with
+    meta : Metadata
+  deriving (Eq, Show)
+
+data BidAction
+  = BA_Fund
+  | BA_Quote
+  | BA_Withdraw
+  | BA_Release
+  | BA_Custom with
+      id : Text
+  deriving (Eq, Ord, Show)
+
+data BidView = BidView
+  with
+    resolution : ResolutionInfo
+    terms : AuctionTerms
+    allocations : Map InstrumentId RequestedAllocation
+    availableActions : Map BidAction [[Party]]
+    meta : Metadata
+  deriving (Eq, Show)
+
+data Bid_WithdrawResult = Bid_WithdrawResult
+  with
+    bid : Optional (ContractId Bid)
+    released : [ContractId Allocation]
+    meta : Metadata
+  deriving (Eq, Show)
+
+data Bid_ReleaseResult = Bid_ReleaseResult
+  with
+    released : [ContractId Allocation]
+    meta : Metadata
+  deriving (Eq, Show)
+
+data Bid_ExpireResult = Bid_ExpireResult
+  with
+    meta : Metadata
+  deriving (Eq, Show)
+
+interface BidProposal where
+  viewtype BidProposalView
+
+  bidProposal_enterImpl
+    : ContractId BidProposal -> BidProposal_Enter -> Update (ContractId Bid)
+
+  bidProposal_withdrawImpl
+    : ContractId BidProposal -> BidProposal_Withdraw -> Update BidProposal_WithdrawResult
+
+  nonconsuming choice BidProposal_Enter : ContractId Bid
+    with
+      actors : [Party]
+      allocations : Map InstrumentId AllocationSpecification
+      extraArgs : ExtraArgs
+    controller actors
+    do
+      now <- getTime
+      require "the bidding window has not closed" (now < (view this).terms.biddingClosesAt)
+      bidProposal_enterImpl this self (BidProposal_Enter with ..)
+
+  choice BidProposal_Withdraw : BidProposal_WithdrawResult
+    with
+      actors : [Party]
+      extraArgs : ExtraArgs
+    controller actors
+    do
+      require "the actors are entitled to withdraw"
+        (entitled (view this).availableActions BPA_Withdraw actors)
+      bidProposal_withdrawImpl this self (BidProposal_Withdraw with ..)
+
+  choice BidProposal_Expire : BidProposal_ExpireResult
+    with
+      actor : Party
+    controller actor
+    do
+      now <- getTime
+      requireExpired "the bidding window has closed" now (Some (view this).terms.biddingClosesAt)
+      pure BidProposal_ExpireResult with meta = emptyMetadata
+
+interface Bid where
+  viewtype BidView
+
+  bid_fundImpl : ContractId Bid -> Bid_Fund -> Update (ContractId Bid)
+
+  bid_withdrawImpl : ContractId Bid -> Bid_Withdraw -> Update Bid_WithdrawResult
+
+  bid_releaseImpl : ContractId Bid -> Bid_Release -> Update Bid_ReleaseResult
+
+  bid_expireImpl : ContractId Bid -> Bid_Expire -> Update Bid_ExpireResult
+
+
+  choice Bid_Fund : ContractId Bid
+    with
+      actors : [Party]
+      allocations : Map InstrumentId (ContractId Allocation)
+      extraArgs : ExtraArgs
+    controller actors
+    do
+      let bv = view this
+      require "the actors are entitled to fund"
+        (entitled bv.availableActions BA_Fund actors)
+      now <- getTime
+      require "the bidding window has not closed" (now < bv.terms.biddingClosesAt)
+      bid_fundImpl this self (Bid_Fund with ..)
+
+  nonconsuming choice Bid_Withdraw : Bid_WithdrawResult
+    with
+      actors : [Party]
+      extraArgs : ExtraArgs
+    controller actors
+    do
+      require "the actors are entitled to withdraw"
+        (entitled (view this).availableActions BA_Withdraw actors)
+      bid_withdrawImpl this self (Bid_Withdraw with ..)
+
+  nonconsuming choice Bid_Release : Bid_ReleaseResult
+    with
+      actors : [Party]
+      extraArgs : ExtraArgs
+    controller actors
+    do
+      require "the actors are entitled to release"
+        (entitled (view this).availableActions BA_Release actors)
+      bid_releaseImpl this self (Bid_Release with ..)
+
+  nonconsuming choice Bid_Expire : Bid_ExpireResult
+    with
+      actors : [Party]
+      extraArgs : ExtraArgs
+    controller actors
+    do
+      now <- getTime
+      requireExpired "the bid has expired" now (Some (view this).terms.expiresAt)
+      bid_expireImpl this self (Bid_Expire with ..)
+

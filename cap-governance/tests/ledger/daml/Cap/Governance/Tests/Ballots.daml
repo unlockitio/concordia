@@ -10,7 +10,7 @@ import qualified DA.Map as Map
 import qualified DA.Set as Set
 import Daml.Script hiding (AnyContractId)
 
-import Cap.Core.Types (AuthenticKey (..), Snapshot (..), ResolutionRef (..))
+import Cap.Core.Types (AuthenticKey (..), Snapshot (..), ResolutionInfo (..))
 import Cap.Governance.ActionV1 (Action)
 import Cap.Governance.Utils (Cast (..), Vote (..))
 
@@ -38,8 +38,8 @@ setup ns = do
     owner; readers = []; authorizers = [[owner]]; targets = Map.empty
   pure Env with actionA = toInterfaceContractId a; actionB = toInterfaceContractId b; ..
 
-resolutionOf : Party -> ResolutionRef
-resolutionOf owner = ResolutionRef with
+resolutionOf : Party -> ResolutionInfo
+resolutionOf owner = ResolutionInfo with
   resolver = AuthenticKey with authorities = Set.fromList [owner]; id = "resolver"
   resolverCid = None
   mechanism = "vote"

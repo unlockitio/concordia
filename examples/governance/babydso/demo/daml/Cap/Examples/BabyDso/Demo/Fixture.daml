@@ -16,7 +16,7 @@ import Daml.Script hiding (AnyContractId)
 
 import Splice.Api.Token.MetadataV1
 
-import Cap.Core.Types (AuthenticKey (..), ResolutionRef (..))
+import Cap.Core.Types (AuthenticKey (..), ResolutionInfo (..))
 import Cap.Governance.ActionV1 (Action)
 import Cap.Governance.ExecutableV1
 
@@ -62,8 +62,8 @@ data Fixture = Fixture with
     actionCid : ContractId SetFeesAction
     governorCid : ContractId DsoGovernor
     rightCids : Map RightKey (ContractId SvWeightSource)
-    resolution : ResolutionRef
-    confirmResolution : ResolutionRef
+    resolution : ResolutionInfo
+    confirmResolution : ResolutionInfo
     terms : VoteTerms
 
 
@@ -105,7 +105,7 @@ setupWith ns sourcesFor = do
     executionWindow = days 1
     expiresAt = now `addRelTime` days 30
 
-  let resolutionFor mechanism id = ResolutionRef with
+  let resolutionFor mechanism id = ResolutionInfo with
         resolver = AuthenticKey with
           authorities = Set.fromList [dso]
           id = bodyId

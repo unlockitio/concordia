@@ -68,7 +68,7 @@ Concordia has three tiers: a domain-agnostic core and two domains built on it.
 CAP defines an interface only where code works with a contract whose template it
 does not know at compile time. Everything else is stored types and helpers.
 
-- **`cap-core`** — stored types (`AuthenticKey`, `ResolutionRef`, `ExecutionCore`, `Snapshot`)
+- **`cap-core`** — stored types (`AuthenticKey`, `ResolutionInfo`, `ExecutionCore`, `Snapshot`)
   and `cap-core-utils` (checked fetches, resolution checks, admission, windows,
   value conversion). It defines no interfaces.
 - **`cap-governance`** — the `Action` and `Executable` interfaces, and
@@ -87,7 +87,7 @@ the helpers it needs. CAP sits above Canton's asset and settlement layer.
 ```
 concordia/
 ├── cap-core/                          # Tier 1: domain-agnostic
-│   ├── types/                         #   AuthenticKey, ResolutionRef, ExecutionCore, Snapshot, TargetReader
+│   ├── types/                         #   AuthenticKey, ResolutionInfo, ExecutionCore, Snapshot, TargetReader
 │   ├── utils/                         #   checked fetches, resolutions, admission, windows, values
 │   └── tests/{unit,ledger}
 ├── cap-governance/                    # Tier 2: governance

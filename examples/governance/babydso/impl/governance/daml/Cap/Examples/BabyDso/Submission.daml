@@ -14,7 +14,7 @@ import qualified DA.TextMap as TextMap
 import Splice.Api.Token.MetadataV1
 import Splice.Util (HasCheckedFetch (..), require)
 
-import Cap.Core.Types (AuthenticKey, Snapshot, ResolutionRef (..))
+import Cap.Core.Types (AuthenticKey, Snapshot, ResolutionInfo (..))
 import Cap.Governance.ActionV1 (Action)
 import Cap.Governance.Utils (IsBallot (..), Vote (..))
 
@@ -47,7 +47,7 @@ template SharedBallot
   with
     dso : Party
     svs : Set Party
-    resolution : ResolutionRef
+    resolution : ResolutionInfo
     actionCid : ContractId Action
     openingWeights : Map Party Decimal
     snapshots : Map AuthenticKey Snapshot
@@ -79,7 +79,7 @@ template SharedBallot
         now <- getTime
         require "the shared ballot has expired" (now >= expiresAt)
 
-instance HasCheckedFetch SharedBallot ResolutionRef where
+instance HasCheckedFetch SharedBallot ResolutionInfo where
   contractGroupId ballot = ballot.resolution
 
 instance IsBallot SharedBallot DsoVote where
@@ -93,7 +93,7 @@ template SvConfirmation
   with
     dso : Party
     confirmer : Party
-    resolution : ResolutionRef
+    resolution : ResolutionInfo
     actionCid : ContractId Action
     vote : DsoVote
     snapshots : Map AuthenticKey Snapshot
@@ -113,7 +113,7 @@ template SvConfirmation
         now <- getTime
         require "the confirmation has expired" (now >= expiresAt)
 
-instance HasCheckedFetch SvConfirmation ResolutionRef where
+instance HasCheckedFetch SvConfirmation ResolutionInfo where
   contractGroupId confirmation = confirmation.resolution
 
 instance IsBallot SvConfirmation DsoVote where

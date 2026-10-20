@@ -22,7 +22,7 @@ broad set of use cases.
 
 ### cap-core
 
-The stored types (`AuthenticKey`, `ResolutionRef`, `ExecutionCore`) and the opt-in
+The stored types (`AuthenticKey`, `ResolutionInfo`, `ExecutionCore`) and the opt-in
 toolkit (`cap-core-utils`: checked fetches, resolution checks, admission, windows,
 value conversion). cap-core defines no interfaces, because nothing in it has to
 work with a contract whose template it does not know.

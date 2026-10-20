@@ -1,0 +1,40 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Auctions.PerLotQuotesBidV2 where
+
+import DA.Map (Map)
+
+import Splice.Api.Token.MetadataV1
+import Splice.Api.Token.HoldingV2 (InstrumentId)
+import Splice.Util (require)
+import Cap.Core.Utils (entitled, requireOpen)
+
+import Cap.Auctions.BidV2 (Bid, BidAction (..))
+import Cap.Auctions.TypesV2 (Quote)
+
+data PerLotQuotesView = PerLotQuotesView
+  with
+    quotes : Map InstrumentId [[Quote]]
+  deriving (Eq, Show)
+
+interface PerLotQuotesBid requires Bid where
+  viewtype PerLotQuotesView
+
+  perLotQuotesBid_quoteImpl
+    : ContractId PerLotQuotesBid -> PerLotQuotesBid_Quote -> Update (ContractId PerLotQuotesBid)
+
+-- separate from fund because clock formats will want to change the quote several times and will not want to allocate each time.
+  choice PerLotQuotesBid_Quote : ContractId PerLotQuotesBid
+    with
+      actors : [Party]
+      quotes : Map InstrumentId [[Quote]]
+      extraArgs : ExtraArgs
+    controller actors
+    do
+      let bv = view (toInterface @Bid this)
+      require "the actors are entitled to quote"
+        (entitled bv.availableActions BA_Quote actors)
+      now <- getTime
+      requireOpen "the bidding window is open"
+        now bv.terms.biddingOpensAt (Some bv.terms.biddingClosesAt)
+      perLotQuotesBid_quoteImpl this self (PerLotQuotesBid_Quote with ..)

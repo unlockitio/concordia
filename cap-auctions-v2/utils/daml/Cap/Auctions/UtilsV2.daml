@@ -1,0 +1,46 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Auctions.UtilsV2
+  ( settlementOf
+  , settleBatch
+  , settleBatches
+  , releaseAllocation
+  ) where
+
+import qualified DA.Set as Set
+
+import Splice.Api.Token.MetadataV1
+import qualified Splice.Api.Token.AllocationV2 as Alloc
+
+import Cap.Core.Types (ResolutionInfo (..))
+import Cap.Auctions.TypesV2 (SettlementBatch (..))
+
+-- compute settlementInfo from ResolutionInfo
+settlementOf : ResolutionInfo -> Alloc.SettlementInfo
+settlementOf resolution = Alloc.SettlementInfo with
+  executors = Set.toList resolution.resolver.authorities
+  id = resolution.id
+  cid = resolution.resolverCid
+  meta = emptyMetadata
+
+settleBatch
+  : ResolutionInfo -> SettlementBatch -> Update Alloc.SettlementFactory_SettleBatchResult
+settleBatch resolution batch = do
+  let settlement = settlementOf resolution
+  exercise batch.factoryCid Alloc.SettlementFactory_SettleBatch with
+    settlement
+    transferLegs = batch.legs
+    allocations = batch.allocations
+    actors = settlement.executors
+    extraArgs = batch.extraArgs
+
+settleBatches
+  : ResolutionInfo -> [SettlementBatch] -> Update [Alloc.SettlementFactory_SettleBatchResult]
+settleBatches resolution = mapA (settleBatch resolution)
+
+releaseAllocation
+  : ResolutionInfo -> ContractId Alloc.Allocation -> ExtraArgs -> Update Alloc.AllocationResult
+releaseAllocation resolution allocationCid extraArgs =
+  exercise allocationCid Alloc.Allocation_Cancel with
+    actors = (settlementOf resolution).executors
+    extraArgs

@@ -13,7 +13,7 @@ import qualified Splice.Api.Token.HoldingV2 as Holding
 import Splice.Util (require)
 import Splice.TokenStandard.Utils (regularAccountOwner)
 
-import Cap.Core.Types (ResolutionRef (..))
+import Cap.Core.Types (ResolutionInfo (..))
 import Cap.Core.Utils (authoritiesOf, orAbort, single)
 import Cap.Auctions.Funding
   ( OneLotBidAllocationRequest (..), bidderPaymentAllocation, bidderLotAllocation )
@@ -25,7 +25,7 @@ template AuctionBid
     terms : OneLotAuctionTerms
     bidderPaymentAccount : Holding.Account
     bidderLotAccount : Holding.Account
-    resolution : ResolutionRef
+    resolution : ResolutionInfo
     quotes : [Quote]
     allocations : [ContractId Alloc.Allocation]
   where

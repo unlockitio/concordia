@@ -16,15 +16,15 @@ signatories with the key the caller expects. `AuthenticKey` in `Cap.Core.Types`;
 **Mechanism** — the rule a resolver runs to turn ballots or bids into an
 outcome: a voting rule on a governor, an auction format on an auction. The
 resolver implements each mechanism as a choice and names it by a `Text`.
-`ResolutionRef.mechanism`.
+`ResolutionInfo.mechanism`.
 
-**Resolution ref** — names the resolver, the mechanism and the proposal a
+**Resolution info** — names the resolver, the mechanism and the proposal a
 ballot or bid belongs to. The resolver is the contract that resolves the
 proposal: a governor in cap-governance, an auction in cap-auctions. `resolver`
 is its key and `resolverCid` optionally pins its contract id. The choice that
-runs the mechanism fetches its ballots by the resolution ref. Resolution here
+runs the mechanism fetches its ballots by the resolution info. Resolution here
 means the act of resolving, not the adopted outcome.
-`ResolutionRef` in `Cap.Core.Types`; `fetchGroup` and `requireResolvedBy` in
+`ResolutionInfo` in `Cap.Core.Types`; `fetchGroup` and `requireResolvedBy` in
 `Cap.Core.Utils`.
 
 **Execution core** — who may execute or cancel an authorized execution or a
@@ -37,7 +37,7 @@ settlement, and when. `ExecutionCore` in `Cap.Core.Types`.
 ## cap-governance
 
 **Decentralized party** — the parties that sign a governor and govern through
-it. `ResolutionRef.resolver.authorities`.
+it. `ResolutionInfo.resolver.authorities`.
 
 **Governor** — the resolver of a governance app: a template the app writes,
 signed by the decentralized party. Each mechanism is a choice on it, run under
