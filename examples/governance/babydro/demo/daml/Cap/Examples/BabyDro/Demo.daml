@@ -5,6 +5,7 @@ module Cap.Examples.BabyDro.Demo where
 import DA.Assert ((===))
 import DA.NonEmpty (NonEmpty(..))
 import qualified DA.Set as Set
+import qualified DA.Map as Map
 import qualified DA.TextMap as TextMap
 import DA.Time (addRelTime, days)
 import Daml.Script
@@ -17,39 +18,44 @@ import Cap.Examples.BabyDro.Dispute
 
 consortium : Party -> Party -> Party -> Script (ContractId Consortium)
 consortium a b c = submit a $ createCmd Consortium with
-  founder = a
-  members = Set.fromList [a, b, c]
-  motions = []
-  openCases = []
-  ballots = []
-  rulings = []
+  founder = a; members = Set.fromList [a, b, c]; policy = SnapshotAtOpen; motions = []; cases = Set.empty
 
 state : Party -> ContractId Consortium -> Script Consortium
 state party cid = do
   Some value <- queryContractId party cid
   pure value
 
-propose : Party -> ContractId Consortium -> Membership -> Script (ContractId Consortium)
-propose proposer cid proposal = submit proposer $ exerciseCmd cid ProposeMembership with proposer; proposal
+propose : Party -> ContractId Consortium -> Proposal -> Script (ContractId Consortium)
+propose proposer cid proposal = submit proposer $ exerciseCmd cid ProposeChange with proposer; proposal
 
-membershipVote : Party -> ContractId Consortium -> Membership -> Script (ContractId Consortium)
-membershipVote voter cid proposal = submit voter $ exerciseCmd cid VoteMembership with voter; proposal
+approve : Party -> ContractId Consortium -> Proposal -> Script (ContractId Consortium)
+approve voter cid proposal = submit voter $ exerciseCmd cid VoteChange with voter; proposal
 
-enact : Party -> ContractId Consortium -> Membership -> Script (ContractId Consortium)
-enact enactor cid proposal = submit enactor $ exerciseCmd cid EnactMembership with enactor; proposal
+enact : Party -> ContractId Consortium -> Proposal -> Script (ContractId Consortium)
+enact enactor cid proposal = submit enactor $ exerciseCmd cid EnactChange with enactor; proposal
 
-open : Party -> ContractId Consortium -> Party -> Script (ContractId Consortium)
-open disputer cid otherRegistry = submit disputer $ exerciseCmd cid OpenDispute with
-  disputer; caseId = "case-one"; name = "shared"; otherRegistry; reason = "competing claims"
+change : Party -> Party -> ContractId Consortium -> Proposal -> Script (ContractId Consortium)
+change a b cid proposal = do
+  proposed <- propose a cid proposal
+  submitMustFail a $ exerciseCmd proposed EnactChange with enactor = a; proposal
+  approved <- approve b proposed proposal
+  enact a approved proposal
 
-vote : Party -> ContractId Consortium -> Decision -> Script (ContractId Consortium)
-vote voter cid decision = submit voter $ exerciseCmd cid VoteDispute with voter; caseId = "case-one"; decision
+open : Party -> ContractId Consortium -> Party -> Text -> Script (ContractId Consortium, ContractId Case)
+open disputer cid otherRegistry caseId = submit disputer $ exerciseCmd cid OpenDispute with
+  disputer; caseId; name = "shared"; otherRegistry; reason = "competing claims"
 
-rule : Party -> ContractId Consortium -> Decision -> Script (ContractId Consortium)
-rule issuer cid decision = submit issuer $ exerciseCmd cid IssueRuling with issuer; caseId = "case-one"; decision
+invite : Party -> ContractId Case -> Party -> Script (ContractId DisputeInvitation)
+invite authority cid voter = submit authority $ exerciseCmd cid Case_Invite with voter
 
-follow : Party -> ContractId Consortium -> Script (ContractId Consortium)
-follow registry cid = submit registry $ exerciseCmd cid AcknowledgeFollow with registry; caseId = "case-one"
+accept : Party -> ContractId Case -> ContractId DisputeInvitation -> Script (ContractId Case, ContractId Ballot)
+accept voter caseCid invitation = submit voter $ exerciseCmd invitation DisputeInvitation_Accept with caseCid
+
+cast : Party -> ContractId Case -> ContractId Ballot -> Decision -> Script (ContractId Case, ContractId Ballot)
+cast voter caseCid ballotCid decision = submit voter $ exerciseCmd ballotCid Ballot_Cast with caseCid; vote = decision
+
+resolve : Party -> ContractId Consortium -> ContractId Case -> Decision -> Script (ContractId Ruling)
+resolve issuer governance caseCid decision = submit issuer $ exerciseCmd governance Consortium_Resolve with issuer; caseCid; decision
 
 nameCredential : Party -> Party -> Text -> Time -> CredentialView
 nameCredential admin subject name now = CredentialView with
@@ -82,73 +88,52 @@ active party cid = do
   result <- queryContractId party cid
   pure (result /= None)
 
--- The consortium decides disputes; each registry retains control of its CIPs-owned claims.
--- One ordered consumer journey, using the CIPs-owned contracts throughout.
+-- CIPs owns credential state. Governance only issues a ruling and acknowledgements.
 journey : Script ()
 journey = script do
   a <- allocateParty "registry-a"
   b <- allocateParty "registry-b"
   c <- allocateParty "registry-c"
-  newcomer <- allocateParty "registry-new"
-  loser <- allocateParty "claimant-b"
+  claimant <- allocateParty "claimant-b"
   now <- getTime
-  -- Founding registries start the governance membership that can admit and remove members.
+  -- Found the member-governed consortium; one member cannot admit a fourth.
   initial <- consortium a b c
-  before <- state a initial
-  Set.size before.members === 3
-  -- A proposal alone cannot admit a registry; another member must support it.
-  let admission = Admit newcomer
-  proposed <- propose a initial admission
-  submitMustFail a $ exerciseCmd proposed EnactMembership with enactor = a; proposal = admission
-  supported <- membershipVote b proposed admission
-  admitted <- enact a supported admission
-  afterAdmission <- state a admitted
-  Set.member newcomer afterAdmission.members === True
-
-  -- Each CIPs registry issues its own claims; only "shared" conflicts.
-  -- The unrelated names establish the boundary of any later registry action.
+  newcomer <- allocateParty "registry-new"
+  admitted <- change a b initial (MembershipChange (Admit newcomer))
+  -- Both CIPs registries issue the same canton.name; unrelated claims also exist.
   first <- register a a "shared" now
-  second <- register b loser "shared" now
+  second <- register b claimant "shared" now
   unrelatedA <- register a a "unrelated" now
-  unrelatedB <- register b loser "another" now
+  unrelatedB <- register b claimant "another" now
+  -- Open a separate case with a frozen policy and electorate.
+  (openedGovernance, caseCid) <- open a admitted b "case-one"
+  Some opened <- queryContractId a caseCid
+  opened.policy === SnapshotAtOpen
+  Set.size opened.eligible === 4
+  -- Founder pre-signs invitations. Each voter accepts and casts in its own
+  -- transaction, without exercising Consortium in that transaction tree.
+  invitationA <- invite a caseCid a
+  (oneCase, ballotA) <- accept a caseCid invitationA
+  (votedA, _) <- cast a oneCase ballotA KeepFirst
+  submitMustFail a $ exerciseCmd openedGovernance Consortium_Resolve with issuer = a; caseCid = votedA; decision = KeepFirst
+  invitationC <- invite a votedA c
+  (twoCase, ballotC) <- accept c votedA invitationC
+  (votedC, _) <- cast c twoCase ballotC KeepFirst
+  -- A ruling does not archive either CIPs claim.
+  ruling <- resolve a openedGovernance votedC KeepFirst
   isActive <- active a first
   isActive === True
   isActive <- active b second
   isActive === True
-  isActive <- active a unrelatedA
-  isActive === True
-  isActive <- active b unrelatedB
-  isActive === True
-
-  -- A member opens the competing-claim case against the other member registry.
-  disputed <- open a admitted b
-  pending <- state a disputed
-  length pending.openCases === 1
-  -- One dispute vote is insufficient; a second member backs KeepFirst before ruling.
-  oneVote <- vote a disputed KeepFirst
-  submitMustFail a $ exerciseCmd oneVote IssueRuling with issuer = a; caseId = "case-one"; decision = KeepFirst
-  twoVotes <- vote c oneVote KeepFirst
-  ruled <- rule c twoVotes KeepFirst
-  -- The ruling records a governance decision, not a CIPs credential mutation.
-  isActive <- active a first
-  isActive === True
-  isActive <- active b second
-  isActive === True
-  result <- state a ruled
-  map (.decision) result.rulings === [KeepFirst]
-  map (Set.size . (.followedBy)) result.rulings === [0]
-
-  -- Each registry acknowledges follow separately; registry b archives its own losing claim.
-  -- Acknowledgment itself does not archive either credential.
-  followedA <- follow a ruled
+  -- Each registry follows independently; only the losing registry archives
+  -- its own credential. The other unrelated claims remain active.
+  followedA <- submit a $ exerciseCmd ruling Ruling_Follow with registry = a
   isActive <- active b second
   isActive === True
   _ <- submit b $ exerciseCmd (toInterfaceContractId @Credential second) Credential_ArchiveAsAnchorers
-  followedB <- follow b followedA
-  complete <- state a followedB
-  map (Set.size . (.followedBy)) complete.rulings === [2]
-  isActive <- active a first
-  isActive === True
+  followedB <- submit b $ exerciseCmd followedA Ruling_Follow with registry = b
+  Some finalRuling <- queryContractId a followedB
+  Set.size finalRuling.followedBy === 2
   isActive <- active b second
   isActive === False
   isActive <- active a unrelatedA
@@ -156,47 +141,28 @@ journey = script do
   isActive <- active b unrelatedB
   isActive === True
 
-  -- Removing the newcomer requires a separate membership vote; existing names survive.
-  let removal = Remove newcomer
-  removalProposed <- propose b followedB removal
-  submitMustFail b $ exerciseCmd removalProposed EnactMembership with enactor = b; proposal = removal
-  removalVoted <- membershipVote c removalProposed removal
-  removed <- enact b removalVoted removal
-  final <- state a removed
-  Set.member newcomer final.members === False
-  isActive <- active a unrelatedA
-  isActive === True
-  isActive <- active b unrelatedB
-  isActive === True
-
--- Negative membership checks: outsiders cannot propose, vote, or enact, and
--- even a member cannot enact admission or removal before another vote.
+-- Membership and policy both require two CURRENT supporters.
 membershipAuthorization : Script ()
 membershipAuthorization = script do
   a <- allocateParty "member-a"
   b <- allocateParty "member-b"
   c <- allocateParty "member-c"
   outsider <- allocateParty "outsider"
-  other <- allocateParty "other-outsider"
   cid <- consortium a b c
-  submitMustFail outsider $ exerciseCmd cid ProposeMembership with proposer = outsider; proposal = Admit outsider
-  proposed <- propose a cid (Admit outsider)
-  submitMustFail outsider $ exerciseCmd proposed VoteMembership with voter = outsider; proposal = Admit outsider
-  submitMustFail outsider $ exerciseCmd proposed EnactMembership with enactor = outsider; proposal = Admit outsider
-  submitMustFail a $ exerciseCmd proposed EnactMembership with enactor = a; proposal = Admit outsider
-  approved <- membershipVote b proposed (Admit outsider)
-  admitted <- enact a approved (Admit outsider)
-  submitMustFail other $ exerciseCmd admitted ProposeMembership with proposer = other; proposal = Remove a
-  proposedRemoval <- propose a admitted (Remove outsider)
-  submitMustFail other $ exerciseCmd proposedRemoval EnactMembership with enactor = other; proposal = Remove outsider
-  submitMustFail a $ exerciseCmd proposedRemoval EnactMembership with enactor = a; proposal = Remove outsider
-  approvedRemoval <- membershipVote c proposedRemoval (Remove outsider)
-  final <- enact a approvedRemoval (Remove outsider)
-  finalState <- state a final
-  Set.member outsider finalState.members === False
+  submitMustFail outsider $ exerciseCmd cid ProposeChange with proposer = outsider; proposal = MembershipChange (Admit outsider)
+  membership <- propose a cid (MembershipChange (Admit outsider))
+  submitMustFail a $ exerciseCmd membership EnactChange with enactor = a; proposal = MembershipChange (Admit outsider)
+  submitMustFail outsider $ exerciseCmd membership VoteChange with voter = outsider; proposal = MembershipChange (Admit outsider)
+  supported <- approve b membership (MembershipChange (Admit outsider))
+  admitted <- enact a supported (MembershipChange (Admit outsider))
+  policyMotion <- propose a admitted (PolicyChange CurrentMembership)
+  submitMustFail a $ exerciseCmd policyMotion EnactChange with enactor = a; proposal = PolicyChange CurrentMembership
+  policySupported <- approve b policyMotion (PolicyChange CurrentMembership)
+  updated <- enact a policySupported (PolicyChange CurrentMembership)
+  result <- state a updated
+  result.policy === CurrentMembership
 
--- Negative dispute checks: nonmembers cannot open, vote, rule, or acknowledge;
--- a member cannot dispute an outsider registry or rule after only one vote.
+-- Ballot inventory rejects foreign case CIDs and duplicate voters.
 unauthorizedDispute : Script ()
 unauthorizedDispute = script do
   a <- allocateParty "member-a"
@@ -204,19 +170,23 @@ unauthorizedDispute = script do
   c <- allocateParty "member-c"
   outsider <- allocateParty "outsider"
   cid <- consortium a b c
-  submitMustFail outsider $ exerciseCmd cid OpenDispute with
-    disputer = outsider; caseId = "case-one"; name = "shared"; otherRegistry = b; reason = "claim"
-  submitMustFail a $ exerciseCmd cid OpenDispute with
-    disputer = a; caseId = "case-one"; name = "shared"; otherRegistry = outsider; reason = "claim"
-  disputed <- open a cid b
-  submitMustFail outsider $ exerciseCmd disputed VoteDispute with voter = outsider; caseId = "case-one"; decision = KeepFirst
-  one <- vote a disputed KeepFirst
-  submitMustFail a $ exerciseCmd one IssueRuling with issuer = a; caseId = "case-one"; decision = KeepFirst
-  submitMustFail outsider $ exerciseCmd one IssueRuling with issuer = outsider; caseId = "case-one"; decision = KeepFirst
-  two <- vote b one KeepFirst
-  ruled <- rule a two KeepFirst
-  submitMustFail outsider $ exerciseCmd ruled AcknowledgeFollow with registry = outsider; caseId = "case-one"
+  submitMustFail outsider $ exerciseCmd cid OpenDispute with disputer = outsider; caseId = "bad"; name = "shared"; otherRegistry = b; reason = "claim"
+  submitMustFail a $ exerciseCmd cid OpenDispute with disputer = a; caseId = "bad"; name = "shared"; otherRegistry = outsider; reason = "claim"
+  (firstGovernance, first) <- open a cid b "first"
+  (secondGovernance, second) <- open b firstGovernance a "second"
+  invitation <- invite a first b
+  submitMustFail outsider $ exerciseCmd invitation DisputeInvitation_Accept with caseCid = first
+  submitMustFail b $ exerciseCmd invitation DisputeInvitation_Accept with caseCid = second
+  (registered, ballot) <- accept b first invitation
+  submitMustFail b $ exerciseCmd registered Case_RegisterBallot with voter = b; previous = None; replacement = ballot
+  foreign <- invite a second c
+  (_, foreignBallot) <- accept c second foreign
+  submitMustFail b $ exerciseCmd registered Case_RegisterBallot with voter = b; previous = Some ballot; replacement = foreignBallot
+  (voted, _) <- cast b registered ballot KeepFirst
+  submitMustFail a $ exerciseCmd secondGovernance Consortium_Resolve with issuer = a; caseCid = voted; decision = KeepFirst
+  submitMustFail outsider $ exerciseCmd secondGovernance Consortium_Resolve with issuer = outsider; caseCid = voted; decision = KeepFirst
 
+-- Removing a voter after opening does not retarget a snapshot case.
 caseLifecycleGuards : Script ()
 caseLifecycleGuards = script do
   a <- allocateParty "member-a"
@@ -224,28 +194,23 @@ caseLifecycleGuards = script do
   c <- allocateParty "member-c"
   d <- allocateParty "member-d"
   initial <- consortium a b c
-  disputed <- open a initial b
-  submitMustFail a $ exerciseCmd initial VoteDispute with voter = a; caseId = "case-one"; decision = KeepFirst
-  submitMustFail b $ exerciseCmd disputed OpenDispute with
-    disputer = b; caseId = "case-one"; name = "shared"; otherRegistry = a; reason = "duplicate"
-  removal <- propose a disputed (Remove b)
-  supported <- membershipVote c removal (Remove b)
-  submitMustFail a $ exerciseCmd supported EnactMembership with enactor = a; proposal = Remove b
-  one <- vote a supported KeepFirst
-  two <- vote c one KeepFirst
-  ruled <- rule c two KeepFirst
-  submitMustFail a $ exerciseCmd ruled OpenDispute with
-    disputer = a; caseId = "case-one"; name = "shared"; otherRegistry = b; reason = "reuse"
-  submitMustFail a $ exerciseCmd ruled EnactMembership with enactor = a; proposal = Remove b
-  followedA <- follow a ruled
-  submitMustFail a $ exerciseCmd followedA EnactMembership with enactor = a; proposal = Remove b
-  followedB <- follow b followedA
-  removed <- enact a followedB (Remove b)
-  final <- state a removed
-  Set.member b final.members === False
-  submitMustFail b $ exerciseCmd removed VoteDispute with voter = b; caseId = "case-one"; decision = KeepFirst
-  submitMustFail d $ exerciseCmd removed ProposeMembership with proposer = d; proposal = Admit d
+  admitted <- change a b initial (MembershipChange (Admit d))
+  (openedGovernance, disputed) <- open a admitted b "snapshot"
+  removal <- change a b openedGovernance (MembershipChange (Remove c))
+  after <- state a removal
+  Set.member c after.members === False
+  invitationA <- invite a disputed a
+  (one, ballotA) <- accept a disputed invitationA
+  (oneVoted, _) <- cast a one ballotA KeepFirst
+  invitationC <- invite a oneVoted c
+  (two, ballotC) <- accept c oneVoted invitationC
+  (twoVoted, _) <- cast c two ballotC KeepFirst
+  ruling <- resolve a removal twoVoted KeepFirst
+  Some result <- queryContractId a ruling
+  result.decision === KeepFirst
 
+-- CurrentMembership excludes a removed voter's ballot even when already cast;
+-- a later policy change leaves this case's frozen policy untouched.
 currentElectorate : Script ()
 currentElectorate = script do
   a <- allocateParty "member-a"
@@ -253,19 +218,66 @@ currentElectorate = script do
   c <- allocateParty "member-c"
   d <- allocateParty "member-d"
   initial <- consortium a b c
-  let admission = Admit d
-  proposed <- propose a initial admission
-  approved <- membershipVote b proposed admission
-  admitted <- enact a approved admission
-  disputed <- open a admitted b
-  one <- vote a disputed KeepFirst
-  two <- vote c one KeepFirst
-  let removal = Remove c
-  removalProposed <- propose a two removal
-  removalVoted <- membershipVote b removalProposed removal
-  removed <- enact a removalVoted removal
-  submitMustFail a $ exerciseCmd removed IssueRuling with issuer = a; caseId = "case-one"; decision = KeepFirst
-  replacement <- vote d removed KeepFirst
-  ruled <- rule a replacement KeepFirst
-  result <- state a ruled
-  map (.decision) result.rulings === [KeepFirst]
+  admitted <- change a b initial (MembershipChange (Admit d))
+  current <- change a b admitted (PolicyChange CurrentMembership)
+  (openedGovernance, disputed) <- open a current b "current"
+  invitationA <- invite a disputed a
+  (one, ballotA) <- accept a disputed invitationA
+  (oneVoted, _) <- cast a one ballotA KeepFirst
+  invitationC <- invite a oneVoted c
+  (two, ballotC) <- accept c oneVoted invitationC
+  (twoVoted, _) <- cast c two ballotC KeepFirst
+  removed <- change a b openedGovernance (MembershipChange (Remove c))
+  switched <- change a b removed (PolicyChange SnapshotAtOpen)
+  Some unchanged <- queryContractId a twoVoted
+  unchanged.policy === CurrentMembership
+  submitMustFail a $ exerciseCmd switched Consortium_Resolve with issuer = a; caseCid = twoVoted; decision = KeepFirst
+  invitationD <- invite a twoVoted d
+  (three, ballotD) <- accept d twoVoted invitationD
+  (threeVoted, _) <- cast d three ballotD KeepFirst
+  ruling <- resolve a switched threeVoted KeepFirst
+  Some result <- queryContractId a ruling
+  result.decision === KeepFirst
+
+-- A parallel founder-signed consortium without this opening cannot resolve it;
+-- the archived predecessor cannot be used either.
+inventoryBoundary : Script ()
+inventoryBoundary = script do
+  a <- allocateParty "member-a"
+  b <- allocateParty "member-b"
+  c <- allocateParty "member-c"
+  initial <- consortium a b c
+  (successor, disputed) <- open a initial b "inventory-boundary"
+  invitationA <- invite a disputed a
+  (one, ballotA) <- accept a disputed invitationA
+  (oneVoted, _) <- cast a one ballotA KeepFirst
+  invitationB <- invite a oneVoted b
+  (two, ballotB) <- accept b oneVoted invitationB
+  (twoVoted, _) <- cast b two ballotB KeepFirst
+  parallel <- submit a $ createCmd Consortium with
+    founder = a; members = Set.fromList [a, c]; policy = SnapshotAtOpen; motions = []; cases = Set.empty
+  submitMustFail a $ exerciseCmd parallel Consortium_Resolve with issuer = a; caseCid = twoVoted; decision = KeepFirst
+  submitMustFail a $ exerciseCmd initial Consortium_Resolve with issuer = a; caseCid = twoVoted; decision = KeepFirst
+  _ <- resolve a successor twoVoted KeepFirst
+  pure ()
+
+-- The founder can counterfeit a parallel consortium with a copied inventory;
+-- this is an explicit trust boundary, not an expected LF-level rejection.
+founderTrustBoundary : Script ()
+founderTrustBoundary = script do
+  a <- allocateParty "member-a"
+  b <- allocateParty "member-b"
+  c <- allocateParty "member-c"
+  initial <- consortium a b c
+  (proper, disputed) <- open a initial b "founder-boundary"
+  invitationA <- invite a disputed a
+  (one, ballotA) <- accept a disputed invitationA
+  (oneVoted, _) <- cast a one ballotA KeepFirst
+  invitationB <- invite a oneVoted b
+  (two, ballotB) <- accept b oneVoted invitationB
+  (twoVoted, _) <- cast b two ballotB KeepFirst
+  real <- state a proper
+  forged <- submit a $ createCmd Consortium with
+    founder = a; members = Set.fromList [a, b]; policy = CurrentMembership; motions = []; cases = real.cases
+  _ <- resolve a forged twoVoted KeepFirst
+  pure ()

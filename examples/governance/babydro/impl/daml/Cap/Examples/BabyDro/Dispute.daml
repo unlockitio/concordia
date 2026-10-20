@@ -3,25 +3,131 @@
 module Cap.Examples.BabyDro.Dispute where
 
 import DA.Set (Set)
+import qualified DA.Set as Set
+import DA.Map (Map)
+import qualified DA.Map as Map
 
--- Case records and ballots remain under the Consortium authority in LF 2.2.
+
+-- These policies are local to the demo, not a rule of the CIPs name model.
+data ElectoratePolicy = SnapshotAtOpen | CurrentMembership deriving (Eq, Show)
 data Decision = KeepFirst | KeepSecond deriving (Eq, Show)
 
-data Case = Case with
+template Case
+  with
+    caseAuthority : Party
+    caseToken : Text
     caseId : Text
     name : Text
     firstRegistry : Party
     secondRegistry : Party
     reason : Text
-  deriving (Eq, Show)
+    policy : ElectoratePolicy
+    voters : Set Party
+    eligible : Set Party
+    ballots : Map Party (ContractId Ballot)
+    openingCaseCid : Optional (ContractId Case)
+  where
+    signatory caseAuthority
+    observer Set.toList voters
+    ensure caseId /= "" && name /= "" && reason /= "" && firstRegistry /= secondRegistry
 
-data Ballot = Ballot with
+    -- The case authority pre-signs an invitation. Accepting it supplies that
+    -- authority to the voter's registration without a Consortium exercise.
+    nonconsuming choice Case_Invite : ContractId DisputeInvitation
+      with
+        voter : Party
+      controller caseAuthority
+      do
+        assertMsg "voter not in the opening electorate" (Set.member voter voters)
+        create DisputeInvitation with caseAuthority; caseToken; caseId; voter
+
+    choice Case_RegisterBallot : ContractId Case
+      with
+        voter : Party
+        previous : Optional (ContractId Ballot)
+        replacement : ContractId Ballot
+      controller voter
+      do
+        assertMsg "voter not in the opening electorate" (Set.member voter voters)
+        assertMsg "ballot inventory does not match" (Map.lookup voter ballots == previous)
+        ballot <- fetch replacement
+        assertMsg "foreign ballot" (ballot.caseAuthority == caseAuthority && ballot.caseToken == caseToken && ballot.caseId == caseId && ballot.voter == voter)
+        let opening = case openingCaseCid of
+              None -> Some self
+              Some original -> Some original
+        create this with ballots = Map.insert voter replacement ballots; openingCaseCid = opening
+
+template DisputeInvitation
+  with
+    caseAuthority : Party
+    caseToken : Text
+    caseId : Text
     voter : Party
-    decision : Decision
-  deriving (Eq, Show)
+  where
+    signatory caseAuthority
+    observer voter
 
-data Ruling = Ruling with
-    dispute : Case
+    choice DisputeInvitation_Accept : (ContractId Case, ContractId Ballot)
+      with
+        caseCid : ContractId Case
+      controller voter
+      do
+        disputed <- fetch caseCid
+        assertMsg "invitation belongs to another case" (disputed.caseAuthority == caseAuthority && disputed.caseToken == caseToken && disputed.caseId == caseId)
+        assertMsg "voter already registered" (Map.lookup voter disputed.ballots == None)
+        ballotCid <- create Ballot with caseAuthority; caseToken; caseId; voter; decision = None
+        updated <- exercise caseCid Case_RegisterBallot with voter; previous = None; replacement = ballotCid
+        pure (updated, ballotCid)
+
+template Ballot
+  with
+    caseAuthority : Party
+    caseToken : Text
+    caseId : Text
+    voter : Party
+    decision : Optional Decision
+  where
+    signatory [caseAuthority, voter]
+
+    choice Ballot_Cast : (ContractId Case, ContractId Ballot)
+      with
+        caseCid : ContractId Case
+        vote : Decision
+      controller voter
+      do
+        replacement <- create this with decision = Some vote
+        updated <- exercise caseCid Case_RegisterBallot with voter; previous = Some self; replacement
+        pure (updated, replacement)
+
+    choice Ballot_Withdraw : (ContractId Case, ContractId Ballot)
+      with
+        caseCid : ContractId Case
+      controller voter
+      do
+        replacement <- create this with decision = None
+        updated <- exercise caseCid Case_RegisterBallot with voter; previous = Some self; replacement
+        pure (updated, replacement)
+
+template Ruling
+  with
+    caseAuthority : Party
+    caseToken : Text
+    caseId : Text
+    name : Text
+    firstRegistry : Party
+    secondRegistry : Party
     decision : Decision
     followedBy : Set Party
-  deriving (Eq, Show)
+  where
+    signatory caseAuthority
+    observer [firstRegistry, secondRegistry]
+
+    -- An acknowledgement is separate from the registry's CIPs credential act.
+    choice Ruling_Follow : ContractId Ruling
+      with
+        registry : Party
+      controller registry
+      do
+        assertMsg "only case registries follow" (registry == firstRegistry || registry == secondRegistry)
+        assertMsg "already followed" (not (Set.member registry followedBy))
+        create this with followedBy = Set.insert registry followedBy

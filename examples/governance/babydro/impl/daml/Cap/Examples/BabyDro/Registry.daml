@@ -4,14 +4,14 @@ module Cap.Examples.BabyDro.Registry where
 
 import DA.Set (Set)
 import qualified DA.Set as Set
+import qualified DA.Map as Map
 import Cap.Examples.BabyDro.Dispute
 
--- Entitlement and dispute decisions only. Name credentials live in the CIPs model.
-
 data Membership = Admit Party | Remove Party deriving (Eq, Show)
+data Proposal = MembershipChange Membership | PolicyChange ElectoratePolicy deriving (Eq, Show)
 
 data Motion = Motion with
-    proposal : Membership
+    proposal : Proposal
     supporters : Set Party
   deriving (Eq, Show)
 
@@ -19,63 +19,63 @@ template Consortium
   with
     founder : Party
     members : Set Party
+    policy : ElectoratePolicy
     motions : [Motion]
-    openCases : [Case]
-    ballots : [(Text, Ballot)]
-    rulings : [Ruling]
+    cases : Set (ContractId Case)
   where
     signatory founder
     observer Set.toList members
     ensure Set.size members >= 2
 
-    choice ProposeMembership : ContractId Consortium
+    choice ProposeChange : ContractId Consortium
       with
         proposer : Party
-        proposal : Membership
+        proposal : Proposal
       controller proposer
       do
         assertMsg "only members propose" (Set.member proposer members)
         assertMsg "proposal already open" (not (any (\m -> m.proposal == proposal) motions))
         case proposal of
-          Admit target -> assertMsg "already entitled" (not (Set.member target members))
-          Remove target -> assertMsg "not entitled" (Set.member target members)
+          MembershipChange (Admit target) -> assertMsg "already entitled" (not (Set.member target members))
+          MembershipChange (Remove target) -> assertMsg "not entitled" (Set.member target members)
+          PolicyChange target -> assertMsg "policy already in force" (target /= policy)
         create this with motions = Motion proposal (Set.singleton proposer) :: motions
 
-    choice VoteMembership : ContractId Consortium
+    choice VoteChange : ContractId Consortium
       with
         voter : Party
-        proposal : Membership
+        proposal : Proposal
       controller voter
       do
         assertMsg "only members vote" (Set.member voter members)
         motion <- case filter (\m -> m.proposal == proposal) motions of
           [one] -> pure one
-          _ -> abort "unknown membership proposal"
+          _ -> abort "unknown proposal"
         assertMsg "member already voted" (not (Set.member voter motion.supporters))
         let replacement = motion with supporters = Set.insert voter motion.supporters
         create this with motions = replacement :: filter (\m -> m.proposal /= proposal) motions
 
-    choice EnactMembership : ContractId Consortium
+    choice EnactChange : ContractId Consortium
       with
         enactor : Party
-        proposal : Membership
+        proposal : Proposal
       controller enactor
       do
         assertMsg "only members enact" (Set.member enactor members)
         motion <- case filter (\m -> m.proposal == proposal) motions of
           [one] -> pure one
-          _ -> abort "unknown membership proposal"
+          _ -> abort "unknown proposal"
         assertMsg "two current members must approve" (Set.size (Set.intersection members motion.supporters) >= 2)
-        updated <- case proposal of
-          Admit target -> pure (Set.insert target members)
-          Remove target -> do
-            assertMsg "cannot remove member with an open case" (not (any (\c -> c.firstRegistry == target || c.secondRegistry == target) openCases))
-            assertMsg "cannot remove member with an unfollowed ruling" (not (any (\r -> (r.dispute.firstRegistry == target || r.dispute.secondRegistry == target) && Set.size r.followedBy < 2) rulings))
-            pure (Set.delete target members)
+        (updated, nextPolicy) <- case proposal of
+          MembershipChange (Admit target) -> pure (Set.insert target members, policy)
+          MembershipChange (Remove target) -> pure (Set.delete target members, policy)
+          PolicyChange target -> pure (members, target)
         assertMsg "at least two members remain" (Set.size updated >= 2)
-        create this with members = updated; motions = filter (\m -> m.proposal /= proposal) motions
+        create this with members = updated; policy = nextPolicy; motions = filter (\m -> m.proposal /= proposal) motions
 
-    choice OpenDispute : ContractId Consortium
+    -- The disputer exercises governance once to open a case. All subsequent
+    -- voter transactions act solely on invitations, ballots and the case.
+    choice OpenDispute : (ContractId Consortium, ContractId Case)
       with
         disputer : Party
         caseId : Text
@@ -85,51 +85,44 @@ template Consortium
       controller disputer
       do
         assertMsg "only entitled registries dispute" (Set.member disputer members && Set.member otherRegistry members && disputer /= otherRegistry)
-        assertMsg "reason and name required" (reason /= "" && name /= "")
-        assertMsg "case id already used" (not (any (\c -> c.caseId == caseId) openCases || any (\r -> r.dispute.caseId == caseId) rulings))
-        create this with openCases = Case caseId name disputer otherRegistry reason :: openCases
+        assertMsg "reason and name required" (reason /= "" && name /= "" && caseId /= "")
+        caseCid <- create Case with
+          caseAuthority = founder
+          caseToken = caseId
+          caseId; name; firstRegistry = disputer; secondRegistry = otherRegistry; reason
+          policy; voters = members; eligible = members; ballots = Map.empty; openingCaseCid = None
+        successor <- create this with cases = Set.insert caseCid cases
+        pure (successor, caseCid)
 
-    choice VoteDispute : ContractId Consortium
-      with
-        voter : Party
-        caseId : Text
-        decision : Decision
-      controller voter
-      do
-        assertMsg "only members vote" (Set.member voter members)
-        assertMsg "unknown case" (any (\c -> c.caseId == caseId) openCases)
-        assertMsg "already voted" (not (any (\(id, b) -> id == caseId && b.voter == voter) ballots))
-        create this with ballots = (caseId, Ballot voter decision) :: ballots
-
-    choice IssueRuling : ContractId Consortium
+    choice Consortium_Resolve : ContractId Ruling
       with
         issuer : Party
-        caseId : Text
+        caseCid : ContractId Case
         decision : Decision
       controller issuer
       do
-        assertMsg "only members issue rulings" (Set.member issuer members)
-        disputed <- case filter (\c -> c.caseId == caseId) openCases of
-          [one] -> pure one
-          _ -> abort "unknown case"
-        let supporters = [b.voter | (id, b) <- ballots, id == caseId, b.decision == decision, Set.member b.voter members]
-        assertMsg "two distinct current votes required" (Set.size (Set.fromList supporters) >= 2)
-        create this with
-          openCases = filter (\c -> c.caseId /= caseId) openCases
-          ballots = filter (\(id, _) -> id /= caseId) ballots
-          rulings = Ruling disputed decision Set.empty :: rulings
-
-    -- This is an acknowledgement, not an operation on the CIPs credential.
-    choice AcknowledgeFollow : ContractId Consortium
-      with
-        registry : Party
-        caseId : Text
-      controller registry
-      do
-        ruling <- case filter (\r -> r.dispute.caseId == caseId) rulings of
-          [one] -> pure one
-          _ -> abort "unknown ruling"
-        assertMsg "only case registries follow" (registry == ruling.dispute.firstRegistry || registry == ruling.dispute.secondRegistry)
-        assertMsg "already followed" (not (Set.member registry ruling.followedBy))
-        let updated = ruling with followedBy = Set.insert registry ruling.followedBy
-        create this with rulings = updated :: filter (\r -> r.dispute.caseId /= caseId) rulings
+        disputed <- fetch caseCid
+        let opening = case disputed.openingCaseCid of
+              None -> caseCid
+              Some original -> original
+        assertMsg "case not opened by this consortium chain" (Set.member opening cases)
+        assertMsg "case authority mismatch" (disputed.caseAuthority == founder)
+        assertMsg "only an eligible registry issues rulings" (Set.member issuer members && Set.member issuer disputed.voters)
+        let electorate = case disputed.policy of
+              SnapshotAtOpen -> disputed.eligible
+              CurrentMembership -> Set.intersection disputed.eligible members
+        votes <- forA (Map.toList disputed.ballots) $ \(voter, ballotCid) -> do
+          ballot <- fetch ballotCid
+          assertMsg "foreign ballot in inventory" (ballot.caseAuthority == disputed.caseAuthority && ballot.caseToken == disputed.caseToken && ballot.caseId == disputed.caseId && ballot.voter == voter)
+          pure (voter, ballot.decision)
+        let supporters = Set.fromList [voter | (voter, Some vote) <- votes, vote == decision, Set.member voter electorate]
+        assertMsg "two eligible votes required" (Set.size supporters >= 2)
+        create Ruling with
+          caseAuthority = disputed.caseAuthority
+          caseToken = disputed.caseToken
+          caseId = disputed.caseId
+          name = disputed.name
+          firstRegistry = disputed.firstRegistry
+          secondRegistry = disputed.secondRegistry
+          decision
+          followedBy = Set.empty
