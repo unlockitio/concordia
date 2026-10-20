@@ -22,8 +22,6 @@ packages:
 - ./examples/governance/babydso/demo
 - ./examples/governance/private-majority-vote/impl
 - ./examples/governance/private-majority-vote/demo
-- ./examples/governance/babydro/impl
-- ./examples/governance/babydro/demo
 - ./examples/auctions/sealed-bid-first-price/impl
 - ./examples/auctions/sealed-bid-first-price/impostors
 - ./examples/auctions/sealed-bid-first-price/demo

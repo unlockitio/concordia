@@ -10,15 +10,23 @@ Opening a case consumes `Consortium.OpenDispute` to check both disputing registr
 
 A ruling does **not** change a CIPs name credential. Each affected registry follows by its own action on its own CIPs-owned state; the demo archives the losing registry's credential as that registry and separately records follow acknowledgements. An acknowledgement alone does not prove the external credential action: the journey checks both contract states and asserts unrelated names remain active. Governance cannot verify the existence or truth of a claimed name in CIPs state when opening a dispute; the journey demonstrates the intended ordering.
 
-The source of the name model is in-flight work on the CIPs branch `cip/canton-network-credentials-standard`, consumed as local DAR dependencies, **not** a verified pinned reproducible SHA. Build the CIPs DARs first from `../cips/cn-credentials-standard/demo` with `dpm build --all`. Then, from this repository root:
+BabyDRO is opt-in: its implementation and demo are excluded from Concordia's `multi-package.yaml`, so `dpm build --all`, CI demo tests, and the default sandbox runner do not build or run them. Its manifests still depend on privately accessible CIPs credentials DARs. Access to those DARs is required; Concordia neither vendors them nor provides public access. The source of the name model is in-flight work on the CIPs branch `cip/canton-network-credentials-standard`, **not** a verified pinned reproducible SHA.
+
+With the required CIPs interface and model DARs already available at the paths in `impl/daml.yaml` and `demo/daml.yaml` (the paths assume sibling `cips` and `concordia` directories), build the local prerequisites from the Concordia root. Run the individual BabyDRO builds and test from a directory outside Concordia with no ancestor `multi-package.yaml`: DPM otherwise resolves the root aggregate package list and rejects excluded packages, even with `--package-root`. For example, when the parent directory has no `multi-package.yaml`:
 
 ```sh
+# From the Concordia root:
 dpm build --all
-dpm test --package-root examples/governance/babydro/demo
+CONCORDIA_ROOT="$(pwd)"
+cd ..
+DAML_PACKAGE="$CONCORDIA_ROOT/examples/governance/babydro/impl" dpm build
+DAML_PACKAGE="$CONCORDIA_ROOT/examples/governance/babydro/demo" dpm build
+DAML_PACKAGE="$CONCORDIA_ROOT/examples/governance/babydro/demo" dpm test
+cd "$CONCORDIA_ROOT"
 dpm script --dar examples/governance/babydro/demo/.daml/dist/cap-example-babydro-demo-0.1.0.dar --all --ide-ledger
-./scripts/sandbox-test.sh
+INCLUDE_BABYDRO=1 ./scripts/sandbox-test.sh
 ```
 
-The relative DAR paths assume `cips` and `concordia` are siblings, and cannot resolve in a standalone Concordia checkout. Build the sibling CIPs packages before building Concordia; no CIPs source or DAR is vendored here. For a standalone build, supply the CIPs DARs in the same relative layout (without modifying the sources) or change the local dependency paths deliberately. The sandbox runner uploads the built demo DAR and its transitive dependencies.
+The aggregate build supplies the local Concordia dependency DARs; both BabyDRO manifests also require the listed `lib/` DARs. If the private CIPs DARs are unavailable, leave BabyDRO out of the build. The opt-in sandbox run requires the built BabyDRO demo DAR and uploads it with its transitive dependencies.
 
 The naming proposal is [canton-foundation/cips draft PR #209](https://github.com/canton-foundation/cips/pull/209), which has **no assigned CIP number**. The draft motivates dispute governance; it does not prescribe this architecture. Other demo-local choices include a distinct DRO and three founding registry operators, a fixed two-vote threshold (an off-ledger k-of-n analogue, **not cryptographic threshold signing**), party-based entitlement, a disputer-supplied case ID and reason, and explicit follow acknowledgements. Admission can enlarge the electorate only with the newcomer's consent; the threshold remains two as a local simplification. The admission invitation delegates DRO and current-member signatories' authority, the newcomer creates a target-signed consent visible to members, and a member exercises that consent to enact admission. A stale invitation cannot enact against an archived Consortium. These delegated transitions are not fresh signatures by every current member on every successor.

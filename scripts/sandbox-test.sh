@@ -12,11 +12,14 @@ SANDBOX_LOG="$RUN_DIR/sandbox.log"
 SANDBOX_PID=""
 
 DARS=(
-  "$ROOT/examples/governance/babydro/demo/.daml/dist/cap-example-babydro-demo-0.1.0.dar"
   "$ROOT/examples/governance/private-majority-vote/demo/.daml/dist/cap-example-majority-vote-demo-0.1.0.dar"
   "$ROOT/examples/governance/babydso/demo/.daml/dist/cap-example-babydso-demo-0.1.0.dar"
   "$ROOT/examples/auctions/sealed-bid-first-price/demo/.daml/dist/cap-example-sealed-first-price-demo-0.1.0.dar"
 )
+
+if [[ "${INCLUDE_BABYDRO:-0}" == "1" ]]; then
+  DARS+=("$ROOT/examples/governance/babydro/demo/.daml/dist/cap-example-babydro-demo-0.1.0.dar")
+fi
 
 # "dpm sandbox" forks a java child, so killing the wrapper pid alone leaves the
 # JVM holding the port. The sandbox is started in its own process group and the
