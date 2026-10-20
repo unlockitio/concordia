@@ -17,8 +17,11 @@ import Cap.Examples.BabyDro.Registry
 import Cap.Examples.BabyDro.Dispute
 
 consortium : Party -> Party -> Party -> Script (ContractId Consortium)
-consortium a b c = submit a $ createCmd Consortium with
-  founder = a; members = Set.fromList [a, b, c]; policy = SnapshotAtOpen; motions = []; cases = Set.empty
+consortium a b c = do
+  submitMustFail a $ createCmd Consortium with
+    founder = a; members = Set.fromList [a, b, c]; policy = SnapshotAtOpen; motions = []; cases = Set.empty
+  submit (actAs [a, b, c]) $ createCmd Consortium with
+    founder = a; members = Set.fromList [a, b, c]; policy = SnapshotAtOpen; motions = []; cases = Set.empty
 
 state : Party -> ContractId Consortium -> Script Consortium
 state party cid = do
@@ -33,6 +36,18 @@ approve voter cid proposal = submit voter $ exerciseCmd cid VoteChange with vote
 
 enact : Party -> ContractId Consortium -> Proposal -> Script (ContractId Consortium)
 enact enactor cid proposal = submit enactor $ exerciseCmd cid EnactChange with enactor; proposal
+
+admit : Party -> Party -> ContractId Consortium -> Party -> Script (ContractId Consortium)
+admit a b cid target = do
+  let proposal = MembershipChange (Admit target)
+  proposed <- propose a cid proposal
+  submitMustFail a $ exerciseCmd proposed EnactChange with enactor = a; proposal
+  supported <- approve b proposed proposal
+  submitMustFail a $ exerciseCmd supported EnactChange with enactor = a; proposal
+  invitation <- submit a $ exerciseCmd supported InviteAdmission with inviter = a; target
+  submitMustFail a $ exerciseCmd invitation AdmissionInvitation_Accept
+  consent <- submit target $ exerciseCmd invitation AdmissionInvitation_Accept
+  submit a $ exerciseCmd consent AdmissionConsent_Finalize with enactor = a
 
 change : Party -> Party -> ContractId Consortium -> Proposal -> Script (ContractId Consortium)
 change a b cid proposal = do
@@ -99,7 +114,7 @@ journey = script do
   -- Found the member-governed consortium; one member cannot admit a fourth.
   initial <- consortium a b c
   newcomer <- allocateParty "registry-new"
-  admitted <- change a b initial (MembershipChange (Admit newcomer))
+  admitted <- admit a b initial newcomer
   -- Both CIPs registries issue the same canton.name; unrelated claims also exist.
   first <- register a a "shared" now
   second <- register b claimant "shared" now
@@ -154,13 +169,28 @@ membershipAuthorization = script do
   submitMustFail a $ exerciseCmd membership EnactChange with enactor = a; proposal = MembershipChange (Admit outsider)
   submitMustFail outsider $ exerciseCmd membership VoteChange with voter = outsider; proposal = MembershipChange (Admit outsider)
   supported <- approve b membership (MembershipChange (Admit outsider))
-  admitted <- enact a supported (MembershipChange (Admit outsider))
+  submitMustFail a $ exerciseCmd supported EnactChange with enactor = a; proposal = MembershipChange (Admit outsider)
+  invitation <- submit a $ exerciseCmd supported InviteAdmission with inviter = a; target = outsider
+  submitMustFail a $ exerciseCmd invitation AdmissionInvitation_Accept
+  consent <- submit outsider $ exerciseCmd invitation AdmissionInvitation_Accept
+  admitted <- submit a $ exerciseCmd consent AdmissionConsent_Finalize with enactor = a
+  Some admittedState <- queryContractId outsider admitted
+  Set.member outsider admittedState.members === True
   policyMotion <- propose a admitted (PolicyChange CurrentMembership)
   submitMustFail a $ exerciseCmd policyMotion EnactChange with enactor = a; proposal = PolicyChange CurrentMembership
   policySupported <- approve b policyMotion (PolicyChange CurrentMembership)
   updated <- enact a policySupported (PolicyChange CurrentMembership)
   result <- state a updated
   result.policy === CurrentMembership
+  Set.member outsider result.members === True
+  submitMustFail a $ exerciseCmd updated ProposeChange with proposer = a; proposal = MembershipChange (Remove a)
+  removal <- propose a updated (MembershipChange (Remove outsider))
+  supportedRemoval <- approve b removal (MembershipChange (Remove outsider))
+  removed <- enact a supportedRemoval (MembershipChange (Remove outsider))
+  Some removalState <- queryContractId a removed
+  Set.member outsider removalState.members === False
+  visibleToDeparted <- queryContractId outsider removed
+  visibleToDeparted === None
 
 -- Ballot inventory rejects foreign case CIDs and duplicate voters.
 unauthorizedDispute : Script ()
@@ -194,7 +224,7 @@ caseLifecycleGuards = script do
   c <- allocateParty "member-c"
   d <- allocateParty "member-d"
   initial <- consortium a b c
-  admitted <- change a b initial (MembershipChange (Admit d))
+  admitted <- admit a b initial d
   (openedGovernance, disputed) <- open a admitted b "snapshot"
   removal <- change a b openedGovernance (MembershipChange (Remove c))
   after <- state a removal
@@ -218,7 +248,7 @@ currentElectorate = script do
   c <- allocateParty "member-c"
   d <- allocateParty "member-d"
   initial <- consortium a b c
-  admitted <- change a b initial (MembershipChange (Admit d))
+  admitted <- admit a b initial d
   current <- change a b admitted (PolicyChange CurrentMembership)
   (openedGovernance, disputed) <- open a current b "current"
   invitationA <- invite a disputed a
@@ -239,7 +269,7 @@ currentElectorate = script do
   Some result <- queryContractId a ruling
   result.decision === KeepFirst
 
--- A parallel founder-signed consortium without this opening cannot resolve it;
+-- A parallel jointly signed consortium without this opening cannot resolve it;
 -- the archived predecessor cannot be used either.
 inventoryBoundary : Script ()
 inventoryBoundary = script do
@@ -254,15 +284,17 @@ inventoryBoundary = script do
   invitationB <- invite a oneVoted b
   (two, ballotB) <- accept b oneVoted invitationB
   (twoVoted, _) <- cast b two ballotB KeepFirst
-  parallel <- submit a $ createCmd Consortium with
+  submitMustFail a $ createCmd Consortium with
+    founder = a; members = Set.fromList [a, c]; policy = SnapshotAtOpen; motions = []; cases = Set.empty
+  parallel <- submit (actAs [a, c]) $ createCmd Consortium with
     founder = a; members = Set.fromList [a, c]; policy = SnapshotAtOpen; motions = []; cases = Set.empty
   submitMustFail a $ exerciseCmd parallel Consortium_Resolve with issuer = a; caseCid = twoVoted; decision = KeepFirst
   submitMustFail a $ exerciseCmd initial Consortium_Resolve with issuer = a; caseCid = twoVoted; decision = KeepFirst
   _ <- resolve a successor twoVoted KeepFirst
   pure ()
 
--- The founder can counterfeit a parallel consortium with a copied inventory;
--- this is an explicit trust boundary, not an expected LF-level rejection.
+-- Two cooperating members can counterfeit a parallel consortium with copied inventory;
+-- this is an explicit fork boundary, not an expected LF-level rejection.
 founderTrustBoundary : Script ()
 founderTrustBoundary = script do
   a <- allocateParty "member-a"
@@ -277,7 +309,9 @@ founderTrustBoundary = script do
   (two, ballotB) <- accept b oneVoted invitationB
   (twoVoted, _) <- cast b two ballotB KeepFirst
   real <- state a proper
-  forged <- submit a $ createCmd Consortium with
+  submitMustFail a $ createCmd Consortium with
+    founder = a; members = Set.fromList [a, b]; policy = CurrentMembership; motions = []; cases = real.cases
+  forged <- submit (actAs [a, b]) $ createCmd Consortium with
     founder = a; members = Set.fromList [a, b]; policy = CurrentMembership; motions = []; cases = real.cases
   _ <- resolve a forged twoVoted KeepFirst
   pure ()

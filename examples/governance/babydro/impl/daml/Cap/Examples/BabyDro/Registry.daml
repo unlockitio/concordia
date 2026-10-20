@@ -23,9 +23,8 @@ template Consortium
     motions : [Motion]
     cases : Set (ContractId Case)
   where
-    signatory founder
-    observer Set.toList members
-    ensure Set.size members >= 2
+    signatory Set.toList members
+    ensure Set.size members >= 2 && Set.member founder members
 
     choice ProposeChange : ContractId Consortium
       with
@@ -37,7 +36,9 @@ template Consortium
         assertMsg "proposal already open" (not (any (\m -> m.proposal == proposal) motions))
         case proposal of
           MembershipChange (Admit target) -> assertMsg "already entitled" (not (Set.member target members))
-          MembershipChange (Remove target) -> assertMsg "not entitled" (Set.member target members)
+          MembershipChange (Remove target) -> do
+            assertMsg "not entitled" (Set.member target members)
+            assertMsg "case authority cannot be removed" (target /= founder)
           PolicyChange target -> assertMsg "policy already in force" (target /= policy)
         create this with motions = Motion proposal (Set.singleton proposer) :: motions
 
@@ -55,6 +56,34 @@ template Consortium
         let replacement = motion with supporters = Set.insert voter motion.supporters
         create this with motions = replacement :: filter (\m -> m.proposal /= proposal) motions
 
+    nonconsuming choice InviteAdmission : ContractId AdmissionInvitation
+      with
+        inviter : Party
+        target : Party
+      controller inviter
+      do
+        assertMsg "only members invite" (Set.member inviter members)
+        assertMsg "already entitled" (not (Set.member target members))
+        let proposal = MembershipChange (Admit target)
+        motion <- case filter (\m -> m.proposal == proposal) motions of
+          [one] -> pure one
+          _ -> abort "unknown admission proposal"
+        assertMsg "two current members must approve" (Set.size (Set.intersection members motion.supporters) >= 2)
+        create AdmissionInvitation with members; target; consortiumCid = self
+
+    choice EnactAdmission : ContractId Consortium
+      with
+        target : Party
+      controller target
+      do
+        let proposal = MembershipChange (Admit target)
+        assertMsg "already entitled" (not (Set.member target members))
+        motion <- case filter (\m -> m.proposal == proposal) motions of
+          [one] -> pure one
+          _ -> abort "unknown admission proposal"
+        assertMsg "two current members must approve" (Set.size (Set.intersection members motion.supporters) >= 2)
+        create this with members = Set.insert target members; motions = filter (\m -> m.proposal /= proposal) motions
+
     choice EnactChange : ContractId Consortium
       with
         enactor : Party
@@ -67,8 +96,10 @@ template Consortium
           _ -> abort "unknown proposal"
         assertMsg "two current members must approve" (Set.size (Set.intersection members motion.supporters) >= 2)
         (updated, nextPolicy) <- case proposal of
-          MembershipChange (Admit target) -> pure (Set.insert target members, policy)
-          MembershipChange (Remove target) -> pure (Set.delete target members, policy)
+          MembershipChange (Admit _) -> abort "new member must accept an admission invitation"
+          MembershipChange (Remove target) -> do
+            assertMsg "case authority cannot be removed" (target /= founder)
+            pure (Set.delete target members, policy)
           PolicyChange target -> pure (members, target)
         assertMsg "at least two members remain" (Set.size updated >= 2)
         create this with members = updated; policy = nextPolicy; motions = filter (\m -> m.proposal /= proposal) motions
@@ -126,3 +157,36 @@ template Consortium
           secondRegistry = disputed.secondRegistry
           decision
           followedBy = Set.empty
+
+template AdmissionInvitation
+  with
+    members : Set Party
+    target : Party
+    consortiumCid : ContractId Consortium
+  where
+    signatory Set.toList members
+    observer target
+
+    choice AdmissionInvitation_Accept : ContractId AdmissionConsent
+      controller target
+      do
+        create AdmissionConsent with members; target; consortiumCid
+
+template AdmissionConsent
+  with
+    members : Set Party
+    target : Party
+    consortiumCid : ContractId Consortium
+  where
+    signatory target
+    observer Set.toList members
+
+    choice AdmissionConsent_Finalize : ContractId Consortium
+      with
+        enactor : Party
+      controller enactor
+      do
+        assertMsg "only invited members finalize" (Set.member enactor members)
+        consortium <- fetch consortiumCid
+        assertMsg "invitation membership changed" (consortium.members == members)
+        exercise consortiumCid EnactAdmission with target
