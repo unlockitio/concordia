@@ -1,0 +1,27 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Examples.BabyDro.Dispute where
+
+import DA.Set (Set)
+
+-- Case records and ballots remain under the Consortium authority in LF 2.2.
+data Decision = KeepFirst | KeepSecond deriving (Eq, Show)
+
+data Case = Case with
+    caseId : Text
+    name : Text
+    firstRegistry : Party
+    secondRegistry : Party
+    reason : Text
+  deriving (Eq, Show)
+
+data Ballot = Ballot with
+    voter : Party
+    decision : Decision
+  deriving (Eq, Show)
+
+data Ruling = Ruling with
+    dispute : Case
+    decision : Decision
+    followedBy : Set Party
+  deriving (Eq, Show)
