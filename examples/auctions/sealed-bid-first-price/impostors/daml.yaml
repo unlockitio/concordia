@@ -4,7 +4,7 @@
 # its security claims. They live in their own package because it defines templates
 # and must not depend on daml-script, which would otherwise be dragged onto any
 # ledger the DAR is uploaded to.
-sdk-version: 3.4.11
+sdk-version: 3.5.11
 name: cap-example-sealed-first-price-impostors
 version: 0.1.0
 source: daml
@@ -16,4 +16,4 @@ data-dependencies:
 - ../../../../lib/splice-api-token-holding-v2-1.0.0.dar
 - ../../../../lib/splice-api-token-allocation-v2-1.0.0.dar
 build-options:
-  - --target=2.1
+  - --target=2.2

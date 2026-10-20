@@ -129,7 +129,7 @@ decisions.
 ## Building
 
 Concordia builds with [`dpm`](https://docs.daml.com) (the Daml Project Manager),
-**SDK 3.4.11**. From the repository root:
+**SDK 3.5.11**. From the repository root:
 
 ```bash
 dpm build --all      # every package in dependency order, per multi-package.yaml

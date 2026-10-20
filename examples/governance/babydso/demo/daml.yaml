@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
-sdk-version: 3.4.11
+sdk-version: 3.5.11
 name: cap-example-babydso-demo
 version: 0.1.0
 source: daml
@@ -22,4 +22,4 @@ data-dependencies:
 - ../impl/governance/.daml/dist/cap-example-babydso-governance-0.1.0.dar
 - ../impl/action/.daml/dist/cap-example-babydso-action-0.1.0.dar
 build-options:
-  - --target=2.1
+  - --target=2.2

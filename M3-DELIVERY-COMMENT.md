@@ -19,7 +19,7 @@ M3 expands `cap-governance` with helpers that governance apps need: reading weig
 
 ## Milestone verification
 
-Daml SDK 3.4.11 via `dpm`, from the repository root. Run instructions, in memory and on a sandbox, are in [`README.md#running-the-demos`](https://github.com/unlockitio/concordia/blob/dev/README.md#running-the-demos).
+Daml SDK 3.5.11 via `dpm`, from the repository root. Run instructions, in memory and on a sandbox, are in [`README.md#running-the-demos`](https://github.com/unlockitio/concordia/blob/dev/README.md#running-the-demos).
 
 | Package | Check | Expected output | What it covers |
 | --- | --- | --- | --- |

@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
-sdk-version: 3.4.11
+sdk-version: 3.5.11
 name: cap-auctions-bid-v1
 version: 0.1.0
 source: daml
@@ -15,4 +15,4 @@ data-dependencies:
 - ../../../cap-core/types/.daml/dist/cap-core-types-0.1.0.dar
 - ../../../cap-core/utils/.daml/dist/cap-core-utils-0.1.0.dar
 build-options:
-  - --target=2.1
+  - --target=2.2
