@@ -6,6 +6,7 @@ import DA.Set (Set)
 import qualified DA.Set as Set
 import DA.Map (Map)
 import qualified DA.Map as Map
+import Canton.Network.Credentials.V1 (Credential)
 
 
 -- These policies are local to the demo, not a rule of the CIPs name model.
@@ -20,6 +21,8 @@ template NameDispute
     name : Text
     firstRegistry : Party
     secondRegistry : Party
+    firstCredential : ContractId Credential
+    secondCredential : ContractId Credential
     reason : Text
     policy : ElectoratePolicy
     voters : Set Party
@@ -30,6 +33,10 @@ template NameDispute
     signatory caseAuthority
     observer Set.toList voters
     ensure caseId /= "" && name /= "" && reason /= "" && firstRegistry /= secondRegistry
+
+    choice NameDispute_Close : ()
+      controller caseAuthority
+      do pure ()
 
     -- The case authority pre-signs an invitation. Accepting it supplies that
     -- authority to the voter's registration without a Consortium exercise.

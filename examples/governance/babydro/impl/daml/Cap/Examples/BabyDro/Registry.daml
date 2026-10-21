@@ -5,9 +5,26 @@ module Cap.Examples.BabyDro.Registry where
 import DA.Set (Set)
 import qualified DA.Set as Set
 import qualified DA.Map as Map
+import DA.NonEmpty (NonEmpty(..))
+import Canton.Network.Credentials.DemoNames (canonicalName, credentialHasName, hasPartySubject)
+import Canton.Network.Credentials.V1
 import Cap.Examples.BabyDro.Dispute
 
 data Membership = Admit Party | Remove Party deriving (Eq, Show)
+
+data ActiveCase = ActiveCase with
+  opening : ContractId NameDispute
+  firstRegistry : Party
+  secondRegistry : Party
+  name : Text
+  firstCredential : ContractId Credential
+  secondCredential : ContractId Credential
+ deriving (Eq, Ord, Show)
+
+matchesClaim : Text -> Party -> CredentialView -> Bool
+matchesClaim name registry credential =
+  canonicalName name && credentialHasName name credential && hasPartySubject credential &&
+  credential.anchorers == NonEmpty registry []
 
 -- The DRO signs the exact founding terms. Each founder accepts separately;
 -- accepted founders sign each successor and therefore authorize the final mint.
@@ -44,7 +61,7 @@ template Consortium
     consortiumId : Text
     members : Set Party
     policy : ElectoratePolicy
-    cases : Set (ContractId NameDispute)
+    cases : Set ActiveCase
   where
     signatory dro, Set.toList members
     ensure consortiumId /= "" && Set.size members >= 2 && not (Set.member dro members)
@@ -83,6 +100,7 @@ template Consortium
         motion <- fetch authorizedMotion
         assertMsg "wrong motion" (motion.consortiumCid == self && motion.change == Remove target && Set.size motion.supporters >= 2)
         assertMsg "at least two members remain" (Set.member target members && Set.size members > 2)
+        assertMsg "registry participates in an active dispute" (all (\activeCase -> target /= activeCase.firstRegistry && target /= activeCase.secondRegistry) (Set.toList cases))
         create this with members = Set.delete target members
 
     choice ApplyPolicy : ContractId Consortium
@@ -117,16 +135,24 @@ template Consortium
         name : Text
         otherRegistry : Party
         reason : Text
+        firstCredential : ContractId Credential
+        secondCredential : ContractId Credential
       controller disputer
       do
         assertMsg "only entitled registries dispute" (Set.member disputer members && Set.member otherRegistry members && disputer /= otherRegistry)
         assertMsg "reason and name required" (reason /= "" && name /= "" && caseId /= "")
+        assertMsg "distinct credential IDs required" (firstCredential /= secondCredential)
+        firstView <- view <$> fetch firstCredential
+        secondView <- view <$> fetch secondCredential
+        assertMsg "first credential does not match the claim and registry" (matchesClaim name disputer firstView)
+        assertMsg "second credential does not match the claim and registry" (matchesClaim name otherRegistry secondView)
         caseCid <- create NameDispute with
           caseAuthority = dro
           caseToken = caseId
           caseId; name; firstRegistry = disputer; secondRegistry = otherRegistry; reason
+          firstCredential; secondCredential
           policy; voters = members; eligible = members; ballots = Map.empty; openingCaseCid = None
-        successor <- create this with cases = Set.insert caseCid cases
+        successor <- create this with cases = Set.insert (ActiveCase caseCid disputer otherRegistry name firstCredential secondCredential) cases
         pure (successor, caseCid)
 
     choice Consortium_Resolve : ContractId Ruling
@@ -140,7 +166,8 @@ template Consortium
         let opening = case disputed.openingCaseCid of
               None -> caseCid
               Some original -> original
-        assertMsg "case not opened by this consortium chain" (Set.member opening cases)
+        let activeCase = ActiveCase opening disputed.firstRegistry disputed.secondRegistry disputed.name disputed.firstCredential disputed.secondCredential
+        assertMsg "case not opened by this consortium chain" (Set.member activeCase cases)
         assertMsg "case authority mismatch" (disputed.caseAuthority == dro)
         assertMsg "only the DRO issues rulings" (issuer == dro)
         let electorate = case disputed.policy of
@@ -151,7 +178,13 @@ template Consortium
           assertMsg "foreign ballot in inventory" (ballot.caseAuthority == disputed.caseAuthority && ballot.caseToken == disputed.caseToken && ballot.caseId == disputed.caseId && ballot.voter == voter)
           pure (voter, ballot.decision)
         let supporters = Set.fromList [voter | (voter, Some vote) <- votes, vote == decision, Set.member voter electorate]
-        assertMsg "two eligible votes required" (Set.size supporters >= 2)
+        let opposite = case decision of KeepFirst -> KeepSecond; KeepSecond -> KeepFirst
+        let opposing = Set.fromList [voter | (voter, Some vote) <- votes, vote == opposite, Set.member voter electorate]
+        assertMsg "exactly one decision must qualify" (Set.size supporters >= 2 && Set.size opposing < 2)
+        let losingCredential = case decision of KeepFirst -> disputed.secondCredential; KeepSecond -> disputed.firstCredential
+        _ <- exercise losingCredential Credential_ArchiveAsAnchorers
+        _ <- exercise caseCid NameDispute_Close
+        _ <- create this with cases = Set.delete activeCase cases
         create Ruling with
           caseAuthority = disputed.caseAuthority
           caseToken = disputed.caseToken

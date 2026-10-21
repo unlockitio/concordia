@@ -65,9 +65,13 @@ changePolicy a b cid targetPolicy = do
   approved <- policyVote b motion
   submit a $ exerciseCmd approved Policy_Enact with enactor = a
 
-open : Party -> ContractId Consortium -> Party -> Text -> Script (ContractId Consortium, ContractId NameDispute)
-open disputer cid otherRegistry caseId = submit disputer $ exerciseCmd cid OpenDispute with
-  disputer; caseId; name = "shared"; otherRegistry; reason = "competing claims"
+open : Party -> ContractId Consortium -> Party -> Text -> ContractId DemoCredential -> ContractId DemoCredential -> Script (ContractId Consortium, ContractId NameDispute)
+open disputer cid otherRegistry caseId first second = do
+  Some otherDisclosure <- queryDisclosure otherRegistry second
+  submit (actAs disputer <> disclose otherDisclosure) $ exerciseCmd cid OpenDispute with
+    disputer; caseId; name = "shared"; otherRegistry; reason = "competing claims"
+    firstCredential = toInterfaceContractId @Credential first
+    secondCredential = toInterfaceContractId @Credential second
 
 voteDispute : Party -> Party -> ContractId NameDispute -> Decision -> Script (ContractId NameDispute)
 voteDispute dro voter cid decision = do
@@ -122,21 +126,68 @@ journey = script do
   second <- register b claimant "shared" now
   unrelatedA <- register a a "unrelated" now
   unrelatedB <- register b claimant "another" now
-  (opened, disputed) <- open a admitted b "case-one"
+  (opened, disputed) <- open a admitted b "case-one" first second
   Some nameDispute <- queryContractId a disputed
   nameDispute.name === "shared"
   nameDispute.firstRegistry === a
   nameDispute.secondRegistry === b
+  Some losingDisclosureAtOpen <- queryDisclosure b second
+  submitMustFail (actAs a <> disclose losingDisclosureAtOpen) $ exerciseCmd opened OpenDispute with
+    disputer = a; caseId = "duplicate"; name = "shared"; otherRegistry = b; reason = "same cid"
+    firstCredential = toInterfaceContractId @Credential first
+    secondCredential = toInterfaceContractId @Credential first
+  submitMustFail (actAs a <> disclose losingDisclosureAtOpen) $ exerciseCmd opened OpenDispute with
+    disputer = a; caseId = "wrong-other"; name = "shared"; otherRegistry = c; reason = "wrong registry"
+    firstCredential = toInterfaceContractId @Credential first
+    secondCredential = toInterfaceContractId @Credential second
+  submitMustFail (actAs a <> disclose losingDisclosureAtOpen) $ exerciseCmd opened OpenDispute with
+    disputer = a; caseId = "wrong-name"; name = "another"; otherRegistry = b; reason = "wrong name"
+    firstCredential = toInterfaceContractId @Credential first
+    secondCredential = toInterfaceContractId @Credential second
+  submitMustFail (actAs a <> disclose losingDisclosureAtOpen) $ exerciseCmd opened OpenDispute with
+    disputer = a; caseId = "wrong-anchor"; name = "shared"; otherRegistry = b; reason = "wrong anchor"
+    firstCredential = toInterfaceContractId @Credential second
+    secondCredential = toInterfaceContractId @Credential first
+  submitMustFail (actAs a <> disclose losingDisclosureAtOpen) $ exerciseCmd opened OpenDispute with
+    disputer = a; caseId = "wrong-record"; name = "shared"; otherRegistry = b; reason = "unrelated"
+    firstCredential = toInterfaceContractId @Credential first
+    secondCredential = toInterfaceContractId @Credential unrelatedB
+  anotherFirst <- register a a "shared" now
+  anotherSecond <- register b claimant "shared" now
+  (twiceOpened, secondCase) <- open a opened b "case-two" anotherFirst anotherSecond
+  Some twoCases <- queryContractId dro twiceOpened
+  Set.size twoCases.cases === 2
+  unrelatedRemoval <- membership a twiceOpened (Remove newcomer)
+  unrelatedApproved <- membershipVote c unrelatedRemoval
+  unrelatedSuccessor <- submit a $ exerciseCmd unrelatedApproved Membership_Enact with enactor = a
+  Some reduced <- queryContractId dro unrelatedSuccessor
+  Set.member newcomer reduced.members === False
+  newcomerAgain <- admit a c unrelatedSuccessor newcomer
+  Some restored <- queryContractId dro newcomerAgain
+  Set.size restored.cases === 2
+  removalA <- membership c newcomerAgain (Remove a)
+  approvedA <- membershipVote newcomer removalA
+  removalB <- membership c newcomerAgain (Remove b)
+  approvedB <- membershipVote newcomer removalB
   one <- voteDispute dro a disputed KeepFirst
-  submitMustFail dro $ exerciseCmd opened Consortium_Resolve with issuer = dro; caseCid = one; decision = KeepFirst
+  submitMustFail dro $ exerciseCmd newcomerAgain Consortium_Resolve with issuer = dro; caseCid = one; decision = KeepFirst
   two <- voteDispute dro c one KeepFirst
-  ruling <- submit dro $ exerciseCmd opened Consortium_Resolve with issuer = dro; caseCid = two; decision = KeepFirst
+  opposing <- voteDispute dro b two KeepSecond
+  submitMustFail dro $ exerciseCmd newcomerAgain Consortium_Resolve with issuer = dro; caseCid = opposing; decision = KeepSecond
+  submitMustFail dro $ exerciseCmd newcomerAgain Consortium_Resolve with issuer = dro; caseCid = one; decision = KeepFirst
+  submitMustFail c $ exerciseCmd approvedA Membership_Enact with enactor = c
+  submitMustFail c $ exerciseCmd approvedB Membership_Enact with enactor = c
+  Some losingDisclosure <- queryDisclosure b second
+  ruling <- submit (actAs dro <> disclose losingDisclosure) $ exerciseCmd newcomerAgain Consortium_Resolve with issuer = dro; caseCid = opposing; decision = KeepFirst
+  submitMustFail (actAs dro <> disclose losingDisclosure) $ exerciseCmd newcomerAgain Consortium_Resolve with issuer = dro; caseCid = opposing; decision = KeepFirst
+  submitMustFail (actAs dro <> disclose losingDisclosure) $ exerciseCmd newcomerAgain Consortium_Resolve with issuer = dro; caseCid = disputed; decision = KeepFirst
   isActive <- active a first
   isActive === True
   isActive <- active b second
-  isActive === True
+  isActive === False
+  caseAlive <- queryContractId dro opposing
+  caseAlive === None
   followedA <- submit a $ exerciseCmd ruling Ruling_Follow with registry = a
-  _ <- submit b $ exerciseCmd (toInterfaceContractId @Credential second) Credential_ArchiveAsAnchorers
   followedB <- submit b $ exerciseCmd followedA Ruling_Follow with registry = b
   Some finalRuling <- queryContractId a followedB
   Set.size finalRuling.followedBy === 2
@@ -146,6 +197,123 @@ journey = script do
   isActive === True
   isActive <- active b unrelatedB
   isActive === True
+  current <- query @Consortium dro
+  let [remainingCid] = [cid | (cid, value) <- current, Set.size value.cases == 1 && value.consortiumId == "consortium-one"]
+  currentRemoval <- membership c remainingCid (Remove b)
+  votedRemoval <- membershipVote newcomer currentRemoval
+  submitMustFail c $ exerciseCmd votedRemoval Membership_Enact with enactor = c
+  secondOne <- voteDispute dro c secondCase KeepFirst
+  secondTwo <- voteDispute dro newcomer secondOne KeepFirst
+  Some secondDisclosure <- queryDisclosure b anotherSecond
+  _ <- submit (actAs dro <> disclose secondDisclosure) $ exerciseCmd remainingCid Consortium_Resolve with issuer = dro; caseCid = secondTwo; decision = KeepFirst
+  current <- query @Consortium dro
+  let [resolvedCid] = [cid | (cid, value) <- current, Set.size value.cases == 0 && value.consortiumId == "consortium-one"]
+  removed <- remove c newcomer resolvedCid b
+  Some afterRemoval <- queryContractId dro removed
+  Set.member b afterRemoval.members === False
+
+keepSecond : Script ()
+keepSecond = script do
+  dro <- allocateParty "second-dro"
+  a <- allocateParty "second-a"
+  b <- allocateParty "second-b"
+  c <- allocateParty "second-c"
+  now <- getTime
+  initial <- consortium dro "second-case" a b c
+  current <- changePolicy a b initial CurrentMembership
+  first <- register a a "shared" now
+  second <- register b b "shared" now
+  (opened, disputed) <- open a current b "keep-second" first second
+  one <- voteDispute dro b disputed KeepSecond
+  two <- voteDispute dro c one KeepSecond
+  Some disclosure <- queryDisclosure a first
+  _ <- submit (actAs dro <> disclose disclosure) $ exerciseCmd opened Consortium_Resolve with issuer = dro; caseCid = two; decision = KeepSecond
+  isActive <- active a first
+  isActive === False
+  isActive <- active b second
+  isActive === True
+
+currentElectorate : Script ()
+currentElectorate = script do
+  dro <- allocateParty "electorate-dro"
+  a <- allocateParty "electorate-a"
+  b <- allocateParty "electorate-b"
+  c <- allocateParty "electorate-c"
+  d <- allocateParty "electorate-d"
+  now <- getTime
+  initial <- consortium dro "electorate-case" a b c
+  current <- changePolicy a b initial CurrentMembership
+  first <- register a a "shared" now
+  second <- register b b "shared" now
+  (opened, disputed) <- open a current b "electorate" first second
+  one <- voteDispute dro c disputed KeepFirst
+  removed <- remove a b opened c
+  Some stillOpen <- queryContractId dro removed
+  Set.size stillOpen.cases === 1
+  submitMustFail dro $ exerciseCmd removed Consortium_Resolve with issuer = dro; caseCid = one; decision = KeepFirst
+  two <- voteDispute dro a one KeepFirst
+  Some disclosure <- queryDisclosure b second
+  submitMustFail (actAs dro <> disclose disclosure) $ exerciseCmd removed Consortium_Resolve with issuer = dro; caseCid = two; decision = KeepFirst
+  admitted <- admit a b removed d
+  submitMustFail d $ exerciseCmd two NameDispute_Invite with voter = d
+  three <- voteDispute dro b two KeepFirst
+  _ <- submit (actAs dro <> disclose disclosure) $ exerciseCmd admitted Consortium_Resolve with issuer = dro; caseCid = three; decision = KeepFirst
+  isActive <- active b second
+  isActive === False
+
+failedArchive : Script ()
+failedArchive = script do
+  dro <- allocateParty "archive-dro"
+  a <- allocateParty "archive-a"
+  b <- allocateParty "archive-b"
+  c <- allocateParty "archive-c"
+  now <- getTime
+  initial <- consortium dro "archive-case" a b c
+  first <- register a a "shared" now
+  second <- register b b "shared" now
+  (opened, disputed) <- open a initial b "archive-failure" first second
+  one <- voteDispute dro a disputed KeepFirst
+  two <- voteDispute dro c one KeepFirst
+  Some disclosure <- queryDisclosure b second
+  _ <- submit b $ exerciseCmd (toInterfaceContractId @Credential second) Credential_ArchiveAsAnchorers
+  submitMustFail (actAs dro <> disclose disclosure) $ exerciseCmd opened Consortium_Resolve with issuer = dro; caseCid = two; decision = KeepFirst
+  Some stillOpen <- queryContractId dro opened
+  Set.size stillOpen.cases === 1
+  Some stillDisputed <- queryContractId dro two
+  stillDisputed.firstRegistry === a
+  isActive <- active a first
+  isActive === True
+  removal <- membership c opened (Remove b)
+  approved <- membershipVote a removal
+  submitMustFail c $ exerciseCmd approved Membership_Enact with enactor = c
+
+conflicted : Script ()
+conflicted = script do
+  dro <- allocateParty "conflict-dro"
+  a <- allocateParty "conflict-a"
+  b <- allocateParty "conflict-b"
+  c <- allocateParty "conflict-c"
+  d <- allocateParty "conflict-d"
+  now <- getTime
+  initial <- consortium dro "conflict-case" a b c
+  admitted <- admit a b initial d
+  first <- register a a "shared" now
+  second <- register b b "shared" now
+  (opened, disputed) <- open a admitted b "conflict" first second
+  one <- voteDispute dro a disputed KeepFirst
+  two <- voteDispute dro c one KeepFirst
+  three <- voteDispute dro b two KeepSecond
+  four <- voteDispute dro d three KeepSecond
+  Some firstDisclosure <- queryDisclosure a first
+  Some secondDisclosure <- queryDisclosure b second
+  submitMustFail (actAs dro <> discloseMany [firstDisclosure, secondDisclosure]) $ exerciseCmd opened Consortium_Resolve with issuer = dro; caseCid = four; decision = KeepFirst
+  submitMustFail (actAs dro <> discloseMany [firstDisclosure, secondDisclosure]) $ exerciseCmd opened Consortium_Resolve with issuer = dro; caseCid = four; decision = KeepSecond
+  isActive <- active a first
+  isActive === True
+  isActive <- active b second
+  isActive === True
+  Some stillOpen <- queryContractId dro opened
+  Set.size stillOpen.cases === 1
 
 motionIsolation : Script ()
 motionIsolation = script do
@@ -187,4 +355,7 @@ motionIsolation = script do
   Some unchanged <- queryContractId dro parallel
   unchanged.policy === SnapshotAtOpen
   Set.member a unchanged.members === True
-  submitMustFail dro $ exerciseCmd initial OpenDispute with disputer = a; caseId = "stale"; name = "shared"; otherRegistry = b; reason = "claim"
+  now <- getTime
+  first <- register a a "shared" now
+  second <- register b b "shared" now
+  submitMustFail dro $ exerciseCmd initial OpenDispute with disputer = a; caseId = "stale"; name = "shared"; otherRegistry = b; reason = "claim"; firstCredential = toInterfaceContractId @Credential first; secondCredential = toInterfaceContractId @Credential second
