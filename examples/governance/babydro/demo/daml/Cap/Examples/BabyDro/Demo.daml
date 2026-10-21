@@ -236,6 +236,32 @@ keepSecond = script do
   isActive <- active b second
   isActive === True
 
+checkedCaseAuthority : Script ()
+checkedCaseAuthority = script do
+  dro <- allocateParty "checked-dro"
+  foreignDro <- allocateParty "foreign-dro"
+  a <- allocateParty "checked-a"
+  b <- allocateParty "checked-b"
+  c <- allocateParty "checked-c"
+  now <- getTime
+  initial <- consortium dro "checked-case" a b c
+  first <- register a a "shared" now
+  second <- register b b "shared" now
+  (_, disputed) <- open a initial b "same-token" first second
+  invitation <- submit dro $ exerciseCmd disputed NameDispute_Invite with voter = c
+  foreign <- submit foreignDro $ createCmd NameDispute with
+    caseAuthority = foreignDro; caseToken = "same-token"; caseId = "same-token"
+    name = "shared"; firstRegistry = a; secondRegistry = b
+    firstCredential = toInterfaceContractId @Credential first
+    secondCredential = toInterfaceContractId @Credential second
+    reason = "foreign authority"; policy = SnapshotAtOpen
+    voters = Set.fromList [a, b, c]; eligible = Set.fromList [a, b, c]
+    ballots = mempty; openingCaseCid = None
+  submitMustFail c $ exerciseCmd invitation DisputeInvitation_Accept with caseCid = foreign
+  (registered, _) <- submit c $ exerciseCmd invitation DisputeInvitation_Accept with caseCid = disputed
+  Some accepted <- queryContractId dro registered
+  Set.member c accepted.voters === True
+
 currentElectorate : Script ()
 currentElectorate = script do
   dro <- allocateParty "electorate-dro"

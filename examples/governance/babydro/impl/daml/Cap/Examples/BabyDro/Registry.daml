@@ -9,6 +9,7 @@ import qualified DA.Set as Set
 import qualified DA.Map as Map
 import DA.NonEmpty (NonEmpty(..))
 import Splice.Api.Token.MetadataV1 (emptyMetadata, ExtraArgs (..), emptyChoiceContext)
+import Splice.Util (fetchChecked)
 import Cap.Core.Types (AuthenticKey (..), Snapshot (..), ExecutionAction (..), ExecutionCore (..))
 import Cap.Governance.ActionV1
 import Cap.Governance.ExecutableV1
@@ -169,13 +170,12 @@ template Consortium
         decision : Decision
       controller issuer
       do
-        disputed <- fetch caseCid
+        disputed <- fetchChecked dro caseCid
         let opening = case disputed.openingCaseCid of
               None -> caseCid
               Some original -> original
         let activeCase = ActiveCase opening disputed.firstRegistry disputed.secondRegistry disputed.name disputed.firstCredential disputed.secondCredential
         assertMsg "case not opened by this consortium chain" (Set.member activeCase cases)
-        assertMsg "case authority mismatch" (disputed.caseAuthority == dro)
         assertMsg "only the DRO issues rulings" (issuer == dro)
         let electorate = case disputed.policy of
               SnapshotAtOpen -> disputed.eligible

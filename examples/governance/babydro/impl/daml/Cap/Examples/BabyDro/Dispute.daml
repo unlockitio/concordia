@@ -7,6 +7,7 @@ import qualified DA.Set as Set
 import DA.Map (Map)
 import qualified DA.Map as Map
 import Canton.Network.Credentials.V1 (Credential)
+import Splice.Util (HasCheckedFetch (..), fetchChecked)
 
 
 -- These policies are local to the demo, not a rule of the CIPs name model.
@@ -64,6 +65,9 @@ template NameDispute
               Some original -> Some original
         create this with ballots = Map.insert voter replacement ballots; openingCaseCid = opening
 
+instance HasCheckedFetch NameDispute Party where
+  contractGroupId disputed = disputed.caseAuthority
+
 template DisputeInvitation
   with
     caseAuthority : Party
@@ -79,8 +83,8 @@ template DisputeInvitation
         caseCid : ContractId NameDispute
       controller voter
       do
-        disputed <- fetch caseCid
-        assertMsg "invitation belongs to another case" (disputed.caseAuthority == caseAuthority && disputed.caseToken == caseToken && disputed.caseId == caseId)
+        disputed <- fetchChecked caseAuthority caseCid
+        assertMsg "invitation belongs to another case" (disputed.caseToken == caseToken && disputed.caseId == caseId)
         assertMsg "voter already registered" (Map.lookup voter disputed.ballots == None)
         ballotCid <- create Ballot with caseAuthority; caseToken; caseId; voter; decision = None
         updated <- exercise caseCid NameDispute_RegisterBallot with voter; previous = None; replacement = ballotCid
