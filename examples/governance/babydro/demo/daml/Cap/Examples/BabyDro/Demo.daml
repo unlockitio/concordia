@@ -108,7 +108,7 @@ active party cid = do
 -- CIPs owns credential state. Governance only issues a ruling and acknowledgements.
 journey : Script ()
 journey = script do
-  dro <- allocateParty "dispute-resolution-operator"
+  dro <- allocateParty "decentralized-registries-operator"
   a <- allocateParty "registry-a"
   b <- allocateParty "registry-b"
   c <- allocateParty "registry-c"
@@ -168,7 +168,7 @@ journey = script do
 -- Membership and policy both require two CURRENT supporters.
 membershipAuthorization : Script ()
 membershipAuthorization = script do
-  dro <- allocateParty "dispute-resolution-operator"
+  dro <- allocateParty "decentralized-registries-operator"
   a <- allocateParty "member-a"
   b <- allocateParty "member-b"
   c <- allocateParty "member-c"
@@ -220,7 +220,7 @@ membershipAuthorization = script do
 -- Ballot inventory rejects foreign case CIDs and duplicate voters.
 unauthorizedDispute : Script ()
 unauthorizedDispute = script do
-  dro <- allocateParty "dispute-resolution-operator"
+  dro <- allocateParty "decentralized-registries-operator"
   a <- allocateParty "member-a"
   b <- allocateParty "member-b"
   c <- allocateParty "member-c"
@@ -248,7 +248,7 @@ unauthorizedDispute = script do
 -- Removing a voter after opening does not retarget a snapshot case.
 caseLifecycleGuards : Script ()
 caseLifecycleGuards = script do
-  dro <- allocateParty "dispute-resolution-operator"
+  dro <- allocateParty "decentralized-registries-operator"
   a <- allocateParty "member-a"
   b <- allocateParty "member-b"
   c <- allocateParty "member-c"
@@ -273,7 +273,7 @@ caseLifecycleGuards = script do
 -- a later policy change leaves this case's frozen policy untouched.
 currentElectorate : Script ()
 currentElectorate = script do
-  dro <- allocateParty "dispute-resolution-operator"
+  dro <- allocateParty "decentralized-registries-operator"
   a <- allocateParty "member-a"
   b <- allocateParty "member-b"
   c <- allocateParty "member-c"
@@ -304,7 +304,7 @@ currentElectorate = script do
 -- the archived predecessor cannot be used either.
 inventoryBoundary : Script ()
 inventoryBoundary = script do
-  dro <- allocateParty "dispute-resolution-operator"
+  dro <- allocateParty "decentralized-registries-operator"
   a <- allocateParty "member-a"
   b <- allocateParty "member-b"
   c <- allocateParty "member-c"
@@ -329,7 +329,7 @@ inventoryBoundary = script do
 -- inventory; this is an explicit fork boundary, not an LF-level rejection.
 droTrustBoundary : Script ()
 droTrustBoundary = script do
-  dro <- allocateParty "dispute-resolution-operator"
+  dro <- allocateParty "decentralized-registries-operator"
   a <- allocateParty "member-a"
   b <- allocateParty "member-b"
   c <- allocateParty "member-c"
