@@ -2,10 +2,17 @@
 
 module Cap.Examples.BabyDro.Registry where
 
+import Prelude hiding (Action)
+
 import DA.Set (Set)
 import qualified DA.Set as Set
 import qualified DA.Map as Map
 import DA.NonEmpty (NonEmpty(..))
+import Splice.Api.Token.MetadataV1 (emptyMetadata, ExtraArgs (..), emptyChoiceContext)
+import Cap.Core.Types (AuthenticKey (..), Snapshot (..), ExecutionAction (..), ExecutionCore (..))
+import Cap.Governance.ActionV1
+import Cap.Governance.ExecutableV1
+import Cap.Governance.Utils (mergeSnapshots, requireSameKeys)
 import Canton.Network.Credentials.DemoNames (canonicalName, credentialHasName, hasPartySubject)
 import Canton.Network.Credentials.V1
 import Cap.Examples.BabyDro.Dispute
@@ -182,7 +189,26 @@ template Consortium
         let opposing = Set.fromList [voter | (voter, Some vote) <- votes, vote == opposite, Set.member voter electorate]
         assertMsg "exactly one decision must qualify" (Set.size supporters >= 2 && Set.size opposing < 2)
         let losingCredential = case decision of KeepFirst -> disputed.secondCredential; KeepSecond -> disputed.firstCredential
-        _ <- exercise losingCredential Credential_ArchiveAsAnchorers
+        actionCid <- create ArchiveClaimAction with dro; members; losingCredential
+        now <- getTime
+        authorized <- exercise (toInterfaceContractId @Action actionCid) Action_AuthorizeExecution with
+          actors = [dro]
+          executionCore = ExecutionCore with
+            authorities = Set.singleton dro
+            availableActions = Map.fromList [(EA_Execute, [[dro]])]
+            opensAt = now
+            cancelAfter = now
+            expiresAt = None
+            meta = emptyMetadata
+          outcome = None
+          snapshots = Map.empty
+          extraArgs = ExtraArgs with context = emptyChoiceContext; meta = emptyMetadata
+        let [executionCid] = authorized.executionCids
+        _ <- exercise executionCid Executable_Execute with
+          actors = [dro]
+          targetCids = Map.fromList [(claimKey dro, coerceContractId losingCredential)]
+          extraArgs = ExtraArgs with context = emptyChoiceContext; meta = emptyMetadata
+        archive actionCid
         _ <- exercise caseCid NameDispute_Close
         _ <- create this with cases = Set.delete activeCase cases
         create Ruling with
@@ -194,6 +220,57 @@ template Consortium
           secondRegistry = disputed.secondRegistry
           decision
           followedBy = Set.empty
+
+claimKey : Party -> AuthenticKey
+claimKey dro = AuthenticKey with authorities = Set.singleton dro; id = "losing-credential"
+
+template ArchiveClaimAction
+  with
+    dro : Party
+    members : Set Party
+    losingCredential : ContractId Credential
+  where
+    signatory dro, Set.toList members
+
+    interface instance Action for ArchiveClaimAction where
+      view = ActionView with
+        authorizers = [[dro]]
+        targets = Map.fromList [(claimKey dro, Snapshot with state = None; cid = Some (coerceContractId losingCredential))]
+        meta = emptyMetadata
+
+      action_readStateImpl key cid = do
+        assertMsg "wrong credential target" (key == claimKey dro && cid == coerceContractId losingCredential)
+        _ <- fetch losingCredential
+        pure None
+
+      action_authorizeExecutionImpl _ arg = do
+        snapshots <- mergeSnapshots (view (toInterface @Action this)).targets arg.snapshots
+        executionCid <- create ArchiveClaimExecution with dro; members; losingCredential; core = arg.executionCore; snapshots
+        pure Action_AuthorizeExecutionResult with
+          executionCids = [toInterfaceContractId executionCid]
+          meta = emptyMetadata
+
+template ArchiveClaimExecution
+  with
+    dro : Party
+    members : Set Party
+    losingCredential : ContractId Credential
+    core : ExecutionCore
+    snapshots : Map.Map AuthenticKey Snapshot
+  where
+    signatory dro, Set.toList members
+
+    interface instance Executable for ArchiveClaimExecution where
+      view = ExecutableView with executionCore = core; snapshots; outcome = None
+
+      executable_cancelImpl _ = abort "claim execution cannot be cancelled"
+
+      executable_executeImpl targetCids _ = do
+        requireSameKeys snapshots targetCids
+        assertMsg "wrong frozen credential" (Map.lookup (claimKey dro) targetCids == Some (coerceContractId losingCredential))
+        _ <- fetch losingCredential
+        _ <- exercise losingCredential Credential_ArchiveAsAnchorers
+        pure Executable_ExecuteResult with created = []; meta = emptyMetadata
 
 template MembershipMotion
   with

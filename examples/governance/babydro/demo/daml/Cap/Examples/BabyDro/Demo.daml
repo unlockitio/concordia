@@ -187,6 +187,9 @@ journey = script do
   isActive === False
   caseAlive <- queryContractId dro opposing
   caseAlive === None
+  Some issuedRuling <- queryContractId dro ruling
+  issuedRuling.decision === KeepFirst
+  issuedRuling.caseId === "case-one"
   followedA <- submit a $ exerciseCmd ruling Ruling_Follow with registry = a
   followedB <- submit b $ exerciseCmd followedA Ruling_Follow with registry = b
   Some finalRuling <- queryContractId a followedB
@@ -283,6 +286,10 @@ failedArchive = script do
   stillDisputed.firstRegistry === a
   isActive <- active a first
   isActive === True
+  isActive <- active b second
+  isActive === False
+  rulingCount <- query @Ruling dro
+  length rulingCount === 0
   removal <- membership c opened (Remove b)
   approved <- membershipVote a removal
   submitMustFail c $ exerciseCmd approved Membership_Enact with enactor = c
