@@ -10,7 +10,7 @@ import Splice.Api.Token.HoldingV2 (InstrumentId)
 import Splice.Util (require)
 import Cap.Core.Types (ResolutionInfo)
 import Cap.Core.Utils (entitled, requireExpired)
-import Cap.Auctions.TypesV2 (AuctionTerms)
+import Cap.Auctions.TypesV2 (AuctionSchedule, AuctionTerms)
 
 data SaleProposalAction
   = SPA_Accept
@@ -24,6 +24,7 @@ data SaleProposalView = SaleProposalView
   with
     resolution : ResolutionInfo
     terms : AuctionTerms
+    schedule : AuctionSchedule
     acceptBefore : Time
     availableActions : Map SaleProposalAction [[Party]]
     meta : Metadata

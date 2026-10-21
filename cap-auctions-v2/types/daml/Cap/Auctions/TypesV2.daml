@@ -3,15 +3,16 @@
 module Cap.Auctions.TypesV2
   ( Direction (..)
   , Quote (..)
-  , RequestedAllocation (..)
   , AllocationTerms (..)
   , AuctionTerms (..)
+  , AuctionSchedule (..)
   , SettlementBatch (..)
   ) where
 
 import DA.Map (Map)
+import DA.Time (RelTime)
 
-import Splice.Api.Token.AllocationV2 (Allocation, AllocationSpecification, FinalizedAllocation, SettlementFactory, TransferLeg)
+import Splice.Api.Token.AllocationV2 (FinalizedAllocation, SettlementFactory, TransferLeg)
 import Splice.Api.Token.HoldingV2 (InstrumentId)
 import Splice.Api.Token.MetadataV1 (ExtraArgs)
 
@@ -26,15 +27,11 @@ data Quote = Quote
     quantity : Decimal
   deriving (Eq, Show, Ord)
 
-data RequestedAllocation = RequestedAllocation
-  with
-    specification : AllocationSpecification
-    allocationCid : Optional (ContractId Allocation)
-  deriving (Eq, Show)
-
 data AllocationTerms = AllocationTerms
   with
-    settlementDeadline : Time
+    settlementWindow : RelTime
+    -- ^ The settlement deadline of every allocation of an auction is the
+    -- biddingClosesAt of the auction's schedule plus settlementWindow.
     committed : Bool
   deriving (Eq, Show)
 
@@ -43,9 +40,12 @@ data AuctionTerms = AuctionTerms
     direction : Direction
     lots : Map InstrumentId Decimal
     payment : InstrumentId
-    sellerAllocations : Map InstrumentId RequestedAllocation
     settleFactories : Map Party (ContractId SettlementFactory)
     allocationTerms : AllocationTerms
+  deriving (Eq, Show)
+
+data AuctionSchedule = AuctionSchedule
+  with
     biddingOpensAt : Time
     biddingClosesAt : Time
     expiresAt : Time

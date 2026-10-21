@@ -3,26 +3,27 @@
 module Cap.Auctions.BidV2 where
 
 import DA.Map (Map)
+import DA.Set (Set)
 
 import Splice.Api.Token.MetadataV1
-import Splice.Api.Token.AllocationV2 (Allocation, AllocationSpecification)
+import Splice.Api.Token.AllocationV2 (Allocation)
 import Splice.Api.Token.HoldingV2 (InstrumentId)
 import Splice.Util (require)
 import Cap.Core.Types (ResolutionInfo)
 import Cap.Core.Utils (entitled, requireExpired)
 
-import Cap.Auctions.TypesV2 (AuctionTerms, RequestedAllocation)
+import Cap.Auctions.TypesV2 (AuctionSchedule, AuctionTerms)
 
 data BidProposalAction
-  = BPA_Withdraw
-  -- add enter and rename the choice to accept
+  = BPA_Accept
+  | BPA_Withdraw
   | BPA_Custom with
       id : Text
   deriving (Eq, Ord, Show)
 
 data BidProposalView = BidProposalView
   with
-    resolution : ResolutionInfo
+    authorities : Set Party
     terms : AuctionTerms
     invited : Optional [Party]
     availableActions : Map BidProposalAction [[Party]]
@@ -30,11 +31,6 @@ data BidProposalView = BidProposalView
   deriving (Eq, Show)
 
 data BidProposal_WithdrawResult = BidProposal_WithdrawResult
-  with
-    meta : Metadata
-  deriving (Eq, Show)
-
-data BidProposal_ExpireResult = BidProposal_ExpireResult
   with
     meta : Metadata
   deriving (Eq, Show)
@@ -51,8 +47,10 @@ data BidAction
 data BidView = BidView
   with
     resolution : ResolutionInfo
+    bidder : Party
     terms : AuctionTerms
-    allocations : Map InstrumentId RequestedAllocation
+    schedule : AuctionSchedule
+    allocations : Map InstrumentId (ContractId Allocation)
     availableActions : Map BidAction [[Party]]
     meta : Metadata
   deriving (Eq, Show)
@@ -78,22 +76,22 @@ data Bid_ExpireResult = Bid_ExpireResult
 interface BidProposal where
   viewtype BidProposalView
 
-  bidProposal_enterImpl
-    : ContractId BidProposal -> BidProposal_Enter -> Update (ContractId Bid)
+  bidProposal_acceptImpl
+    : ContractId BidProposal -> BidProposal_Accept -> Update (ContractId Bid)
 
   bidProposal_withdrawImpl
     : ContractId BidProposal -> BidProposal_Withdraw -> Update BidProposal_WithdrawResult
 
-  nonconsuming choice BidProposal_Enter : ContractId Bid
+  nonconsuming choice BidProposal_Accept : ContractId Bid
     with
       actors : [Party]
-      allocations : Map InstrumentId AllocationSpecification
+      resolutionInfo : ResolutionInfo
       extraArgs : ExtraArgs
     controller actors
     do
-      now <- getTime
-      require "the bidding window has not closed" (now < (view this).terms.biddingClosesAt)
-      bidProposal_enterImpl this self (BidProposal_Enter with ..)
+      require "the resolution is run by the proposal's authorities"
+        (resolutionInfo.resolver.authorities == (view this).authorities)
+      bidProposal_acceptImpl this self (BidProposal_Accept with ..)
 
   choice BidProposal_Withdraw : BidProposal_WithdrawResult
     with
@@ -104,15 +102,6 @@ interface BidProposal where
       require "the actors are entitled to withdraw"
         (entitled (view this).availableActions BPA_Withdraw actors)
       bidProposal_withdrawImpl this self (BidProposal_Withdraw with ..)
-
-  choice BidProposal_Expire : BidProposal_ExpireResult
-    with
-      actor : Party
-    controller actor
-    do
-      now <- getTime
-      requireExpired "the bidding window has closed" now (Some (view this).terms.biddingClosesAt)
-      pure BidProposal_ExpireResult with meta = emptyMetadata
 
 interface Bid where
   viewtype BidView
@@ -137,7 +126,7 @@ interface Bid where
       require "the actors are entitled to fund"
         (entitled bv.availableActions BA_Fund actors)
       now <- getTime
-      require "the bidding window has not closed" (now < bv.terms.biddingClosesAt)
+      require "the bidding window has not closed" (now < bv.schedule.biddingClosesAt)
       bid_fundImpl this self (Bid_Fund with ..)
 
   nonconsuming choice Bid_Withdraw : Bid_WithdrawResult
@@ -167,6 +156,6 @@ interface Bid where
     controller actors
     do
       now <- getTime
-      requireExpired "the bid has expired" now (Some (view this).terms.expiresAt)
+      requireExpired "the bid has expired" now (Some (view this).schedule.expiresAt)
       bid_expireImpl this self (Bid_Expire with ..)
 

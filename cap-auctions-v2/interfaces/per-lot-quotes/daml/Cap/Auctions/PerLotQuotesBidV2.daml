@@ -36,5 +36,5 @@ interface PerLotQuotesBid requires Bid where
         (entitled bv.availableActions BA_Quote actors)
       now <- getTime
       requireOpen "the bidding window is open"
-        now bv.terms.biddingOpensAt (Some bv.terms.biddingClosesAt)
+        now bv.schedule.biddingOpensAt (Some bv.schedule.biddingClosesAt)
       perLotQuotesBid_quoteImpl this self (PerLotQuotesBid_Quote with ..)
