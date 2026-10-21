@@ -12,7 +12,7 @@ import qualified DA.Map as Map
 data ElectoratePolicy = SnapshotAtOpen | CurrentMembership deriving (Eq, Show)
 data Decision = KeepFirst | KeepSecond deriving (Eq, Show)
 
-template Case
+template NameDispute
   with
     caseAuthority : Party
     caseToken : Text
@@ -25,7 +25,7 @@ template Case
     voters : Set Party
     eligible : Set Party
     ballots : Map Party (ContractId Ballot)
-    openingCaseCid : Optional (ContractId Case)
+    openingCaseCid : Optional (ContractId NameDispute)
   where
     signatory caseAuthority
     observer Set.toList voters
@@ -33,7 +33,7 @@ template Case
 
     -- The case authority pre-signs an invitation. Accepting it supplies that
     -- authority to the voter's registration without a Consortium exercise.
-    nonconsuming choice Case_Invite : ContractId DisputeInvitation
+    nonconsuming choice NameDispute_Invite : ContractId DisputeInvitation
       with
         voter : Party
       controller caseAuthority
@@ -41,7 +41,7 @@ template Case
         assertMsg "voter not in the opening electorate" (Set.member voter voters)
         create DisputeInvitation with caseAuthority; caseToken; caseId; voter
 
-    choice Case_RegisterBallot : ContractId Case
+    choice NameDispute_RegisterBallot : ContractId NameDispute
       with
         voter : Party
         previous : Optional (ContractId Ballot)
@@ -67,16 +67,16 @@ template DisputeInvitation
     signatory caseAuthority
     observer voter
 
-    choice DisputeInvitation_Accept : (ContractId Case, ContractId Ballot)
+    choice DisputeInvitation_Accept : (ContractId NameDispute, ContractId Ballot)
       with
-        caseCid : ContractId Case
+        caseCid : ContractId NameDispute
       controller voter
       do
         disputed <- fetch caseCid
         assertMsg "invitation belongs to another case" (disputed.caseAuthority == caseAuthority && disputed.caseToken == caseToken && disputed.caseId == caseId)
         assertMsg "voter already registered" (Map.lookup voter disputed.ballots == None)
         ballotCid <- create Ballot with caseAuthority; caseToken; caseId; voter; decision = None
-        updated <- exercise caseCid Case_RegisterBallot with voter; previous = None; replacement = ballotCid
+        updated <- exercise caseCid NameDispute_RegisterBallot with voter; previous = None; replacement = ballotCid
         pure (updated, ballotCid)
 
 template Ballot
@@ -89,23 +89,23 @@ template Ballot
   where
     signatory [caseAuthority, voter]
 
-    choice Ballot_Cast : (ContractId Case, ContractId Ballot)
+    choice Ballot_Cast : (ContractId NameDispute, ContractId Ballot)
       with
-        caseCid : ContractId Case
+        caseCid : ContractId NameDispute
         vote : Decision
       controller voter
       do
         replacement <- create this with decision = Some vote
-        updated <- exercise caseCid Case_RegisterBallot with voter; previous = Some self; replacement
+        updated <- exercise caseCid NameDispute_RegisterBallot with voter; previous = Some self; replacement
         pure (updated, replacement)
 
-    choice Ballot_Withdraw : (ContractId Case, ContractId Ballot)
+    choice Ballot_Withdraw : (ContractId NameDispute, ContractId Ballot)
       with
-        caseCid : ContractId Case
+        caseCid : ContractId NameDispute
       controller voter
       do
         replacement <- create this with decision = None
-        updated <- exercise caseCid Case_RegisterBallot with voter; previous = Some self; replacement
+        updated <- exercise caseCid NameDispute_RegisterBallot with voter; previous = Some self; replacement
         pure (updated, replacement)
 
 template Ruling

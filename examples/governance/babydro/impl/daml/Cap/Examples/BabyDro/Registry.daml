@@ -8,101 +8,109 @@ import qualified DA.Map as Map
 import Cap.Examples.BabyDro.Dispute
 
 data Membership = Admit Party | Remove Party deriving (Eq, Show)
-data Proposal = MembershipChange Membership | PolicyChange ElectoratePolicy deriving (Eq, Show)
 
-data Motion = Motion with
-    proposal : Proposal
-    supporters : Set Party
-  deriving (Eq, Show)
+-- The DRO signs the exact founding terms. Each founder accepts separately;
+-- accepted founders sign each successor and therefore authorize the final mint.
+template GenesisProposal
+  with
+    dro : Party
+    consortiumId : Text
+    founders : Set Party
+    policy : ElectoratePolicy
+    accepted : Set Party
+  where
+    signatory dro, Set.toList accepted
+    observer Set.toList founders
+    ensure consortiumId /= "" && Set.size founders >= 2 && not (Set.member dro founders)
+      && Set.isSubsetOf accepted founders
 
+    choice Genesis_Accept : ContractId GenesisProposal
+      with founder : Party
+      controller founder
+      do
+        assertMsg "not a founder or already accepted" (Set.member founder founders && not (Set.member founder accepted))
+        create this with accepted = Set.insert founder accepted
+
+    choice Genesis_Finalize : ContractId Consortium
+      controller dro
+      do
+        assertMsg "every founder must accept" (accepted == founders)
+        create Consortium with dro; consortiumId; members = founders; policy; cases = Set.empty
+
+-- Stable identity is (dro, consortiumId). Without keys it is not globally unique.
 template Consortium
   with
     dro : Party
+    consortiumId : Text
     members : Set Party
     policy : ElectoratePolicy
-    motions : [Motion]
-    cases : Set (ContractId Case)
+    cases : Set (ContractId NameDispute)
   where
     signatory dro, Set.toList members
-    ensure Set.size members >= 2 && not (Set.member dro members)
+    ensure consortiumId /= "" && Set.size members >= 2 && not (Set.member dro members)
 
-    choice ProposeChange : ContractId Consortium
+    nonconsuming choice ProposeMembership : ContractId MembershipMotion
       with
         proposer : Party
-        proposal : Proposal
+        change : Membership
       controller proposer
       do
         assertMsg "only members propose" (Set.member proposer members)
-        assertMsg "proposal already open" (not (any (\m -> m.proposal == proposal) motions))
-        case proposal of
-          MembershipChange (Admit target) -> assertMsg "DRO cannot join the registry" (target /= dro && not (Set.member target members))
-          MembershipChange (Remove target) -> assertMsg "not entitled" (Set.member target members)
-          PolicyChange target -> assertMsg "policy already in force" (target /= policy)
-        create this with motions = Motion proposal (Set.singleton proposer) :: motions
+        case change of
+          Admit target -> assertMsg "not a new registry" (target /= dro && not (Set.member target members))
+          Remove target -> assertMsg "not a member" (Set.member target members)
+        create MembershipMotion with
+          dro; consortiumId; consortiumCid = self; members; change
+          supporters = Set.singleton proposer; root = None
 
-    choice VoteChange : ContractId Consortium
+    nonconsuming choice ProposePolicy : ContractId PolicyMotion
       with
-        voter : Party
-        proposal : Proposal
-      controller voter
+        proposer : Party
+        targetPolicy : ElectoratePolicy
+      controller proposer
       do
-        assertMsg "only members vote" (Set.member voter members)
-        motion <- case filter (\m -> m.proposal == proposal) motions of
-          [one] -> pure one
-          _ -> abort "unknown proposal"
-        assertMsg "member already voted" (not (Set.member voter motion.supporters))
-        let replacement = motion with supporters = Set.insert voter motion.supporters
-        create this with motions = replacement :: filter (\m -> m.proposal /= proposal) motions
+        assertMsg "only members propose a change" (Set.member proposer members && targetPolicy /= policy)
+        create PolicyMotion with
+          dro; consortiumId; consortiumCid = self; members; targetPolicy
+          supporters = Set.singleton proposer; root = None
 
-    nonconsuming choice InviteAdmission : ContractId AdmissionInvitation
+    choice ApplyRemoval : ContractId Consortium
       with
-        inviter : Party
         target : Party
-      controller inviter
+        authorizedMotion : ContractId MembershipMotion
+      controller dro, Set.toList members
       do
-        assertMsg "only members invite" (Set.member inviter members)
-        assertMsg "DRO cannot join the registry" (target /= dro && not (Set.member target members))
-        let proposal = MembershipChange (Admit target)
-        motion <- case filter (\m -> m.proposal == proposal) motions of
-          [one] -> pure one
-          _ -> abort "unknown admission proposal"
-        assertMsg "two current members must approve" (Set.size (Set.intersection members motion.supporters) >= 2)
-        create AdmissionInvitation with dro; members; target; consortiumCid = self
+        motion <- fetch authorizedMotion
+        assertMsg "wrong motion" (motion.consortiumCid == self && motion.change == Remove target && Set.size motion.supporters >= 2)
+        assertMsg "at least two members remain" (Set.member target members && Set.size members > 2)
+        create this with members = Set.delete target members
+
+    choice ApplyPolicy : ContractId Consortium
+      with
+        targetPolicy : ElectoratePolicy
+        authorizedMotion : ContractId PolicyMotion
+      controller dro, Set.toList members
+      do
+        motion <- fetch authorizedMotion
+        assertMsg "wrong motion" (motion.consortiumCid == self && motion.targetPolicy == targetPolicy && Set.size motion.supporters >= 2)
+        assertMsg "policy already in force" (targetPolicy /= policy)
+        create this with policy = targetPolicy
 
     choice EnactAdmission : ContractId Consortium
       with
         target : Party
+        authorizedMotion : ContractId MembershipMotion
+        acceptedConsent : ContractId AdmissionConsent
       controller target
       do
-        let proposal = MembershipChange (Admit target)
+        motion <- fetch authorizedMotion
+        consent <- fetch acceptedConsent
+        assertMsg "consent mismatch" (consent.motionCid == authorizedMotion && consent.consortiumCid == self && consent.target == target)
+        assertMsg "wrong motion" (motion.consortiumCid == self && motion.change == Admit target && Set.size motion.supporters >= 2)
         assertMsg "DRO cannot join the registry" (target /= dro && not (Set.member target members))
-        motion <- case filter (\m -> m.proposal == proposal) motions of
-          [one] -> pure one
-          _ -> abort "unknown admission proposal"
-        assertMsg "two current members must approve" (Set.size (Set.intersection members motion.supporters) >= 2)
-        create this with members = Set.insert target members; motions = filter (\m -> m.proposal /= proposal) motions
+        create this with members = Set.insert target members
 
-    choice EnactChange : ContractId Consortium
-      with
-        enactor : Party
-        proposal : Proposal
-      controller enactor
-      do
-        assertMsg "only members enact" (Set.member enactor members)
-        motion <- case filter (\m -> m.proposal == proposal) motions of
-          [one] -> pure one
-          _ -> abort "unknown proposal"
-        assertMsg "two current members must approve" (Set.size (Set.intersection members motion.supporters) >= 2)
-        (updated, nextPolicy) <- case proposal of
-          MembershipChange (Admit _) -> abort "new member must accept an admission invitation"
-          MembershipChange (Remove target) -> pure (Set.delete target members, policy)
-          PolicyChange target -> pure (members, target)
-        assertMsg "at least two members remain" (Set.size updated >= 2)
-        create this with members = updated; policy = nextPolicy; motions = filter (\m -> m.proposal /= proposal) motions
-
-    -- The disputer exercises governance once to open a case. All subsequent
-    -- voter transactions act solely on invitations, ballots and the case.
-    choice OpenDispute : (ContractId Consortium, ContractId Case)
+    choice OpenDispute : (ContractId Consortium, ContractId NameDispute)
       with
         disputer : Party
         caseId : Text
@@ -113,7 +121,7 @@ template Consortium
       do
         assertMsg "only entitled registries dispute" (Set.member disputer members && Set.member otherRegistry members && disputer /= otherRegistry)
         assertMsg "reason and name required" (reason /= "" && name /= "" && caseId /= "")
-        caseCid <- create Case with
+        caseCid <- create NameDispute with
           caseAuthority = dro
           caseToken = caseId
           caseId; name; firstRegistry = disputer; secondRegistry = otherRegistry; reason
@@ -124,7 +132,7 @@ template Consortium
     choice Consortium_Resolve : ContractId Ruling
       with
         issuer : Party
-        caseCid : ContractId Case
+        caseCid : ContractId NameDispute
         decision : Decision
       controller issuer
       do
@@ -154,12 +162,100 @@ template Consortium
           decision
           followedBy = Set.empty
 
+template MembershipMotion
+  with
+    dro : Party
+    consortiumId : Text
+    consortiumCid : ContractId Consortium
+    members : Set Party
+    change : Membership
+    supporters : Set Party
+    root : Optional (ContractId MembershipMotion)
+  where
+    signatory dro, Set.toList members
+    ensure Set.isSubsetOf supporters members
+
+    choice Membership_Vote : ContractId MembershipMotion
+      with voter : Party
+      controller voter
+      do
+        assertMsg "duplicate or ineligible vote" (Set.member voter members && not (Set.member voter supporters))
+        let origin = case root of None -> self; Some original -> original
+        create this with supporters = Set.insert voter supporters; root = Some origin
+
+    nonconsuming choice Membership_Enact : ContractId Consortium
+      with enactor : Party
+      controller enactor
+      do
+        assertMsg "only current members enact" (Set.member enactor members)
+        assertMsg "two members must approve" (Set.size supporters >= 2)
+        consortium <- fetch consortiumCid
+        assertMsg "stale or foreign consortium" (consortium.dro == dro && consortium.consortiumId == consortiumId && consortium.members == members)
+        case change of
+          Admit _ -> abort "candidate must accept invitation"
+          Remove target -> do
+            assertMsg "at least two members remain" (Set.size members > 2)
+            exercise consortiumCid ApplyRemoval with target; authorizedMotion = self
+
+    nonconsuming choice Membership_Invite : ContractId AdmissionInvitation
+      with inviter : Party
+      controller inviter
+      do
+        assertMsg "only supported admission can invite" (Set.member inviter members && Set.size supporters >= 2)
+        target <- case change of Admit party -> pure party; Remove _ -> abort "not admission"
+        _ <- fetch consortiumCid
+        create AdmissionInvitation with dro; consortiumId; members; target; consortiumCid; motionCid = self
+
+    nonconsuming choice Membership_Admit : ContractId Consortium
+      with
+        target : Party
+        acceptedConsent : ContractId AdmissionConsent
+      controller target
+      do
+        assertMsg "wrong target or insufficient support" (change == Admit target && Set.size supporters >= 2)
+        consortium <- fetch consortiumCid
+        assertMsg "stale or foreign consortium" (consortium.dro == dro && consortium.consortiumId == consortiumId && consortium.members == members)
+        exercise consortiumCid EnactAdmission with target; authorizedMotion = self; acceptedConsent
+
+template PolicyMotion
+  with
+    dro : Party
+    consortiumId : Text
+    consortiumCid : ContractId Consortium
+    members : Set Party
+    targetPolicy : ElectoratePolicy
+    supporters : Set Party
+    root : Optional (ContractId PolicyMotion)
+  where
+    signatory dro, Set.toList members
+    ensure Set.isSubsetOf supporters members
+
+    choice Policy_Vote : ContractId PolicyMotion
+      with voter : Party
+      controller voter
+      do
+        assertMsg "duplicate or ineligible vote" (Set.member voter members && not (Set.member voter supporters))
+        let origin = case root of None -> self; Some original -> original
+        create this with supporters = Set.insert voter supporters; root = Some origin
+
+    nonconsuming choice Policy_Enact : ContractId Consortium
+      with enactor : Party
+      controller enactor
+      do
+        assertMsg "only members enact" (Set.member enactor members)
+        assertMsg "two members must approve" (Set.size supporters >= 2)
+        consortium <- fetch consortiumCid
+        assertMsg "stale or foreign consortium" (consortium.dro == dro && consortium.consortiumId == consortiumId && consortium.members == members)
+        exercise consortiumCid ApplyPolicy with targetPolicy; authorizedMotion = self
+
 template AdmissionInvitation
   with
     dro : Party
+    consortiumId : Text
     members : Set Party
     target : Party
     consortiumCid : ContractId Consortium
+    motionCid : ContractId MembershipMotion
   where
     signatory dro, Set.toList members
     observer target
@@ -167,24 +263,26 @@ template AdmissionInvitation
     choice AdmissionInvitation_Accept : ContractId AdmissionConsent
       controller target
       do
-        create AdmissionConsent with dro; members; target; consortiumCid
+        create AdmissionConsent with dro; consortiumId; members; target; consortiumCid; motionCid
 
 template AdmissionConsent
   with
     dro : Party
+    consortiumId : Text
     members : Set Party
     target : Party
     consortiumCid : ContractId Consortium
+    motionCid : ContractId MembershipMotion
   where
     signatory target
     observer Set.toList members
 
-    choice AdmissionConsent_Finalize : ContractId Consortium
-      with
-        enactor : Party
+    nonconsuming choice AdmissionConsent_Finalize : ContractId Consortium
+      with enactor : Party
       controller enactor
       do
         assertMsg "only invited members finalize" (Set.member enactor members)
         consortium <- fetch consortiumCid
-        assertMsg "invitation authority or membership changed" (consortium.dro == dro && consortium.members == members)
-        exercise consortiumCid EnactAdmission with target
+        motion <- fetch motionCid
+        assertMsg "invitation authority or membership changed" (consortium.dro == dro && consortium.consortiumId == consortiumId && consortium.members == members && motion.consortiumCid == consortiumCid && motion.change == Admit target)
+        exercise motionCid Membership_Admit with target; acceptedConsent = self
