@@ -182,9 +182,8 @@ journey = script do
     disputer = a; caseId = "wrong-record"; name = "shared"; otherRegistry = b; reason = "unrelated"
     firstCredential = toInterfaceContractId @Credential first
     secondCredential = toInterfaceContractId @Credential unrelatedB
-  anotherFirst <- register a a "shared" now
   anotherSecond <- register b claimant "shared" now
-  (twiceOpened, secondCase) <- open a opened b "case-two" anotherFirst anotherSecond
+  (twiceOpened, secondCase) <- open a opened b "case-two" first anotherSecond
   Some twoCases <- queryContractId dro twiceOpened
   Set.size twoCases.cases === 2
   unrelatedRemoval <- membership a twiceOpened (Remove newcomer)
@@ -244,6 +243,15 @@ journey = script do
   removed <- remove c newcomer resolvedCid b
   Some afterRemoval <- queryContractId dro removed
   Set.member b afterRemoval.members === False
+  aCredentials <- query @DemoCredential a
+  bCredentials <- query @DemoCredential b
+  let shared = [(cid, value) | (cid, value) <- aCredentials <> bCredentials, credentialHasName "shared" value.credential]
+  length shared === 1
+  map fst shared === [first]
+  length [(cid, value) | (cid, value) <- aCredentials, credentialHasName "unrelated" value.credential] === 1
+  length [(cid, value) | (cid, value) <- bCredentials, credentialHasName "another" value.credential] === 1
+  isActive <- active b anotherSecond
+  isActive === False
 
 keepSecond : Script ()
 keepSecond = script do
