@@ -1,6 +1,6 @@
 -- SPDX-License-Identifier: Apache-2.0
 
-module Cap.Examples.MajorityVote.Governor where
+module Cap.Examples.MajorityVote.Resolver where
 
 import Prelude hiding (Action)
 
@@ -13,7 +13,7 @@ import qualified DA.Set as Set
 import Splice.Api.Token.MetadataV1
 import Splice.Util (require)
 
-import Cap.Core.Types (AuthenticKey (..), ExecutionAction (..), ExecutionCore (..), ResolutionRef (..))
+import Cap.Core.Types (AuthenticKey (..), ExecutionAction (..), ExecutionCore (..), ResolutionInfo (..))
 import Cap.Core.Utils (IsAnyValue (..), fetchGroup, requireClosed, requireResolvedBy)
 import Cap.Governance.ActionV1
 import Cap.Governance.Utils
@@ -44,7 +44,7 @@ template Proposal
   with
     dso : Party
     operator : Party
-    resolution : ResolutionRef
+    resolution : ResolutionInfo
     electorate : Set Party
     terms : ProposalTerms
     roll : [Party]
@@ -80,7 +80,7 @@ template BallotInvitation
     dso : Party
     operator : Party
     voter : Party
-    resolution : ResolutionRef
+    resolution : ResolutionInfo
   where
     signatory dso, operator
     observer voter
@@ -103,18 +103,18 @@ template BallotInvitation
           vote = None
 
 
-template Governor
+template Resolver
   with
     dso : Party
     operator : Party
     electorate : Set Party
-    governorId : Text
+    resolverId : Text
     expiresAt : Time
   where
     signatory dso
     observer operator :: Set.toList electorate
 
-    nonconsuming choice Governor_Propose : ContractId Proposal
+    nonconsuming choice Resolver_Propose : ContractId Proposal
       with
         proposer : Party
         proposalId : Text
@@ -125,14 +125,14 @@ template Governor
           (Set.member proposer electorate)
         create Proposal with
           dso; operator; electorate; terms
-          resolution = ResolutionRef with
-            resolver = governorKey this
+          resolution = ResolutionInfo with
+            resolver = resolverKey this
             resolverCid = None
             mechanism = majorityMechanismName
             id = proposalId
           roll = []
 
-    nonconsuming choice Governor_ResolveMajority : ResolveResult
+    nonconsuming choice Resolver_ResolveMajority : ResolveResult
       with
         proposalCid : ContractId Proposal
         ballotCids : [ContractId PrivateBallot]
@@ -140,10 +140,10 @@ template Governor
       do resolveMajority this self proposalCid ballotCids
 
 
-governorKey : Governor -> AuthenticKey
-governorKey governor = AuthenticKey with
-  authorities = Set.fromList [governor.dso]
-  id = governor.governorId
+resolverKey : Resolver -> AuthenticKey
+resolverKey resolver = AuthenticKey with
+  authorities = Set.fromList [resolver.dso]
+  id = resolver.resolverId
 
 majorityOf : Decimal -> Tally Text Text
 majorityOf electorateSize casts =
@@ -151,13 +151,13 @@ majorityOf electorateSize casts =
   in Some (if for > 0.5 * electorateSize then yay else nay)
 
 resolveMajority
-  : Governor -> ContractId Governor -> ContractId Proposal -> [ContractId PrivateBallot]
+  : Resolver -> ContractId Resolver -> ContractId Proposal -> [ContractId PrivateBallot]
   -> Update ResolveResult
-resolveMajority governor self proposalCid ballotCids = do
+resolveMajority resolver self proposalCid ballotCids = do
   now <- getTime
   proposal <- fetch proposalCid
-  requireResolvedBy (governorKey governor) (coerceContractId self) majorityMechanismName proposal.resolution
-  require "the proposal is on this governor's electorate" (proposal.electorate == governor.electorate)
+  requireResolvedBy (resolverKey resolver) (coerceContractId self) majorityMechanismName proposal.resolution
+  require "the proposal is on this resolver's electorate" (proposal.electorate == resolver.electorate)
   let terms = proposal.terms
 
   presented <- fetchGroup proposal.resolution ballotCids
@@ -171,19 +171,19 @@ resolveMajority governor self proposalCid ballotCids = do
   action <- agreedAction ballots
   require "the ballots vote on the proposal's action" (action == terms.actionCid)
 
-  casts <- castsOf Some governor.electorate ballots
+  casts <- castsOf Some resolver.electorate ballots
   require "the presented ballots cover the roll" (sort (map (.voter) ballots) == sort proposal.roll)
   consumeBallots cids
 
-  let verdict = decide (atLeastVotes 1) (majorityOf (intToDecimal (Set.size governor.electorate))) casts
+  let verdict = decide (atLeastVotes 1) (majorityOf (intToDecimal (Set.size resolver.electorate))) casts
   created <- case verdict of
     Decided winner | winner == yay -> do
       result <- exercise terms.actionCid Action_AuthorizeExecution with
-        actors = [governor.dso]
+        actors = [resolver.dso]
         executionCore = ExecutionCore with
-          authorities = Set.fromList [governor.dso]
+          authorities = Set.fromList [resolver.dso]
           availableActions = Map.fromList
-            [(EA_Execute, map (:: []) (Set.toList governor.electorate))]
+            [(EA_Execute, map (:: []) (Set.toList resolver.electorate))]
           opensAt = terms.votingClosesAt
           cancelAfter = terms.votingClosesAt
           expiresAt = Some terms.expiresAt

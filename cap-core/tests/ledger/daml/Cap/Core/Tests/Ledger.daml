@@ -10,7 +10,7 @@ import Daml.Script hiding (AnyContractId)
 
 import Splice.Api.Token.MetadataV1 (AnyContractId)
 
-import Cap.Core.Types (AuthenticKey (..), ResolutionRef (..))
+import Cap.Core.Types (AuthenticKey (..), ResolutionInfo (..))
 import Cap.Core.Utils
 
 import Cap.Core.Tests.Support
@@ -61,7 +61,7 @@ template Probe
       with
         key : AuthenticKey
         mechanism : Text
-        resolution : ResolutionRef
+        resolution : ResolutionInfo
       controller owner
       do requireResolvedBy key (coerceContractId self) mechanism resolution
 
@@ -92,8 +92,8 @@ resolverKey party = AuthenticKey with authorities = Set.fromList [party]; id = "
 signedKeyOf : Party -> Text -> AuthenticKey
 signedKeyOf party id = AuthenticKey with authorities = Set.fromList [party]; id
 
-resolutionOf : Party -> Optional AnyContractId -> Text -> ResolutionRef
-resolutionOf party resolverCid mechanism = ResolutionRef with
+resolutionOf : Party -> Optional AnyContractId -> Text -> ResolutionInfo
+resolutionOf party resolverCid mechanism = ResolutionInfo with
   resolver = resolverKey party
   resolverCid
   mechanism

@@ -12,7 +12,7 @@ import qualified DA.Set as Set
 import Splice.Api.Token.MetadataV1
 import Splice.Util (HasCheckedFetch (..))
 
-import Cap.Core.Types (AuthenticKey (..), Snapshot (..), ResolutionRef (..))
+import Cap.Core.Types (AuthenticKey (..), Snapshot (..), ResolutionInfo (..))
 import Cap.Core.Utils (IsAnyValue (..), fetchCheckedAny, signedKey)
 import Cap.Governance.ActionV1
 import Cap.Governance.Utils
@@ -46,14 +46,14 @@ readTarget key cid = do
 template Ballot
   with
     owner : Party
-    resolution : ResolutionRef
+    resolution : ResolutionInfo
     actionCid : ContractId Action
     votes : Map Party (Optional Text)
     snapshots : Map AuthenticKey Snapshot
   where
     signatory owner
 
-instance HasCheckedFetch Ballot ResolutionRef where
+instance HasCheckedFetch Ballot ResolutionInfo where
   contractGroupId ballot = ballot.resolution
 
 instance IsBallot Ballot Text where

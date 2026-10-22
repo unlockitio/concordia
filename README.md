@@ -68,7 +68,7 @@ Concordia has three tiers: a domain-agnostic core and two domains built on it.
 CAP defines an interface only where code works with a contract whose template it
 does not know at compile time. Everything else is stored types and helpers.
 
-- **`cap-core`** — stored types (`AuthenticKey`, `ResolutionRef`, `ExecutionCore`, `Snapshot`)
+- **`cap-core`** — stored types (`AuthenticKey`, `ResolutionInfo`, `ExecutionCore`, `Snapshot`)
   and `cap-core-utils` (checked fetches, resolution checks, admission, windows,
   value conversion). It defines no interfaces.
 - **`cap-governance`** — the `Action` and `Executable` interfaces, and
@@ -87,7 +87,7 @@ the helpers it needs. CAP sits above Canton's asset and settlement layer.
 ```
 concordia/
 ├── cap-core/                          # Tier 1: domain-agnostic
-│   ├── types/                         #   AuthenticKey, ResolutionRef, ExecutionCore, Snapshot, TargetReader
+│   ├── types/                         #   AuthenticKey, ResolutionInfo, ExecutionCore, Snapshot, TargetReader
 │   ├── utils/                         #   checked fetches, resolutions, admission, windows, values
 │   └── tests/{unit,ledger}
 ├── cap-governance/                    # Tier 2: governance
@@ -100,6 +100,9 @@ concordia/
 │   ├── funding/                       #   funding a bid through a Token Standard allocation request
 │   ├── DESIGN.md
 │   └── RATIONALE.md
+├── docs/governance/
+│   ├── intro.md                       # governance flows in Canton and the cap-governance architecture
+│   └── rationale.md                   # cap-governance design decisions
 ├── examples/governance/
 │   ├── babydso/                       # Splice DSO governance with weighted votes
 │   │                                  #   impl/{ans,config,rights,governance,action}, demo
@@ -112,7 +115,6 @@ concordia/
 ├── .github/workflows/ci.yml           # build and test on push and pull request to dev
 ├── multi-package.yaml                 # dpm workspace (build order)
 ├── DESIGN.md                          # map of the design docs
-├── cap-governance-rationale.md        # cap-governance design decisions
 ├── SCOPE.md                           # first-release scope, capability → milestone
 ├── POST-RELEASE.md                    # extension points for downstream modules
 ├── GLOSSARY.md                        # terms and where each is defined
@@ -121,7 +123,8 @@ concordia/
 └── README.md                          # this file
 ```
 
-[`cap-governance-rationale.md`](cap-governance-rationale.md) and
+[`docs/governance/intro.md`](docs/governance/intro.md),
+[`docs/governance/rationale.md`](docs/governance/rationale.md) and
 [`cap-auctions/DESIGN.md`](cap-auctions/DESIGN.md) carry the tier-2 designs.
 [`cap-auctions/RATIONALE.md`](cap-auctions/RATIONALE.md) records the auction
 decisions.

@@ -13,7 +13,7 @@ import qualified Splice.Api.Token.AllocationV2 as Alloc
 import Splice.Util (require)
 import Splice.TokenStandard.Utils (receiverSide, senderSide)
 
-import Cap.Core.Types (AuthenticKey (..), ResolutionRef (..))
+import Cap.Core.Types (AuthenticKey (..), ResolutionInfo (..))
 import Cap.Core.Utils (requireClosed, requireResolvedBy)
 import Cap.Auctions.OneLotBidV1
 import Cap.Auctions.SettlementV1 (SettlementBatch (..))
@@ -46,7 +46,7 @@ template Auction
 
     choice Auction_Resolve : AuctionResult
       with
-        resolution : ResolutionRef
+        resolution : ResolutionInfo
         bidCids : [ContractId OneLotBid]
         extraArgs : ExtraArgs
       controller Set.toList authorities
@@ -57,7 +57,7 @@ template Auction
 
 resolveFirstPrice
   : Auction
-  -> ResolutionRef
+  -> ResolutionInfo
   -> [ContractId OneLotBid]
   -> ExtraArgs
   -> Update AuctionResult

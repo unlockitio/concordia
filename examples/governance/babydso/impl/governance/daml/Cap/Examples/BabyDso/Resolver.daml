@@ -1,6 +1,6 @@
 -- SPDX-License-Identifier: Apache-2.0
 
-module Cap.Examples.BabyDso.Governor where
+module Cap.Examples.BabyDso.Resolver where
 
 import Prelude hiding (Action)
 
@@ -15,7 +15,7 @@ import DA.Time (RelTime, addRelTime)
 import Splice.Api.Token.MetadataV1
 import Splice.Util (HasCheckedFetch (..), fetchChecked, require)
 
-import Cap.Core.Types (AuthenticKey (..), ExecutionAction (..), ExecutionCore (..), ResolutionRef (..))
+import Cap.Core.Types (AuthenticKey (..), ExecutionAction (..), ExecutionCore (..), ResolutionInfo (..))
 import Cap.Core.Utils
   ( IsAnyValue (..), fetchGroup, requireClosed, requireResolvedBy, signedKey )
 import Cap.Governance.ActionV1
@@ -37,11 +37,11 @@ data ResolveResult r = ResolveResult
   deriving (Eq, Show)
 
 
-template DsoGovernor
+template DsoResolver
   with
     dso : Party
     svs : Set Party
-    governorId : Text
+    resolverId : Text
     rightKeys : Set RightKey -- the voting rights that count and the SV holding each; weights are read when a vote opens
     executionDelay : RelTime
     executionWindow : RelTime
@@ -50,10 +50,10 @@ template DsoGovernor
     signatory dso
     observer Set.toList svs
 
-    nonconsuming choice DsoGovernor_OpenVote : ContractId SharedBallot
+    nonconsuming choice DsoResolver_OpenVote : ContractId SharedBallot
       with
         proposer : Party
-        resolution : ResolutionRef
+        resolution : ResolutionInfo
         actionCid : ContractId Action
         rightCids : Map RightKey (ContractId SvWeightSource)
         targetCids : Map AuthenticKey AnyContractId
@@ -62,7 +62,7 @@ template DsoGovernor
         expiresAt : Time
       controller proposer
       do
-        requireResolvedBy (governorKey this) (coerceContractId self) weightedVoteMechanismName resolution
+        requireResolvedBy (resolverKey this) (coerceContractId self) weightedVoteMechanismName resolution
         openingWeights <- fetchWeightsPerContract rightKeys rightCids
         require "the proposer is a voter: it holds weight at opening"
           (proposer `Map.member` openingWeights)
@@ -73,23 +73,23 @@ template DsoGovernor
           snapshots = snapshots
           votes = Map.singleton proposer vote
 
-    nonconsuming choice DsoGovernor_ResolveVote : ResolveResult (TextMap Decimal)
+    nonconsuming choice DsoResolver_ResolveVote : ResolveResult (TextMap Decimal)
       with
         sv : Party
-        resolution : ResolutionRef
+        resolution : ResolutionInfo
         ballotCid : ContractId SharedBallot
       controller sv
       do
         require "the resolving party is an sv" (sv `Set.member` svs)
-        requireResolvedBy (governorKey this) (coerceContractId self) weightedVoteMechanismName resolution
+        requireResolvedBy (resolverKey this) (coerceContractId self) weightedVoteMechanismName resolution
         ballot <- fetchChecked resolution ballotCid
         archive ballotCid
         resolveWeightedVote this ballot
 
-    nonconsuming choice DsoGovernor_Confirm : ContractId SvConfirmation
+    nonconsuming choice DsoResolver_Confirm : ContractId SvConfirmation
       with
         confirmer : Party
-        resolution : ResolutionRef
+        resolution : ResolutionInfo
         actionCid : ContractId Action
         vote : DsoVote
         targetCids : Map AuthenticKey AnyContractId
@@ -97,31 +97,31 @@ template DsoGovernor
       controller confirmer
       do
         require "the confirmer is an sv" (confirmer `Set.member` svs)
-        requireResolvedBy (governorKey this) (coerceContractId self) confirmationMechanismName resolution
+        requireResolvedBy (resolverKey this) (coerceContractId self) confirmationMechanismName resolution
         action <- fetch actionCid
         snapshots <- snapshotStates action targetCids
         create SvConfirmation with
           dso; confirmer; resolution; actionCid; vote; expiresAt
           snapshots = snapshots
 
-    nonconsuming choice DsoGovernor_ResolveConfirmations : ResolveResult AnyValue
+    nonconsuming choice DsoResolver_ResolveConfirmations : ResolveResult AnyValue
       with
         sv : Party
-        resolution : ResolutionRef
+        resolution : ResolutionInfo
         confirmationCids : [ContractId SvConfirmation]
       controller sv
       do
         require "the resolving party is an sv" (sv `Set.member` svs)
-        requireResolvedBy (governorKey this) (coerceContractId self) confirmationMechanismName resolution
+        requireResolvedBy (resolverKey this) (coerceContractId self) confirmationMechanismName resolution
         presented <- fetchGroup resolution confirmationCids
         let (cids, confirmations) = unzip presented
         consumeBallots cids
         resolveConfirmations this confirmations
 
-governorKey : DsoGovernor -> AuthenticKey
-governorKey governor = AuthenticKey with
-  authorities = Set.fromList [governor.dso]
-  id = governor.governorId
+resolverKey : DsoResolver -> AuthenticKey
+resolverKey resolver = AuthenticKey with
+  authorities = Set.fromList [resolver.dso]
+  id = resolver.resolverId
 
 
 data RightKey = RightKey
@@ -140,8 +140,8 @@ instance HasVotingRights SvWeightSource where
 
 
 resolveWeightedVote
-  : DsoGovernor -> SharedBallot -> Update (ResolveResult (TextMap Decimal))
-resolveWeightedVote governor ballot = do
+  : DsoResolver -> SharedBallot -> Update (ResolveResult (TextMap Decimal))
+resolveWeightedVote resolver ballot = do
   now <- getTime
   requireClosed "the voting window has closed" now ballot.votingClosesAt
   require "the proposal has not expired" (now < ballot.expiresAt)
@@ -152,15 +152,15 @@ resolveWeightedVote governor ballot = do
   let verdict = decide (atLeastShareOfTotal 2 3) weightedMedianByField casts
   executions <- case verdict of
     Decided winner -> do
-      let opensAt = now `addRelTime` governor.executionDelay
+      let opensAt = now `addRelTime` resolver.executionDelay
       result <- exercise actionCid Action_AuthorizeExecution with
-        actors = [governor.dso]
+        actors = [resolver.dso]
         executionCore = ExecutionCore with
-          authorities = Set.fromList [governor.dso]
-          availableActions = Map.fromList [(EA_Execute, [[sv] | sv <- Set.toList governor.svs])]
+          authorities = Set.fromList [resolver.dso]
+          availableActions = Map.fromList [(EA_Execute, [[sv] | sv <- Set.toList resolver.svs])]
           opensAt
           cancelAfter = opensAt
-          expiresAt = Some (opensAt `addRelTime` governor.executionWindow)
+          expiresAt = Some (opensAt `addRelTime` resolver.executionWindow)
           meta = emptyMetadata
         outcome = Some (toAnyValue winner)
         snapshots = snapshots
@@ -190,26 +190,26 @@ weightedMedianByField casts = case [parameters | Cast with vote = Voted paramete
 
 
 resolveConfirmations
-  : DsoGovernor -> [SvConfirmation] -> Update (ResolveResult AnyValue)
-resolveConfirmations governor confirmations = do
+  : DsoResolver -> [SvConfirmation] -> Update (ResolveResult AnyValue)
+resolveConfirmations resolver confirmations = do
   now <- getTime
   require "no confirmation has expired" (all ((now <) . (.expiresAt)) confirmations)
   actionCid <- agreedAction confirmations
   snapshots <- agreedSnapshots confirmations
-  casts <- castsOf confirmedOf governor.svs confirmations
-  let verdict = decide (atLeastVotes (byzantineQuorum (Set.size governor.svs))) unanimous casts
+  casts <- castsOf confirmedOf resolver.svs confirmations
+  let verdict = decide (atLeastVotes (byzantineQuorum (Set.size resolver.svs))) unanimous casts
   outcome <- case verdict of
     Decided outcome -> pure outcome
     _ -> abort "too few svs confirmed one outcome"
 
   result <- exercise actionCid Action_AuthorizeExecution with
-    actors = [governor.dso]
+    actors = [resolver.dso]
     executionCore = ExecutionCore with
-      authorities = Set.fromList [governor.dso]
-      availableActions = Map.fromList [(EA_Execute, [[sv] | sv <- Set.toList governor.svs])]
+      authorities = Set.fromList [resolver.dso]
+      availableActions = Map.fromList [(EA_Execute, [[sv] | sv <- Set.toList resolver.svs])]
       opensAt = now
       cancelAfter = now
-      expiresAt = Some (now `addRelTime` governor.executionWindow)
+      expiresAt = Some (now `addRelTime` resolver.executionWindow)
       meta = emptyMetadata
     outcome = Some outcome
     snapshots

@@ -14,7 +14,7 @@ import Splice.TokenStandard.Utils
 
 import qualified Splice.Api.Token.AllocationV2 as Alloc
 
-import Cap.Core.Types (ResolutionRef)
+import Cap.Core.Types (ResolutionInfo)
 import Cap.Core.Utils (authoritiesOf)
 import Cap.Auctions.OneLotBidV1 (OneLotBidView, Quote)
 import Cap.Auctions.Utils
@@ -22,7 +22,7 @@ import Cap.Auctions.Utils
 
 template OneLotBidAllocationRequest
   with
-    resolution : ResolutionRef
+    resolution : ResolutionInfo
     bid : OneLotBidView -- could be generalized to any bid type actually
     requestedAt : Time
   where

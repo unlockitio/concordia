@@ -27,8 +27,6 @@ tmp.md
 WRITING.md
 CLAUDE.md
 
-# Architecture docs — not published to the repo
-docs/
 
 # Example walkthroughs / notes — private working drafts
 
@@ -41,5 +39,6 @@ tools
 
 M1-DELIVERY-COMMENT.md
 M2-DELIVERY-COMMENT.md
+M3-DELIVERY-COMMENT.md
 M3-DELIVERY-COMMENT.md
 DESIGN_old.md

@@ -16,14 +16,14 @@ import Daml.Script hiding (AnyContractId)
 
 import Splice.Api.Token.MetadataV1
 
-import Cap.Core.Types (AuthenticKey (..), ResolutionRef (..))
+import Cap.Core.Types (AuthenticKey (..), ResolutionInfo (..))
 import Cap.Governance.ActionV1 (Action)
 import Cap.Governance.ExecutableV1
 
 import Cap.Examples.BabyDso.Action
 import Cap.Examples.BabyDso.Ans
 import Cap.Examples.BabyDso.Config
-import Cap.Examples.BabyDso.Governor
+import Cap.Examples.BabyDso.Resolver
 import Cap.Examples.BabyDso.Rights
 import Cap.Examples.BabyDso.Submission
 
@@ -60,10 +60,10 @@ data Fixture = Fixture with
     configCid : ContractId AmuletConfig
     ansCid : ContractId AnsRules
     actionCid : ContractId SetFeesAction
-    governorCid : ContractId DsoGovernor
+    resolverCid : ContractId DsoResolver
     rightCids : Map RightKey (ContractId SvWeightSource)
-    resolution : ResolutionRef
-    confirmResolution : ResolutionRef
+    resolution : ResolutionInfo
+    confirmResolution : ResolutionInfo
     terms : VoteTerms
 
 
@@ -97,19 +97,19 @@ setupWith ns sourcesFor = do
       cid <- submit dso $ createCmd SvWeightSource with dso; svs; name; sv; weight
       pure ((RightKey with authKey = sourceKey dso name; sv), cid))
   let rightCids = Map.fromList created
-  governorCid <- submit dso $ createCmd DsoGovernor with
+  resolverCid <- submit dso $ createCmd DsoResolver with
     dso; svs
-    governorId = bodyId
+    resolverId = bodyId
     rightKeys = Set.fromList (Map.keys rightCids)
     executionDelay = hours 2
     executionWindow = days 1
     expiresAt = now `addRelTime` days 30
 
-  let resolutionFor mechanism id = ResolutionRef with
+  let resolutionFor mechanism id = ResolutionInfo with
         resolver = AuthenticKey with
           authorities = Set.fromList [dso]
           id = bodyId
-        resolverCid = Some (coerceContractId governorCid)
+        resolverCid = Some (coerceContractId resolverCid)
         mechanism
         id
       resolution = resolutionFor weightedVoteMechanismName proposalId
@@ -157,7 +157,7 @@ openVoteCmd
   : Fixture -> Party -> DsoVote -> Map RightKey (ContractId SvWeightSource)
   -> Commands (ContractId SharedBallot)
 openVoteCmd f proposer vote rightCids =
-  exerciseCmd f.governorCid DsoGovernor_OpenVote with
+  exerciseCmd f.resolverCid DsoResolver_OpenVote with
     proposer; vote; rightCids
     resolution = f.resolution
     actionCid = toInterfaceContractId @Action f.actionCid
@@ -178,14 +178,14 @@ castAs f voter ballotCid vote = submit (actAs voter <> readAs f.dso) (castCmd vo
 resolveVoteAs
   : Fixture -> Party -> ContractId SharedBallot -> Script (ResolveResult (TextMap Decimal))
 resolveVoteAs f sv ballotCid =
-  submit (actAs sv <> readAs f.dso) $ exerciseCmd f.governorCid DsoGovernor_ResolveVote with
+  submit (actAs sv <> readAs f.dso) $ exerciseCmd f.resolverCid DsoResolver_ResolveVote with
     sv
     resolution = f.resolution
     ballotCid
 
 confirmAs : Fixture -> Party -> AnyValue -> Script (ContractId SvConfirmation)
 confirmAs f confirmer confirmed =
-  submit (actAs confirmer <> readAs f.dso) $ exerciseCmd f.governorCid DsoGovernor_Confirm with
+  submit (actAs confirmer <> readAs f.dso) $ exerciseCmd f.resolverCid DsoResolver_Confirm with
     confirmer
     resolution = f.confirmResolution
     actionCid = toInterfaceContractId @Action f.actionCid
@@ -196,7 +196,7 @@ confirmAs f confirmer confirmed =
 resolveConfirmationsAs
   : Fixture -> Party -> [ContractId SvConfirmation] -> Script (ResolveResult AnyValue)
 resolveConfirmationsAs f sv confirmationCids =
-  submit (actAs sv <> readAs f.dso) $ exerciseCmd f.governorCid DsoGovernor_ResolveConfirmations with
+  submit (actAs sv <> readAs f.dso) $ exerciseCmd f.resolverCid DsoResolver_ResolveConfirmations with
     sv; confirmationCids
     resolution = f.confirmResolution
 

@@ -5,7 +5,7 @@
 The selling domain of CAP: two interfaces — `OneLotBid` and `Settlement` — that let an
 auction format, a token registry and a bidder be written without knowing each other.
 
-Every bid carries a `ResolutionRef`, which names the sale, the auction format and the
+Every bid carries a `ResolutionInfo`, which names the sale, the auction format and the
 authorities running it.
 The auction is a template the format writes, signed by those authorities, and it
 resolves the bids in a choice of its own (`Auction_Resolve` in the sealed-bid example).

@@ -2,7 +2,7 @@
 
 module Cap.Core.Types
   ( AuthenticKey (..)
-  , ResolutionRef (..)
+  , ResolutionInfo (..)
   , ExecutionAction (..)
   , ExecutionCore (..)
   , Snapshot (..)
@@ -21,7 +21,7 @@ data AuthenticKey = AuthenticKey
     id : Text
   deriving (Eq, Show, Ord)
 
-data ResolutionRef = ResolutionRef
+data ResolutionInfo = ResolutionInfo 
   with
     resolver : AuthenticKey
     resolverCid : Optional AnyContractId

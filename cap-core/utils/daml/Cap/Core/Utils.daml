@@ -43,7 +43,7 @@ import qualified DA.Traversable as Traversable
 import Splice.Api.Token.MetadataV1
 import Splice.Util (HasCheckedFetch (..), fetchChecked, require)
 
-import Cap.Core.Types (AuthenticKey (..), ResolutionRef (..))
+import Cap.Core.Types (AuthenticKey (..), ResolutionInfo (..))
 
 
 -- | The key of a contract built from its actual signatories, for use in a
@@ -77,14 +77,14 @@ fetchGroup key cids = do
 -- | Checks that a resolution names this resolver, is bound to no other resolver
 -- contract, and names this mechanism. The resolver passes its own key, its own
 -- contract id, and the mechanism its choice runs.
-requireResolvedBy : AuthenticKey -> AnyContractId -> Text -> ResolutionRef -> Update ()
+requireResolvedBy : AuthenticKey -> AnyContractId -> Text -> ResolutionInfo -> Update ()
 requireResolvedBy rKey self mechanism resolution = do
   require ("the resolution names the resolver " <> show rKey) (resolution.resolver == rKey)
   require "the resolution is bound to no other resolver contract"
     (optional True (== self) resolution.resolverCid)
   require ("the resolution names the mechanism " <> mechanism) (resolution.mechanism == mechanism)
 
-authoritiesOf : ResolutionRef -> Set Party
+authoritiesOf : ResolutionInfo -> Set Party
 authoritiesOf resolution = resolution.resolver.authorities
 
 

@@ -33,7 +33,7 @@ bundle `{A, B}` gives no price for `A` on its own, so whether an award is within
 bid is a question about bundles and belongs to the format. A reserve per bundle
 does not compose into a reserve per lot either.
 
-The cost of the narrow interface is limited to the bid. `ResolutionRef` and
+The cost of the narrow interface is limited to the bid. `ResolutionInfo` and
 `Settlement` do not mention a lot, so a bundle-bid interface added later
 reuses them and duplicates only `OneLotBid`. The name carries the restriction so
 it appears when someone writes `interface instance OneLotBid`, not when a check
@@ -89,10 +89,10 @@ The limit is that a format wanting a different notion of "better price" (e.g.
 multi-attribute score) cannot express it. Such a format needs more than a
 price in `Quote`, so it is outside this interface anyway.
 
-### Identity is carried by ResolutionRef
+### Identity is carried by ResolutionInfo
 
 `OneLotAuctionTerms` names what is being sold and on what schedule. It does not
-name the sale or the authority set, because `ResolutionRef` already does and every
+name the sale or the authority set, because `ResolutionInfo` already does and every
 `OneLotBidView` carries one in its `resolution` field. The sale is
 `resolution.id` and the authority set is `resolution.resolver.authorities`.
 
@@ -111,7 +111,7 @@ reads the same way, so the interface has one convention for "any of these, all o
 that" rather than two.
 
 The alternative was a flat `[Quote]`, with a bidder wanting mutually exclusive
-terms taking one seat per alternative on the same `ResolutionRef`. That works and
+terms taking one seat per alternative on the same `ResolutionInfo`. That works and
 needs no interface change, but it prices the bidder wrongly: each seat funds its
 own allocation, so a bidder offering "five units at 100 or three at 90" escrows
 both and locks 770 to bid for at most 500. Under `[[Quote]]` the exposure is

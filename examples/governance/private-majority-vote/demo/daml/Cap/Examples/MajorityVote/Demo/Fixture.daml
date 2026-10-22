@@ -16,17 +16,17 @@ import Daml.Script
 import Splice.Api.Token.MetadataV1
 import qualified Splice.Api.Token.MetadataV1 as Meta
 
-import Cap.Core.Types (AuthenticKey (..), Snapshot (..), ExecutionAction (..), ExecutionCore (..), ResolutionRef (..))
+import Cap.Core.Types (AuthenticKey (..), Snapshot (..), ExecutionAction (..), ExecutionCore (..), ResolutionInfo (..))
 import Cap.Core.Utils (IsAnyValue (..))
 import Cap.Governance.ActionV1 (Action, Action_AuthorizeExecution (..))
 import Cap.Governance.ExecutableV1
 
 import Cap.Examples.MajorityVote.Ballot
 import Cap.Examples.MajorityVote.Config
-import Cap.Examples.MajorityVote.Governor
+import Cap.Examples.MajorityVote.Resolver
 
-governorName : Text
-governorName = "governor-1"
+resolverName : Text
+resolverName = "resolver-1"
 
 proposalName : Text
 proposalName = "proposal-1"
@@ -47,9 +47,9 @@ data Fixture = Fixture with
     bob : Party
     carol : Party
     electorate : Set Party
-    governorCid : ContractId Governor
+    resolverCid : ContractId Resolver
     proposalCid : ContractId Proposal
-    resolution : ResolutionRef
+    resolution : ResolutionInfo
     configCid : ContractId Config
     actionCid : ContractId SetConfigAction
     terms : ProposalTerms
@@ -70,16 +70,16 @@ setupAs ns = do
     dso; electorate; setting = openingSetting
   actionCid <- submit dso $ createCmd SetConfigAction with
     dso; operator; electorate; baseSetting = openingSetting; newSetting = proposedSetting
-  let governor = Governor with
+  let resolver = Resolver with
         dso; operator; electorate
-        governorId = governorName
+        resolverId = resolverName
         expiresAt = now `addRelTime` days 10
-  governorCid <- submit dso $ createCmd governor
+  resolverCid <- submit dso $ createCmd resolver
 
-  let resolution = ResolutionRef with
+  let resolution = ResolutionInfo with
         resolver = AuthenticKey with
           authorities = Set.fromList [dso]
-          id = governorName
+          id = resolverName
         resolverCid = None
         mechanism = majorityMechanismName
         id = proposalName
@@ -89,7 +89,7 @@ setupAs ns = do
         votingClosesAt = now `addRelTime` days 2
         expiresAt = now `addRelTime` days 3
 
-  proposalCid <- submit alice $ exerciseCmd governorCid Governor_Propose with
+  proposalCid <- submit alice $ exerciseCmd resolverCid Resolver_Propose with
     proposer = alice
     proposalId = proposalName
     terms
@@ -107,7 +107,7 @@ liveProposal f = do
   proposals <- query @Proposal f.operator
   case [cid | (cid, p) <- proposals, p.resolution == f.resolution] of
     [cid] -> pure cid
-    _ -> fail "no live proposal on this governor"
+    _ -> fail "no live proposal on this resolver"
 
 seat : Fixture -> Party -> Script (ContractId PrivateBallot)
 seat f voter = do
@@ -123,7 +123,7 @@ cast voter ballotCid option =
 
 resolveCmd : Fixture -> [ContractId PrivateBallot] -> Commands ResolveResult
 resolveCmd f ballotCids =
-  exerciseCmd f.governorCid Governor_ResolveMajority with
+  exerciseCmd f.resolverCid Resolver_ResolveMajority with
     proposalCid = f.proposalCid
     ballotCids
 

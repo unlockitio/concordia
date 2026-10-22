@@ -19,13 +19,13 @@ fee lives on `AnsRules`, signed by `dso`. `SetFeesAction` names both contracts a
 so an execution updates both fees or neither.
 
 The SVs vote on one `SharedBallot` with weights read from `SvWeightSource`
-contracts. `DsoGovernor_OpenVote` reads the weights and takes a snapshot of
-both targets when the vote opens. `DsoGovernor_ResolveVote` requires two thirds
+contracts. `DsoResolver_OpenVote` reads the weights and takes a snapshot of
+both targets when the vote opens. `DsoResolver_ResolveVote` requires two thirds
 of the opening weight and takes the weighted median of each fee field. The
-governor then calls `Action_AuthorizeExecution`, which creates a `FeeUpdate`
+resolver then calls `Action_AuthorizeExecution`, which creates a `FeeUpdate`
 that any single SV can execute after `executionDelay`.
 
-SVs submit with `readAs dso` because the `DsoGovernor`, `AnsRules` and the
+SVs submit with `readAs dso` because the `DsoResolver`, `AnsRules` and the
 weight sources are signed by `dso`.
 
 In the fixture SV1 holds two weight sources (`sv1-a` = 3.0, `sv1-b` = 2.0), SV2
@@ -42,16 +42,16 @@ sequenceDiagram
     participant SV1
     participant SV2
     participant SV3
-    participant R as DsoGovernor
+    participant R as DsoResolver
     participant B as SharedBallot
     participant X as FeeUpdate
     participant T as AmuletConfig + AnsRules
 
-    SV1->>R: DsoGovernor_OpenVote — (0.05, 2.0)
+    SV1->>R: DsoResolver_OpenVote — (0.05, 2.0)
     R->>B: create — weights, target snapshots
     SV2->>B: SharedBallot_Cast — (0.06, 2.5)
     SV3->>B: SharedBallot_Cast — (0.09, 4.0)
-    SV1->>R: DsoGovernor_ResolveVote
+    SV1->>R: DsoResolver_ResolveVote
     Note over R: two thirds reached, weighted median (0.05, 2.0)
     R->>X: Action_AuthorizeExecution creates FeeUpdate
     SV2->>X: Executable_Execute, after executionDelay
@@ -72,7 +72,7 @@ sequenceDiagram
         participant SV3
     end
     box Contracts
-        participant R as DsoGovernor
+        participant R as DsoResolver
         participant B as SharedBallot
         participant ACT as SetFeesAction
         participant X as FeeUpdate
@@ -85,10 +85,10 @@ sequenceDiagram
     AA->>ACT: create SetFeesAction — authorizers [[dso]], targets config and ANS
     DSO->>ANS: create AnsRules — entryFee 2.0
     DSO->>DSO: create SvWeightSource × 4 — sv1-a 3.0, sv1-b 2.0, sv2-a 3.0, sv3-a 1.0
-    DSO->>R: create DsoGovernor — rightKeys, executionDelay 2h, executionWindow 1d
+    DSO->>R: create DsoResolver — rightKeys, executionDelay 2h, executionWindow 1d
 
     Note over AA,ANS: Open the vote
-    SV1->>R: DsoGovernor_OpenVote — vote (0.05, 2.0), rightCids, targetCids
+    SV1->>R: DsoResolver_OpenVote — vote (0.05, 2.0), rightCids, targetCids
     R->>R: requireResolvedBy — mechanism "weighted-vote"
     R->>R: fetchWeightsPerContract — SV1 5.0, SV2 3.0, SV3 1.0
     R->>ACT: fetch, then snapshotStatesWith action_readStateImpl
@@ -103,7 +103,7 @@ sequenceDiagram
     B->>B: archive and recreate with SV3's vote
 
     Note over AA,ANS: Resolve, after votingClosesAt
-    SV1->>R: DsoGovernor_ResolveVote — resolution, [ballotCid]
+    SV1->>R: DsoResolver_ResolveVote — resolution, [ballotCid]
     R->>B: fetchGroup, requireClosed, weightedCastsOf
     R->>B: consumeBallots — archive
     R->>R: decide (atLeastShareOfTotal 2 3) weightedMedianByField — 9.0 cast of 6.0 needed
@@ -130,14 +130,14 @@ sequenceDiagram
 keeps each vote private from `dso` and from the other voters. The `operator`
 runs the round and is trusted to see every vote.
 
-A member of the electorate opens a `Proposal` through `Governor_Propose`.
+A member of the electorate opens a `Proposal` through `Resolver_Propose`.
 The operator invites each voter, and each voter accepts the invitation, which
 adds the voter to the proposal's `roll` and creates a `PrivateBallot` signed by
 the operator and the voter. No other party observes a `PrivateBallot`.
 
 After the voting window closes, the operator presents every ballot on the roll
-to `Governor_ResolveMajority`. A `yay` wins when its weight is more than half
-of the electorate. On a `yay` the governor calls `Action_AuthorizeExecution` on
+to `Resolver_ResolveMajority`. A `yay` wins when its weight is more than half
+of the electorate. On a `yay` the resolver calls `Action_AuthorizeExecution` on
 `SetConfigAction`, which creates a `ConfigUpdate` that any single voter can
 execute. The execution requires the setting to still be `"sync-a"`.
 
@@ -149,17 +149,17 @@ The short version covers the steps of the round: propose, invite and join, cast,
 sequenceDiagram
     participant OP as operator
     participant V as Voters
-    participant R as Governor
+    participant R as Resolver
     participant BL as PrivateBallot
     participant X as ConfigUpdate
     participant CFG as Config
 
-    V->>R: Governor_Propose (Alice) — creates Proposal
+    V->>R: Resolver_Propose (Alice) — creates Proposal
     OP->>V: Proposal_Invite — one BallotInvitation each
     V->>BL: BallotInvitation_Accept — join the roll, create PrivateBallot
     V->>BL: PrivateBallot_Cast — yay, yay, nay
     Note over OP,BL: votes are visible to the operator, not to dso or other voters
-    OP->>R: Governor_ResolveMajority
+    OP->>R: Resolver_ResolveMajority
     Note over R: ballots cover the roll, 2 of 3 yay
     R->>X: Action_AuthorizeExecution creates ConfigUpdate
     V->>X: Executable_Execute (Alice)
@@ -180,7 +180,7 @@ sequenceDiagram
         participant C as Carol
     end
     box Contracts
-        participant R as Governor
+        participant R as Resolver
         participant P as Proposal
         participant I as BallotInvitation
         participant BL as PrivateBallot
@@ -192,10 +192,10 @@ sequenceDiagram
     Note over DSO,CFG: Setup
     DSO->>CFG: create Config — setting "sync-a"
     DSO->>ACT: create SetConfigAction — authorizers [[dso]], baseSetting "sync-a", newSetting "sync-b"
-    DSO->>R: create Governor — electorate {Alice, Bob, Carol}
+    DSO->>R: create Resolver — electorate {Alice, Bob, Carol}
 
     Note over DSO,CFG: Propose and invite, before entryClosesAt
-    A->>R: Governor_Propose — proposalId, terms
+    A->>R: Resolver_Propose — proposalId, terms
     R->>P: create Proposal — mechanism "majority", roll []
     OP->>P: Proposal_Invite
     P->>I: create BallotInvitation × 3 — signed by dso and operator
@@ -214,7 +214,7 @@ sequenceDiagram
     Note over OP,BL: each ballot is visible to its voter and the operator only
 
     Note over DSO,CFG: Resolve, after votingClosesAt
-    OP->>R: Governor_ResolveMajority — proposalCid, three ballots
+    OP->>R: Resolver_ResolveMajority — proposalCid, three ballots
     R->>P: fetch, requireResolvedBy
     R->>BL: fetchGroup, requireClosed, check the ballot windows and actionCid
     R->>R: castsOf — the ballots cover the roll
