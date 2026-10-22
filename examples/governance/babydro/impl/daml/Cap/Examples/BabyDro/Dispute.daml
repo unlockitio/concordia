@@ -2,17 +2,74 @@
 
 module Cap.Examples.BabyDro.Dispute where
 
+import Prelude hiding (Action)
+
 import DA.Set (Set)
 import qualified DA.Set as Set
 import DA.Map (Map)
 import qualified DA.Map as Map
 import Canton.Network.Credentials.V1 (Credential)
 import Splice.Util (HasCheckedFetch (..), fetchChecked)
+import Cap.Core.Types (AuthenticKey (..), Snapshot (..))
+import Cap.Core.Utils (IsAnyValue (..))
+import Splice.Api.Token.MetadataV1 (AnyValue (..), AnyContractId)
+import qualified DA.TextMap as TextMap
+import Cap.Governance.ActionV1 (Action)
+import Cap.Governance.Utils (HasState (..), IsBallot (..), Vote (..))
 
+disputeKey : Party -> Text -> AuthenticKey
+disputeKey authority token = AuthenticKey with authorities = Set.singleton authority; id = "name-dispute:" <> token
 
 -- These policies are local to the demo, not a rule of the CIPs name model.
 data ElectoratePolicy = SnapshotAtOpen | CurrentMembership deriving (Eq, Show)
 data Decision = KeepFirst | KeepSecond deriving (Eq, Show)
+
+-- Only the immutable opening terms belong in the snapshotted state. The
+-- ballot inventory and successor CID change with every vote; the two claims,
+-- the frozen policy and the opening electorate do not.
+data DisputeState = DisputeState with
+  caseToken : Text
+  caseId : Text
+  name : Text
+  firstRegistry : Party
+  secondRegistry : Party
+  firstCredential : ContractId Credential
+  secondCredential : ContractId Credential
+  policy : ElectoratePolicy
+  voters : Set Party
+  eligible : Set Party
+  firstAction : ContractId Action
+  secondAction : ContractId Action
+ deriving (Eq, Show)
+
+instance IsAnyValue DisputeState where
+  toAnyValue state = AV_Map (TextMap.fromList
+    [("caseToken", AV_Text state.caseToken), ("caseId", AV_Text state.caseId)
+    ,("name", AV_Text state.name), ("firstRegistry", AV_Party state.firstRegistry)
+    ,("secondRegistry", AV_Party state.secondRegistry)
+    ,("firstCredential", AV_ContractId (coerceContractId state.firstCredential))
+    ,("secondCredential", AV_ContractId (coerceContractId state.secondCredential))
+    ,("policy", AV_Text (show state.policy))
+    ,("voters", toAnyValue (Set.toList state.voters))
+    ,("eligible", toAnyValue (Set.toList state.eligible))
+    ,("firstAction", AV_ContractId (coerceContractId state.firstAction))
+    ,("secondAction", AV_ContractId (coerceContractId state.secondAction))])
+  fromAnyValue (AV_Map fields) = do
+    caseToken <- TextMap.lookup "caseToken" fields >>= fromAnyValue
+    caseId <- TextMap.lookup "caseId" fields >>= fromAnyValue
+    name <- TextMap.lookup "name" fields >>= fromAnyValue
+    firstRegistry <- TextMap.lookup "firstRegistry" fields >>= fromAnyValue
+    secondRegistry <- TextMap.lookup "secondRegistry" fields >>= fromAnyValue
+    firstCredential <- coerceContractId <$> (TextMap.lookup "firstCredential" fields >>= (fromAnyValue : AnyValue -> Optional AnyContractId))
+    secondCredential <- coerceContractId <$> (TextMap.lookup "secondCredential" fields >>= (fromAnyValue : AnyValue -> Optional AnyContractId))
+    rawPolicy <- TextMap.lookup "policy" fields >>= fromAnyValue
+    policy <- case rawPolicy of "SnapshotAtOpen" -> Some SnapshotAtOpen; "CurrentMembership" -> Some CurrentMembership; _ -> None
+    voters <- Set.fromList <$> (TextMap.lookup "voters" fields >>= fromAnyValue)
+    eligible <- Set.fromList <$> (TextMap.lookup "eligible" fields >>= fromAnyValue)
+    firstAction <- coerceContractId <$> (TextMap.lookup "firstAction" fields >>= (fromAnyValue : AnyValue -> Optional AnyContractId))
+    secondAction <- coerceContractId <$> (TextMap.lookup "secondAction" fields >>= (fromAnyValue : AnyValue -> Optional AnyContractId))
+    Some DisputeState with caseToken; caseId; name; firstRegistry; secondRegistry; firstCredential; secondCredential; policy; voters; eligible; firstAction; secondAction
+  fromAnyValue _ = None
 
 template NameDispute
   with
@@ -30,6 +87,8 @@ template NameDispute
     eligible : Set Party
     ballots : Map Party (ContractId Ballot)
     openingCaseCid : Optional (ContractId NameDispute)
+    firstAction : ContractId Action
+    secondAction : ContractId Action
   where
     signatory caseAuthority
     observer Set.toList voters
@@ -47,7 +106,7 @@ template NameDispute
       controller caseAuthority
       do
         assertMsg "voter not in the opening electorate" (Set.member voter voters)
-        create DisputeInvitation with caseAuthority; caseToken; caseId; voter
+        create DisputeInvitation with caseAuthority; caseToken; caseId; voter; firstAction; secondAction; caseState = toAnyValue (stateOf this)
 
     choice NameDispute_RegisterBallot : ContractId NameDispute
       with
@@ -59,7 +118,7 @@ template NameDispute
         assertMsg "voter not in the opening electorate" (Set.member voter voters)
         assertMsg "ballot inventory does not match" (Map.lookup voter ballots == previous)
         ballot <- fetch replacement
-        assertMsg "foreign ballot" (ballot.caseAuthority == caseAuthority && ballot.caseToken == caseToken && ballot.caseId == caseId && ballot.voter == voter)
+        assertMsg "foreign ballot" (ballot.caseAuthority == caseAuthority && ballot.caseToken == caseToken && ballot.caseId == caseId && ballot.voter == voter && ballot.firstAction == firstAction && ballot.secondAction == secondAction && ballot.caseState == toAnyValue (stateOf this))
         let opening = case openingCaseCid of
               None -> Some self
               Some original -> Some original
@@ -68,12 +127,33 @@ template NameDispute
 instance HasCheckedFetch NameDispute Party where
   contractGroupId disputed = disputed.caseAuthority
 
+instance HasCheckedFetch NameDispute AuthenticKey where
+  contractGroupId disputed = disputeKey disputed.caseAuthority disputed.caseToken
+
+instance HasState NameDispute DisputeState where
+  stateOf disputed = DisputeState with
+    caseToken = disputed.caseToken
+    caseId = disputed.caseId
+    name = disputed.name
+    firstRegistry = disputed.firstRegistry
+    secondRegistry = disputed.secondRegistry
+    firstCredential = disputed.firstCredential
+    secondCredential = disputed.secondCredential
+    policy = disputed.policy
+    voters = disputed.voters
+    eligible = disputed.eligible
+    firstAction = disputed.firstAction
+    secondAction = disputed.secondAction
+
 template DisputeInvitation
   with
     caseAuthority : Party
     caseToken : Text
     caseId : Text
     voter : Party
+    firstAction : ContractId Action
+    secondAction : ContractId Action
+    caseState : AnyValue
   where
     signatory caseAuthority
     observer voter
@@ -84,9 +164,9 @@ template DisputeInvitation
       controller voter
       do
         disputed <- fetchChecked caseAuthority caseCid
-        assertMsg "invitation belongs to another case" (disputed.caseToken == caseToken && disputed.caseId == caseId)
+        assertMsg "invitation belongs to another case" (disputed.caseToken == caseToken && disputed.caseId == caseId && disputed.firstAction == firstAction && disputed.secondAction == secondAction && toAnyValue (stateOf disputed) == caseState)
         assertMsg "voter already registered" (Map.lookup voter disputed.ballots == None)
-        ballotCid <- create Ballot with caseAuthority; caseToken; caseId; voter; decision = None
+        ballotCid <- create Ballot with caseAuthority; caseToken; caseId; voter; firstAction; secondAction; caseState; decision = None
         updated <- exercise caseCid NameDispute_RegisterBallot with voter; previous = None; replacement = ballotCid
         pure (updated, ballotCid)
 
@@ -96,9 +176,16 @@ template Ballot
     caseToken : Text
     caseId : Text
     voter : Party
+    firstAction : ContractId Action
+    secondAction : ContractId Action
+    caseState : AnyValue
     decision : Optional Decision
   where
     signatory [caseAuthority, voter]
+
+    choice Ballot_Consume : ()
+      controller caseAuthority
+      do pure ()
 
     choice Ballot_Cast : (ContractId NameDispute, ContractId Ballot)
       with
@@ -118,6 +205,20 @@ template Ballot
         replacement <- create this with decision = None
         updated <- exercise caseCid NameDispute_RegisterBallot with voter; previous = Some self; replacement
         pure (updated, replacement)
+
+instance IsBallot Ballot Decision where
+  votesOf ballot = Map.fromList [(ballot.voter, optional Absent Voted ballot.decision)]
+  snapshotsOf ballot = Map.fromList
+    [(disputeKey ballot.caseAuthority ballot.caseToken, Snapshot with state = Some ballot.caseState; cid = None)]
+  -- A ballot carrying no vote asks for nothing; the resolution only presents
+  -- ballots that voted for the decision, so the None case never reaches a
+  -- tally. It names the first action rather than aborting so that a ballot
+  -- without a vote stays a plain value.
+  actionOf ballot = case ballot.decision of
+    Some KeepFirst -> ballot.firstAction
+    Some KeepSecond -> ballot.secondAction
+    None -> ballot.firstAction
+  consume cid = exercise cid Ballot_Consume
 
 template Ruling
   with

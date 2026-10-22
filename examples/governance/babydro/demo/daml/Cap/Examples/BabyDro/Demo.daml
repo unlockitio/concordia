@@ -2,16 +2,28 @@
 
 module Cap.Examples.BabyDro.Demo where
 
+import Prelude hiding (Action)
+
 import DA.Assert ((===))
 import DA.NonEmpty (NonEmpty(..))
+import qualified DA.Map as Map
 import qualified DA.Set as Set
+import DA.Action (unless)
+import qualified DA.Text as Text
 import qualified DA.TextMap as TextMap
-import DA.Time (addRelTime, days)
+import DA.Date (date, Month (Jan))
+import DA.Time (addRelTime, days, time)
 import Daml.Script
 import qualified Splice.Api.Token.MetadataV1 as Metadata
+import Splice.Api.Token.MetadataV1 (emptyMetadata, ExtraArgs (..), emptyChoiceContext)
 import Canton.Network.Credentials.Demo
 import Canton.Network.Credentials.DemoNames
 import Canton.Network.Credentials.V1
+import Cap.Core.Types (Snapshot (..), ExecutionAction (..), ExecutionCore (..))
+import Cap.Core.Utils (IsAnyValue (..))
+import Cap.Governance.ActionV1
+import Cap.Governance.ExecutableV1
+import Cap.Governance.Utils (HasState (..))
 import Cap.Examples.BabyDro.Registry
 import Cap.Examples.BabyDro.Dispute
 
@@ -105,6 +117,24 @@ register admin subject name now = do
   issued <- submit admin $ exerciseCmd request DemoNameRequest_AcceptAsRegistryIssued with
     factory = toInterfaceContractId @CredentialRegistryFactory factory
   pure (fromInterfaceContractId @DemoCredential @RegisteredCredential issued)
+
+-- A must-fail that proves which check rejected the submit, so a test cannot
+-- pass on an unrelated failure.
+submitMustFailContaining : Show a => Text -> Party -> [Disclosure] -> Commands a -> Script ()
+submitMustFailContaining expected actor disclosures cmds = do
+  result <- trySubmit (actAs actor <> discloseMany disclosures) cmds
+  case result of
+    Left (FailureStatusError status) -> requireContains status.message
+    Left (TruncatedError _ message) -> requireContains message
+    Left err -> fail ("the command failed unexpectedly: " <> show err)
+    Right value -> fail ("the command succeeded with " <> show value)
+  where
+    requireContains actual =
+      unless (expected `Text.isInfixOf` actual) $
+        fail ("expected a failure containing " <> expected <> ", got " <> actual)
+
+epoch : Time
+epoch = time (date 1970 Jan 1) 0 0 0
 
 active : Party -> ContractId DemoCredential -> Script Bool
 active party cid = do
@@ -249,6 +279,7 @@ checkedCaseAuthority = script do
   second <- register b b "shared" now
   (_, disputed) <- open a initial b "same-token" first second
   invitation <- submit dro $ exerciseCmd disputed NameDispute_Invite with voter = c
+  Some original <- queryContractId dro disputed
   foreign <- submit foreignDro $ createCmd NameDispute with
     caseAuthority = foreignDro; caseToken = "same-token"; caseId = "same-token"
     name = "shared"; firstRegistry = a; secondRegistry = b
@@ -257,6 +288,7 @@ checkedCaseAuthority = script do
     reason = "foreign authority"; policy = SnapshotAtOpen
     voters = Set.fromList [a, b, c]; eligible = Set.fromList [a, b, c]
     ballots = mempty; openingCaseCid = None
+    firstAction = original.firstAction; secondAction = original.secondAction
   submitMustFail c $ exerciseCmd invitation DisputeInvitation_Accept with caseCid = foreign
   (registered, _) <- submit c $ exerciseCmd invitation DisputeInvitation_Accept with caseCid = disputed
   Some accepted <- queryContractId dro registered
@@ -304,12 +336,21 @@ failedArchive = script do
   one <- voteDispute dro a disputed KeepFirst
   two <- voteDispute dro c one KeepFirst
   Some disclosure <- queryDisclosure b second
+  Some beforeFailure <- queryContractId dro two
   _ <- submit b $ exerciseCmd (toInterfaceContractId @Credential second) Credential_ArchiveAsAnchorers
   submitMustFail (actAs dro <> disclose disclosure) $ exerciseCmd opened Consortium_Resolve with issuer = dro; caseCid = two; decision = KeepFirst
   Some stillOpen <- queryContractId dro opened
   Set.size stillOpen.cases === 1
   Some stillDisputed <- queryContractId dro two
   stillDisputed.firstRegistry === a
+  -- The whole transaction rolled back: ballot consumption, both case action
+  -- archives and the case closure are all still undone.
+  Map.size stillDisputed.ballots === 2
+  liveBallots <- query @Ballot dro
+  length liveBallots === 2
+  Some survivingFirst <- queryInterfaceContractId @Action dro beforeFailure.firstAction
+  Some survivingSecond <- queryInterfaceContractId @Action dro beforeFailure.secondAction
+  (survivingFirst.targets /= survivingSecond.targets) === True
   isActive <- active a first
   isActive === True
   isActive <- active b second
@@ -339,8 +380,10 @@ conflicted = script do
   four <- voteDispute dro d three KeepSecond
   Some firstDisclosure <- queryDisclosure a first
   Some secondDisclosure <- queryDisclosure b second
-  submitMustFail (actAs dro <> discloseMany [firstDisclosure, secondDisclosure]) $ exerciseCmd opened Consortium_Resolve with issuer = dro; caseCid = four; decision = KeepFirst
-  submitMustFail (actAs dro <> discloseMany [firstDisclosure, secondDisclosure]) $ exerciseCmd opened Consortium_Resolve with issuer = dro; caseCid = four; decision = KeepSecond
+  submitMustFailContaining "exactly one decision must qualify" dro [firstDisclosure, secondDisclosure] $
+    exerciseCmd opened Consortium_Resolve with issuer = dro; caseCid = four; decision = KeepFirst
+  submitMustFailContaining "exactly one decision must qualify" dro [firstDisclosure, secondDisclosure] $
+    exerciseCmd opened Consortium_Resolve with issuer = dro; caseCid = four; decision = KeepSecond
   isActive <- active a first
   isActive === True
   isActive <- active b second
@@ -392,3 +435,138 @@ motionIsolation = script do
   first <- register a a "shared" now
   second <- register b b "shared" now
   submitMustFail dro $ exerciseCmd initial OpenDispute with disputer = a; caseId = "stale"; name = "shared"; otherRegistry = b; reason = "claim"; firstCredential = toInterfaceContractId @Credential first; secondCredential = toInterfaceContractId @Credential second
+
+-- A withdrawn ballot carries no vote, so it stops counting; the same voter
+-- can recast and the resolution then has its two supporters again.
+withdrawalAndRecast : Script ()
+withdrawalAndRecast = script do
+  dro <- allocateParty "withdraw-dro"
+  a <- allocateParty "withdraw-a"
+  b <- allocateParty "withdraw-b"
+  c <- allocateParty "withdraw-c"
+  now <- getTime
+  initial <- consortium dro "withdraw-case" a b c
+  first <- register a a "shared" now
+  second <- register b b "shared" now
+  (opened, disputed) <- open a initial b "withdraw" first second
+  one <- voteDispute dro a disputed KeepFirst
+  invitation <- submit dro $ exerciseCmd one NameDispute_Invite with voter = c
+  (registered, ballot) <- submit c $ exerciseCmd invitation DisputeInvitation_Accept with caseCid = one
+  (voted, cast) <- submit c $ exerciseCmd ballot Ballot_Cast with caseCid = registered; vote = KeepFirst
+  (withdrawn, empty) <- submit c $ exerciseCmd cast Ballot_Withdraw with caseCid = voted
+  Some disclosure <- queryDisclosure b second
+  submitMustFailContaining "exactly one decision must qualify" dro [disclosure] $
+    exerciseCmd opened Consortium_Resolve with issuer = dro; caseCid = withdrawn; decision = KeepFirst
+  isActive <- active b second
+  isActive === True
+  (recast, finalBallot) <- submit c $ exerciseCmd empty Ballot_Cast with caseCid = withdrawn; vote = KeepFirst
+  Some beforeResolve <- queryContractId dro recast
+  _ <- submit (actAs dro <> disclose disclosure) $ exerciseCmd opened Consortium_Resolve with issuer = dro; caseCid = recast; decision = KeepFirst
+  isActive <- active b second
+  isActive === False
+  isActive <- active a first
+  isActive === True
+  -- The resolution consumes every inventoried ballot and both case actions,
+  -- and closes the case, so nothing can be counted or executed again.
+  consumedBallot <- queryContractId dro finalBallot
+  consumedBallot === None
+  liveBallots <- query @Ballot dro
+  length liveBallots === 0
+  firstActionAlive <- queryInterfaceContractId @Action dro beforeResolve.firstAction
+  firstActionAlive === None
+  secondActionAlive <- queryInterfaceContractId @Action dro beforeResolve.secondAction
+  secondActionAlive === None
+  caseAlive <- queryContractId dro recast
+  caseAlive === None
+  rulings <- query @Ruling dro
+  length rulings === 1
+
+-- A ballot its signatories mint outside the case cannot enter the inventory:
+-- registration checks the case identity, the two case actions and the frozen
+-- opening state the case authority put on the invitation.
+foreignBallotRejected : Script ()
+foreignBallotRejected = script do
+  dro <- allocateParty "foreign-ballot-dro"
+  a <- allocateParty "foreign-ballot-a"
+  b <- allocateParty "foreign-ballot-b"
+  c <- allocateParty "foreign-ballot-c"
+  now <- getTime
+  initial <- consortium dro "foreign-ballot-case" a b c
+  first <- register a a "shared" now
+  second <- register b b "shared" now
+  otherFirst <- register a a "shared" now
+  otherSecond <- register b b "shared" now
+  (opened, disputed) <- open a initial b "foreign-ballot" first second
+  (_, parallelCase) <- open a opened b "other-case" otherFirst otherSecond
+  Some live <- queryContractId dro disputed
+  Some other <- queryContractId dro parallelCase
+  staleAction <- submit (actAs dro <> actAs c) $ createCmd Ballot with
+    caseAuthority = dro; caseToken = "foreign-ballot"; caseId = "foreign-ballot"; voter = c
+    firstAction = other.firstAction; secondAction = other.secondAction
+    caseState = toAnyValue (stateOf live); decision = Some KeepFirst
+  submitMustFailContaining "foreign ballot" c [] $ exerciseCmd disputed NameDispute_RegisterBallot with
+    voter = c; previous = None; replacement = staleAction
+  staleState <- submit (actAs dro <> actAs c) $ createCmd Ballot with
+    caseAuthority = dro; caseToken = "foreign-ballot"; caseId = "foreign-ballot"; voter = c
+    firstAction = live.firstAction; secondAction = live.secondAction
+    caseState = toAnyValue (stateOf other); decision = Some KeepFirst
+  submitMustFailContaining "foreign ballot" c [] $ exerciseCmd disputed NameDispute_RegisterBallot with
+    voter = c; previous = None; replacement = staleState
+  Some stillOpen <- queryContractId dro disputed
+  Map.size stillOpen.ballots === 0
+
+-- The execution checks the presented case against the snapshot the ballots
+-- carried, so an execution snapshotted on one case cannot archive the loser
+-- while pointing at another live case.
+stateMismatchRejected : Script ()
+stateMismatchRejected = script do
+  dro <- allocateParty "mismatch-dro"
+  a <- allocateParty "mismatch-a"
+  b <- allocateParty "mismatch-b"
+  c <- allocateParty "mismatch-c"
+  now <- getTime
+  initial <- consortium dro "mismatch-case" a b c
+  first <- register a a "shared" now
+  second <- register b b "shared" now
+  otherFirst <- register a a "shared" now
+  otherSecond <- register b b "shared" now
+  (opened, disputed) <- open a initial b "mismatch-one" first second
+  (_, parallelCase) <- open a opened b "mismatch-two" otherFirst otherSecond
+  Some live <- queryContractId dro disputed
+  Some other <- queryContractId dro parallelCase
+  let signers = actAs dro <> actAs a <> actAs b
+  actionCid <- submit signers $ createCmd ArchiveClaimAction with
+    dro; caseToken = "mismatch-one"; name = "shared"
+    firstRegistry = a; secondRegistry = b
+    firstCredential = toInterfaceContractId @Credential first
+    secondCredential = toInterfaceContractId @Credential second
+    decision = KeepFirst
+  authorized <- submit signers $ exerciseCmd (toInterfaceContractId @Action actionCid) Action_AuthorizeExecution with
+    actors = [dro]
+    executionCore = ExecutionCore with
+      authorities = Set.singleton dro
+      availableActions = Map.fromList [(EA_Execute, [[dro]])]
+      -- The execution window must already be open under both the script
+      -- clock and the ledger clock, so it opens at the epoch.
+      opensAt = epoch
+      cancelAfter = epoch
+      expiresAt = None
+      meta = emptyMetadata
+    outcome = None
+    snapshots = Map.fromList
+      [(disputeKey dro "mismatch-one", Snapshot with state = Some (toAnyValue (stateOf other)); cid = None)]
+    extraArgs = ExtraArgs with context = emptyChoiceContext; meta = emptyMetadata
+  let [executionCid] = authorized.executionCids
+  Some disclosure <- queryDisclosure b second
+  submitMustFailContaining "has drifted from its snapshot" dro [disclosure] $ exerciseCmd executionCid Executable_Execute with
+    actors = [dro]
+    targetCids = Map.fromList
+      [(claimKey dro, coerceContractId (toInterfaceContractId @Credential second))
+      ,(disputeKey dro "mismatch-one", coerceContractId disputed)]
+    extraArgs = ExtraArgs with context = emptyChoiceContext; meta = emptyMetadata
+  isActive <- active b second
+  isActive === True
+  Some stillLive <- queryContractId dro disputed
+  stillLive.caseId === "mismatch-one"
+  live.caseId === "mismatch-one"
+  other.caseId === "mismatch-two"

@@ -13,10 +13,15 @@ import Splice.Util (fetchChecked)
 import Cap.Core.Types (AuthenticKey (..), Snapshot (..), ExecutionAction (..), ExecutionCore (..))
 import Cap.Governance.ActionV1
 import Cap.Governance.ExecutableV1
-import Cap.Governance.Utils (mergeSnapshots, requireSameKeys)
+import Cap.Core.Utils (IsAnyValue (..))
+import Cap.Governance.Utils (mergeSnapshots, requireSameKeys, readState, checkTarget, unchanged, castsOf, agreedAction, agreedSnapshots, consumeBallots, HasState (..), Vote (..))
 import Canton.Network.Credentials.DemoNames (canonicalName, credentialHasName, hasPartySubject)
 import Canton.Network.Credentials.V1
 import Cap.Examples.BabyDro.Dispute
+
+losingClaim : Decision -> ContractId Credential -> ContractId Credential -> ContractId Credential
+losingClaim KeepFirst _ second = second
+losingClaim KeepSecond first _ = first
 
 data Membership = Admit Party | Remove Party deriving (Eq, Show)
 
@@ -154,12 +159,19 @@ template Consortium
         secondView <- view <$> fetch secondCredential
         assertMsg "first credential does not match the claim and registry" (matchesClaim name disputer firstView)
         assertMsg "second credential does not match the claim and registry" (matchesClaim name otherRegistry secondView)
+        firstActionCid <- create ArchiveClaimAction with
+          dro; caseToken = caseId; name; firstRegistry = disputer; secondRegistry = otherRegistry
+          firstCredential; secondCredential; decision = KeepFirst
+        secondActionCid <- create ArchiveClaimAction with
+          dro; caseToken = caseId; name; firstRegistry = disputer; secondRegistry = otherRegistry
+          firstCredential; secondCredential; decision = KeepSecond
         caseCid <- create NameDispute with
           caseAuthority = dro
           caseToken = caseId
           caseId; name; firstRegistry = disputer; secondRegistry = otherRegistry; reason
           firstCredential; secondCredential
           policy; voters = members; eligible = members; ballots = Map.empty; openingCaseCid = None
+          firstAction = toInterfaceContractId firstActionCid; secondAction = toInterfaceContractId secondActionCid
         successor <- create this with cases = Set.insert (ActiveCase caseCid disputer otherRegistry name firstCredential secondCredential) cases
         pure (successor, caseCid)
 
@@ -180,18 +192,27 @@ template Consortium
         let electorate = case disputed.policy of
               SnapshotAtOpen -> disputed.eligible
               CurrentMembership -> Set.intersection disputed.eligible members
-        votes <- forA (Map.toList disputed.ballots) $ \(voter, ballotCid) -> do
+        presented <- forA (Map.toList disputed.ballots) $ \(voter, ballotCid) -> do
           ballot <- fetch ballotCid
-          assertMsg "foreign ballot in inventory" (ballot.caseAuthority == disputed.caseAuthority && ballot.caseToken == disputed.caseToken && ballot.caseId == disputed.caseId && ballot.voter == voter)
-          pure (voter, ballot.decision)
-        let supporters = Set.fromList [voter | (voter, Some vote) <- votes, vote == decision, Set.member voter electorate]
+          assertMsg "foreign ballot in inventory" (ballot.caseAuthority == disputed.caseAuthority && ballot.caseToken == disputed.caseToken && ballot.caseId == disputed.caseId && ballot.voter == voter && ballot.firstAction == disputed.firstAction && ballot.secondAction == disputed.secondAction && ballot.caseState == toAnyValue (stateOf disputed))
+          pure (ballotCid, ballot)
+        let eligibleBallots = [(cid, ballot) | (cid, ballot) <- presented, Set.member ballot.voter electorate]
+        casts <- castsOf Some electorate (map snd eligibleBallots)
+        let supporters = Set.fromList [voter | (voter, cast) <- Map.toList casts, cast.vote == Voted decision]
         let opposite = case decision of KeepFirst -> KeepSecond; KeepSecond -> KeepFirst
-        let opposing = Set.fromList [voter | (voter, Some vote) <- votes, vote == opposite, Set.member voter electorate]
+        let opposing = Set.fromList [voter | (voter, cast) <- Map.toList casts, cast.vote == Voted opposite]
         assertMsg "exactly one decision must qualify" (Set.size supporters >= 2 && Set.size opposing < 2)
-        let losingCredential = case decision of KeepFirst -> disputed.secondCredential; KeepSecond -> disputed.firstCredential
-        actionCid <- create ArchiveClaimAction with dro; members; losingCredential
+        let actionCid = case decision of KeepFirst -> disputed.firstAction; KeepSecond -> disputed.secondAction
+        let supportingBallots = [ballot | (_, ballot) <- eligibleBallots, ballot.decision == Some decision]
+        agreed <- agreedAction supportingBallots
+        assertMsg "ballots authorize another action" (agreed == actionCid)
+        ballotSnapshots <- agreedSnapshots supportingBallots
+        let losingCredential = losingClaim decision disputed.firstCredential disputed.secondCredential
+        let stateKey = disputeKey dro disputed.caseToken
+        liveState <- readState @NameDispute stateKey (coerceContractId caseCid)
+        assertMsg "ballot state differs from the live case" (ballotSnapshots == Map.fromList [(stateKey, Snapshot with state = liveState; cid = None)])
         now <- getTime
-        authorized <- exercise (toInterfaceContractId @Action actionCid) Action_AuthorizeExecution with
+        authorized <- exercise actionCid Action_AuthorizeExecution with
           actors = [dro]
           executionCore = ExecutionCore with
             authorities = Set.singleton dro
@@ -201,14 +222,16 @@ template Consortium
             expiresAt = None
             meta = emptyMetadata
           outcome = None
-          snapshots = Map.empty
+          snapshots = ballotSnapshots
           extraArgs = ExtraArgs with context = emptyChoiceContext; meta = emptyMetadata
         let [executionCid] = authorized.executionCids
         _ <- exercise executionCid Executable_Execute with
           actors = [dro]
-          targetCids = Map.fromList [(claimKey dro, coerceContractId losingCredential)]
+          targetCids = Map.fromList [(claimKey dro, coerceContractId losingCredential), (stateKey, coerceContractId caseCid)]
           extraArgs = ExtraArgs with context = emptyChoiceContext; meta = emptyMetadata
-        archive actionCid
+        consumeBallots (map fst presented)
+        archive disputed.firstAction
+        archive disputed.secondAction
         _ <- exercise caseCid NameDispute_Close
         _ <- create this with cases = Set.delete activeCase cases
         create Ruling with
@@ -227,25 +250,37 @@ claimKey dro = AuthenticKey with authorities = Set.singleton dro; id = "losing-c
 template ArchiveClaimAction
   with
     dro : Party
-    members : Set Party
-    losingCredential : ContractId Credential
+    caseToken : Text
+    name : Text
+    firstRegistry : Party
+    secondRegistry : Party
+    firstCredential : ContractId Credential
+    secondCredential : ContractId Credential
+    decision : Decision
   where
-    signatory dro, Set.toList members
+    signatory [dro, firstRegistry, secondRegistry]
 
     interface instance Action for ArchiveClaimAction where
       view = ActionView with
         authorizers = [[dro]]
-        targets = Map.fromList [(claimKey dro, Snapshot with state = None; cid = Some (coerceContractId losingCredential))]
+        targets = Map.fromList
+          [(claimKey dro, Snapshot with state = None; cid = Some (coerceContractId (losingClaim decision firstCredential secondCredential)))
+          ,(disputeKey dro caseToken, Snapshot with state = None; cid = None)]
         meta = emptyMetadata
 
-      action_readStateImpl key cid = do
-        assertMsg "wrong credential target" (key == claimKey dro && cid == coerceContractId losingCredential)
-        _ <- fetch losingCredential
-        pure None
+      action_readStateImpl key cid =
+        if key == disputeKey dro caseToken then readState @NameDispute key cid
+        else do
+          let losingCredential = losingClaim decision firstCredential secondCredential
+          assertMsg "wrong credential target" (key == claimKey dro && cid == coerceContractId losingCredential)
+          _ <- fetch losingCredential
+          pure None
 
       action_authorizeExecutionImpl _ arg = do
         snapshots <- mergeSnapshots (view (toInterface @Action this)).targets arg.snapshots
-        executionCid <- create ArchiveClaimExecution with dro; members; losingCredential; core = arg.executionCore; snapshots
+        executionCid <- create ArchiveClaimExecution with
+          dro; caseToken; name; firstRegistry; secondRegistry; firstCredential; secondCredential; decision
+          core = arg.executionCore; snapshots
         pure Action_AuthorizeExecutionResult with
           executionCids = [toInterfaceContractId executionCid]
           meta = emptyMetadata
@@ -253,12 +288,17 @@ template ArchiveClaimAction
 template ArchiveClaimExecution
   with
     dro : Party
-    members : Set Party
-    losingCredential : ContractId Credential
+    caseToken : Text
+    name : Text
+    firstRegistry : Party
+    secondRegistry : Party
+    firstCredential : ContractId Credential
+    secondCredential : ContractId Credential
+    decision : Decision
     core : ExecutionCore
     snapshots : Map.Map AuthenticKey Snapshot
   where
-    signatory dro, Set.toList members
+    signatory [dro, firstRegistry, secondRegistry]
 
     interface instance Executable for ArchiveClaimExecution where
       view = ExecutableView with executionCore = core; snapshots; outcome = None
@@ -267,7 +307,11 @@ template ArchiveClaimExecution
 
       executable_executeImpl targetCids _ = do
         requireSameKeys snapshots targetCids
+        let losingCredential = losingClaim decision firstCredential secondCredential
         assertMsg "wrong frozen credential" (Map.lookup (claimKey dro) targetCids == Some (coerceContractId losingCredential))
+        let stateKey = disputeKey dro caseToken
+        (_, disputed) <- checkTarget @NameDispute unchanged stateKey snapshots targetCids
+        assertMsg "action belongs to another dispute" (disputed.name == name && disputed.firstRegistry == firstRegistry && disputed.secondRegistry == secondRegistry && disputed.firstCredential == firstCredential && disputed.secondCredential == secondCredential)
         _ <- fetch losingCredential
         _ <- exercise losingCredential Credential_ArchiveAsAnchorers
         pure Executable_ExecuteResult with created = []; meta = emptyMetadata
