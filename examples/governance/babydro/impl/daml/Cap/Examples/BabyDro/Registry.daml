@@ -5,6 +5,7 @@ module Cap.Examples.BabyDro.Registry where
 import Prelude hiding (Action)
 
 import DA.Set (Set)
+import DA.Foldable (forA_)
 import qualified DA.Set as Set
 import qualified DA.Map as Map
 import DA.NonEmpty (NonEmpty(..))
@@ -18,10 +19,12 @@ import Cap.Governance.Utils (mergeSnapshots, requireSameKeys, readState, checkTa
 import Canton.Network.Credentials.DemoNames (canonicalName, credentialHasName, hasPartySubject)
 import Canton.Network.Credentials.V1
 import Cap.Examples.BabyDro.Dispute
+import Cap.Examples.BabyDro.Rights
 
-losingClaim : Decision -> ContractId Credential -> ContractId Credential -> ContractId Credential
-losingClaim KeepFirst _ second = second
-losingClaim KeepSecond first _ = first
+winnerOf : Decision -> Party -> Party -> Party
+winnerOf KeepFirst first _ = first
+winnerOf KeepSecond _ second = second
+winnerOf (KeepRegistry registry) _ _ = registry
 
 data Membership = Admit Party | Remove Party deriving (Eq, Show)
 
@@ -32,7 +35,8 @@ data ActiveCase = ActiveCase with
   name : Text
   firstCredential : ContractId Credential
   secondCredential : ContractId Credential
- deriving (Eq, Ord, Show)
+  claims : Map.Map Party (ContractId Credential)
+   deriving (Eq, Ord, Show)
 
 matchesClaim : Text -> Party -> CredentialView -> Bool
 matchesClaim name registry credential =
@@ -65,62 +69,97 @@ template GenesisProposal
       controller dro
       do
         assertMsg "every founder must accept" (accepted == founders)
-        create Consortium with dro; consortiumId; members = founders; policy; cases = Set.empty
+        create Consortium with
+          dro; consortiumId; policy; cases = Set.empty
+          admitted = Map.fromList [(founder, 1) | founder <- Set.toList founders]
+          stints = Map.fromList [(founder, 1) | founder <- Set.toList founders]
 
 -- Stable identity is (dro, consortiumId). Without keys it is not globally unique.
+--
+-- The consortium records *that* a member is entitled and for which stint; it
+-- never holds a voting right contract ID. A right minted inside an all-member
+-- choice would be disclosed to every member, so entitlement is only invited
+-- here and the credential is created in a separate DRO-and-member transaction.
+--
+-- `stints` keeps the highest stint number ever issued to a party, including
+-- parties no longer admitted, so re-admission always allocates a fresh one.
 template Consortium
   with
     dro : Party
     consortiumId : Text
-    members : Set Party
+    admitted : Map.Map Party Int
+    stints : Map.Map Party Int
     policy : ElectoratePolicy
     cases : Set ActiveCase
   where
-    signatory dro, Set.toList members
-    ensure consortiumId /= "" && Set.size members >= 2 && not (Set.member dro members)
+    signatory dro, Map.keys admitted
+    ensure consortiumId /= "" && Map.size admitted >= 2 && Map.lookup dro admitted == None
+      && all (\(party, stint) -> Map.lookup party stints == Some stint) (Map.toList admitted)
+
+    -- Decision-free terms only: who may hold a right and until when. No
+    -- credential and no route is named, so the all-member witnesses of this
+    -- choice learn nothing about the credential that follows.
+    nonconsuming choice InviteRight : ContractId VotingRightInvitation
+      with
+        member : Party
+        expiresAt : Time
+      controller dro
+      do
+        now <- getTime
+        assertMsg "invitation must expire in the future" (expiresAt > now)
+        case Map.lookup member admitted of
+          None -> abort "only admitted members receive rights"
+          Some stint -> create VotingRightInvitation with dro; consortiumId; member; stint; expiresAt
 
     nonconsuming choice ProposeMembership : ContractId MembershipMotion
       with
         proposer : Party
+        proposerRight : RightRef
         change : Membership
       controller proposer
       do
-        assertMsg "only members propose" (Set.member proposer members)
+        requireEntitlement dro consortiumId admitted proposer proposerRight
         case change of
-          Admit target -> assertMsg "not a new registry" (target /= dro && not (Set.member target members))
-          Remove target -> assertMsg "not a member" (Set.member target members)
+          Admit target -> assertMsg "not a new registry" (target /= dro && not (Map.member target admitted))
+          Remove target -> assertMsg "not a member" (Map.member target admitted)
         create MembershipMotion with
-          dro; consortiumId; consortiumCid = self; members; change
+          dro; consortiumId; consortiumCid = self; admitted; change
           supporters = Set.singleton proposer; root = None
 
     nonconsuming choice ProposePolicy : ContractId PolicyMotion
       with
         proposer : Party
+        proposerRight : RightRef
         targetPolicy : ElectoratePolicy
       controller proposer
       do
-        assertMsg "only members propose a change" (Set.member proposer members && targetPolicy /= policy)
+        assertMsg "policy already in force" (targetPolicy /= policy)
+        requireEntitlement dro consortiumId admitted proposer proposerRight
         create PolicyMotion with
-          dro; consortiumId; consortiumCid = self; members; targetPolicy
+          dro; consortiumId; consortiumCid = self; admitted; targetPolicy
           supporters = Set.singleton proposer; root = None
 
     choice ApplyRemoval : ContractId Consortium
       with
         target : Party
         authorizedMotion : ContractId MembershipMotion
-      controller dro, Set.toList members
+      controller dro, Map.keys admitted
       do
         motion <- fetch authorizedMotion
         assertMsg "wrong motion" (motion.consortiumCid == self && motion.change == Remove target && Set.size motion.supporters >= 2)
-        assertMsg "at least two members remain" (Set.member target members && Set.size members > 2)
-        assertMsg "registry participates in an active dispute" (all (\activeCase -> target /= activeCase.firstRegistry && target /= activeCase.secondRegistry) (Set.toList cases))
-        create this with members = Set.delete target members
+        assertMsg "at least two members remain" (Map.member target admitted && Map.size admitted > 2)
+        assertMsg "registry participates in an active dispute" (all (\activeCase -> Map.lookup target activeCase.claims == None) (Set.toList cases))
+        -- The removed member's credential stays live; this contract cannot
+        -- archive it. Dropping the party from `admitted` is what retires the
+        -- entitlement, and `stints` remembers the stint so a later
+        -- re-admission cannot reuse it.
+        create this with admitted = Map.delete target admitted
 
     choice ApplyPolicy : ContractId Consortium
       with
         targetPolicy : ElectoratePolicy
         authorizedMotion : ContractId PolicyMotion
-      controller dro, Set.toList members
+      controller dro, Map.keys admitted
       do
         motion <- fetch authorizedMotion
         assertMsg "wrong motion" (motion.consortiumCid == self && motion.targetPolicy == targetPolicy && Set.size motion.supporters >= 2)
@@ -138,41 +177,57 @@ template Consortium
         consent <- fetch acceptedConsent
         assertMsg "consent mismatch" (consent.motionCid == authorizedMotion && consent.consortiumCid == self && consent.target == target)
         assertMsg "wrong motion" (motion.consortiumCid == self && motion.change == Admit target && Set.size motion.supporters >= 2)
-        assertMsg "DRO cannot join the registry" (target /= dro && not (Set.member target members))
-        create this with members = Set.insert target members
+        assertMsg "DRO cannot join the registry" (target /= dro && not (Map.member target admitted))
+        -- A fresh stint number, so a right issued during an earlier stint
+        -- cannot be presented again after re-admission.
+        let stint = optional 1 (+ 1) (Map.lookup target stints)
+        create this with
+          admitted = Map.insert target stint admitted
+          stints = Map.insert target stint stints
 
     choice OpenDispute : (ContractId Consortium, ContractId NameDispute)
       with
         disputer : Party
+        disputerRight : RightRef
         caseId : Text
         name : Text
         otherRegistry : Party
         reason : Text
         firstCredential : ContractId Credential
         secondCredential : ContractId Credential
+        additionalClaims : Map.Map Party (ContractId Credential)
       controller disputer
       do
-        assertMsg "only entitled registries dispute" (Set.member disputer members && Set.member otherRegistry members && disputer /= otherRegistry)
+        let members = Set.fromList (Map.keys admitted)
+        assertMsg "only entitled registries dispute" (Map.member disputer admitted && Map.member otherRegistry admitted && disputer /= otherRegistry)
+        -- Only the submitter proves its own entitlement. A co-participant's
+        -- right is its own private credential; demanding it here would force
+        -- every opener to read foreign rights.
+        requireEntitlement dro consortiumId admitted disputer disputerRight
         assertMsg "reason and name required" (reason /= "" && name /= "" && caseId /= "")
         assertMsg "distinct credential IDs required" (firstCredential /= secondCredential)
-        firstView <- view <$> fetch firstCredential
-        secondView <- view <$> fetch secondCredential
-        assertMsg "first credential does not match the claim and registry" (matchesClaim name disputer firstView)
-        assertMsg "second credential does not match the claim and registry" (matchesClaim name otherRegistry secondView)
-        firstActionCid <- create ArchiveClaimAction with
-          dro; caseToken = caseId; name; firstRegistry = disputer; secondRegistry = otherRegistry
-          firstCredential; secondCredential; decision = KeepFirst
-        secondActionCid <- create ArchiveClaimAction with
-          dro; caseToken = caseId; name; firstRegistry = disputer; secondRegistry = otherRegistry
-          firstCredential; secondCredential; decision = KeepSecond
+        assertMsg "duplicate participant" (Map.lookup disputer additionalClaims == None && Map.lookup otherRegistry additionalClaims == None)
+        let claims = Map.insert disputer firstCredential (Map.insert otherRegistry secondCredential additionalClaims)
+        assertMsg "all claimants must be admitted members" (all (\registry -> Map.member registry admitted) (Map.keys claims))
+        assertMsg "distinct credential IDs required" (Set.size (Set.fromList (map snd (Map.toList claims))) == Map.size claims)
+        forA_ (Map.toList claims) $ \(registry, credentialCid) -> do
+          credential <- view <$> fetch credentialCid
+          assertMsg "credential does not match the claim and registry" (matchesClaim name registry credential)
+        actionPairs <- forA (Map.toList claims) $ \(registry, _) -> do
+          actionCid <- create ArchiveClaimAction with
+            dro; caseToken = caseId; name; claims; winner = registry
+          pure (registry, toInterfaceContractId actionCid)
+        let actions = Map.fromList actionPairs
+        let Some firstAction = Map.lookup disputer actions
+        let Some secondAction = Map.lookup otherRegistry actions
         caseCid <- create NameDispute with
           caseAuthority = dro
           caseToken = caseId
-          caseId; name; firstRegistry = disputer; secondRegistry = otherRegistry; reason
-          firstCredential; secondCredential
-          policy; voters = members; eligible = members; ballots = Map.empty; openingCaseCid = None
-          firstAction = toInterfaceContractId firstActionCid; secondAction = toInterfaceContractId secondActionCid
-        successor <- create this with cases = Set.insert (ActiveCase caseCid disputer otherRegistry name firstCredential secondCredential) cases
+          consortiumId; caseId; name; firstRegistry = disputer; secondRegistry = otherRegistry; reason
+          firstCredential; secondCredential; claims
+          policy; voters = members; eligible = members; admitted; ballots = Map.empty; openingCaseCid = None
+          firstAction; secondAction; actions
+        successor <- create this with cases = Set.insert (ActiveCase caseCid disputer otherRegistry name firstCredential secondCredential claims) cases
         pure (successor, caseCid)
 
     choice Consortium_Resolve : ContractId Ruling
@@ -182,11 +237,12 @@ template Consortium
         decision : Decision
       controller issuer
       do
+        let members = Set.fromList (Map.keys admitted)
         disputed <- fetchChecked dro caseCid
         let opening = case disputed.openingCaseCid of
               None -> caseCid
               Some original -> original
-        let activeCase = ActiveCase opening disputed.firstRegistry disputed.secondRegistry disputed.name disputed.firstCredential disputed.secondCredential
+        let activeCase = ActiveCase opening disputed.firstRegistry disputed.secondRegistry disputed.name disputed.firstCredential disputed.secondCredential disputed.claims
         assertMsg "case not opened by this consortium chain" (Set.member activeCase cases)
         assertMsg "only the DRO issues rulings" (issuer == dro)
         let electorate = case disputed.policy of
@@ -194,20 +250,30 @@ template Consortium
               CurrentMembership -> Set.intersection disputed.eligible members
         presented <- forA (Map.toList disputed.ballots) $ \(voter, ballotCid) -> do
           ballot <- fetch ballotCid
-          assertMsg "foreign ballot in inventory" (ballot.caseAuthority == disputed.caseAuthority && ballot.caseToken == disputed.caseToken && ballot.caseId == disputed.caseId && ballot.voter == voter && ballot.firstAction == disputed.firstAction && ballot.secondAction == disputed.secondAction && ballot.caseState == toAnyValue (stateOf disputed))
+          assertMsg "foreign ballot in inventory" (ballot.caseAuthority == disputed.caseAuthority && ballot.caseToken == disputed.caseToken && ballot.caseId == disputed.caseId && ballot.voter == voter && ballot.firstAction == disputed.firstAction && ballot.secondAction == disputed.secondAction && ballot.actions == disputed.actions && ballot.caseState == toAnyValue (stateOf disputed))
           pure (ballotCid, ballot)
         let eligibleBallots = [(cid, ballot) | (cid, ballot) <- presented, Set.member ballot.voter electorate]
+        -- Each ballot carries the right its voter presented when registering.
+        -- The DRO signs every right it issued, so it can re-check the live
+        -- credential here without any member disclosing a foreign one. An
+        -- expired or revoked right fails this check, because the credential
+        -- is fetched and its validity window re-read at this ledger time.
+        --
+        -- The policy freezes who may vote, not which credential counts: the
+        -- stint is always checked against the live consortium, so a right
+        -- from a finished stint never counts under either policy.
+        forA_ eligibleBallots (\(_, ballot) -> requireEntitlement dro consortiumId admitted ballot.voter ballot.right)
         casts <- castsOf Some electorate (map snd eligibleBallots)
-        let supporters = Set.fromList [voter | (voter, cast) <- Map.toList casts, cast.vote == Voted decision]
-        let opposite = case decision of KeepFirst -> KeepSecond; KeepSecond -> KeepFirst
-        let opposing = Set.fromList [voter | (voter, cast) <- Map.toList casts, cast.vote == Voted opposite]
-        assertMsg "exactly one decision must qualify" (Set.size supporters >= 2 && Set.size opposing < 2)
-        let actionCid = case decision of KeepFirst -> disputed.firstAction; KeepSecond -> disputed.secondAction
-        let supportingBallots = [ballot | (_, ballot) <- eligibleBallots, ballot.decision == Some decision]
+        let winner = winnerOf decision disputed.firstRegistry disputed.secondRegistry
+        assertMsg "winner not in the frozen claims" (Map.lookup winner disputed.claims /= None)
+        let supporters = Set.fromList [voter | (voter, cast) <- Map.toList casts, case cast.vote of Voted choice -> winnerOf choice disputed.firstRegistry disputed.secondRegistry == winner; Absent -> False; Abstained -> False]
+        let opposingQuorum = any (\registry -> registry /= winner && Set.size (Set.fromList [voter | (voter, cast) <- Map.toList casts, case cast.vote of Voted choice -> winnerOf choice disputed.firstRegistry disputed.secondRegistry == registry; Absent -> False; Abstained -> False]) >= 2) (Map.keys disputed.claims)
+        assertMsg "exactly one decision must qualify" (Set.size supporters >= 2 && not opposingQuorum)
+        let Some actionCid = Map.lookup winner disputed.actions
+        let supportingBallots = [ballot | (_, ballot) <- eligibleBallots, case ballot.decision of Some choice -> winnerOf choice disputed.firstRegistry disputed.secondRegistry == winner; None -> False]
         agreed <- agreedAction supportingBallots
         assertMsg "ballots authorize another action" (agreed == actionCid)
         ballotSnapshots <- agreedSnapshots supportingBallots
-        let losingCredential = losingClaim decision disputed.firstCredential disputed.secondCredential
         let stateKey = disputeKey dro disputed.caseToken
         liveState <- readState @NameDispute stateKey (coerceContractId caseCid)
         assertMsg "ballot state differs from the live case" (ballotSnapshots == Map.fromList [(stateKey, Snapshot with state = liveState; cid = None)])
@@ -225,61 +291,58 @@ template Consortium
           snapshots = ballotSnapshots
           extraArgs = ExtraArgs with context = emptyChoiceContext; meta = emptyMetadata
         let [executionCid] = authorized.executionCids
+        let targets = Map.insert stateKey (coerceContractId caseCid) (Map.fromList [(claimKey dro registry, coerceContractId credential) | (registry, credential) <- Map.toList disputed.claims, registry /= winner])
         _ <- exercise executionCid Executable_Execute with
           actors = [dro]
-          targetCids = Map.fromList [(claimKey dro, coerceContractId losingCredential), (stateKey, coerceContractId caseCid)]
+          targetCids = targets
           extraArgs = ExtraArgs with context = emptyChoiceContext; meta = emptyMetadata
         consumeBallots (map fst presented)
-        archive disputed.firstAction
-        archive disputed.secondAction
+        forA_ (map snd (Map.toList disputed.actions)) archive
         _ <- exercise caseCid NameDispute_Close
         _ <- create this with cases = Set.delete activeCase cases
         create Ruling with
           caseAuthority = disputed.caseAuthority
           caseToken = disputed.caseToken
+          consortiumId = disputed.consortiumId
           caseId = disputed.caseId
           name = disputed.name
           firstRegistry = disputed.firstRegistry
           secondRegistry = disputed.secondRegistry
-          decision
+          decision; winner; participants = Set.fromList (Map.keys disputed.claims)
           followedBy = Set.empty
 
-claimKey : Party -> AuthenticKey
-claimKey dro = AuthenticKey with authorities = Set.singleton dro; id = "losing-credential"
+claimKey : Party -> Party -> AuthenticKey
+claimKey dro registry = AuthenticKey with authorities = Set.singleton dro; id = "losing-credential:" <> show registry
 
 template ArchiveClaimAction
   with
     dro : Party
     caseToken : Text
     name : Text
-    firstRegistry : Party
-    secondRegistry : Party
-    firstCredential : ContractId Credential
-    secondCredential : ContractId Credential
-    decision : Decision
+    claims : Map.Map Party (ContractId Credential)
+    winner : Party
   where
-    signatory [dro, firstRegistry, secondRegistry]
+    signatory dro, Map.keys claims
 
     interface instance Action for ArchiveClaimAction where
       view = ActionView with
         authorizers = [[dro]]
-        targets = Map.fromList
-          [(claimKey dro, Snapshot with state = None; cid = Some (coerceContractId (losingClaim decision firstCredential secondCredential)))
-          ,(disputeKey dro caseToken, Snapshot with state = None; cid = None)]
+        targets = Map.insert (disputeKey dro caseToken) (Snapshot with state = None; cid = None)
+          (Map.fromList [(claimKey dro registry, Snapshot with state = None; cid = Some (coerceContractId credential)) | (registry, credential) <- Map.toList claims, registry /= winner])
         meta = emptyMetadata
 
       action_readStateImpl key cid =
         if key == disputeKey dro caseToken then readState @NameDispute key cid
         else do
-          let losingCredential = losingClaim decision firstCredential secondCredential
-          assertMsg "wrong credential target" (key == claimKey dro && cid == coerceContractId losingCredential)
-          _ <- fetch losingCredential
-          pure None
+          let matches = [credential | (registry, credential) <- Map.toList claims, registry /= winner, key == claimKey dro registry && cid == coerceContractId credential]
+          case matches of
+            [credential] -> do _ <- fetch credential; pure None
+            _ -> abort "wrong credential target"
 
       action_authorizeExecutionImpl _ arg = do
         snapshots <- mergeSnapshots (view (toInterface @Action this)).targets arg.snapshots
         executionCid <- create ArchiveClaimExecution with
-          dro; caseToken; name; firstRegistry; secondRegistry; firstCredential; secondCredential; decision
+          dro; caseToken; name; claims; winner
           core = arg.executionCore; snapshots
         pure Action_AuthorizeExecutionResult with
           executionCids = [toInterfaceContractId executionCid]
@@ -290,15 +353,12 @@ template ArchiveClaimExecution
     dro : Party
     caseToken : Text
     name : Text
-    firstRegistry : Party
-    secondRegistry : Party
-    firstCredential : ContractId Credential
-    secondCredential : ContractId Credential
-    decision : Decision
+    claims : Map.Map Party (ContractId Credential)
+    winner : Party
     core : ExecutionCore
     snapshots : Map.Map AuthenticKey Snapshot
   where
-    signatory [dro, firstRegistry, secondRegistry]
+    signatory dro, Map.keys claims
 
     interface instance Executable for ArchiveClaimExecution where
       view = ExecutableView with executionCore = core; snapshots; outcome = None
@@ -307,13 +367,16 @@ template ArchiveClaimExecution
 
       executable_executeImpl targetCids _ = do
         requireSameKeys snapshots targetCids
-        let losingCredential = losingClaim decision firstCredential secondCredential
-        assertMsg "wrong frozen credential" (Map.lookup (claimKey dro) targetCids == Some (coerceContractId losingCredential))
+        let losers = [(registry, credential) | (registry, credential) <- Map.toList claims, registry /= winner]
+        forA_ losers $ \(registry, credential) ->
+          assertMsg "wrong frozen credential" (Map.lookup (claimKey dro registry) targetCids == Some (coerceContractId credential))
         let stateKey = disputeKey dro caseToken
         (_, disputed) <- checkTarget @NameDispute unchanged stateKey snapshots targetCids
-        assertMsg "action belongs to another dispute" (disputed.name == name && disputed.firstRegistry == firstRegistry && disputed.secondRegistry == secondRegistry && disputed.firstCredential == firstCredential && disputed.secondCredential == secondCredential)
-        _ <- fetch losingCredential
-        _ <- exercise losingCredential Credential_ArchiveAsAnchorers
+        assertMsg "action belongs to another dispute" (disputed.name == name && disputed.claims == claims)
+        forA_ losers $ \(_, credential) -> do
+          _ <- fetch credential
+          _ <- exercise credential Credential_ArchiveAsAnchorers
+          pure ()
         pure Executable_ExecuteResult with created = []; meta = emptyMetadata
 
 template MembershipMotion
@@ -321,44 +384,54 @@ template MembershipMotion
     dro : Party
     consortiumId : Text
     consortiumCid : ContractId Consortium
-    members : Set Party
+    admitted : Map.Map Party Int
     change : Membership
     supporters : Set Party
     root : Optional (ContractId MembershipMotion)
   where
-    signatory dro, Set.toList members
-    ensure Set.isSubsetOf supporters members
+    signatory dro, Map.keys admitted
+    ensure Set.isSubsetOf supporters (Set.fromList (Map.keys admitted))
 
+    -- Every supporter proved a live entitlement when it voted, so the enacting
+    -- choices do not re-read foreign rights.
     choice Membership_Vote : ContractId MembershipMotion
-      with voter : Party
+      with
+        voter : Party
+        voterRight : RightRef
       controller voter
       do
-        assertMsg "duplicate or ineligible vote" (Set.member voter members && not (Set.member voter supporters))
+        assertMsg "duplicate or ineligible vote" (Map.member voter admitted && not (Set.member voter supporters))
+        requireEntitlement dro consortiumId admitted voter voterRight
         let origin = case root of None -> self; Some original -> original
         create this with supporters = Set.insert voter supporters; root = Some origin
 
     nonconsuming choice Membership_Enact : ContractId Consortium
-      with enactor : Party
+      with
+        enactor : Party
+        enactorRight : RightRef
       controller enactor
       do
-        assertMsg "only current members enact" (Set.member enactor members)
+        requireEntitlement dro consortiumId admitted enactor enactorRight
         assertMsg "two members must approve" (Set.size supporters >= 2)
         consortium <- fetch consortiumCid
-        assertMsg "stale or foreign consortium" (consortium.dro == dro && consortium.consortiumId == consortiumId && consortium.members == members)
+        assertMsg "stale or foreign consortium" (consortium.dro == dro && consortium.consortiumId == consortiumId && consortium.admitted == admitted)
         case change of
           Admit _ -> abort "candidate must accept invitation"
           Remove target -> do
-            assertMsg "at least two members remain" (Set.size members > 2)
+            assertMsg "at least two members remain" (Map.size admitted > 2)
             exercise consortiumCid ApplyRemoval with target; authorizedMotion = self
 
     nonconsuming choice Membership_Invite : ContractId AdmissionInvitation
-      with inviter : Party
+      with
+        inviter : Party
+        inviterRight : RightRef
       controller inviter
       do
-        assertMsg "only supported admission can invite" (Set.member inviter members && Set.size supporters >= 2)
+        assertMsg "only supported admission can invite" (Set.size supporters >= 2)
+        requireEntitlement dro consortiumId admitted inviter inviterRight
         target <- case change of Admit party -> pure party; Remove _ -> abort "not admission"
         _ <- fetch consortiumCid
-        create AdmissionInvitation with dro; consortiumId; members; target; consortiumCid; motionCid = self
+        create AdmissionInvitation with dro; consortiumId; admitted; target; consortiumCid; motionCid = self
 
     nonconsuming choice Membership_Admit : ContractId Consortium
       with
@@ -368,7 +441,7 @@ template MembershipMotion
       do
         assertMsg "wrong target or insufficient support" (change == Admit target && Set.size supporters >= 2)
         consortium <- fetch consortiumCid
-        assertMsg "stale or foreign consortium" (consortium.dro == dro && consortium.consortiumId == consortiumId && consortium.members == members)
+        assertMsg "stale or foreign consortium" (consortium.dro == dro && consortium.consortiumId == consortiumId && consortium.admitted == admitted)
         exercise consortiumCid EnactAdmission with target; authorizedMotion = self; acceptedConsent
 
 template PolicyMotion
@@ -376,67 +449,72 @@ template PolicyMotion
     dro : Party
     consortiumId : Text
     consortiumCid : ContractId Consortium
-    members : Set Party
+    admitted : Map.Map Party Int
     targetPolicy : ElectoratePolicy
     supporters : Set Party
     root : Optional (ContractId PolicyMotion)
   where
-    signatory dro, Set.toList members
-    ensure Set.isSubsetOf supporters members
+    signatory dro, Map.keys admitted
+    ensure Set.isSubsetOf supporters (Set.fromList (Map.keys admitted))
 
     choice Policy_Vote : ContractId PolicyMotion
-      with voter : Party
+      with
+        voter : Party
+        voterRight : RightRef
       controller voter
       do
-        assertMsg "duplicate or ineligible vote" (Set.member voter members && not (Set.member voter supporters))
+        assertMsg "duplicate or ineligible vote" (Map.member voter admitted && not (Set.member voter supporters))
+        requireEntitlement dro consortiumId admitted voter voterRight
         let origin = case root of None -> self; Some original -> original
         create this with supporters = Set.insert voter supporters; root = Some origin
 
     nonconsuming choice Policy_Enact : ContractId Consortium
-      with enactor : Party
+      with
+        enactor : Party
+        enactorRight : RightRef
       controller enactor
       do
-        assertMsg "only members enact" (Set.member enactor members)
+        requireEntitlement dro consortiumId admitted enactor enactorRight
         assertMsg "two members must approve" (Set.size supporters >= 2)
         consortium <- fetch consortiumCid
-        assertMsg "stale or foreign consortium" (consortium.dro == dro && consortium.consortiumId == consortiumId && consortium.members == members)
+        assertMsg "stale or foreign consortium" (consortium.dro == dro && consortium.consortiumId == consortiumId && consortium.admitted == admitted)
         exercise consortiumCid ApplyPolicy with targetPolicy; authorizedMotion = self
 
 template AdmissionInvitation
   with
     dro : Party
     consortiumId : Text
-    members : Set Party
+    admitted : Map.Map Party Int
     target : Party
     consortiumCid : ContractId Consortium
     motionCid : ContractId MembershipMotion
   where
-    signatory dro, Set.toList members
+    signatory dro, Map.keys admitted
     observer target
 
     choice AdmissionInvitation_Accept : ContractId AdmissionConsent
       controller target
       do
-        create AdmissionConsent with dro; consortiumId; members; target; consortiumCid; motionCid
+        create AdmissionConsent with dro; consortiumId; admitted; target; consortiumCid; motionCid
 
 template AdmissionConsent
   with
     dro : Party
     consortiumId : Text
-    members : Set Party
+    admitted : Map.Map Party Int
     target : Party
     consortiumCid : ContractId Consortium
     motionCid : ContractId MembershipMotion
   where
     signatory target
-    observer Set.toList members
+    observer Map.keys admitted
 
     nonconsuming choice AdmissionConsent_Finalize : ContractId Consortium
       with enactor : Party
       controller enactor
       do
-        assertMsg "only invited members finalize" (Set.member enactor members)
+        assertMsg "only invited members finalize" (Map.member enactor admitted)
         consortium <- fetch consortiumCid
         motion <- fetch motionCid
-        assertMsg "invitation authority or membership changed" (consortium.dro == dro && consortium.consortiumId == consortiumId && consortium.members == members && motion.consortiumCid == consortiumCid && motion.change == Admit target)
+        assertMsg "invitation authority or membership changed" (consortium.dro == dro && consortium.consortiumId == consortiumId && consortium.admitted == admitted && motion.consortiumCid == consortiumCid && motion.change == Admit target)
         exercise motionCid Membership_Admit with target; acceptedConsent = self

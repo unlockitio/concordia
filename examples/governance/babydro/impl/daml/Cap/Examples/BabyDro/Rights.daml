@@ -1,0 +1,218 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Examples.BabyDro.Rights where
+
+import DA.NonEmpty (NonEmpty(..))
+import qualified DA.Map as Map
+import qualified DA.TextMap as TextMap
+import Splice.Api.Token.MetadataV1 (AnyValue(..))
+import Splice.Util (HasCheckedFetch(..), fetchChecked)
+import Canton.Network.Credentials.V1
+import Cap.Governance.Utils (HasVotingRights(..), fetchWeightsFromOneContract)
+
+data RightRef = RegisteredRight (ContractId RegisteredVotingRight) | DirectRight (ContractId DirectVotingRight)
+  deriving (Eq, Show)
+
+data RightKey = RightKey with dro : Party; consortiumId : Text; member : Party
+  deriving (Eq, Ord, Show)
+
+rightView : Party -> Text -> Party -> Time -> Time -> CredentialView
+rightView dro consortiumId member issuedAt expiresAt = CredentialView with
+  id = Some ("urn:babydro:voting:" <> consortiumId <> ":" <> show dro <> ":" <> show member)
+  credentialTypes = ["VerifiableCredential", "BabyDROVotingRight"]
+  issuer = W3C_VC_Identifier_Party dro
+  validFrom = Some issuedAt
+  validUntil = Some expiresAt
+  credentialSubject = NonEmpty (CredentialSubject (Some (W3C_VC_Identifier_Party member))
+    (TextMap.fromList [("babydro/consortiumId", AV_Text consortiumId)])) []
+  credentialSchema = []
+  securing = None
+  holders = [member]
+  anchorers = NonEmpty dro []
+
+rightWeight : Party -> Map.Map Party Decimal
+rightWeight member = Map.singleton member 1.0
+
+template RegisteredVotingRight
+  with
+    dro : Party
+    consortiumId : Text
+    member : Party
+    -- Which stint of this member's membership the right belongs to. A right
+    -- from an earlier stint is not an entitlement after re-admission, and
+    -- unlike an issue timestamp this does not collapse when two ledger events
+    -- share a timestamp.
+    stint : Int
+    issuedAt : Time
+    expiresAt : Time
+    registryAdmin : Party
+    registeredAt : Time
+    registrationExpiresAt : Optional Time
+  where
+    signatory [dro, member]
+    observer registryAdmin
+    ensure consortiumId /= "" && dro /= member && registryAdmin == dro && issuedAt < expiresAt && stint > 0
+
+    -- Retirement is the issuer's act. The member cannot take its own
+    -- entitlement out of the consortium's reach unilaterally.
+    choice RegisteredVotingRight_Revoke : ()
+      controller dro
+      do pure ()
+
+    interface instance Credential for RegisteredVotingRight where
+      view = rightView dro consortiumId member issuedAt expiresAt
+      credential_publicFetchImpl _ _ = pure (view (toInterface @Credential this))
+      credential_removeSelfAsHolderImpl _ _ = abort "voting right holder cannot be removed"
+      -- Both CIPs archive choices route here, so this abort closes the holder
+      -- route and the anchorer route alike. Retirement goes through the
+      -- template's own revocation choice instead.
+      credential_archiveAsAllHoldersImpl _ _ = abort "voting right is retired only by issuer revocation"
+
+    interface instance RegisteredCredential for RegisteredVotingRight where
+      view = RegisteredCredentialView with
+        registryAdmin; registeredAt; expiresAt = registrationExpiresAt
+        meta = TextMap.fromList [("babydro/stint", AV_Int stint)]
+      registeredCredential_publicFetchImpl _ _ = pure RegisteredCredential_PublicFetchResult with
+        credential = rightView dro consortiumId member issuedAt expiresAt
+        registration = view (toInterface @RegisteredCredential this)
+
+instance HasCheckedFetch RegisteredVotingRight RightKey where
+  contractGroupId right = RightKey right.dro right.consortiumId right.member
+
+instance HasVotingRights RegisteredVotingRight where
+  rightsOf right = rightWeight right.member
+
+template DirectVotingRight
+  with
+    dro : Party
+    consortiumId : Text
+    member : Party
+    stint : Int
+    issuedAt : Time
+    expiresAt : Time
+  where
+    signatory [dro, member]
+    ensure consortiumId /= "" && dro /= member && issuedAt < expiresAt && stint > 0
+
+    choice DirectVotingRight_Revoke : ()
+      controller dro
+      do pure ()
+
+    interface instance Credential for DirectVotingRight where
+      view = rightView dro consortiumId member issuedAt expiresAt
+      credential_publicFetchImpl _ _ = pure (view (toInterface @Credential this))
+      credential_removeSelfAsHolderImpl _ _ = abort "voting right holder cannot be removed"
+      credential_archiveAsAllHoldersImpl _ _ = abort "voting right is retired only by issuer revocation"
+
+instance HasCheckedFetch DirectVotingRight RightKey where
+  contractGroupId right = RightKey right.dro right.consortiumId right.member
+
+instance HasVotingRights DirectVotingRight where
+  rightsOf right = rightWeight right.member
+
+-- The consortium decides *that* a member is entitled; it never carries the
+-- entitlement itself. The invitation holds only the member and the expiry, so
+-- the all-member transaction that mints it discloses no credential. The right
+-- is created later, in a DRO-and-member transaction the other members are not
+-- party to.
+template VotingRightInvitation
+  with
+    dro : Party
+    consortiumId : Text
+    member : Party
+    stint : Int
+    expiresAt : Time
+  where
+    signatory dro
+    observer member
+    ensure consortiumId /= "" && dro /= member && stint > 0
+
+    choice VotingRightInvitation_Accept : ContractId DirectVotingRight
+      controller member
+      do
+        issuedAt <- getTime
+        assertMsg "invitation already expired" (issuedAt < expiresAt)
+        create DirectVotingRight with dro; consortiumId; member; stint; issuedAt; expiresAt
+
+    -- The registry route mints the same entitlement through the CIPs registry
+    -- factory. The factory is the DRO's contract, so the member needs it
+    -- disclosed; the resulting right is identical in weight and validity.
+    choice VotingRightInvitation_AcceptRegistered : ContractId RegisteredVotingRight
+      with factory : ContractId CredentialRegistryFactory
+      controller member
+      do
+        issuedAt <- getTime
+        assertMsg "invitation already expired" (issuedAt < expiresAt)
+        let credential = rightView dro consortiumId member issuedAt expiresAt
+        -- The CIPs issue choice carries no BabyDRO fields, so the stint rides
+        -- in the registration metadata the factory reads back.
+        let registration = RegisteredCredentialView dro issuedAt (Some expiresAt)
+              (TextMap.fromList [("babydro/stint", AV_Int stint)])
+        issued <- exercise factory CredentialRegistryFactory_Issue with credential; registration
+        pure (fromInterfaceContractId @RegisteredVotingRight @RegisteredCredential issued.issuedCredential)
+
+template VotingRightFactory
+  with dro : Party
+  where
+    signatory dro
+
+    interface instance CredentialRegistryFactory for VotingRightFactory where
+      view = CredentialRegistryFactoryView with registryAdmin = dro; anchorers = NonEmpty dro []
+      credentialRegistryFactory_issueImpl _ arg = do
+        let credential = arg.credential
+        let registration = arg.registration
+        member <- case credential.credentialSubject of
+          NonEmpty subject [] -> case subject.id of
+            Some (W3C_VC_Identifier_Party party) -> pure party
+            _ -> abort "voting subject must be a party"
+          _ -> abort "one voting subject required"
+        consortiumId <- case TextMap.lookup "babydro/consortiumId" (case credential.credentialSubject of NonEmpty subject [] -> subject.claims; _ -> TextMap.empty) of
+          Some (AV_Text identity) -> pure identity
+          _ -> abort "consortium identity required"
+        issuedAt <- case credential.validFrom of Some t -> pure t; None -> abort "issue time required"
+        expiresAt <- case credential.validUntil of Some t -> pure t; None -> abort "expiry required"
+        stint <- case TextMap.lookup "babydro/stint" registration.meta of
+          Some (AV_Int value) -> pure value
+          _ -> abort "membership stint required"
+        assertMsg "factory accepts only exact BabyDRO rights" (credential == rightView dro consortiumId member issuedAt expiresAt && registration.registryAdmin == dro)
+        right <- create RegisteredVotingRight with
+          dro; consortiumId; member; stint; issuedAt; expiresAt
+          registryAdmin = dro; registeredAt = registration.registeredAt
+          registrationExpiresAt = registration.expiresAt
+        pure CredentialRegistryFactory_IssueResult with issuedCredential = toInterfaceContractId @RegisteredCredential right
+      credentialRegistryFactory_anchorImpl _ _ = abort "external issuer not supported"
+
+-- The presenter of a right is the party the right belongs to, or the DRO,
+-- which signs every right it issued. Nobody has to read a third party's
+-- credential to check an entitlement. Returns the membership stint the right
+-- was issued for.
+--
+-- The fetch is what makes a revoked right unusable: once the issuer archives
+-- it, there is no contract left to present.
+checkRight : Party -> Text -> Party -> RightRef -> Update Int
+checkRight dro consortiumId member reference = do
+  let key = RightKey dro consortiumId member
+  (weight, credential, stint) <- case reference of
+    RegisteredRight cid -> do
+      weights <- fetchWeightsFromOneContract key cid
+      right <- fetchChecked key cid
+      pure (Map.lookup member weights, rightView right.dro right.consortiumId right.member right.issuedAt right.expiresAt, right.stint)
+    DirectRight cid -> do
+      weights <- fetchWeightsFromOneContract key cid
+      right <- fetchChecked key cid
+      pure (Map.lookup member weights, rightView right.dro right.consortiumId right.member right.issuedAt right.expiresAt, right.stint)
+  assertMsg "one voting right with unit weight required" (weight == Some 1.0 && credential.issuer == W3C_VC_Identifier_Party dro && credential.holders == [member])
+  now <- getTime
+  assertMsg "voting right not currently valid" (credential.validFrom <= Some now && credential.validUntil > Some now)
+  pure stint
+
+-- Membership and entitlement are one check. A right carries the stint it was
+-- issued for, so a removed and re-admitted member cannot present the right
+-- from its earlier stint even when both were issued at the same ledger time.
+requireEntitlement : Party -> Text -> Map.Map Party Int -> Party -> RightRef -> Update ()
+requireEntitlement dro consortiumId admitted member reference =
+  case Map.lookup member admitted of
+    None -> abort "not an admitted member"
+    Some currentStint -> do
+      stint <- checkRight dro consortiumId member reference
+      assertMsg "voting right belongs to an earlier membership" (stint == currentStint)

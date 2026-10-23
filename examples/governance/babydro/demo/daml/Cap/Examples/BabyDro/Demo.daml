@@ -11,7 +11,7 @@ import qualified DA.Set as Set
 import DA.Action (unless)
 import qualified DA.Text as Text
 import qualified DA.TextMap as TextMap
-import DA.Date (date, Month (Jan))
+import DA.Date (date, Month (Dec, Jan))
 import DA.Time (addRelTime, days, time)
 import Daml.Script
 import qualified Splice.Api.Token.MetadataV1 as Metadata
@@ -26,6 +26,41 @@ import Cap.Governance.ExecutableV1
 import Cap.Governance.Utils (HasState (..))
 import Cap.Examples.BabyDro.Registry
 import Cap.Examples.BabyDro.Dispute
+import Cap.Examples.BabyDro.Rights
+
+farFuture : Time
+farFuture = time (date 2100 Jan 1) 0 0 0
+
+-- The consortium only invites; the member mints its own right in a separate
+-- DRO-and-member transaction, so no other member witnesses the credential.
+issueRight : Party -> ContractId Consortium -> Party -> Time -> Script RightRef
+issueRight dro cid member expiresAt = do
+  invitation <- submit dro $ exerciseCmd cid InviteRight with member; expiresAt
+  DirectRight <$> submit member (exerciseCmd invitation VotingRightInvitation_Accept)
+
+-- Picks the member's currently usable right: the one with the highest stint
+-- that has not expired. A member can hold several over time, including stale
+-- ones from an earlier membership stint.
+rightOf : Party -> Party -> Text -> Script RightRef
+rightOf dro member consortiumId = do
+  now <- getTime
+  direct <- query @DirectVotingRight member
+  registered <- query @RegisteredVotingRight member
+  let directCandidates =
+        [ (value.stint, DirectRight cid)
+        | (cid, value) <- direct
+        , value.member == member, value.dro == dro, value.consortiumId == consortiumId
+        , value.expiresAt > now ]
+  let registeredCandidates =
+        [ (value.stint, RegisteredRight cid)
+        | (cid, value) <- registered
+        , value.member == member, value.dro == dro, value.consortiumId == consortiumId
+        , value.expiresAt > now ]
+  case directCandidates <> registeredCandidates of
+    [] -> fail ("no usable voting right for " <> show member)
+    first :: rest -> do
+      let best = foldl (\acc candidate -> if fst candidate > fst acc then candidate else acc) first rest
+      pure (snd best)
 
 consortium : Party -> Text -> Party -> Party -> Party -> Script (ContractId Consortium)
 consortium dro consortiumId a b c = do
@@ -40,55 +75,95 @@ consortium dro consortiumId a b c = do
   submitMustFail c $ exerciseCmd proposal Genesis_Accept with founder = c
   third <- submit c $ exerciseCmd second Genesis_Accept with founder = c
   submitMustFail a $ exerciseCmd third Genesis_Finalize
-  submit dro $ exerciseCmd third Genesis_Finalize
+  founded <- submit dro $ exerciseCmd third Genesis_Finalize
+  _ <- issueRight dro founded a farFuture
+  _ <- issueRight dro founded b farFuture
+  _ <- issueRight dro founded c farFuture
+  pure founded
 
 membership : Party -> ContractId Consortium -> Membership -> Script (ContractId MembershipMotion)
-membership proposer cid change = submit proposer $ exerciseCmd cid ProposeMembership with proposer; change
+membership proposer cid change = do
+  Some live <- queryContractId proposer cid
+  proposerRight <- rightOf live.dro proposer live.consortiumId
+  submit proposer $ exerciseCmd cid ProposeMembership with proposer; proposerRight; change
 
 membershipVote : Party -> ContractId MembershipMotion -> Script (ContractId MembershipMotion)
-membershipVote voter cid = submit voter $ exerciseCmd cid Membership_Vote with voter
+membershipVote voter cid = do
+  Some motion <- queryContractId voter cid
+  voterRight <- rightOf motion.dro voter motion.consortiumId
+  submit voter $ exerciseCmd cid Membership_Vote with voter; voterRight
+
+membershipEnact : Party -> ContractId MembershipMotion -> Script (ContractId Consortium)
+membershipEnact enactor cid = do
+  Some motion <- queryContractId enactor cid
+  enactorRight <- rightOf motion.dro enactor motion.consortiumId
+  submit enactor $ exerciseCmd cid Membership_Enact with enactor; enactorRight
+
+membershipEnactMustFail : Party -> ContractId MembershipMotion -> Script ()
+membershipEnactMustFail enactor cid = do
+  Some motion <- queryContractId enactor cid
+  enactorRight <- rightOf motion.dro enactor motion.consortiumId
+  submitMustFail enactor $ exerciseCmd cid Membership_Enact with enactor; enactorRight
 
 policyMotion : Party -> ContractId Consortium -> ElectoratePolicy -> Script (ContractId PolicyMotion)
-policyMotion proposer cid targetPolicy = submit proposer $ exerciseCmd cid ProposePolicy with proposer; targetPolicy
+policyMotion proposer cid targetPolicy = do
+  Some live <- queryContractId proposer cid
+  proposerRight <- rightOf live.dro proposer live.consortiumId
+  submit proposer $ exerciseCmd cid ProposePolicy with proposer; proposerRight; targetPolicy
 
 policyVote : Party -> ContractId PolicyMotion -> Script (ContractId PolicyMotion)
-policyVote voter cid = submit voter $ exerciseCmd cid Policy_Vote with voter
+policyVote voter cid = do
+  Some motion <- queryContractId voter cid
+  voterRight <- rightOf motion.dro voter motion.consortiumId
+  submit voter $ exerciseCmd cid Policy_Vote with voter; voterRight
 
 admit : Party -> Party -> ContractId Consortium -> Party -> Script (ContractId Consortium)
 admit a b cid target = do
+  Some before <- queryContractId a cid
   motion <- membership a cid (Admit target)
-  submitMustFail a $ exerciseCmd motion Membership_Enact with enactor = a
+  membershipEnactMustFail a motion
   approved <- membershipVote b motion
-  submitMustFail a $ exerciseCmd approved Membership_Enact with enactor = a
-  invitation <- submit a $ exerciseCmd approved Membership_Invite with inviter = a
+  membershipEnactMustFail a approved
+  inviterRight <- rightOf before.dro a before.consortiumId
+  invitation <- submit a $ exerciseCmd approved Membership_Invite with inviter = a; inviterRight
   submitMustFail a $ exerciseCmd invitation AdmissionInvitation_Accept
   consent <- submit target $ exerciseCmd invitation AdmissionInvitation_Accept
-  submit a $ exerciseCmd consent AdmissionConsent_Finalize with enactor = a
+  admitted <- submit a $ exerciseCmd consent AdmissionConsent_Finalize with enactor = a
+  _ <- issueRight before.dro admitted target farFuture
+  pure admitted
 
 remove : Party -> Party -> ContractId Consortium -> Party -> Script (ContractId Consortium)
 remove a b cid target = do
   motion <- membership a cid (Remove target)
   approved <- membershipVote b motion
-  submit a $ exerciseCmd approved Membership_Enact with enactor = a
+  membershipEnact a approved
 
 changePolicy : Party -> Party -> ContractId Consortium -> ElectoratePolicy -> Script (ContractId Consortium)
 changePolicy a b cid targetPolicy = do
   motion <- policyMotion a cid targetPolicy
+  Some live <- queryContractId a motion
   approved <- policyVote b motion
-  submit a $ exerciseCmd approved Policy_Enact with enactor = a
+  enactorRight <- rightOf live.dro a live.consortiumId
+  submit a $ exerciseCmd approved Policy_Enact with enactor = a; enactorRight
 
+-- Only the disputer's own claim credential and right are its own; the other
+-- registry's claim still needs disclosure, but its voting right no longer does.
 open : Party -> ContractId Consortium -> Party -> Text -> ContractId DemoCredential -> ContractId DemoCredential -> Script (ContractId Consortium, ContractId NameDispute)
 open disputer cid otherRegistry caseId first second = do
   Some otherDisclosure <- queryDisclosure otherRegistry second
+  Some live <- queryContractId disputer cid
+  disputerRight <- rightOf live.dro disputer live.consortiumId
   submit (actAs disputer <> disclose otherDisclosure) $ exerciseCmd cid OpenDispute with
-    disputer; caseId; name = "shared"; otherRegistry; reason = "competing claims"
+    disputer; disputerRight; caseId; name = "shared"; otherRegistry; reason = "competing claims"
     firstCredential = toInterfaceContractId @Credential first
-    secondCredential = toInterfaceContractId @Credential second
+    secondCredential = toInterfaceContractId @Credential second; additionalClaims = Map.empty
 
 voteDispute : Party -> Party -> ContractId NameDispute -> Decision -> Script (ContractId NameDispute)
 voteDispute dro voter cid decision = do
+  Some live <- queryContractId dro cid
+  right <- rightOf dro voter live.consortiumId
   invitation <- submit dro $ exerciseCmd cid NameDispute_Invite with voter
-  (registered, ballot) <- submit voter $ exerciseCmd invitation DisputeInvitation_Accept with caseCid = cid
+  (registered, ballot) <- submit voter $ exerciseCmd invitation DisputeInvitation_Accept with caseCid = cid; right
   (voted, _) <- submit voter $ exerciseCmd ballot Ballot_Cast with caseCid = registered; vote = decision
   pure voted
 
@@ -102,6 +177,8 @@ nameCredential admin subject name now = CredentialView with
   credentialSubject = NonEmpty (CredentialSubject
     (Some (W3C_VC_Identifier_Party subject))
     (TextMap.fromList [("demo.example/name", Metadata.AV_Text name)])) []
+  credentialSchema = []
+  securing = None
   holders = []
   anchorers = NonEmpty admin []
 
@@ -162,35 +239,36 @@ journey = script do
   nameDispute.firstRegistry === a
   nameDispute.secondRegistry === b
   Some losingDisclosureAtOpen <- queryDisclosure b second
+  aRight <- rightOf dro a "consortium-one"
   submitMustFail (actAs a <> disclose losingDisclosureAtOpen) $ exerciseCmd opened OpenDispute with
-    disputer = a; caseId = "duplicate"; name = "shared"; otherRegistry = b; reason = "same cid"
+    disputer = a; disputerRight = aRight; caseId = "duplicate"; name = "shared"; otherRegistry = b; reason = "same cid"
     firstCredential = toInterfaceContractId @Credential first
-    secondCredential = toInterfaceContractId @Credential first
+    secondCredential = toInterfaceContractId @Credential first; additionalClaims = Map.empty
   submitMustFail (actAs a <> disclose losingDisclosureAtOpen) $ exerciseCmd opened OpenDispute with
-    disputer = a; caseId = "wrong-other"; name = "shared"; otherRegistry = c; reason = "wrong registry"
+    disputer = a; disputerRight = aRight; caseId = "wrong-other"; name = "shared"; otherRegistry = c; reason = "wrong registry"
     firstCredential = toInterfaceContractId @Credential first
-    secondCredential = toInterfaceContractId @Credential second
+    secondCredential = toInterfaceContractId @Credential second; additionalClaims = Map.empty
   submitMustFail (actAs a <> disclose losingDisclosureAtOpen) $ exerciseCmd opened OpenDispute with
-    disputer = a; caseId = "wrong-name"; name = "another"; otherRegistry = b; reason = "wrong name"
+    disputer = a; disputerRight = aRight; caseId = "wrong-name"; name = "another"; otherRegistry = b; reason = "wrong name"
     firstCredential = toInterfaceContractId @Credential first
-    secondCredential = toInterfaceContractId @Credential second
+    secondCredential = toInterfaceContractId @Credential second; additionalClaims = Map.empty
   submitMustFail (actAs a <> disclose losingDisclosureAtOpen) $ exerciseCmd opened OpenDispute with
-    disputer = a; caseId = "wrong-anchor"; name = "shared"; otherRegistry = b; reason = "wrong anchor"
+    disputer = a; disputerRight = aRight; caseId = "wrong-anchor"; name = "shared"; otherRegistry = b; reason = "wrong anchor"
     firstCredential = toInterfaceContractId @Credential second
-    secondCredential = toInterfaceContractId @Credential first
+    secondCredential = toInterfaceContractId @Credential first; additionalClaims = Map.empty
   submitMustFail (actAs a <> disclose losingDisclosureAtOpen) $ exerciseCmd opened OpenDispute with
-    disputer = a; caseId = "wrong-record"; name = "shared"; otherRegistry = b; reason = "unrelated"
+    disputer = a; disputerRight = aRight; caseId = "wrong-record"; name = "shared"; otherRegistry = b; reason = "unrelated"
     firstCredential = toInterfaceContractId @Credential first
-    secondCredential = toInterfaceContractId @Credential unrelatedB
+    secondCredential = toInterfaceContractId @Credential unrelatedB; additionalClaims = Map.empty
   anotherSecond <- register b claimant "shared" now
   (twiceOpened, secondCase) <- open a opened b "case-two" first anotherSecond
   Some twoCases <- queryContractId dro twiceOpened
   Set.size twoCases.cases === 2
   unrelatedRemoval <- membership a twiceOpened (Remove newcomer)
   unrelatedApproved <- membershipVote c unrelatedRemoval
-  unrelatedSuccessor <- submit a $ exerciseCmd unrelatedApproved Membership_Enact with enactor = a
+  unrelatedSuccessor <- membershipEnact a unrelatedApproved
   Some reduced <- queryContractId dro unrelatedSuccessor
-  Set.member newcomer reduced.members === False
+  Map.member newcomer reduced.admitted === False
   newcomerAgain <- admit a c unrelatedSuccessor newcomer
   Some restored <- queryContractId dro newcomerAgain
   Set.size restored.cases === 2
@@ -204,8 +282,8 @@ journey = script do
   opposing <- voteDispute dro b two KeepSecond
   submitMustFail dro $ exerciseCmd newcomerAgain Consortium_Resolve with issuer = dro; caseCid = opposing; decision = KeepSecond
   submitMustFail dro $ exerciseCmd newcomerAgain Consortium_Resolve with issuer = dro; caseCid = one; decision = KeepFirst
-  submitMustFail c $ exerciseCmd approvedA Membership_Enact with enactor = c
-  submitMustFail c $ exerciseCmd approvedB Membership_Enact with enactor = c
+  membershipEnactMustFail c approvedA
+  membershipEnactMustFail c approvedB
   Some losingDisclosure <- queryDisclosure b second
   ruling <- submit (actAs dro <> disclose losingDisclosure) $ exerciseCmd newcomerAgain Consortium_Resolve with issuer = dro; caseCid = opposing; decision = KeepFirst
   submitMustFail (actAs dro <> disclose losingDisclosure) $ exerciseCmd newcomerAgain Consortium_Resolve with issuer = dro; caseCid = opposing; decision = KeepFirst
@@ -233,7 +311,7 @@ journey = script do
   let [remainingCid] = [cid | (cid, value) <- current, Set.size value.cases == 1 && value.consortiumId == "consortium-one"]
   currentRemoval <- membership c remainingCid (Remove b)
   votedRemoval <- membershipVote newcomer currentRemoval
-  submitMustFail c $ exerciseCmd votedRemoval Membership_Enact with enactor = c
+  membershipEnactMustFail c votedRemoval
   secondOne <- voteDispute dro c secondCase KeepFirst
   secondTwo <- voteDispute dro newcomer secondOne KeepFirst
   Some secondDisclosure <- queryDisclosure b anotherSecond
@@ -242,7 +320,7 @@ journey = script do
   let [resolvedCid] = [cid | (cid, value) <- current, Set.size value.cases == 0 && value.consortiumId == "consortium-one"]
   removed <- remove c newcomer resolvedCid b
   Some afterRemoval <- queryContractId dro removed
-  Set.member b afterRemoval.members === False
+  Map.member b afterRemoval.admitted === False
   aCredentials <- query @DemoCredential a
   bCredentials <- query @DemoCredential b
   let shared = [(cid, value) | (cid, value) <- aCredentials <> bCredentials, credentialHasName "shared" value.credential]
@@ -288,17 +366,18 @@ checkedCaseAuthority = script do
   (_, disputed) <- open a initial b "same-token" first second
   invitation <- submit dro $ exerciseCmd disputed NameDispute_Invite with voter = c
   Some original <- queryContractId dro disputed
+  right <- rightOf dro c "checked-case"
   foreign <- submit foreignDro $ createCmd NameDispute with
-    caseAuthority = foreignDro; caseToken = "same-token"; caseId = "same-token"
+    caseAuthority = foreignDro; caseToken = "same-token"; consortiumId = "checked-case"; caseId = "same-token"
     name = "shared"; firstRegistry = a; secondRegistry = b
     firstCredential = toInterfaceContractId @Credential first
     secondCredential = toInterfaceContractId @Credential second
     reason = "foreign authority"; policy = SnapshotAtOpen
-    voters = Set.fromList [a, b, c]; eligible = Set.fromList [a, b, c]
+    voters = Set.fromList [a, b, c]; eligible = Set.fromList [a, b, c]; admitted = original.admitted
     ballots = mempty; openingCaseCid = None
-    firstAction = original.firstAction; secondAction = original.secondAction
-  submitMustFail c $ exerciseCmd invitation DisputeInvitation_Accept with caseCid = foreign
-  (registered, _) <- submit c $ exerciseCmd invitation DisputeInvitation_Accept with caseCid = disputed
+    firstAction = original.firstAction; secondAction = original.secondAction; claims = original.claims; actions = original.actions
+  submitMustFail c $ exerciseCmd invitation DisputeInvitation_Accept with caseCid = foreign; right
+  (registered, _) <- submit c $ exerciseCmd invitation DisputeInvitation_Accept with caseCid = disputed; right
   Some accepted <- queryContractId dro registered
   Set.member c accepted.voters === True
 
@@ -367,7 +446,7 @@ failedArchive = script do
   length rulingCount === 0
   removal <- membership c opened (Remove b)
   approved <- membershipVote a removal
-  submitMustFail c $ exerciseCmd approved Membership_Enact with enactor = c
+  membershipEnactMustFail c approved
 
 conflicted : Script ()
 conflicted = script do
@@ -410,39 +489,42 @@ motionIsolation = script do
   parallel <- consortium dro "two" a b c
   motion <- membership a initial (Admit outsider)
   other <- policyMotion b initial CurrentMembership
-  submitMustFail c $ exerciseCmd motion Membership_Enact with enactor = c
-  submitMustFail outsider $ exerciseCmd motion Membership_Vote with voter = outsider
+  aRightOne <- rightOf dro a "one"
+  bRightOne <- rightOf dro b "one"
+  membershipEnactMustFail c motion
+  -- An outsider has no right at all, so it cannot even present one.
+  submitMustFail outsider $ exerciseCmd motion Membership_Vote with voter = outsider; voterRight = aRightOne
   supported <- membershipVote b motion
-  submitMustFail b $ exerciseCmd supported Membership_Vote with voter = b
-  submitMustFail a $ exerciseCmd supported Membership_Enact with enactor = a
-  submitMustFail a $ exerciseCmd supported Membership_Invite with inviter = outsider
-  invite <- submit a $ exerciseCmd supported Membership_Invite with inviter = a
+  submitMustFail b $ exerciseCmd supported Membership_Vote with voter = b; voterRight = bRightOne
+  membershipEnactMustFail a supported
+  submitMustFail a $ exerciseCmd supported Membership_Invite with inviter = outsider; inviterRight = aRightOne
+  invite <- submit a $ exerciseCmd supported Membership_Invite with inviter = a; inviterRight = aRightOne
   consent <- submit outsider $ exerciseCmd invite AdmissionInvitation_Accept
   submitMustFail outsider $ exerciseCmd parallel EnactAdmission with target = outsider; authorizedMotion = supported; acceptedConsent = consent
   admitted <- submit a $ exerciseCmd consent AdmissionConsent_Finalize with enactor = a
   Some updated <- queryContractId dro admitted
   updated.consortiumId === "one"
-  Set.member outsider updated.members === True
-  submitMustFail b $ exerciseCmd other Policy_Vote with voter = b
+  Map.member outsider updated.admitted === True
+  submitMustFail b $ exerciseCmd other Policy_Vote with voter = b; voterRight = bRightOne
   fresh <- policyMotion a admitted CurrentMembership
   voted <- policyVote b fresh
-  submitMustFail c $ exerciseCmd voted Policy_Vote with voter = b
-  switched <- submit a $ exerciseCmd voted Policy_Enact with enactor = a
+  submitMustFail c $ exerciseCmd voted Policy_Vote with voter = b; voterRight = bRightOne
+  switched <- submit a $ exerciseCmd voted Policy_Enact with enactor = a; enactorRight = aRightOne
   Some changed <- queryContractId dro switched
   changed.policy === CurrentMembership
   removal <- membership b switched (Remove a)
   votedRemoval <- membershipVote c removal
-  removed <- submit b $ exerciseCmd votedRemoval Membership_Enact with enactor = b
+  removed <- membershipEnact b votedRemoval
   Some final <- queryContractId dro removed
-  Set.member a final.members === False
+  Map.member a final.admitted === False
   final.consortiumId === "one"
   Some unchanged <- queryContractId dro parallel
   unchanged.policy === SnapshotAtOpen
-  Set.member a unchanged.members === True
+  Map.member a unchanged.admitted === True
   now <- getTime
   first <- register a a "shared" now
   second <- register b b "shared" now
-  submitMustFail dro $ exerciseCmd initial OpenDispute with disputer = a; caseId = "stale"; name = "shared"; otherRegistry = b; reason = "claim"; firstCredential = toInterfaceContractId @Credential first; secondCredential = toInterfaceContractId @Credential second
+  submitMustFail dro $ exerciseCmd initial OpenDispute with disputer = a; disputerRight = aRightOne; caseId = "stale"; name = "shared"; otherRegistry = b; reason = "claim"; firstCredential = toInterfaceContractId @Credential first; secondCredential = toInterfaceContractId @Credential second; additionalClaims = Map.empty
 
 -- A withdrawn ballot carries no vote, so it stops counting; the same voter
 -- can recast and the resolution then has its two supporters again.
@@ -459,7 +541,8 @@ withdrawalAndRecast = script do
   (opened, disputed) <- open a initial b "withdraw" first second
   one <- voteDispute dro a disputed KeepFirst
   invitation <- submit dro $ exerciseCmd one NameDispute_Invite with voter = c
-  (registered, ballot) <- submit c $ exerciseCmd invitation DisputeInvitation_Accept with caseCid = one
+  cRight <- rightOf dro c "withdraw-case"
+  (registered, ballot) <- submit c $ exerciseCmd invitation DisputeInvitation_Accept with caseCid = one; right = cRight
   (voted, cast) <- submit c $ exerciseCmd ballot Ballot_Cast with caseCid = registered; vote = KeepFirst
   (withdrawn, empty) <- submit c $ exerciseCmd cast Ballot_Withdraw with caseCid = voted
   Some disclosure <- queryDisclosure b second
@@ -508,24 +591,154 @@ foreignBallotRejected = script do
   (_, parallelCase) <- open a opened b "other-case" otherFirst otherSecond
   Some live <- queryContractId dro disputed
   Some other <- queryContractId dro parallelCase
+  cRight <- rightOf dro c "foreign-ballot-case"
   staleAction <- submit (actAs dro <> actAs c) $ createCmd Ballot with
-    caseAuthority = dro; caseToken = "foreign-ballot"; caseId = "foreign-ballot"; voter = c
-    firstAction = other.firstAction; secondAction = other.secondAction
+    caseAuthority = dro; caseToken = "foreign-ballot"; consortiumId = "foreign-ballot-case"; caseId = "foreign-ballot"; voter = c
+    right = cRight
+    firstAction = other.firstAction; secondAction = other.secondAction; actions = other.actions
     caseState = toAnyValue (stateOf live); decision = Some KeepFirst
   submitMustFailContaining "foreign ballot" c [] $ exerciseCmd disputed NameDispute_RegisterBallot with
     voter = c; previous = None; replacement = staleAction
   staleState <- submit (actAs dro <> actAs c) $ createCmd Ballot with
-    caseAuthority = dro; caseToken = "foreign-ballot"; caseId = "foreign-ballot"; voter = c
-    firstAction = live.firstAction; secondAction = live.secondAction
+    caseAuthority = dro; caseToken = "foreign-ballot"; consortiumId = "foreign-ballot-case"; caseId = "foreign-ballot"; voter = c
+    right = cRight
+    firstAction = live.firstAction; secondAction = live.secondAction; actions = live.actions
     caseState = toAnyValue (stateOf other); decision = Some KeepFirst
   submitMustFailContaining "foreign ballot" c [] $ exerciseCmd disputed NameDispute_RegisterBallot with
     voter = c; previous = None; replacement = staleState
   Some stillOpen <- queryContractId dro disputed
   Map.size stillOpen.ballots === 0
 
--- The execution checks the presented case against the snapshot the ballots
--- carried, so an execution snapshotted on one case cannot archive the loser
--- while pointing at another live case.
+-- Both issuance routes produce the same entitlement, the consortium never
+-- names a credential, and neither route lets the holder walk away with its
+-- own right.
+rightRoutes : Script ()
+rightRoutes = script do
+  dro <- allocateParty "rights-dro"
+  a <- allocateParty "rights-a"
+  b <- allocateParty "rights-b"
+  c <- allocateParty "rights-c"
+  let founders = Set.fromList [a, b, c]
+  proposal <- submit dro $ createCmd GenesisProposal with dro; consortiumId = "rights-test"; founders; policy = SnapshotAtOpen; accepted = Set.empty
+  first <- submit a $ exerciseCmd proposal Genesis_Accept with founder = a
+  second <- submit b $ exerciseCmd first Genesis_Accept with founder = b
+  third <- submit c $ exerciseCmd second Genesis_Accept with founder = c
+  founded <- submit dro $ exerciseCmd third Genesis_Finalize
+  factory <- submit dro $ createCmd VotingRightFactory with dro
+  let expiry = time (date 2100 Jan 1) 0 0 0
+  Some factoryDisclosure <- queryDisclosure dro factory
+  aInvitation <- submit dro $ exerciseCmd founded InviteRight with member = a; expiresAt = expiry
+  aRight <- submit (actAs a <> disclose factoryDisclosure) $ exerciseCmd aInvitation VotingRightInvitation_AcceptRegistered with
+    factory = toInterfaceContractId @CredentialRegistryFactory factory
+  bInvitation <- submit dro $ exerciseCmd founded InviteRight with member = b; expiresAt = expiry
+  bRight <- submit b $ exerciseCmd bInvitation VotingRightInvitation_Accept
+  -- Equivalent entitlement from either route.
+  Some registeredView <- queryInterfaceContractId @Credential a (toInterfaceContractId @Credential aRight)
+  Some directView <- queryInterfaceContractId @Credential b (toInterfaceContractId @Credential bRight)
+  registeredView.credentialTypes === directView.credentialTypes
+  registeredView.issuer === directView.issuer
+  registeredView.validUntil === directView.validUntil
+  registeredView.holders === [a]
+  directView.holders === [b]
+  -- The consortium holds no credential reference at all, so an all-member
+  -- transaction cannot carry one.
+  Some live <- queryContractId a founded
+  Set.fromList (Map.keys live.admitted) === founders
+  -- A member cannot take its own entitlement off the ledger, by either CIPs
+  -- archive route or by removing itself as holder.
+  submitMustFailContaining "voting right is retired only by issuer revocation" b [] $
+    exerciseCmd (toInterfaceContractId @Credential bRight) Credential_ArchiveAsAllHolders
+  submitMustFailContaining "voting right holder cannot be removed" b [] $
+    exerciseCmd (toInterfaceContractId @Credential bRight) Credential_RemoveSelfAsHolder with holder = b
+  submitMustFail b $ exerciseCmd bRight Archive
+  -- The anchorer route is closed too: retirement is the template's own
+  -- revocation choice, which only the issuer controls.
+  submitMustFailContaining "voting right is retired only by issuer revocation" dro [] $
+    exerciseCmd (toInterfaceContractId @Credential bRight) Credential_ArchiveAsAnchorers
+  stillLive <- queryContractId b bRight
+  (stillLive /= None) === True
+  -- Only an admitted member is invited, and the DRO cannot invite itself.
+  submitMustFail dro $ exerciseCmd founded InviteRight with member = dro; expiresAt = expiry
+  submitMustFail dro $ exerciseCmd founded InviteRight with member = c; expiresAt = epoch
+  -- The right is unusable once the issuer revokes it: a motion presenting the
+  -- revoked reference fails.
+  cInvitation <- submit dro $ exerciseCmd founded InviteRight with member = c; expiresAt = expiry
+  cRight <- submit c $ exerciseCmd cInvitation VotingRightInvitation_Accept
+  _ <- submit dro $ exerciseCmd cRight DirectVotingRight_Revoke
+  revoked <- queryContractId c cRight
+  revoked === None
+  submitMustFail c $ exerciseCmd founded ProposeMembership with
+    proposer = c; proposerRight = DirectRight cRight; change = Remove a
+
+-- A member removed and re-admitted cannot present the right it held during
+-- the earlier stint, and the stale right is not a second live entitlement.
+reAdmissionRetiresOldRight : Script ()
+reAdmissionRetiresOldRight = script do
+  dro <- allocateParty "readmit-dro"
+  a <- allocateParty "readmit-a"
+  b <- allocateParty "readmit-b"
+  c <- allocateParty "readmit-c"
+  d <- allocateParty "readmit-d"
+  initial <- consortium dro "readmit-case" a b c
+  admitted <- admit a b initial d
+  staleRight <- rightOf dro d "readmit-case"
+  removed <- remove a b admitted d
+  Some reduced <- queryContractId dro removed
+  Map.member d reduced.admitted === False
+  -- The old credential survives removal; it must not be usable afterwards.
+  stillLive <- case staleRight of
+    DirectRight cid -> do
+      result <- queryContractId d cid
+      pure (result /= None)
+    RegisteredRight cid -> do
+      result <- queryContractId d cid
+      pure (result /= None)
+  stillLive === True
+  submitMustFail d $ exerciseCmd removed ProposeMembership with
+    proposer = d; proposerRight = staleRight; change = Remove a
+  restored <- admit a b removed d
+  -- Re-admitted, but the stale right belongs to the earlier stint.
+  submitMustFailContaining "voting right belongs to an earlier membership" d [] $
+    exerciseCmd restored ProposeMembership with
+      proposer = d; proposerRight = staleRight; change = Remove a
+  -- The right issued for the new stint works.
+  freshRight <- rightOf dro d "readmit-case"
+  (freshRight /= staleRight) === True
+  _ <- submit d $ exerciseCmd restored ProposeMembership with
+    proposer = d; proposerRight = freshRight; change = Remove a
+  pure ()
+
+-- An expired right is refused even while the member is still admitted. The
+-- validity window is entirely in the past under both the static (1970) and
+-- the wallclock ledger clock, so this needs no setTime.
+expiredRightRejected : Script ()
+expiredRightRejected = script do
+  dro <- allocateParty "expiry-dro"
+  a <- allocateParty "expiry-a"
+  b <- allocateParty "expiry-b"
+  c <- allocateParty "expiry-c"
+  initial <- consortium dro "expiry-case" a b c
+  Some live <- queryContractId a initial
+  let Some stint = Map.lookup a live.admitted
+  -- The invitation route refuses a past expiry outright.
+  submitMustFailContaining "invitation must expire in the future" dro [] $
+    exerciseCmd initial InviteRight with member = a; expiresAt = time (date 1969 Dec 31) 0 0 0
+  -- Minting the already-expired right directly is the only way to reach the
+  -- resolution-time expiry check; both signatories authorize it here.
+  expiredRight <- submit (actAs dro <> actAs a) $ createCmd DirectVotingRight with
+    dro; consortiumId = "expiry-case"; member = a; stint
+    issuedAt = time (date 1969 Jan 1) 0 0 0
+    expiresAt = time (date 1969 Dec 31) 0 0 0
+  submitMustFailContaining "voting right not currently valid" a [] $
+    exerciseCmd initial ProposeMembership with
+      proposer = a; proposerRight = DirectRight expiredRight; change = Remove b
+  -- The live right from genesis still works, so the rejection is the expiry
+  -- and not the member.
+  longRight <- rightOf dro a "expiry-case"
+  _ <- submit a $ exerciseCmd initial ProposeMembership with
+    proposer = a; proposerRight = longRight; change = Remove b
+  pure ()
+
 stateMismatchRejected : Script ()
 stateMismatchRejected = script do
   dro <- allocateParty "mismatch-dro"
@@ -544,11 +757,8 @@ stateMismatchRejected = script do
   Some other <- queryContractId dro parallelCase
   let signers = actAs dro <> actAs a <> actAs b
   actionCid <- submit signers $ createCmd ArchiveClaimAction with
-    dro; caseToken = "mismatch-one"; name = "shared"
-    firstRegistry = a; secondRegistry = b
-    firstCredential = toInterfaceContractId @Credential first
-    secondCredential = toInterfaceContractId @Credential second
-    decision = KeepFirst
+     dro; caseToken = "mismatch-one"; name = "shared"
+     claims = live.claims; winner = a
   authorized <- submit signers $ exerciseCmd (toInterfaceContractId @Action actionCid) Action_AuthorizeExecution with
     actors = [dro]
     executionCore = ExecutionCore with
@@ -569,7 +779,7 @@ stateMismatchRejected = script do
   submitMustFailContaining "has drifted from its snapshot" dro [disclosure] $ exerciseCmd executionCid Executable_Execute with
     actors = [dro]
     targetCids = Map.fromList
-      [(claimKey dro, coerceContractId (toInterfaceContractId @Credential second))
+      [(claimKey dro b, coerceContractId (toInterfaceContractId @Credential second))
       ,(disputeKey dro "mismatch-one", coerceContractId disputed)]
     extraArgs = ExtraArgs with context = emptyChoiceContext; meta = emptyMetadata
   isActive <- active b second
@@ -578,3 +788,88 @@ stateMismatchRejected = script do
   stillLive.caseId === "mismatch-one"
   live.caseId === "mismatch-one"
   other.caseId === "mismatch-two"
+
+nWayDispute : Script ()
+nWayDispute = script do
+  dro <- allocateParty "nway-dro"
+  a <- allocateParty "nway-a"
+  b <- allocateParty "nway-b"
+  c <- allocateParty "nway-c"
+  now <- getTime
+  initial <- consortium dro "nway" a b c
+  first <- register a a "shared" now
+  second <- register b b "shared" now
+  third <- register c c "shared" now
+  unrelated <- register c c "unrelated" now
+  Some bDisclosure <- queryDisclosure b second
+  Some cDisclosure <- queryDisclosure c third
+  -- Only the claim credentials need disclosure now: the opener proves its own
+  -- right and no foreign voting right is read.
+  aRight <- rightOf dro a "nway"
+  let claims = Map.singleton c (toInterfaceContractId @Credential third)
+  (opened, disputed) <- submit (actAs a <> discloseMany [bDisclosure, cDisclosure]) $ exerciseCmd initial OpenDispute with
+    disputer = a; disputerRight = aRight; caseId = "nway-case"; name = "shared"; otherRegistry = b; reason = "three claims"
+    firstCredential = toInterfaceContractId @Credential first
+    secondCredential = toInterfaceContractId @Credential second; additionalClaims = claims
+  Some frozen <- queryContractId dro disputed
+  Map.size frozen.claims === 3
+  removal <- membership a opened (Remove c)
+  supportedRemoval <- membershipVote b removal
+  membershipEnactMustFail a supportedRemoval
+  one <- voteDispute dro a disputed (KeepRegistry a)
+  two <- voteDispute dro b one KeepFirst
+  opposing <- voteDispute dro c two (KeepRegistry c)
+  submitMustFailContaining "exactly one decision must qualify" dro [bDisclosure, cDisclosure] $
+    exerciseCmd opened Consortium_Resolve with issuer = dro; caseCid = opposing; decision = KeepSecond
+  ruling <- submit (actAs dro <> discloseMany [bDisclosure, cDisclosure]) $ exerciseCmd opened Consortium_Resolve with issuer = dro; caseCid = opposing; decision = KeepFirst
+  Some result <- queryContractId dro ruling
+  result.winner === a
+  Set.size result.participants === 3
+  isActive <- active a first
+  isActive === True
+  isActive <- active b second
+  isActive === False
+  isActive <- active c third
+  isActive === False
+  isActive <- active c unrelated
+  isActive === True
+  entries <- query @Consortium dro
+  let [(_, successor)] = [(cid, value) | (cid, value) <- entries, Set.size value.cases == 0 && value.consortiumId == "nway"]
+  Set.size successor.cases === 0
+
+nWayRollback : Script ()
+nWayRollback = script do
+  dro <- allocateParty "rollback-dro"
+  a <- allocateParty "rollback-a"
+  b <- allocateParty "rollback-b"
+  c <- allocateParty "rollback-c"
+  now <- getTime
+  initial <- consortium dro "rollback-nway" a b c
+  first <- register a a "shared" now
+  second <- register b b "shared" now
+  third <- register c c "shared" now
+  Some bDisclosure <- queryDisclosure b second
+  Some cDisclosure <- queryDisclosure c third
+  aRight <- rightOf dro a "rollback-nway"
+  (opened, disputed) <- submit (actAs a <> discloseMany [bDisclosure, cDisclosure]) $ exerciseCmd initial OpenDispute with
+    disputer = a; disputerRight = aRight; caseId = "rollback-nway"; name = "shared"; otherRegistry = b; reason = "three claims"
+    firstCredential = toInterfaceContractId @Credential first
+    secondCredential = toInterfaceContractId @Credential second
+    additionalClaims = Map.singleton c (toInterfaceContractId @Credential third)
+  one <- voteDispute dro a disputed KeepFirst
+  two <- voteDispute dro b one (KeepRegistry a)
+  Some before <- queryContractId dro two
+  _ <- submit c $ exerciseCmd (toInterfaceContractId @Credential third) Credential_ArchiveAsAnchorers
+  submitMustFail (actAs dro <> discloseMany [bDisclosure, cDisclosure]) $ exerciseCmd opened Consortium_Resolve with issuer = dro; caseCid = two; decision = KeepFirst
+  Some stillOpen <- queryContractId dro opened
+  Set.size stillOpen.cases === 1
+  Some stillCase <- queryContractId dro two
+  Map.size stillCase.ballots === 2
+  isActive <- active b second
+  isActive === True
+  liveBallots <- query @Ballot dro
+  length liveBallots === 2
+  actions <- mapA (queryInterfaceContractId @Action dro) (map snd (Map.toList before.actions))
+  all (/= None) actions === True
+  rulings <- query @Ruling dro
+  length rulings === 0
