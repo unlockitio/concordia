@@ -225,32 +225,174 @@ template Consortium
           caseToken = caseId
           consortiumId; caseId; name; firstRegistry = disputer; secondRegistry = otherRegistry; reason
           firstCredential; secondCredential; claims
-          policy; voters = members; eligible = members; admitted; ballots = Map.empty; openingCaseCid = None
+          policy; voters = members; eligible = members; admitted; registered = Set.empty; openingCaseCid = None
           firstAction; secondAction; actions
+        -- The tally root for this case is minted here, by the consortium, so
+        -- the honest resolution path is bound to this exact case from the
+        -- start. It is signed by the DRO alone, which is what keeps the ballot
+        -- reads it performs out of every member's transaction projection.
+        _ <- create DisputeResolver with dro; consortiumId; caseToken = caseId; caseId
         successor <- create this with cases = Set.insert (ActiveCase caseCid disputer otherRegistry name firstCredential secondCredential claims) cases
         pure (successor, caseCid)
 
-    choice Consortium_Resolve : ContractId Ruling
+    -- The member-visible half of a resolution. It is exercised as a nested
+    -- child of the DRO-only tally root, so every consortium member sees this
+    -- node and everything below it: the aggregate outcome, the loser archive,
+    -- the closed case, the ruling and the successor.
+    --
+    -- It deliberately fetches no ballot, no voting right and no tally detail.
+    -- The only vote-derived input is the decision itself, and the receipt that
+    -- states which roll it was tallied over. Members therefore learn the
+    -- outcome and trust the DRO's count; they cannot read any decision.
+    choice Consortium_PublishRuling : ContractId Ruling
       with
-        issuer : Party
         caseCid : ContractId NameDispute
         decision : Decision
-      controller issuer
+        receiptCid : ContractId TallyReceipt
+        -- The case's tally root is spent here. This bounds replay within
+        -- the honest resolver flow, but it is not a cryptographic proof of
+        -- the count: the DRO can exercise this choice directly and can mint
+        -- its own receipt. Members explicitly trust the DRO's tally.
+        resolverCid : ContractId DisputeResolver
+      controller dro
       do
-        let members = Set.fromList (Map.keys admitted)
+        receipt <- fetch receiptCid
+        resolver <- fetch resolverCid
         disputed <- fetchChecked dro caseCid
+        assertMsg "resolver belongs to another case" (resolver.dro == dro && resolver.consortiumId == consortiumId
+          && resolver.caseToken == disputed.caseToken && resolver.caseId == disputed.caseId)
+        assertMsg "receipt belongs to another case" (receipt.dro == dro && receipt.consortiumId == consortiumId
+          && receipt.caseToken == disputed.caseToken && receipt.caseId == disputed.caseId
+          && receipt.decision == decision)
+        -- A published ruling is always tallied over the case's complete,
+        -- authoritative roll of ballot slots. A resolution that omitted an
+        -- opposing voter's slot cannot be published through this choice.
+        assertMsg "tally roll differs from the case roll" (receipt.roll == disputed.registered)
         let opening = case disputed.openingCaseCid of
               None -> caseCid
               Some original -> original
         let activeCase = ActiveCase opening disputed.firstRegistry disputed.secondRegistry disputed.name disputed.firstCredential disputed.secondCredential disputed.claims
         assertMsg "case not opened by this consortium chain" (Set.member activeCase cases)
-        assertMsg "only the DRO issues rulings" (issuer == dro)
+        let winner = winnerOf decision disputed.firstRegistry disputed.secondRegistry
+        assertMsg "winner not in the frozen claims" (Map.lookup winner disputed.claims /= None)
+        assertMsg "receipt names another winner" (receipt.winner == winner)
+        let Some actionCid = Map.lookup winner disputed.actions
+        let stateKey = disputeKey dro disputed.caseToken
+        -- Derived from the live case here, not taken from the caller. The
+        -- root separately proved the counted ballots agreed on this same
+        -- state, using reads no member witnesses.
+        liveState <- readState @NameDispute stateKey (coerceContractId caseCid)
+        let snapshots = Map.fromList [(stateKey, Snapshot with state = liveState; cid = None)]
+        now <- getTime
+        authorized <- exercise actionCid Action_AuthorizeExecution with
+          actors = [dro]
+          executionCore = ExecutionCore with
+            authorities = Set.singleton dro
+            availableActions = Map.fromList [(EA_Execute, [[dro]])]
+            opensAt = now
+            cancelAfter = now
+            expiresAt = None
+            meta = emptyMetadata
+          outcome = None
+          snapshots
+          extraArgs = ExtraArgs with context = emptyChoiceContext; meta = emptyMetadata
+        let [executionCid] = authorized.executionCids
+        let targets = Map.insert stateKey (coerceContractId caseCid) (Map.fromList [(claimKey dro registry, coerceContractId credential) | (registry, credential) <- Map.toList disputed.claims, registry /= winner])
+        _ <- exercise executionCid Executable_Execute with
+          actors = [dro]
+          targetCids = targets
+          extraArgs = ExtraArgs with context = emptyChoiceContext; meta = emptyMetadata
+        forA_ (map snd (Map.toList disputed.actions)) archive
+        _ <- exercise caseCid NameDispute_Close
+        -- The receipt and the case's tally root are both spent, so one tally
+        -- cannot publish two rulings and a case cannot be resolved twice.
+        archive receiptCid
+        archive resolverCid
+        _ <- create this with cases = Set.delete activeCase cases
+        create Ruling with
+          caseAuthority = disputed.caseAuthority
+          caseToken = disputed.caseToken
+          consortiumId = disputed.consortiumId
+          caseId = disputed.caseId
+          name = disputed.name
+          firstRegistry = disputed.firstRegistry
+          secondRegistry = disputed.secondRegistry
+          decision; winner; participants = Set.fromList (Map.keys disputed.claims)
+          electorate = Set.union disputed.voters (Set.fromList (Map.keys admitted))
+          followedBy = Set.empty
+
+-- What a tally asserts about itself, for the member-visible half of the
+-- resolution and for a later auditor. It carries the roll it counted and the
+-- outcome, never a vote.
+template TallyReceipt
+  with
+    dro : Party
+    consortiumId : Text
+    caseToken : Text
+    caseId : Text
+    roll : Set Party
+    decision : Decision
+    winner : Party
+  where
+    signatory dro
+
+-- The private tally root. Signed by the DRO alone: a transaction rooted here
+-- is projected to no member, so the ballot and voting-right reads it performs
+-- stay between the DRO and each ballot's own voter. The aggregate reaches the
+-- members through the nested `Consortium_PublishRuling` child, which they are
+-- informees of, and a Daml projection gives a party the nodes it is informee
+-- of plus their descendants, never a sibling subtree.
+template DisputeResolver
+  with
+    dro : Party
+    consortiumId : Text
+    caseToken : Text
+    caseId : Text
+  where
+    signatory dro
+    ensure consortiumId /= "" && caseToken /= "" && caseId /= ""
+
+    -- Nonconsuming here, because the resolver is spent by the member-visible
+    -- publishing child instead: that is what makes "one published ruling per
+    -- case" a property of the member-observed half of the transaction, not
+    -- only of the private root.
+    nonconsuming choice Resolver_Resolve : ContractId Ruling
+      with
+        consortiumCid : ContractId Consortium
+        caseCid : ContractId NameDispute
+        decision : Decision
+        -- Every slot on the case roll, by voter. Not a caller-chosen subset:
+        -- the keys must be exactly the roll.
+        slots : Map.Map Party (ContractId Ballot)
+      controller dro
+      do
+        consortium <- fetch consortiumCid
+        assertMsg "stale or foreign consortium" (consortium.dro == dro && consortium.consortiumId == consortiumId)
+        disputed <- fetchChecked dro caseCid
+        assertMsg "resolver belongs to another case" (disputed.consortiumId == consortiumId
+          && disputed.caseToken == caseToken && disputed.caseId == caseId)
+        let opening = case disputed.openingCaseCid of
+              None -> caseCid
+              Some original -> original
+        let activeCase = ActiveCase opening disputed.firstRegistry disputed.secondRegistry disputed.name disputed.firstCredential disputed.secondCredential disputed.claims
+        assertMsg "case not opened by this consortium chain" (Set.member activeCase consortium.cases)
+        -- The complete authoritative roll, so a resolution cannot silently
+        -- omit an opposing voter's slot. The roll only ever grew, through
+        -- case-authority-signed invitations.
+        assertMsg "presented slots are not exactly the case roll"
+          (Map.keys slots == Set.toList disputed.registered)
+        let members = Set.fromList (Map.keys consortium.admitted)
         let electorate = case disputed.policy of
               SnapshotAtOpen -> disputed.eligible
               CurrentMembership -> Set.intersection disputed.eligible members
-        presented <- forA (Map.toList disputed.ballots) $ \(voter, ballotCid) -> do
+        -- Each slot is bound to this case and this voter. A ballot minted for
+        -- another case, carrying another case's actions or another case's
+        -- frozen state, or belonging to another voter, is refused here; and a
+        -- superseded generation no longer fetches at all, because every cast
+        -- and withdrawal consumed its predecessor.
+        presented <- forA (Map.toList slots) $ \(voter, ballotCid) -> do
           ballot <- fetch ballotCid
-          assertMsg "foreign ballot in inventory" (ballot.caseAuthority == disputed.caseAuthority && ballot.caseToken == disputed.caseToken && ballot.caseId == disputed.caseId && ballot.voter == voter && ballot.firstAction == disputed.firstAction && ballot.secondAction == disputed.secondAction && ballot.actions == disputed.actions && ballot.caseState == toAnyValue (stateOf disputed))
+          assertMsg "foreign ballot slot" (ballot.caseAuthority == disputed.caseAuthority && ballot.caseToken == disputed.caseToken && ballot.consortiumId == disputed.consortiumId && ballot.caseId == disputed.caseId && ballot.voter == voter && ballot.firstAction == disputed.firstAction && ballot.secondAction == disputed.secondAction && ballot.actions == disputed.actions && ballot.caseState == toAnyValue (stateOf disputed))
           pure (ballotCid, ballot)
         let eligibleBallots = [(cid, ballot) | (cid, ballot) <- presented, Set.member ballot.voter electorate]
         -- Each ballot carries the right its voter presented when registering.
@@ -262,7 +404,7 @@ template Consortium
         -- The policy freezes who may vote, not which credential counts: the
         -- stint is always checked against the live consortium, so a right
         -- from a finished stint never counts under either policy.
-        forA_ eligibleBallots (\(_, ballot) -> requireEntitlement dro consortiumId admitted ballot.voter ballot.right)
+        forA_ eligibleBallots (\(_, ballot) -> requireEntitlement dro consortiumId consortium.admitted ballot.voter ballot.right)
         casts <- castsOf Some electorate (map snd eligibleBallots)
         let winner = winnerOf decision disputed.firstRegistry disputed.secondRegistry
         assertMsg "winner not in the frozen claims" (Map.lookup winner disputed.claims /= None)
@@ -277,39 +419,12 @@ template Consortium
         let stateKey = disputeKey dro disputed.caseToken
         liveState <- readState @NameDispute stateKey (coerceContractId caseCid)
         assertMsg "ballot state differs from the live case" (ballotSnapshots == Map.fromList [(stateKey, Snapshot with state = liveState; cid = None)])
-        now <- getTime
-        authorized <- exercise actionCid Action_AuthorizeExecution with
-          actors = [dro]
-          executionCore = ExecutionCore with
-            authorities = Set.singleton dro
-            availableActions = Map.fromList [(EA_Execute, [[dro]])]
-            opensAt = now
-            cancelAfter = now
-            expiresAt = None
-            meta = emptyMetadata
-          outcome = None
-          snapshots = ballotSnapshots
-          extraArgs = ExtraArgs with context = emptyChoiceContext; meta = emptyMetadata
-        let [executionCid] = authorized.executionCids
-        let targets = Map.insert stateKey (coerceContractId caseCid) (Map.fromList [(claimKey dro registry, coerceContractId credential) | (registry, credential) <- Map.toList disputed.claims, registry /= winner])
-        _ <- exercise executionCid Executable_Execute with
-          actors = [dro]
-          targetCids = targets
-          extraArgs = ExtraArgs with context = emptyChoiceContext; meta = emptyMetadata
+        -- Every slot is spent, so no vote survives the case it was cast in.
         consumeBallots (map fst presented)
-        forA_ (map snd (Map.toList disputed.actions)) archive
-        _ <- exercise caseCid NameDispute_Close
-        _ <- create this with cases = Set.delete activeCase cases
-        create Ruling with
-          caseAuthority = disputed.caseAuthority
-          caseToken = disputed.caseToken
-          consortiumId = disputed.consortiumId
-          caseId = disputed.caseId
-          name = disputed.name
-          firstRegistry = disputed.firstRegistry
-          secondRegistry = disputed.secondRegistry
-          decision; winner; participants = Set.fromList (Map.keys disputed.claims)
-          followedBy = Set.empty
+        receiptCid <- create TallyReceipt with
+          dro; consortiumId; caseToken; caseId
+          roll = disputed.registered; decision; winner
+        exercise consortiumCid Consortium_PublishRuling with caseCid; decision; receiptCid; resolverCid = self
 
 claimKey : Party -> Party -> AuthenticKey
 claimKey dro registry = AuthenticKey with authorities = Set.singleton dro; id = "losing-credential:" <> show registry

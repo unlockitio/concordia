@@ -116,7 +116,16 @@ template NameDispute
     voters : Set Party
     eligible : Set Party
     admitted : Map Party Int
-    ballots : Map Party (ContractId Ballot)
+    -- The authoritative, complete roll of voters that hold a ballot slot. It
+    -- is a set of parties, never a map to ballot contract IDs: the case is
+    -- observed by every member, so a ballot reference here would have to be
+    -- read inside a member-witnessed node to be useful, and that is the leak
+    -- this design removes. Membership of the roll is participation metadata,
+    -- not ballot content.
+    --
+    -- The roll only grows, and only through a case-authority-signed
+    -- invitation, so a resolver cannot shrink it to drop an opposing vote.
+    registered : Set Party
     openingCaseCid : Optional (ContractId NameDispute)
     firstAction : ContractId Action
     secondAction : ContractId Action
@@ -125,6 +134,7 @@ template NameDispute
     signatory caseAuthority
     observer Set.toList voters
     ensure caseId /= "" && name /= "" && reason /= "" && firstRegistry /= secondRegistry
+      && Set.isSubsetOf registered voters
       && Map.size claims >= 2 && Map.keys claims == Map.keys actions
       && Map.lookup firstRegistry claims == Some firstCredential
       && Map.lookup secondRegistry claims == Some secondCredential
@@ -146,30 +156,26 @@ template NameDispute
       do
         assertMsg "voter not in the opening electorate" (Set.member voter voters)
         assertMsg "voter is not an admitted member" (Map.member voter admitted)
+        assertMsg "voter already holds a ballot slot" (not (Set.member voter registered))
         create DisputeInvitation with caseAuthority; caseToken; consortiumId; caseId; voter; firstAction; secondAction; actions; caseState = toAnyValue (stateOf this)
 
-    choice NameDispute_RegisterBallot : ContractId NameDispute
+    -- Enrolment records only *that* the voter now holds a slot. It takes no
+    -- ballot contract ID and performs no ballot fetch, so this
+    -- member-observed node carries no decision. One enrolment per voter: the
+    -- genesis ballot is created in the same transaction, and every later
+    -- replacement is consuming and stays inside the voter-and-DRO-only
+    -- ballot lineage, which the case never witnesses again.
+    choice NameDispute_Enrol : ContractId NameDispute
       with
         voter : Party
-        previous : Optional (ContractId Ballot)
-        replacement : ContractId Ballot
       controller voter
       do
         assertMsg "voter not in the opening electorate" (Set.member voter voters)
-        assertMsg "ballot inventory does not match" (Map.lookup voter ballots == previous)
-        ballot <- fetch replacement
-        assertMsg "foreign ballot" (ballot.caseAuthority == caseAuthority && ballot.caseToken == caseToken && ballot.consortiumId == consortiumId && ballot.caseId == caseId && ballot.voter == voter && ballot.firstAction == firstAction && ballot.secondAction == secondAction && ballot.actions == actions && ballot.caseState == toAnyValue (stateOf this))
-        -- Membership here is the opening electorate; the voter additionally
-        -- proves a live right of its own. The authoritative stint check is at
-        -- resolution, against the consortium live then: a member removed and
-        -- re-admitted mid-case holds a new right, and freezing the stint at
-        -- open would reject that legitimate credential.
-        _ <- checkRight caseAuthority consortiumId voter ballot.right
-        pure ()
+        assertMsg "voter already holds a ballot slot" (not (Set.member voter registered))
         let opening = case openingCaseCid of
               None -> Some self
               Some original -> Some original
-        create this with ballots = Map.insert voter replacement ballots; openingCaseCid = opening
+        create this with registered = Set.insert voter registered; openingCaseCid = opening
 
 instance HasCheckedFetch NameDispute Party where
   contractGroupId disputed = disputed.caseAuthority
@@ -218,11 +224,30 @@ template DisputeInvitation
       do
         disputed <- fetchChecked caseAuthority caseCid
         assertMsg "invitation belongs to another case" (disputed.caseToken == caseToken && disputed.consortiumId == consortiumId && disputed.caseId == caseId && disputed.firstAction == firstAction && disputed.secondAction == secondAction && disputed.actions == actions && toAnyValue (stateOf disputed) == caseState)
-        assertMsg "voter already registered" (Map.lookup voter disputed.ballots == None)
-        ballotCid <- create Ballot with caseAuthority; caseToken; consortiumId; caseId; voter; right; firstAction; secondAction; actions; caseState; decision = None
-        updated <- exercise caseCid NameDispute_RegisterBallot with voter; previous = None; replacement = ballotCid
+        assertMsg "voter already registered" (not (Set.member voter disputed.registered))
+        -- The voter proves a live right of its own. The authoritative stint
+        -- check runs again at resolution against the consortium live then: a
+        -- member removed and re-admitted mid-case holds a new right, and
+        -- freezing the stint at open would reject that legitimate credential.
+        _ <- checkRight caseAuthority consortiumId voter right
+        -- Enrol first, then create the slot. Enrolment is the member-observed
+        -- node and carries only the voter identity; the ballot create is a
+        -- sibling node signed by the voter and the DRO only.
+        updated <- exercise caseCid NameDispute_Enrol with voter
+        ballotCid <- create Ballot with caseAuthority; caseToken; consortiumId; caseId; voter; right; firstAction; secondAction; actions; caseState; decision = None; generation = 0
         pure (updated, ballotCid)
 
+-- The ballot slot. Signed by the case authority and the voter only, and never
+-- fetched inside a member-witnessed node, so its decision is projected to the
+-- voter and the DRO alone.
+--
+-- `generation` exists for auditability of the lineage, not for slot authority.
+-- Slot authority comes from the shape of the lineage: the case issues one
+-- invitation per voter and refuses a second slot, so there is exactly one
+-- genesis ballot per voter, and every cast or withdrawal is a *consuming*
+-- replacement that creates exactly one successor. A ballot that still fetches
+-- is therefore the unique live slot of its voter, which is what lets the
+-- resolver treat the presented set as authoritative and complete.
 template Ballot
   with
     caseAuthority : Party
@@ -238,31 +263,27 @@ template Ballot
     actions : Map Party (ContractId Action)
     caseState : AnyValue
     decision : Optional Decision
+    generation : Int
   where
     signatory [caseAuthority, voter]
+    ensure generation >= 0
 
     choice Ballot_Consume : ()
       controller caseAuthority
       do pure ()
 
-    choice Ballot_Cast : (ContractId NameDispute, ContractId Ballot)
+    -- Casting and withdrawing no longer touch the case. The slot already
+    -- exists on the case roll, so the replacement stays entirely inside the
+    -- voter-and-DRO lineage and no member witnesses a vote changing.
+    choice Ballot_Cast : ContractId Ballot
       with
-        caseCid : ContractId NameDispute
         vote : Decision
       controller voter
-      do
-        replacement <- create this with decision = Some vote
-        updated <- exercise caseCid NameDispute_RegisterBallot with voter; previous = Some self; replacement
-        pure (updated, replacement)
+      do create this with decision = Some vote; generation = generation + 1
 
-    choice Ballot_Withdraw : (ContractId NameDispute, ContractId Ballot)
-      with
-        caseCid : ContractId NameDispute
+    choice Ballot_Withdraw : ContractId Ballot
       controller voter
-      do
-        replacement <- create this with decision = None
-        updated <- exercise caseCid NameDispute_RegisterBallot with voter; previous = Some self; replacement
-        pure (updated, replacement)
+      do create this with decision = None; generation = generation + 1
 
 instance IsBallot Ballot Decision where
   votesOf ballot = Map.fromList [(ballot.voter, optional Absent Voted ballot.decision)]
@@ -293,10 +314,15 @@ template Ruling
     decision : Decision
     winner : Party
     participants : Set Party
+    -- Every member of the case electorate, so the aggregate outcome is
+    -- readable by the whole consortium and not only by the registries whose
+    -- claims were at stake. This is the published aggregate: an outcome and a
+    -- winner, with no per-voter counts.
+    electorate : Set Party
     followedBy : Set Party
   where
     signatory caseAuthority
-    observer Set.toList participants
+    observer Set.toList (Set.union participants electorate)
 
     -- An acknowledgement is separate from the registry's CIPs credential act.
     choice Ruling_Follow : ContractId Ruling

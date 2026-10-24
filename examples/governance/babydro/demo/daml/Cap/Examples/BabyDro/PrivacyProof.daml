@@ -1,0 +1,97 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Examples.BabyDro.PrivacyProof where
+
+import Daml.Script
+import DA.Assert ((===))
+
+-- Retained LF 2.2 transaction-projection regression. Inspect with
+-- dpm test --test-pattern resolverProjection --transactions-output FILE.
+template ProofBallot
+  with
+    dro : Party
+    voter : Party
+    decision : Text
+  where
+    signatory [dro, voter]
+
+template ProofConsortium
+  with
+    dro : Party
+    members : [Party]
+  where
+    signatory dro, members
+
+    -- Consuming: proves a DRO-only root can reach a successor signed by the
+    -- DRO and every member, because exercising the choice delegates the
+    -- contract's signatory authority to the choice body.
+    choice ProofPublish : (ContractId ProofConsortium, ContractId ProofOutcome)
+      with result : Text
+      controller dro
+      do
+        successor <- create this
+        published <- create ProofOutcome with dro; members; result
+        pure (successor, published)
+
+    nonconsuming choice ProofBaseline : Text
+      with ballot : ContractId ProofBallot
+      controller dro
+      do
+        seen <- fetch ballot
+        pure seen.decision
+
+template ProofOutcome
+  with
+    dro : Party
+    members : [Party]
+    result : Text
+  where
+    signatory dro
+    observer members
+
+template ProofResolver
+  with
+    dro : Party
+    board : ContractId ProofConsortium
+  where
+    signatory dro
+
+    nonconsuming choice ProofResolve : (ContractId ProofConsortium, ContractId ProofOutcome)
+      with
+        first : ContractId ProofBallot
+        second : ContractId ProofBallot
+      controller dro
+      do
+        a <- fetch first
+        b <- fetch second
+        assertMsg "different voters" (a.voter /= b.voter)
+        let aggregate = if a.decision == b.decision then a.decision else "no quorum"
+        exercise board ProofPublish with result = aggregate
+
+resolverProjection : Script ()
+resolverProjection = script do
+  dro <- allocateParty "proof-dro"
+  alice <- allocateParty "proof-alice"
+  bob <- allocateParty "proof-bob"
+  carol <- allocateParty "proof-carol"
+  board <- submit (actAs dro <> actAs alice <> actAs bob <> actAs carol) $
+    createCmd ProofConsortium with dro; members = [alice, bob, carol]
+  first <- submit (actAs dro <> actAs alice) $ createCmd ProofBallot with dro; voter = alice; decision = "A"
+  second <- submit (actAs dro <> actAs bob) $ createCmd ProofBallot with dro; voter = bob; decision = "A"
+  _ <- submit dro $ exerciseCmd board ProofBaseline with ballot = first
+  resolver <- submit dro $ createCmd ProofResolver with dro; board
+  (successor, outcome) <- submit dro $ exerciseCmd resolver ProofResolve with first; second
+  Some published <- queryContractId carol outcome
+  published.result === "A"
+  -- Carol never sees either ballot, not even the one fetched in the same
+  -- transaction that published the aggregate it does see.
+  unseenFirst <- queryContractId carol first
+  unseenFirst === None
+  unseenSecond <- queryContractId carol second
+  unseenSecond === None
+  -- The member-signed successor is live and visible to the members.
+  Some live <- queryContractId carol successor
+  live.members === [alice, bob, carol]
+  -- The DRO-only resolver root is not visible to any member.
+  invisibleRoot <- queryContractId carol resolver
+  invisibleRoot === None
