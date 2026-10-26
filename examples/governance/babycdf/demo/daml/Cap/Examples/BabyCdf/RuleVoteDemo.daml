@@ -1,0 +1,255 @@
+-- SPDX-License-Identifier: Apache-2.0
+module Cap.Examples.BabyCdf.RuleVoteDemo where
+
+import DA.Assert ((===))
+import qualified DA.Map as Map
+import qualified DA.Set as Set
+import DA.Time (addRelTime, hours, minutes)
+import Daml.Script hiding (AnyContractId)
+import Cap.Governance.ExecutableV1
+import Splice.Api.Token.MetadataV1 (ExtraArgs (..), emptyChoiceContext, emptyMetadata)
+import qualified Cap.Governance.Utils.Count as Count
+import Cap.Examples.BabyCdf.RuleVote
+import Cap.Examples.BabyCdf.Rights
+
+assemblyAttendanceIsSelfRegistered : Script ()
+assemblyAttendanceIsSelfRegistered = do
+  opener <- allocateParty "assembly-opener"
+  p1 <- allocateParty "assembly-permanent-1"
+  p2 <- allocateParty "assembly-permanent-2"
+  p3 <- allocateParty "assembly-permanent-3"
+  p4 <- allocateParty "assembly-permanent-4"
+  p5 <- allocateParty "assembly-permanent-5"
+  a1 <- allocateParty "assembly-alternate-1"
+  a2 <- allocateParty "assembly-alternate-2"
+  adviser <- allocateParty "assembly-adviser"
+  outsider <- allocateParty "assembly-outsider"
+  now <- getTime
+  let permanent = Set.fromList [p1, p2, p3, p4, p5]
+      alternates = Set.fromList [a1, a2]
+      advisers = Set.singleton adviser
+      opensAt = now `addRelTime` hours 1
+      closesAt = now `addRelTime` hours 2
+  assembly <- submit opener $ createCmd RuleAssembly with
+    opener; permanent; alternates; advisers; opensAt; closesAt
+  submitMustFail p1 $ exerciseCmd assembly RegisterAttendance with attendee = p1
+  setTime opensAt
+  submitMustFail outsider $ exerciseCmd assembly RegisterAttendance with attendee = outsider
+  submitMustFail opener $ exerciseCmd assembly RegisterAttendance with attendee = p1
+  adviserCid <- submit adviser $ exerciseCmd assembly RegisterAttendance with attendee = adviser
+  a2Cid <- submit a2 $ exerciseCmd assembly RegisterAttendance with attendee = a2
+  setTime (opensAt `addRelTime` minutes 15)
+  a1Cid <- submit a1 $ exerciseCmd assembly RegisterAttendance with attendee = a1
+  duplicateA2 <- submit a2 $ exerciseCmd assembly RegisterAttendance with attendee = a2
+  p1Cid <- submit p1 $ exerciseCmd assembly RegisterAttendance with attendee = p1
+  Some unchanged <- queryContractId p1 assembly
+  unchanged.opensAt === opensAt
+  submitMustFail opener $ exerciseCmd assembly ResolveAttendance with
+    attendanceCids = [adviserCid, a2Cid, a1Cid, p1Cid]
+  setTime closesAt
+  submitMustFail p2 $ exerciseCmd assembly RegisterAttendance with attendee = p2
+  submitMustFail opener $ exerciseCmd assembly ResolveAttendance with
+    attendanceCids = [adviserCid, a2Cid, a2Cid, p1Cid]
+  submitMustFail opener $ exerciseCmd assembly ResolveAttendance with
+    attendanceCids = [adviserCid, a2Cid, duplicateA2, p1Cid]
+  resolved <- submit opener $ exerciseCmd assembly ResolveAttendance with
+    attendanceCids = [p1Cid, a1Cid, adviserCid, a2Cid]
+  Some attendance <- queryContractId a1 resolved
+  attendance.attendees === [adviser, a2, a1, p1]
+  attendance.alternatePriority === [a2, a1]
+  attendance.assemblyQuorumMet === True
+  second <- submit opener $ createCmd RuleAssembly with
+    opener; permanent; alternates; advisers; opensAt; closesAt
+  submitMustFail opener $ exerciseCmd second ResolveAttendance with
+    attendanceCids = [adviserCid, a2Cid]
+  noQuorum <- submit opener $ exerciseCmd second ResolveAttendance with attendanceCids = []
+  Some emptyAttendance <- queryContractId opener noQuorum
+  emptyAttendance.assemblyQuorumMet === False
+
+extra : ExtraArgs
+extra = ExtraArgs with context = emptyChoiceContext; meta = emptyMetadata
+
+-- Consumer path exercises actual CAP Action authorization and Executable
+-- execution; the Java fixture remains advisory and does not read this ledger.
+capRuleAndSeparateApprovals : Script ()
+capRuleAndSeparateApprovals = do
+  _ <- capRuleAndSeparateApprovalsWithMilestone
+  pure ()
+
+capRuleAndSeparateApprovalsWithMilestone : Script (ContractId ApprovedMilestone)
+capRuleAndSeparateApprovalsWithMilestone = do
+  opener <- allocateParty "demo-opener"
+  a <- allocateParty "member-a"
+  b <- allocateParty "member-b"
+  c <- allocateParty "member-c"
+  d <- allocateParty "member-d"
+  e <- allocateParty "member-e"
+  f <- allocateParty "alternate-f"
+  g <- allocateParty "alternate-g"
+  outsider <- allocateParty "outsider"
+  adviser <- allocateParty "adviser"
+  foreignCdf <- allocateParty "foreign-cdf"
+  now <- getTime
+  governor <- submit opener $ createCmd AgendaGovernor with
+    opener; consortiumId = "demo-cdf"; permanent = Set.fromList [a,b,c,d,e]; alternates = Set.fromList [f,g]
+  factory <- submit opener $ createCmd VotingRightFactory with cdf = opener; members = [a,b,c,d,e,f,g]
+  let issueFrom cdf factoryCid consortiumId member expiresAt registered = do
+        invitation <- submit cdf $ createCmd VotingRightInvitation with
+          cdf; consortiumId; member; expiresAt
+        if registered then do
+          cid <- submit member $ exerciseCmd invitation AcceptRegistered with factory = factoryCid
+          pure (member, RegisteredRight cid)
+        else do
+          cid <- submit member $ exerciseCmd invitation AcceptDirect
+          pure (member, DirectRight cid)
+      issue member registered =
+        issueFrom opener (toInterfaceContractId factory) "demo-cdf" member (now `addRelTime` hours 12) registered
+  ra <- issue a False
+  rb <- issue b True
+  rc <- issue c False
+  rf <- issue f True
+  rg <- issue g False
+  -- A second live credential for the same member: duplicates can exist on the
+  -- ledger and are only rejected where they are presented at resolution.
+  (_, duplicateA) <- issue a True
+  adviserRight <- issue adviser False
+  outsiderRight <- issue outsider False
+  (_, expiringC) <- issueFrom opener (toInterfaceContractId factory) "demo-cdf" c
+    (now `addRelTime` minutes 30) False
+  foreignFactory <- submit foreignCdf $ createCmd VotingRightFactory with
+    cdf = foreignCdf; members = [a,b,c]
+  (_, foreignA) <- issueFrom foreignCdf (toInterfaceContractId foreignFactory) "demo-cdf" a
+    (now `addRelTime` hours 12) True
+  (_, otherConsortiumB) <- issueFrom opener (toInterfaceContractId factory) "other-cdf" b
+    (now `addRelTime` hours 12) False
+  registry <- submit opener $ createCmd RuleRegistry with
+    opener; members = Set.fromList [a,b,c,d,e,f,g]; version = 0
+  let propose proposer roundId agenda baseVersion = do
+        opened <- getTime
+        submit proposer $ exerciseCmd governor ProposeAgenda with
+          proposer; roundId; agenda; baseVersion; closesAt = opened `addRelTime` hours 1
+      invite proposal = submit opener $ exerciseCmd proposal InviteBallots
+      cast voter cid option = submit voter $ exerciseCmd cid CastAgendaVote with option
+      resolve proposal ballots rights = submit opener $ exerciseCmd governor ResolveAgenda with
+        proposalCid = proposal; ballotCids = ballots; rights
+      execute cid targets = submit opener $ exerciseCmd cid Executable_Execute with
+        actors = [opener]; targetCids = targets; extraArgs = extra
+  submitMustFail outsider $ exerciseCmd governor ProposeAgenda with
+    proposer = outsider; roundId = "outsider"; agenda = Grant proposalSubject
+    baseVersion = 0; closesAt = now `addRelTime` hours 1
+  first <- propose a "rule-v1" (Architecture (RuleDraft "architecture-review" 1 "interfaces")) 0
+  ballots <- invite first
+  let [bf, bg, ba, bb, bc, bd, be] = ballots
+  votedA <- cast a ba (Count.Voted Yes)
+  submitMustFail a $ exerciseCmd votedA CastAgendaVote with option = Count.Voted Yes
+  submitMustFail b $ exerciseCmd bb CastAgendaVote with option = Count.Absent
+  votedB <- cast b bb (Count.Voted Yes)
+  abstained <- cast c bc Count.Abstained
+  submitMustFail opener $ exerciseCmd governor ResolveAgenda with
+    proposalCid = first; ballotCids = [votedA,votedB,abstained,bd,be,bf,bg]; rights = [ra,rb,rc]
+  setTime (now `addRelTime` hours 1)
+  let resolveFirst rights = submitMustFail opener $ exerciseCmd governor ResolveAgenda with
+        proposalCid = first; ballotCids = [votedA,votedB,abstained,bd,be,bf,bg]; rights
+  -- Both of a's credentials are live at the same time: this package does not
+  -- prevent duplicate issuance, it only refuses to count two for one voter.
+  liveDirect <- query @DirectVotingRight a
+  liveRegistered <- query @RegisteredVotingRight a
+  length [() | (_, r) <- liveDirect, r.member == a] === 1
+  length [() | (_, r) <- liveRegistered, r.member == a, r.cdf == opener] === 1
+  resolveFirst [ra, (a, duplicateA), rb, rc]
+  resolveFirst [(a, duplicateA), ra, rb, rc]
+  resolveFirst [ra, ra, rb, rc]
+  -- A participating voter without a presented credential, and a presented
+  -- credential for a voter who did not take part.
+  resolveFirst [ra, rb]
+  resolveFirst [ra, rb, rc, rg]
+  -- Advisers and outsiders hold no voting credential this round.
+  resolveFirst [ra, rb, rc, adviserRight]
+  resolveFirst [ra, rb, rc, outsiderRight]
+  resolveFirst [ra, rb, outsiderRight]
+  -- Wrong holder: b's credential presented as a's.
+  resolveFirst [(a, snd rb), rb, rc]
+  -- Wrong issuer and wrong consortium claim.
+  resolveFirst [(a, foreignA), rb, rc]
+  resolveFirst [ra, (b, otherConsortiumB), rc]
+  -- Expired at the intended resolution time, even though it was valid earlier.
+  resolveFirst [ra, rb, (c, expiringC)]
+  Resolution verdict executions <- resolve first [votedA,votedB,abstained,bd,be,bf,bg] [ra,rb,rc]
+  verdict === Count.Decided Yes
+  let [execution] = executions
+      target cid = Map.fromList [(registryKey opener, coerceContractId cid)]
+  submitMustFail outsider $ exerciseCmd execution Executable_Execute with
+    actors = [outsider]; targetCids = target registry; extraArgs = extra
+  executed <- execute execution (target registry)
+  let [nextRegistry, ruleCid] = executed.created
+  Some active <- queryContractId a (coerceContractId ruleCid : ContractId EffectiveRule)
+  active.draft.version === 1
+  application <- submit a $ exerciseCmd (coerceContractId ruleCid : ContractId EffectiveRule) ApplyRule with
+    subject = proposalSubject; reviewer = a
+  Some applied <- queryContractId a application
+  applied.findings === [ClauseFinding "compose-with-asset-layer" Pass
+    "Architectural Notes / CAP is designed to sit above"]
+  second <- propose b "rule-v2" (Architecture (RuleDraft "architecture-review" 2 "migration")) 1
+  [sf,sg,sa,sb,sc,sd,se] <- invite second
+  sa1 <- cast a sa (Count.Voted Yes)
+  sb1 <- cast b sb (Count.Voted Yes)
+  sc1 <- cast c sc Count.Abstained
+  current <- getTime
+  setTime (current `addRelTime` hours 1)
+  Resolution _ [secondExec] <- resolve second [sa1,sb1,sc1,sd,se,sf,sg] [ra,rb,rc]
+  submitMustFail opener $ exerciseCmd secondExec Executable_Execute with
+    actors = [opener]; targetCids = target registry; extraArgs = extra
+  updated <- execute secondExec (target (coerceContractId nextRegistry : ContractId RuleRegistry))
+  let [_, secondRule] = updated.created
+  milestoneReview <- submit b $ exerciseCmd (coerceContractId secondRule : ContractId EffectiveRule) ApplyRule with
+    subject = milestoneSubject; reviewer = b
+  Some reviewed <- queryContractId b milestoneReview
+  reviewed.findings ===
+    [ ClauseFinding "compose-with-asset-layer" InsufficientEvidence "no matching pinned excerpt"
+    , ClauseFinding "governance-execution-hooks" Pass
+        "Milestones and Deliverables / Milestone 3 / Deliverables" ]
+  grant <- propose a "grant" (Grant proposalSubject) 0
+  [gf,gg,ga,gb,gc,gd,ge] <- invite grant
+  ga1 <- cast a ga (Count.Voted Yes)
+  gb1 <- cast b gb (Count.Voted Yes)
+  gf1 <- cast f gf Count.Abstained
+  current <- getTime
+  setTime (current `addRelTime` hours 1)
+  Resolution _ [grantExec] <- resolve grant [ga1,gb1,gc,gd,ge,gf1,gg] [ra,rb,rf]
+  grantResult <- execute grantExec Map.empty
+  let [grantCid] = grantResult.created
+  Some approvedGrant <- queryContractId a (coerceContractId grantCid : ContractId ApprovedGrantProposal)
+  approvedGrant.proposal === proposalSubject
+  submitMustFail a $ exerciseCmd governor ProposeAgenda with
+    proposer = a; roundId = "unpinned"; agenda = Milestone milestoneSubject
+    baseVersion = 0; closesAt = current `addRelTime` hours 2
+  milestone <- propose f "milestone" (Milestone illustrativeMilestone) 0
+  [mf,mg,ma,mb,mc,md,me] <- invite milestone
+  ma1 <- cast a ma (Count.Voted Yes)
+  mb1 <- cast b mb (Count.Voted No)
+  mc1 <- cast c mc Count.Abstained
+  current <- getTime
+  setTime (current `addRelTime` hours 1)
+  Resolution split noExecution <- resolve milestone [ma1,mb1,mc1,md,me,mf,mg] [ra,rb,rc]
+  split === Count.Undecided
+  noExecution === []
+  later <- propose f "milestone-approved" (Milestone illustrativeMilestone) 0
+  [lf,lg,la,lb,lc,ld,le] <- invite later
+  la1 <- cast a la (Count.Voted Yes)
+  lb1 <- cast b lb (Count.Voted Yes)
+  lg1 <- cast g lg Count.Abstained
+  current <- getTime
+  setTime (current `addRelTime` hours 1)
+  Resolution _ [milestoneExec] <- resolve later [la1,lb1,lc,ld,le,lf,lg1] [ra,rb,rg]
+  milestoneResult <- execute milestoneExec Map.empty
+  let [milestoneCid] = milestoneResult.created
+  Some approvedMilestone <- queryContractId g (coerceContractId milestoneCid : ContractId ApprovedMilestone)
+  approvedMilestone.milestone === illustrativeMilestone
+  pure (coerceContractId milestoneCid)
+
+reviewClauseIsThreeValued : Script ()
+reviewClauseIsThreeValued = do
+  reviewClause [] compositionClause === ClauseFinding "compose-with-asset-layer"
+    InsufficientEvidence "no matching pinned excerpt"
+  reviewClause [compositionClause.expected, compositionClause.contradicts] compositionClause ===
+    ClauseFinding "compose-with-asset-layer" Fail "synthetic/conflict"

@@ -1,0 +1,447 @@
+-- SPDX-License-Identifier: Apache-2.0
+module Cap.Examples.BabyCdf.RuleVote where
+
+import Prelude hiding (Action)
+import qualified DA.Map as Map
+import DA.Map (Map)
+import DA.List (unique, sortOn)
+import DA.Foldable (forA_)
+import qualified DA.Set as Set
+import DA.Set (Set)
+import Splice.Api.Token.MetadataV1
+import Cap.Core.Types (AuthenticKey (..), Snapshot (..), ExecutionAction (..), ExecutionCore (..))
+import Cap.Core.Utils (IsAnyValue (..), HasCheckedFetch (..), fetchGroup, signedKey)
+import Cap.Governance.ActionV1
+import Cap.Governance.ExecutableV1
+import Cap.Governance.Utils (IsBallot (..), castsOf, agreedAction, agreedSnapshots, consumeBallots, HasState (..), readState, checkTarget, mergeSnapshots, requireSameKeys)
+import qualified Cap.Governance.Utils.Count as Count
+import Cap.Examples.BabyCdf.Rights (RightRef, checkRight)
+
+-- Attendance and agenda ballots are independent. Alternates vote as themselves,
+-- not as proxies for permanent members. This is not Foundation governance.
+data AssemblyRole = PermanentMember | AlternateMember | AdviserMember
+  deriving (Eq, Show)
+
+template RuleAssembly
+  with
+    opener : Party
+    permanent : Set Party
+    alternates : Set Party
+    advisers : Set Party
+    opensAt : Time
+    closesAt : Time
+  where
+    signatory opener
+    observer Set.toList permanent ++ Set.toList alternates ++ Set.toList advisers
+    ensure Set.size permanent == 5 && Set.size alternates == 2
+      && Set.null (Set.intersection permanent alternates)
+      && Set.null (Set.intersection permanent advisers)
+      && Set.null (Set.intersection alternates advisers)
+      && opensAt < closesAt
+
+    nonconsuming choice RegisterAttendance : ContractId AssemblyAttendance
+      with attendee : Party
+      controller attendee
+      do
+        now <- getTime
+        assertMsg "attendance window closed" (opensAt <= now && now < closesAt)
+        let role = if attendee `Set.member` permanent then PermanentMember
+              else if attendee `Set.member` alternates then AlternateMember
+              else AdviserMember
+        assertMsg "not an assembly participant"
+          (attendee `Set.member` Set.union permanent (Set.union alternates advisers))
+        create AssemblyAttendance with
+          opener; assemblyCid = self; attendee; role; registeredAt = now; opensAt; closesAt
+
+    choice ResolveAttendance : ContractId ResolvedAssembly
+      with attendanceCids : [ContractId AssemblyAttendance]
+      controller opener
+      do
+        now <- getTime
+        assertMsg "attendance window still open" (now >= closesAt)
+        assertMsg "presented attendance contracts are distinct" (unique attendanceCids)
+        presented <- forA attendanceCids $ \cid -> do
+          r <- fetch cid
+          checked <- fetchGroup (AuthenticKey with
+            authorities = Set.fromList [opener, r.attendee]; id = "babycdf-assembly-attendance") [cid]
+          case checked of
+            [(_, registration)] -> pure registration
+            _ -> abort "expected one attendance"
+        let registrations = presented
+            attendees = map (.attendee) (sortOn (\r -> (r.registeredAt, r.attendee)) registrations)
+        assertMsg "duplicate attendee registration" (unique attendees)
+        forA_ registrations $ \r -> do
+          assertMsg "attendance belongs to another assembly or window"
+            (r.assemblyCid == self && r.opensAt == opensAt && r.closesAt == closesAt)
+          assertMsg "attendance outside assembly window"
+            (opensAt <= r.registeredAt && r.registeredAt < closesAt)
+          assertMsg "invalid attendance role or participant"
+            (if r.attendee `Set.member` permanent then r.role == PermanentMember
+             else if r.attendee `Set.member` alternates then r.role == AlternateMember
+             else r.attendee `Set.member` advisers && r.role == AdviserMember)
+        let presentVoters = Set.intersection (Set.fromList attendees) (Set.union permanent alternates)
+            alternatePriority = filter (`Set.member` alternates) attendees
+        create ResolvedAssembly with
+          opener; permanent; alternates; advisers; attendees; alternatePriority
+          assemblyQuorumMet = Set.size presentVoters >= 3
+
+template AssemblyAttendance
+  with
+    opener : Party
+    assemblyCid : ContractId RuleAssembly
+    attendee : Party
+    role : AssemblyRole
+    registeredAt : Time
+    opensAt : Time
+    closesAt : Time
+  where
+    signatory opener, attendee
+    ensure opensAt <= registeredAt && registeredAt < closesAt
+
+instance HasCheckedFetch AssemblyAttendance AuthenticKey where
+  contractGroupId attendance = signedKey "babycdf-assembly-attendance" attendance
+
+template ResolvedAssembly
+  with
+    opener : Party
+    permanent : Set Party
+    alternates : Set Party
+    advisers : Set Party
+    attendees : [Party]
+    alternatePriority : [Party]
+    assemblyQuorumMet : Bool
+  where
+    signatory opener
+    observer Set.toList permanent ++ Set.toList alternates ++ Set.toList advisers
+
+data RuleDraft = RuleDraft with
+    ruleId : Text
+    version : Int
+    designText : Text
+  deriving (Eq, Show)
+
+data GithubSubject = GithubSubject with
+    kind : Text
+    url : Text
+    contentVersion : Text
+  deriving (Eq, Show)
+
+-- Immutable proposal blob; issue URL alone never supplies an immutable milestone revision.
+proposalBlob : Text
+proposalBlob = "f591787a772848e4537aba5d8ba02be1764647da"
+
+proposalSubject : GithubSubject
+proposalSubject = GithubSubject "proposal"
+  "https://github.com/canton-foundation/canton-dev-fund/blob/c6964dc9545f4046d6f4e4c1cb81cfd01fd6b521/proposals/concordia.md"
+  proposalBlob
+
+milestoneSubject : GithubSubject
+milestoneSubject = GithubSubject "milestone"
+  "https://github.com/canton-foundation/canton-dev-fund/issues/540"
+  ""
+
+data PinnedExcerpt = PinnedExcerpt with
+    anchor : Text
+    quote : Text
+  deriving (Eq, Show)
+
+data ReviewClause = ReviewClause with
+    clauseId : Text
+    expected : PinnedExcerpt
+    contradicts : PinnedExcerpt
+  deriving (Eq, Show)
+
+data ClauseStatus = Pass | Fail | InsufficientEvidence deriving (Eq, Show)
+
+data ClauseFinding = ClauseFinding with
+    clauseId : Text
+    status : ClauseStatus
+    sourceAnchor : Text
+  deriving (Eq, Show)
+
+reviewClause : [PinnedExcerpt] -> ReviewClause -> ClauseFinding
+reviewClause evidence clause =
+  let positive = clause.expected `elem` evidence
+      negative = clause.contradicts `elem` evidence
+      status = if negative then Fail else if positive then Pass else InsufficientEvidence
+      sourceAnchor = if negative then clause.contradicts.anchor
+        else if positive then clause.expected.anchor else "no matching pinned excerpt"
+  in ClauseFinding clause.clauseId status sourceAnchor
+
+-- Demo architecture clauses, never official Foundation policies.
+compositionClause : ReviewClause
+compositionClause = ReviewClause "compose-with-asset-layer"
+  (PinnedExcerpt "Architectural Notes / CAP is designed to sit above" "CAP is designed to sit above existing Canton asset and settlement infrastructure")
+  (PinnedExcerpt "synthetic/conflict" "CAP replaces existing Canton asset and settlement infrastructure")
+
+executionClause : ReviewClause
+executionClause = ReviewClause "governance-execution-hooks"
+  (PinnedExcerpt "Milestones and Deliverables / Milestone 3 / Deliverables" "downstream execution hooks for approved proposals")
+  (PinnedExcerpt "synthetic/conflict" "no downstream execution hooks for approved proposals")
+
+proposalEvidence : [PinnedExcerpt]
+proposalEvidence = [compositionClause.expected]
+
+milestoneEvidence : [PinnedExcerpt]
+milestoneEvidence = [executionClause.expected]
+
+data RuleVote = Yes | No deriving (Eq, Ord, Show)
+
+data Agenda = Architecture RuleDraft | Grant GithubSubject | Milestone GithubSubject
+  deriving (Eq, Show)
+
+validAgenda : Agenda -> Bool
+validAgenda (Architecture draft) = draft.ruleId == "architecture-review"
+  && draft.version `elem` [1, 2] && draft.designText /= ""
+validAgenda (Grant subject) = subject == proposalSubject
+-- This pin is illustrative, not a verified immutable revision of issue #540.
+validAgenda (Milestone subject) = subject == illustrativeMilestone
+
+illustrativeMilestone : GithubSubject
+illustrativeMilestone = GithubSubject "milestone"
+  "https://github.com/canton-foundation/canton-dev-fund/issues/540"
+  "illustrative-immutable-milestone-revision-v1"
+
+eligible : Set Party -> Set Party -> Set Party
+eligible permanent alternates = Set.union permanent alternates
+
+registryKey : Party -> AuthenticKey
+registryKey opener = AuthenticKey with authorities = Set.singleton opener; id = "babycdf-architecture-registry"
+
+template RuleRegistry
+  with opener : Party; members : Set Party; version : Int
+  where
+    signatory opener
+    observer Set.toList members
+    choice ActivateRule : (ContractId RuleRegistry, ContractId EffectiveRule)
+      with draft : RuleDraft
+      controller opener
+      do
+        assertMsg "rule must advance the active version" (draft.version == version + 1)
+        next <- create this with version = draft.version
+        let clauses = if draft.version == 1 then [compositionClause]
+              else [compositionClause, executionClause]
+        rule <- create EffectiveRule with opener; members; draft; clauses
+        pure (next, rule)
+
+instance HasState RuleRegistry Int where
+  stateOf registry = registry.version
+
+instance HasCheckedFetch RuleRegistry AuthenticKey where
+  contractGroupId = signedKey "babycdf-architecture-registry"
+
+template EffectiveRule
+  with opener : Party; members : Set Party; draft : RuleDraft; clauses : [ReviewClause]
+  where
+    signatory opener
+    observer Set.toList members
+    nonconsuming choice ApplyRule : ContractId RuleApplication
+      with subject : GithubSubject; reviewer : Party
+      controller reviewer
+      do
+        assertMsg "reviewer is not a member" (reviewer `Set.member` members)
+        assertMsg "only curated demo subjects are reviewable"
+          (subject == proposalSubject || subject == milestoneSubject)
+        let evidence = if subject == proposalSubject then proposalEvidence else milestoneEvidence
+        create RuleApplication with
+          opener; reviewer; draft; subject
+          findings = map (reviewClause evidence) clauses
+
+template RuleApplication
+  with opener : Party; reviewer : Party; draft : RuleDraft
+       subject : GithubSubject; findings : [ClauseFinding]
+  where signatory opener, reviewer
+
+template ApprovedGrantProposal
+  with opener : Party; members : Set Party; proposal : GithubSubject
+  where
+    signatory opener
+    observer Set.toList members
+    ensure proposal == proposalSubject
+
+template ApprovedMilestone
+  with opener : Party; members : Set Party; milestone : GithubSubject
+  where
+    signatory opener
+    observer Set.toList members
+    ensure milestone == illustrativeMilestone
+
+agendaTargets : Party -> Agenda -> Int -> Map AuthenticKey Snapshot
+agendaTargets opener agenda baseVersion = case agenda of
+  Architecture _ -> Map.fromList [(registryKey opener,
+    Snapshot with state = Some (toAnyValue baseVersion); cid = None)]
+  _ -> Map.empty
+
+-- A real Action contract is signed by the demo authority. The registry target
+-- is snapshotted by state; approval agendas have no execution target.
+template AgendaAction
+  with opener : Party; members : Set Party; agenda : Agenda; baseVersion : Int
+  where
+    signatory opener
+    observer Set.toList members
+    ensure validAgenda agenda
+    interface instance Action for AgendaAction where
+      view = ActionView with
+        authorizers = [[opener]]
+        targets = agendaTargets opener agenda baseVersion
+        meta = emptyMetadata
+      action_readStateImpl key cid
+        | key == registryKey opener = readState @RuleRegistry key cid
+        | otherwise = abort "not an action target"
+      action_authorizeExecutionImpl _ arg = do
+        snapshots <- mergeSnapshots (agendaTargets opener agenda baseVersion) arg.snapshots
+        execution <- create AgendaExecution with
+          opener; members; agenda; baseVersion; snapshots
+          core = arg.executionCore; outcome = arg.outcome
+        pure Action_AuthorizeExecutionResult with
+          executionCids = [toInterfaceContractId execution]
+          meta = emptyMetadata
+
+template AgendaExecution
+  with opener : Party; members : Set Party; agenda : Agenda; baseVersion : Int
+       core : ExecutionCore; snapshots : Map AuthenticKey Snapshot
+       outcome : Optional AnyValue
+  where
+    signatory opener
+    observer Set.toList members
+    interface instance Executable for AgendaExecution where
+      view = ExecutableView with executionCore = core; snapshots; outcome
+      executable_cancelImpl _ = abort "demo execution cannot be cancelled"
+      executable_executeImpl targetCids _ = do
+        requireSameKeys snapshots targetCids
+        assertMsg "execution requires an affirmative resolved vote"
+          (outcome == Some (toAnyValue True))
+        created <- case agenda of
+          Architecture draft -> do
+            (registry, live) <- checkTarget @RuleRegistry (==)
+              (registryKey opener) snapshots targetCids
+            assertMsg "version did not advance" (draft.version == live.version + 1 && live.version == baseVersion)
+            (next, rule) <- exercise registry ActivateRule with draft
+            pure [coerceContractId next, coerceContractId rule]
+          Grant proposal -> do
+            cid <- create ApprovedGrantProposal with opener; members; proposal
+            pure [coerceContractId cid]
+          Milestone milestone -> do
+            cid <- create ApprovedMilestone with opener; members; milestone
+            pure [coerceContractId cid]
+        pure Executable_ExecuteResult with created; meta = emptyMetadata
+
+-- One signed, keyed ballot per voter. Resolution checks the group, action,
+-- windows, and full electorate before consuming each ballot exactly once.
+template AgendaBallot
+  with opener : Party; voter : Party; roundId : Text
+       actionCid : ContractId Action; closesAt : Time
+       vote : Count.Vote RuleVote
+  where
+    signatory opener
+    observer voter
+    choice CastAgendaVote : ContractId AgendaBallot
+      with option : Count.Vote RuleVote
+      controller voter
+      do
+        now <- getTime
+        assertMsg "voting closed" (now < closesAt)
+        assertMsg "already cast" (vote == Count.Absent)
+        assertMsg "absence is not a cast" (option /= Count.Absent)
+        create this with vote = option
+    choice ConsumeAgendaBallot : ()
+      controller opener
+      do pure ()
+
+instance HasCheckedFetch AgendaBallot AuthenticKey where
+  contractGroupId ballot = signedKey ballot.roundId ballot
+
+instance IsBallot AgendaBallot RuleVote where
+  votesOf ballot = Map.fromList [(ballot.voter, ballot.vote)]
+  snapshotsOf _ = Map.empty
+  actionOf ballot = ballot.actionCid
+  consume cid = exercise cid ConsumeAgendaBallot
+
+data Resolution = Resolution with
+    verdict : Count.Verdict RuleVote
+    executions : [ContractId Executable]
+  deriving (Eq, Show)
+
+template AgendaProposal
+  with opener : Party; members : Set Party; roundId : Text
+       actionCid : ContractId Action; closesAt : Time
+  where
+    signatory opener
+    observer Set.toList members
+    nonconsuming choice InviteBallots : [ContractId AgendaBallot]
+      controller opener
+      do
+        now <- getTime
+        assertMsg "voting closed" (now < closesAt)
+        forA (Set.toList members) $ \voter -> create AgendaBallot with
+          opener; voter; roundId; actionCid; closesAt; vote = Count.Absent
+
+template AgendaGovernor
+  with opener : Party; consortiumId : Text; permanent : Set Party; alternates : Set Party
+  where
+    signatory opener
+    observer Set.toList (eligible permanent alternates)
+    ensure consortiumId /= "" && Set.size permanent == 5 && Set.size alternates == 2
+      && Set.null (Set.intersection permanent alternates)
+    nonconsuming choice ProposeAgenda : ContractId AgendaProposal
+      with proposer : Party; roundId : Text; agenda : Agenda
+           baseVersion : Int; closesAt : Time
+      controller proposer
+      do
+        now <- getTime
+        assertMsg "not a member" (proposer `Set.member` eligible permanent alternates)
+        assertMsg "invalid agenda or window" (validAgenda agenda && now < closesAt)
+        action <- create AgendaAction with
+          opener; members = eligible permanent alternates; agenda; baseVersion
+        create AgendaProposal with
+          opener; members = eligible permanent alternates; roundId
+          actionCid = toInterfaceContractId action; closesAt
+    nonconsuming choice ResolveAgenda : Resolution
+      with proposalCid : ContractId AgendaProposal
+           ballotCids : [ContractId AgendaBallot]
+           rights : [(Party, RightRef)]
+      controller opener
+      do
+        proposal <- fetch proposalCid
+        let members = eligible permanent alternates
+        assertMsg "proposal belongs to this governor" (proposal.opener == opener && proposal.members == members)
+        now <- getTime
+        assertMsg "voting still open" (now >= proposal.closesAt)
+        presented <- fetchGroup (AuthenticKey with authorities = Set.singleton opener; id = proposal.roundId) ballotCids
+        let (cids, ballots) = unzip presented
+        assertMsg "ballots do not cover exactly this electorate"
+          (Set.fromList (map (.voter) ballots) == members
+            && unique (map (.voter) ballots) && length ballots == Set.size members)
+        forA_ ballots $ \b ->
+          assertMsg "ballot from different round or window" (b.closesAt == proposal.closesAt)
+        action <- agreedAction ballots
+        assertMsg "ballots reference another action" (action == proposal.actionCid)
+        snapshots <- agreedSnapshots ballots
+        casts <- castsOf Some members ballots
+        let participants = Set.fromList [voter | (voter, vote) <- Map.toList casts, Count.isPresent vote.vote]
+            presentedMembers = map fst rights
+        assertMsg "one presented credential per participating eligible voter"
+          (unique presentedMembers && Set.fromList presentedMembers == participants
+            && length rights == Set.size participants)
+        forA_ rights $ \(member, right) ->
+          checkRight opener consortiumId member now right
+        let verdict = Count.decide (Count.atLeastPresent 3) (Count.shareOfVotes 1 2) casts
+        consumeBallots cids
+        executions <- case verdict of
+          Count.Decided Yes -> do
+            result <- exercise action Action_AuthorizeExecution with
+              actors = [opener]
+              executionCore = ExecutionCore with
+                authorities = Set.singleton opener
+                availableActions = Map.fromList [(EA_Execute, [[opener]])]
+                opensAt = proposal.closesAt
+                cancelAfter = proposal.closesAt
+                expiresAt = None
+                meta = emptyMetadata
+              outcome = Some (toAnyValue True)
+              snapshots
+              extraArgs = ExtraArgs with context = emptyChoiceContext; meta = emptyMetadata
+            pure result.executionCids
+          _ -> pure []
+        archive proposalCid
+        pure Resolution with verdict; executions

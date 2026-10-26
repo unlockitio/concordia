@@ -1,0 +1,182 @@
+-- SPDX-License-Identifier: Apache-2.0
+module Cap.Examples.BabyCdf.Rights where
+
+import DA.NonEmpty (NonEmpty(..))
+import qualified DA.Map as Map
+import qualified DA.TextMap as TextMap
+import Splice.Api.Token.MetadataV1 (AnyValue(..))
+import Splice.Util (HasCheckedFetch(..), fetchChecked)
+import Canton.Network.Credentials.V1
+import Cap.Governance.Utils (HasVotingRights(..), fetchWeightsFromOneContract)
+
+data RightRef = RegisteredRight (ContractId RegisteredVotingRight) | DirectRight (ContractId DirectVotingRight)
+  deriving (Eq, Show)
+
+data RightKey = RightKey with cdf : Party; consortiumId : Text; member : Party
+  deriving (Eq, Ord, Show)
+
+rightView : Party -> Text -> Party -> Time -> Time -> CredentialView
+rightView cdf consortiumId member issuedAt expiresAt = CredentialView with
+  id = Some ("urn:babycdf:voting:" <> consortiumId <> ":" <> show cdf <> ":" <> show member)
+  credentialTypes = ["VerifiableCredential", "BabyCDFVotingRight"]
+  issuer = W3C_VC_Identifier_Party cdf
+  validFrom = Some issuedAt
+  validUntil = Some expiresAt
+  credentialSubject = NonEmpty (CredentialSubject (Some (W3C_VC_Identifier_Party member))
+    (TextMap.fromList [("babycdf/consortiumId", AV_Text consortiumId)])) []
+  credentialSchema = []
+  securing = None
+  holders = [member]
+  anchorers = NonEmpty cdf []
+
+template RegisteredVotingRight
+  with
+    cdf : Party
+    consortiumId : Text
+    member : Party
+    issuedAt : Time
+    expiresAt : Time
+    registryAdmin : Party
+    registeredAt : Time
+    registrationExpiresAt : Optional Time
+  where
+    signatory [cdf, member]
+    ensure consortiumId /= "" && cdf /= member && registryAdmin == cdf && issuedAt < expiresAt
+
+    choice RegisteredVotingRight_Revoke : ()
+      controller cdf
+      do pure ()
+
+    interface instance Credential for RegisteredVotingRight where
+      view = rightView cdf consortiumId member issuedAt expiresAt
+      credential_publicFetchImpl _ _ = pure (view (toInterface @Credential this))
+      credential_removeSelfAsHolderImpl _ _ = abort "voting right holder cannot be removed"
+      credential_archiveAsAllHoldersImpl _ _ = abort "issuer revocation required"
+
+    interface instance RegisteredCredential for RegisteredVotingRight where
+      view = RegisteredCredentialView with
+        registryAdmin; registeredAt; expiresAt = registrationExpiresAt; meta = TextMap.empty
+      registeredCredential_publicFetchImpl _ _ = pure RegisteredCredential_PublicFetchResult with
+        credential = rightView cdf consortiumId member issuedAt expiresAt
+        registration = view (toInterface @RegisteredCredential this)
+
+instance HasCheckedFetch RegisteredVotingRight RightKey where
+  contractGroupId right = RightKey right.cdf right.consortiumId right.member
+
+instance HasVotingRights RegisteredVotingRight where
+  rightsOf right = Map.singleton right.member 1.0
+
+template DirectVotingRight
+  with
+    cdf : Party
+    consortiumId : Text
+    member : Party
+    issuedAt : Time
+    expiresAt : Time
+  where
+    signatory [cdf, member]
+    ensure consortiumId /= "" && cdf /= member && issuedAt < expiresAt
+
+    choice DirectVotingRight_Revoke : ()
+      controller cdf
+      do pure ()
+
+    interface instance Credential for DirectVotingRight where
+      view = rightView cdf consortiumId member issuedAt expiresAt
+      credential_publicFetchImpl _ _ = pure (view (toInterface @Credential this))
+      credential_removeSelfAsHolderImpl _ _ = abort "voting right holder cannot be removed"
+      credential_archiveAsAllHoldersImpl _ _ = abort "issuer revocation required"
+
+instance HasCheckedFetch DirectVotingRight RightKey where
+  contractGroupId right = RightKey right.cdf right.consortiumId right.member
+
+instance HasVotingRights DirectVotingRight where
+  rightsOf right = Map.singleton right.member 1.0
+
+template VotingRightInvitation
+  with
+    cdf : Party
+    consortiumId : Text
+    member : Party
+    expiresAt : Time
+  where
+    signatory cdf
+    observer member
+    ensure consortiumId /= "" && cdf /= member
+
+    choice AcceptDirect : ContractId DirectVotingRight
+      controller member
+      do
+        issuedAt <- getTime
+        assertMsg "invitation expired" (issuedAt < expiresAt)
+        create DirectVotingRight with cdf; consortiumId; member; issuedAt; expiresAt
+
+    choice AcceptRegistered : ContractId RegisteredVotingRight
+      with factory : ContractId CredentialRegistryFactory
+      controller member
+      do
+        issuedAt <- getTime
+        assertMsg "invitation expired" (issuedAt < expiresAt)
+        let credential = rightView cdf consortiumId member issuedAt expiresAt
+            registration = RegisteredCredentialView cdf issuedAt (Some expiresAt) TextMap.empty
+        issued <- exercise factory CredentialRegistryFactory_Issue with credential; registration
+        pure (fromInterfaceContractId @RegisteredVotingRight @RegisteredCredential issued.issuedCredential)
+
+template VotingRightFactory
+  with cdf : Party; members : [Party]
+  where
+    signatory cdf
+    observer members
+    interface instance CredentialRegistryFactory for VotingRightFactory where
+      view = CredentialRegistryFactoryView with registryAdmin = cdf; anchorers = NonEmpty cdf []
+      credentialRegistryFactory_issueImpl _ arg = do
+        let credential = arg.credential
+            registration = arg.registration
+        member <- case credential.credentialSubject of
+          NonEmpty subject [] -> case subject.id of
+            Some (W3C_VC_Identifier_Party party) -> pure party
+            _ -> abort "voting subject must be a party"
+          _ -> abort "one voting subject required"
+        consortiumId <- case TextMap.lookup "babycdf/consortiumId" (case credential.credentialSubject of NonEmpty subject [] -> subject.claims; _ -> TextMap.empty) of
+          Some (AV_Text identity) -> pure identity
+          _ -> abort "consortium identity required"
+        issuedAt <- case credential.validFrom of Some t -> pure t; None -> abort "issue time required"
+        expiresAt <- case credential.validUntil of Some t -> pure t; None -> abort "expiry required"
+        assertMsg "factory accepts only exact BabyCDF rights"
+          (credential == rightView cdf consortiumId member issuedAt expiresAt
+            && registration == RegisteredCredentialView cdf issuedAt (Some expiresAt) TextMap.empty)
+        right <- create RegisteredVotingRight with
+          cdf; consortiumId; member; issuedAt; expiresAt
+          registryAdmin = cdf; registeredAt = registration.registeredAt
+          registrationExpiresAt = registration.expiresAt
+        pure CredentialRegistryFactory_IssueResult with issuedCredential = toInterfaceContractId @RegisteredCredential right
+      credentialRegistryFactory_anchorImpl _ _ = abort "external issuer not supported"
+
+-- The right is presented by CID and rechecked here, at the moment of
+-- resolution. `fetchChecked` binds the contract to the claimed issuer,
+-- consortium and holder, so a foreign issuer, another consortium's claim or
+-- another member's credential cannot be passed off as this one. The fetch is
+-- also what makes revocation effective: a revoked right has no contract left.
+checkRight : Party -> Text -> Party -> Time -> RightRef -> Update ()
+checkRight cdf consortiumId member resolutionTime reference = do
+  let key = RightKey cdf consortiumId member
+  (weight, credential, registrationValid) <- case reference of
+    RegisteredRight cid -> do
+      weights <- fetchWeightsFromOneContract key cid
+      right <- fetchChecked key cid
+      pure ( Map.lookup member weights
+           , rightView right.cdf right.consortiumId right.member right.issuedAt right.expiresAt
+           , right.registryAdmin == cdf && right.registeredAt <= resolutionTime
+               && right.registrationExpiresAt > Some resolutionTime )
+    DirectRight cid -> do
+      weights <- fetchWeightsFromOneContract key cid
+      right <- fetchChecked key cid
+      pure ( Map.lookup member weights
+           , rightView right.cdf right.consortiumId right.member right.issuedAt right.expiresAt
+           , True )
+  assertMsg "one voting credential with unit weight required" (weight == Some 1.0)
+  assertMsg "voting credential has another issuer or holder"
+    (credential.issuer == W3C_VC_Identifier_Party cdf && credential.holders == [member])
+  assertMsg "voting credential not valid at resolution"
+    (credential.validFrom <= Some resolutionTime && credential.validUntil > Some resolutionTime
+      && registrationValid)
