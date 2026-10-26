@@ -650,6 +650,13 @@ foreignBallotRejected = script do
   Some live <- queryContractId dro disputed
   Some other <- queryContractId dro parallelCase
   cRight <- rightOf dro c "foreign-ballot-case"
+  -- The voter alone cannot mint a slot: every Ballot also needs the DRO's
+  -- signature. The checks below deliberately co-sign to test the tally bound.
+  submitMustFail c $ createCmd Ballot with
+    caseAuthority = dro; caseToken = "foreign-ballot"; consortiumId = "foreign-ballot-case"; caseId = "foreign-ballot"; voter = c
+    right = cRight
+    firstAction = other.firstAction; secondAction = other.secondAction; actions = other.actions
+    caseState = toAnyValue (stateOf live); decision = Some KeepFirst; generation = 0
   -- Two forged slots: one carrying another case's actions, one carrying
   -- another case's frozen state. Both name c as voter and this case's token.
   staleAction <- submit (actAs dro <> actAs c) $ createCmd Ballot with
