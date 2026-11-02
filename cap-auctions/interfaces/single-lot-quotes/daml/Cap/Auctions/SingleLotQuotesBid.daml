@@ -1,0 +1,48 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Auctions.SingleLotQuotesBid where
+
+import Splice.Api.Token.MetadataV1
+import Splice.Util (HasCheckedFetch (..), require)
+import Cap.Core.Types (ResolutionInfo)
+import Cap.Core.Utils (entitled, requireOpen)
+
+import Cap.Auctions.Bid (Bid, BidAction (..))
+import Cap.Auctions.Types (HasSingleLotQuotes (..), Quote)
+
+data SingleLotQuotesView = SingleLotQuotesView
+  with
+    quotes : [Quote]
+  deriving (Eq, Show)
+
+interface SingleLotQuotesBid requires Bid where
+  viewtype SingleLotQuotesView
+
+  singleLotQuotesBid_quoteImpl
+    : ContractId SingleLotQuotesBid -> SingleLotQuotesBid_Quote -> Update (ContractId SingleLotQuotesBid)
+
+-- separate from fund choice because clock formats will want to change the quote several times 
+-- and will not want to allocate each time.
+  choice SingleLotQuotesBid_Quote : ContractId SingleLotQuotesBid
+    with
+      actors : [Party]
+      quotes : [Quote]
+      extraArgs : ExtraArgs
+    controller actors
+    do
+      let bv = view (toInterface @Bid this)
+      require "the actors are entitled to quote"
+        (entitled bv.availableActions BA_Quote actors)
+      now <- getTime
+      requireOpen "the bidding window is open"
+        now bv.schedule.biddingOpensAt (Some bv.schedule.biddingClosesAt)
+      singleLotQuotesBid_quoteImpl this self (SingleLotQuotesBid_Quote with ..)
+
+instance HasSingleLotQuotes SingleLotQuotesBid where
+  singleLotQuotes bid = (view bid).quotes
+
+instance Show SingleLotQuotesBid where
+  show bid = show (view (toInterface @Bid bid), view bid)
+
+instance HasCheckedFetch SingleLotQuotesBid ResolutionInfo where
+  contractGroupId bid = (view (toInterface @Bid bid)).resolutionInfo

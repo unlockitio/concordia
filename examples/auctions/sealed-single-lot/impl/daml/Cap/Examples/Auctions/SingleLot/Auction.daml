@@ -1,0 +1,87 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Examples.Auctions.SingleLot.Auction where
+
+import DA.Foldable (forA_)
+import DA.List (dedup)
+import DA.Map (Map)
+import qualified DA.Map as Map
+import DA.Optional (isSome)
+import DA.Set (Set)
+import qualified DA.Set as Set
+
+import Splice.Api.Token.MetadataV1
+import qualified Splice.Api.Token.AllocationV2 as Alloc
+import Splice.Api.Token.HoldingV2 (Account (..))
+
+import Cap.Core.Types (AuthenticKey (..), ResolutionInfo)
+import Cap.Core.Utils (Ignored, requireClosed, requireResolvedBy)
+import Cap.Auctions.Types (AuctionSchedule (..), AuctionTerms, Funding (..))
+import Cap.Auctions.Bid (Bid, Bid_Close (..))
+import Cap.Auctions.Funding (SettleBatchContext, cancelAllocations, fetchAndIgnoreConflictingBids, settlementOf)
+import Cap.Auctions.SingleLot
+  ( PricingMechanism, clearAndSettleSingleLotFromEmptyLegsAllocations, expectSingleLot, nativePricingMechanisms )
+
+import Cap.Examples.Auctions.SingleLot.Bid (SingleLotBid)
+
+
+
+supportedMechanisms : [PricingMechanism]
+supportedMechanisms = nativePricingMechanisms
+
+accountSigner : Account -> Optional Party
+accountSigner account = case account.owner of
+  Some owner -> Some owner
+  None -> account.provider
+
+sellerSigners : Map Party Funding -> [Party]
+sellerSigners sellerFundings =
+  dedup [signer | funding <- Map.values sellerFundings, Some signer <- [accountSigner funding.account]]
+
+data SingleLotAuction_ResolveResult = SingleLotAuction_ResolveResult
+  with
+    settled : [Alloc.SettlementFactory_SettleBatchResult]
+    cancelled : [Alloc.AllocationResult]
+    ignoredBids : Ignored SingleLotBid
+  deriving (Eq, Show)
+
+template SingleLotAuction
+  with
+    authorities : Set Party
+    resolverId : Text
+    resolutionInfo : ResolutionInfo
+    terms : AuctionTerms
+    schedule : AuctionSchedule
+    sellerFundings : Map Party Funding
+  where
+    signatory Set.toList authorities, sellerSigners sellerFundings
+
+    ensure
+      not (Map.null sellerFundings)
+        && all (\funding -> isSome (accountSigner funding.account)) (Map.values sellerFundings)
+
+    choice SingleLotAuction_Resolve : SingleLotAuction_ResolveResult
+      with
+        bidCids : [ContractId SingleLotBid]
+        settleBatchContexts : Map Party SettleBatchContext
+        cancelContexts : Map (ContractId Alloc.Allocation) ExtraArgs
+        extraArgs : ExtraArgs
+      controller Set.toList authorities
+      do
+        requireResolvedBy (AuthenticKey with authorities; id = resolverId) (coerceContractId self) resolutionInfo
+        now <- getTime
+        requireClosed "the bidding window is closed" now schedule.biddingClosesAt
+        singleLotTerms <- expectSingleLot terms
+        (keptBids, ignoredBids) <- fetchAndIgnoreConflictingBids sellerFundings bidCids
+        result <- clearAndSettleSingleLotFromEmptyLegsAllocations
+          supportedMechanisms resolutionInfo singleLotTerms sellerFundings keptBids
+          settleBatchContexts
+        cancelled <- cancelAllocations (settlementOf resolutionInfo) cancelContexts result.unsettled
+        forA_ (map fst keptBids <> map fst ignoredBids) $ \cid ->
+          exercise (toInterfaceContractId @Bid cid) Bid_Close with
+            actors = Set.toList authorities
+            extraArgs
+        pure SingleLotAuction_ResolveResult with
+          settled = result.settled
+          cancelled
+          ignoredBids

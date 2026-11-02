@@ -1,0 +1,80 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Auctions.Types
+  ( Direction (..)
+  , Quote (..)
+  , HasSingleLotQuotes (..)
+  , AllocationTerms (..)
+  , RemainderPolicy (..)
+  , LotTerms (..)
+  , AuctionTerms (..)
+  , AuctionSchedule (..)
+  , Funding (..)
+  ) where
+
+import DA.Map (Map)
+import DA.Time (RelTime)
+
+import Splice.Api.Token.AllocationV2 (Allocation)
+import Splice.Api.Token.HoldingV2 (Account, InstrumentId)
+
+data Direction
+  = Forward
+  | Reverse
+  deriving (Eq, Show)
+
+data Quote = Quote
+  with
+    price : Decimal
+    -- ^ Units of the payment instrument per unit of the lot.
+    amount : Decimal
+    -- ^ Amount of the lot.
+  deriving (Eq, Show, Ord)
+
+class HasSingleLotQuotes t where
+  singleLotQuotes : t -> [Quote]
+
+data Funding = Funding
+  with
+    account : Account
+    allocation : ContractId Allocation
+  deriving (Eq, Show)
+
+data AllocationTerms = AllocationTerms
+  with
+    settlementWindow : RelTime
+    -- ^ The settlement deadline of every allocation of an auction is the
+    -- biddingClosesAt of the auction's schedule plus settlementWindow.
+    committed : Bool
+  deriving (Eq, Show)
+
+data RemainderPolicy
+  = AwardToBidders
+  | ReturnToSeller
+  deriving (Eq, Show)
+
+data LotTerms = LotTerms
+  with
+    supply : Decimal
+    amountStep : Decimal
+    -- ^ Smallest amount of the lot that can be filled. Supply and quote amounts are multiples of it.
+    reservePrice : Decimal
+    -- ^ Units of the payment instrument per unit of the lot.
+  deriving (Eq, Show)
+
+data AuctionTerms = AuctionTerms
+  with
+    direction : Direction
+    lots : Map InstrumentId LotTerms
+    remainderPolicy : RemainderPolicy
+    payment : InstrumentId
+    allocationTerms : AllocationTerms
+  deriving (Eq, Show)
+
+data AuctionSchedule = AuctionSchedule
+  with
+    biddingOpensAt : Time
+    biddingClosesAt : Time
+    expiresAt : Time
+  deriving (Eq, Show)
+

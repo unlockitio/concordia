@@ -1,0 +1,71 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Examples.Auctions.DutchSingleLot.SaleProposal where
+
+import qualified DA.Map as Map
+import DA.Optional (isSome)
+import DA.Set (Set)
+import qualified DA.Set as Set
+
+import Splice.Api.Token.MetadataV1
+import Splice.Util (require)
+
+import Cap.Core.Types (ResolutionInfo)
+import Cap.Auctions.Types (AuctionSchedule, AuctionTerms (..))
+import Cap.Auctions.SaleProposal
+import Cap.Auctions.Funding (requireValidSellerFunding)
+import Cap.Auctions.SingleLot (pricingMechanismOf)
+
+import Cap.Examples.Auctions.DutchSingleLot.Auction (DutchAuction (..), accountSigner, supportedMechanisms)
+import Cap.Auctions.Clock (PriceClock, clockMeta, dutchClockReachesReserveBy, validDutchClock)
+
+
+template DutchSaleProposal
+  with
+    authorities : Set Party
+    resolverId : Text
+    seller : Party
+    resolutionInfo : ResolutionInfo
+    terms : AuctionTerms
+    schedule : AuctionSchedule
+    clock : PriceClock
+    acceptBefore : Time
+  where
+    signatory Set.toList authorities
+    observer seller
+
+    ensure
+      isSome (pricingMechanismOf supportedMechanisms resolutionInfo)
+        && case Map.values terms.lots of
+             [lotTerms] ->
+               null (validDutchClock terms.direction lotTerms.reservePrice clock)
+                 && null (dutchClockReachesReserveBy terms.direction lotTerms.reservePrice clock
+                           schedule.biddingOpensAt schedule.biddingClosesAt)
+             _ -> False
+
+    interface instance SaleProposal for DutchSaleProposal where
+      view = SaleProposalView with
+        resolutionInfo; terms; schedule; acceptBefore
+        availableActions = Map.fromList
+          [ (SPA_Accept, [[seller]])
+          , (SPA_Reject, [[seller]])
+          , (SPA_Withdraw, [Set.toList authorities])
+          ]
+        meta = clockMeta clock
+
+      saleProposal_acceptImpl _ arg = do
+        require "every seller account is the seller's"
+          (all (\funding -> accountSigner funding.account == Some seller) (Map.values arg.fundings))
+        requireValidSellerFunding resolutionInfo terms schedule arg.fundings
+        auctionCid <- create DutchAuction with
+          authorities; resolverId; resolutionInfo; terms; schedule; clock
+          sellerFundings = arg.fundings
+        pure SaleProposal_AcceptResult with
+          sale = coerceContractId auctionCid
+          meta = emptyMetadata
+
+      saleProposal_rejectImpl _ _ =
+        pure SaleProposal_RejectResult with meta = emptyMetadata
+
+      saleProposal_withdrawImpl _ _ =
+        pure SaleProposal_WithdrawResult with meta = emptyMetadata

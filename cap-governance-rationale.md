@@ -19,8 +19,8 @@ ballot only once. The resolving party chooses which ballots to present, so the
 choice that runs the mechanism must refuse a ballot from another proposal and a
 ballot presented twice. `fetchGroup` fetches the ballots, refuses duplicates and
 checks that each ballot references the same `ResolutionInfo`. `requireResolvedBy`
-checks that the resolution info names the governor where the outcome is decided
-and the mechanism used.
+checks that the resolution info names the governor where the outcome is decided.
+The governor then checks that it names the mechanism its choice runs.
 
 **Example:** a decentralized party has two open proposals on the same governor.
 Without the group check, the party resolving proposal A could present ballots

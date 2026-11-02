@@ -1,0 +1,115 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Examples.Auctions.SingleLot.Bid where
+
+import DA.Map (Map)
+import qualified DA.Map as Map
+import DA.Set (Set)
+import qualified DA.Set as Set
+
+import Splice.Api.Token.MetadataV1
+import Splice.Util (require)
+
+import Cap.Core.Types (ResolutionInfo)
+import Cap.Core.Utils (orAbort, requireMet, requireOpen, single)
+import Cap.Auctions.Types (AuctionSchedule (..), AuctionTerms, Funding (..), HasSingleLotQuotes (..), Quote)
+import Cap.Auctions.Bid
+import Cap.Auctions.SingleLotQuotesBid
+import Cap.Auctions.Funding (fetchFundingAllocations)
+import Cap.Auctions.SingleLot (expectSingleLot, validSingleLotBid)
+
+
+template SingleLotBidProposal
+  with
+    authorities : Set Party
+    resolutionInfo : ResolutionInfo
+    terms : AuctionTerms
+    schedule : AuctionSchedule
+    invited : [Party]
+  where
+    signatory Set.toList authorities
+    observer invited
+
+    interface instance BidProposal for SingleLotBidProposal where
+      view = BidProposalView with
+        authorities
+        terms
+        invited = Some invited
+        availableActions = Map.fromList
+          [ (BPA_Accept, [[bidder] | bidder <- invited])
+          , (BPA_Withdraw, [Set.toList authorities])
+          ]
+        meta = emptyMetadata
+
+      bidProposal_acceptImpl _ arg = do
+        bidder <- orAbort "a bid is accepted by one bidder" (single arg.actors)
+        require "the bidder is invited" (bidder `elem` invited)
+        require "the resolution is this proposal's" (arg.resolutionInfo == resolutionInfo)
+        now <- getTime
+        requireOpen "the bidding window is open"
+          now schedule.biddingOpensAt (Some schedule.biddingClosesAt)
+        toInterfaceContractId <$> create SingleLotBid with
+          authorities; bidder; resolutionInfo; terms; schedule
+          fundings = Map.empty
+          quotes = []
+
+      bidProposal_withdrawImpl _ _ =
+        pure BidProposal_WithdrawResult with meta = emptyMetadata
+
+
+template SingleLotBid
+  with
+    authorities : Set Party
+    bidder : Party
+    resolutionInfo : ResolutionInfo
+    terms : AuctionTerms
+    schedule : AuctionSchedule
+    fundings : Map Party Funding
+    quotes : [Quote]
+  where
+    signatory Set.toList authorities, bidder
+
+    interface instance Bid for SingleLotBid where
+      view = BidView with
+        resolutionInfo; terms; schedule; fundings
+        availableActions = Map.fromList
+          [ (BA_Fund, [[bidder]])
+          , (BA_Quote, [[bidder]])
+          , (BA_Withdraw, [[bidder]])
+          , (BA_Close, [Set.toList authorities])
+          ]
+        meta = emptyMetadata
+
+      bid_fundImpl _ arg = do
+        let newBid = this with fundings = arg.fundings
+        singleLotTerms <- expectSingleLot terms
+        fetchedFundings <- fetchFundingAllocations newBid.fundings
+        requireMet (validSingleLotBid resolutionInfo terms schedule singleLotTerms newBid fetchedFundings)
+        toInterfaceContractId <$> create newBid
+
+      bid_withdrawImpl self _ = do
+        now <- getTime
+        require "the bidding window is open" (now < schedule.biddingClosesAt)
+        archive (fromInterfaceContractId @SingleLotBid self)
+        pure Bid_WithdrawResult with bid = None; withdrawn = []; meta = emptyMetadata
+
+      bid_closeImpl self _ = do
+        archive (fromInterfaceContractId @SingleLotBid self)
+        pure Bid_CloseResult with meta = emptyMetadata
+
+      bid_expireImpl self _ = do
+        archive (fromInterfaceContractId @SingleLotBid self)
+        pure Bid_ExpireResult with meta = emptyMetadata
+
+    interface instance SingleLotQuotesBid for SingleLotBid where
+      view = SingleLotQuotesView with quotes
+
+      singleLotQuotesBid_quoteImpl _ arg = do
+        let newBid = this with quotes = arg.quotes
+        singleLotTerms <- expectSingleLot terms
+        fetchedFundings <- fetchFundingAllocations newBid.fundings
+        requireMet (validSingleLotBid resolutionInfo terms schedule singleLotTerms newBid fetchedFundings)
+        toInterfaceContractId <$> create newBid
+
+instance HasSingleLotQuotes SingleLotBid where
+  singleLotQuotes = (.quotes)

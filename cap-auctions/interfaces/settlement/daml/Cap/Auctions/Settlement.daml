@@ -1,0 +1,88 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Auctions.Settlement where
+
+import DA.Map (Map)
+
+import Splice.Api.Token.MetadataV1
+import qualified Splice.Api.Token.AllocationV2 as Alloc
+import Splice.Util (require)
+import Cap.Core.Types (ExecutionAction (..), ExecutionCore, ResolutionInfo)
+import Cap.Core.Utils (entitled, requireExpired, requireOpen)
+import Cap.Auctions.Types (Funding)
+import Cap.Auctions.Funding (Batch, Finalizer, SettleBatchContext, cancelAllocations, settleBatches, settlementOf, unsettledAllocations)
+
+data SettlementView = SettlementView
+  with
+    executionCore : ExecutionCore
+    resolutionInfo : ResolutionInfo
+    batches : [Batch]
+    fundings : [Map Party Funding]
+    meta : Metadata
+  deriving (Eq, Show)
+
+data Settlement_SettleResult = Settlement_SettleResult
+  with
+    batches : [Alloc.SettlementFactory_SettleBatchResult]
+    cancelled : [Alloc.AllocationResult]
+    meta : Metadata
+  deriving (Eq, Show)
+
+data Settlement_CancelResult = Settlement_CancelResult
+  with
+    cancelled : [ContractId Alloc.Allocation]
+    meta : Metadata
+  deriving (Eq, Show)
+
+data Settlement_ExpireResult = Settlement_ExpireResult
+  with
+    meta : Metadata
+  deriving (Eq, Show)
+
+
+interface Settlement where
+  viewtype SettlementView
+
+  settlement_cancelImpl : Settlement_Cancel -> Update Settlement_CancelResult
+
+  settlement_finalizer : Finalizer
+
+  choice Settlement_Settle : Settlement_SettleResult
+    with
+      actors : [Party]
+      settleBatchContexts : Map Party SettleBatchContext
+      cancelContexts : Map (ContractId Alloc.Allocation) ExtraArgs
+    controller actors
+    do
+      let v = view this
+          settlement = settlementOf v.resolutionInfo
+      now <- getTime
+      requireOpen "the settlement window is open" now v.executionCore.opensAt v.executionCore.expiresAt
+      require "the actors are entitled to settle"
+        (entitled v.executionCore.availableActions EA_Execute actors)
+      require "the settlement settles at least one batch" (not (null v.batches))
+      batches <- settleBatches (settlement_finalizer this) settlement settleBatchContexts v.batches
+      cancelled <- cancelAllocations settlement cancelContexts (unsettledAllocations v.fundings v.batches)
+      pure Settlement_SettleResult with batches; cancelled; meta = emptyMetadata
+
+  choice Settlement_Cancel : Settlement_CancelResult
+    with
+      actors : [Party]
+      cancelExtraArgs : Map (ContractId Alloc.Allocation) ExtraArgs
+    controller actors
+    do
+      let v = view this
+      now <- getTime
+      requireOpen "the cancellation window is open" now v.executionCore.cancelAfter None
+      require "the actors are entitled to cancel"
+        (entitled v.executionCore.availableActions EA_Cancel actors)
+      settlement_cancelImpl this (Settlement_Cancel with actors; cancelExtraArgs)
+
+  choice Settlement_Expire : Settlement_ExpireResult
+    with
+      actor : Party
+    controller actor
+    do
+      now <- getTime
+      requireExpired "the settlement has expired" now (view this).executionCore.expiresAt
+      pure Settlement_ExpireResult with meta = emptyMetadata

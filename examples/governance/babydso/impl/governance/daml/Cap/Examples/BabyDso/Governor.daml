@@ -62,7 +62,8 @@ template DsoGovernor
         expiresAt : Time
       controller proposer
       do
-        requireResolvedBy (governorKey this) (coerceContractId self) weightedVoteMechanismName resolution
+        requireResolvedBy (governorKey this) (coerceContractId self) resolution
+        require ("the resolution names the mechanism " <> weightedVoteMechanismName) (resolution.mechanism == weightedVoteMechanismName)
         openingWeights <- fetchWeightsPerContract rightKeys rightCids
         require "the proposer is a voter: it holds weight at opening"
           (proposer `Map.member` openingWeights)
@@ -81,7 +82,8 @@ template DsoGovernor
       controller sv
       do
         require "the resolving party is an sv" (sv `Set.member` svs)
-        requireResolvedBy (governorKey this) (coerceContractId self) weightedVoteMechanismName resolution
+        requireResolvedBy (governorKey this) (coerceContractId self) resolution
+        require ("the resolution names the mechanism " <> weightedVoteMechanismName) (resolution.mechanism == weightedVoteMechanismName)
         ballot <- fetchChecked resolution ballotCid
         archive ballotCid
         resolveWeightedVote this ballot
@@ -97,7 +99,8 @@ template DsoGovernor
       controller confirmer
       do
         require "the confirmer is an sv" (confirmer `Set.member` svs)
-        requireResolvedBy (governorKey this) (coerceContractId self) confirmationMechanismName resolution
+        requireResolvedBy (governorKey this) (coerceContractId self) resolution
+        require ("the resolution names the mechanism " <> confirmationMechanismName) (resolution.mechanism == confirmationMechanismName)
         action <- fetch actionCid
         snapshots <- snapshotStates action targetCids
         create SvConfirmation with
@@ -112,7 +115,8 @@ template DsoGovernor
       controller sv
       do
         require "the resolving party is an sv" (sv `Set.member` svs)
-        requireResolvedBy (governorKey this) (coerceContractId self) confirmationMechanismName resolution
+        requireResolvedBy (governorKey this) (coerceContractId self) resolution
+        require ("the resolution names the mechanism " <> confirmationMechanismName) (resolution.mechanism == confirmationMechanismName)
         presented <- fetchGroup resolution confirmationCids
         let (cids, confirmations) = unzip presented
         consumeBallots cids

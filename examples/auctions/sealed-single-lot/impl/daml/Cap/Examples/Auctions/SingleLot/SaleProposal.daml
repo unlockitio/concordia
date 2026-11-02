@@ -1,0 +1,63 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Examples.Auctions.SingleLot.SaleProposal where
+
+import qualified DA.Map as Map
+import DA.Optional (isSome)
+import DA.Set (Set)
+import qualified DA.Set as Set
+
+import Splice.Api.Token.MetadataV1
+import Splice.Util (require)
+
+import Cap.Core.Types (ResolutionInfo)
+import Cap.Auctions.Types (AuctionSchedule, AuctionTerms (..))
+import Cap.Auctions.SaleProposal
+import Cap.Auctions.Funding (requireValidSellerFunding)
+
+import Cap.Auctions.SingleLot (pricingMechanismOf)
+
+import Cap.Examples.Auctions.SingleLot.Auction (SingleLotAuction (..), accountSigner, supportedMechanisms)
+
+
+template SingleLotSaleProposal
+  with
+    authorities : Set Party
+    resolverId : Text
+    seller : Party
+    resolutionInfo : ResolutionInfo
+    terms : AuctionTerms
+    schedule : AuctionSchedule
+    acceptBefore : Time
+  where
+    signatory Set.toList authorities
+    observer seller
+
+    ensure Map.size terms.lots == 1 && isSome (pricingMechanismOf supportedMechanisms resolutionInfo)
+
+    interface instance SaleProposal for SingleLotSaleProposal where
+      view = SaleProposalView with
+        resolutionInfo; terms; schedule; acceptBefore
+        availableActions = Map.fromList
+          [ (SPA_Accept, [[seller]])
+          , (SPA_Reject, [[seller]])
+          , (SPA_Withdraw, [Set.toList authorities])
+          ]
+        meta = emptyMetadata
+
+      saleProposal_acceptImpl _ arg = do
+        require "every seller account is the seller's"
+          (all (\funding -> accountSigner funding.account == Some seller) (Map.values arg.fundings))
+        requireValidSellerFunding resolutionInfo terms schedule arg.fundings
+        auctionCid <- create SingleLotAuction with
+          authorities; resolverId; resolutionInfo; terms; schedule
+          sellerFundings = arg.fundings
+        pure SaleProposal_AcceptResult with
+          sale = coerceContractId auctionCid
+          meta = emptyMetadata
+
+      saleProposal_rejectImpl _ _ =
+        pure SaleProposal_RejectResult with meta = emptyMetadata
+
+      saleProposal_withdrawImpl _ _ =
+        pure SaleProposal_WithdrawResult with meta = emptyMetadata

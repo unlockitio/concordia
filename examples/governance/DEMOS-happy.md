@@ -89,7 +89,7 @@ sequenceDiagram
 
     Note over AA,ANS: Open the vote
     SV1->>R: DsoGovernor_OpenVote — vote (0.05, 2.0), rightCids, targetCids
-    R->>R: requireResolvedBy — mechanism "weighted-vote"
+    R->>R: requireResolvedBy, then require mechanism "weighted-vote"
     R->>R: fetchWeightsPerContract — SV1 5.0, SV2 3.0, SV3 1.0
     R->>ACT: fetch, then snapshotStatesWith action_readStateImpl
     ACT->>CFG: readState — snapshot of transferFee and epoch

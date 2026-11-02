@@ -75,9 +75,10 @@ does not know at compile time. Everything else is stored types and helpers.
   `cap-governance-utils` with the modules `Targets` (taking snapshots of
   targets, and checking them at execution under a `DriftPolicy` the action
   supplies), `Ballots`, `VotingRights` and `Count` (quorums and tallies).
-- **`cap-auctions`** — the `OneLotBid` and `Settlement` interfaces, utils and
-  funding. Settlement composes with the Token Standard V2 rather than restating
-  it.
+- **`cap-auctions`** — the `Bid`, `SingleLotQuotesBid`, `SaleProposal` and
+  `Settlement` interfaces, the shared types, and `cap-auctions-utils` with the
+  modules `Funding`, `Clearing` and `SingleLot`. Settlement composes with the
+  Token Standard V2 rather than restating it.
 
 A format author writes its own templates (resolver contract, ballots, bids) and uses
 the helpers it needs. CAP sits above Canton's asset and settlement layer.
@@ -95,17 +96,16 @@ concordia/
 │   ├── utils/                         #   Targets, Ballots, VotingRights, Count
 │   └── tests/{unit,ledger}
 ├── cap-auctions/                      # Tier 2: auctions (Token Standard V2)
-│   ├── interfaces/{bid,settlement}
-│   ├── utils/                         #   settlement legs and allocations for a one-lot bid
-│   ├── funding/                       #   funding a bid through a Token Standard allocation request
-│   ├── DESIGN.md
-│   └── RATIONALE.md
+│   ├── types/                         #   AuctionTerms, LotTerms, Quote, Funding
+│   ├── interfaces/{bid,sale-proposal,single-lot-quotes,settlement}
+│   └── utils/                         #   Funding, Clearing, SingleLot
 ├── examples/governance/
 │   ├── babydso/                       # Splice DSO governance with weighted votes
 │   │                                  #   impl/{ans,config,rights,governance,action}, demo
 │   └── private-majority-vote/         # M2: private ballots, {impl,demo}
 ├── examples/auctions/
-│   └── sealed-bid-first-price/        # M2: private bids, {impl,impostors,demo}
+│   ├── single-lot/                    # single-lot auction on cap-auctions, {impl}
+│   └── sealed-bid-first-price/        # M2: DEMOS.md only; the code was removed
 ├── examples/lib/                      # vendored DARs only the examples need
 ├── lib/                               # vendored Token Standard DARs (prebuilt)
 ├── scripts/sandbox-test.sh            # sandbox integration run
@@ -121,10 +121,8 @@ concordia/
 └── README.md                          # this file
 ```
 
-[`cap-governance-rationale.md`](cap-governance-rationale.md) and
-[`cap-auctions/DESIGN.md`](cap-auctions/DESIGN.md) carry the tier-2 designs.
-[`cap-auctions/RATIONALE.md`](cap-auctions/RATIONALE.md) records the auction
-decisions.
+[`cap-governance-rationale.md`](cap-governance-rationale.md) carries the
+tier-2 governance design.
 
 ## Building
 
@@ -143,9 +141,6 @@ from the repo root with `--package-root`:
 ```bash
 # M2 — majority vote, all scripts ok
 dpm test --package-root examples/governance/private-majority-vote/demo
-
-# M2 — sealed-bid first price, all scripts ok
-dpm test --package-root examples/auctions/sealed-bid-first-price/demo
 
 # BabyDso with weighted votes, all scripts ok
 dpm test --package-root examples/governance/babydso/demo
@@ -190,7 +185,6 @@ dpm script --all --ledger-host localhost --ledger-port 6865 \
 The other demo DARs, same shape:
 
 ```
-examples/auctions/sealed-bid-first-price/demo/.daml/dist/cap-example-sealed-first-price-demo-0.1.0.dar
 examples/governance/babydso/demo/.daml/dist/cap-example-babydso-demo-0.1.0.dar
 ```
 

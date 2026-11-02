@@ -1,0 +1,406 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | Cap.Auctions.Funding is a set of helpers for auctions to check funding,
+-- ignore bids, and build, settle and cancel token standard settlement
+-- batches. It keeps the mechanism logic separate from settlement.
+
+module Cap.Auctions.Funding
+  ( -- * Settlement info
+    settlementOf
+
+    -- * Checks
+  , validFundingTerms
+  , emptyTransferLegAllocations
+  , bidForResolution
+  , accountSignedBid
+  , noSellerAccountsInBid
+  , distinctAccountsAmongBids
+
+    -- * Fetching and ignoring invalid bids
+  , BidCheck
+  , AllocationsCheck
+  , AmongBidsCheck
+  , fetchAndIgnoreInvalidBids
+  , fetchAndIgnoreConflictingBids
+
+    -- * Fetching allocations
+  , fetchFundingAllocations
+
+    -- * Checking the seller
+  , validSellerFunding
+  , requireValidSellerFunding
+
+    -- * Building batches
+  , Batch (..)
+  , buildBatchesByAccount
+
+    -- * Settling batches
+  , SettleBatchContext (..)
+  , Finalizer
+  , settleBatches
+  , lastIterationFinalizer
+
+    -- * Cancelling unsettled allocations
+  , unsettledAllocations
+  , cancelAllocations
+  ) where
+
+import DA.List (dedup, unique)
+import DA.Map (Map)
+import qualified DA.Map as Map
+import DA.Optional (fromOptional, isSome)
+import qualified DA.Set as Set
+import qualified DA.TextMap as TextMap
+import DA.Time (addRelTime)
+
+import Splice.Api.Token.MetadataV1
+import qualified Splice.Api.Token.AllocationV2 as Alloc
+import Splice.TokenStandard.Utils (transferLegSidesWithAuthorizer)
+import Splice.Util (require)
+
+import Cap.Core.Types (ResolutionInfo (..))
+import Cap.Core.Utils (Contracts, Ignored, Unmet, applyFilters, ignoreUnless, ignoreUnlessAmong, ignoreUnlessM, orAbort, requireMet)
+import Cap.Auctions.Bid (Bid)
+import Cap.Auctions.Types (AuctionSchedule (..), AuctionTerms (..), Direction (..), Funding (..))
+
+
+-- Settlement info
+------------------
+-- The token standard SettlementInfo that every allocation of an auction is made for.
+
+-- compute settlementInfo from ResolutionInfo
+settlementOf : ResolutionInfo -> Alloc.SettlementInfo
+settlementOf resolutionInfo = Alloc.SettlementInfo with
+  executors = Set.toList resolutionInfo.resolver.authorities
+  id = resolutionInfo.id
+  cid = resolutionInfo.resolverCid
+  meta = emptyMetadata
+
+
+-- Checks (missing checking the reserve, i think its currently being done in clearing)
+---------
+-- Each check returns its unmet conditions. Use requireMet to abort on them, at
+-- submission or resolution, or ignoreUnless and ignoreUnlessAmong to ignore the bid at resolution.
+
+-- | Requires every allocation of the bid to be for this settlement, under its
+-- admin, authorized by its account, not to expire before the auction's
+-- settlement deadline, and to be committed if the terms require it.
+validFundingTerms : ResolutionInfo -> AuctionTerms -> AuctionSchedule -> AllocationsCheck t
+validFundingTerms resolutionInfo terms schedule _ fundings =
+  [ "allocation " <> show funding.allocation <> " " <> errorMsg
+  | (admin, (funding, v)) <- Map.toList fundings
+  , (False, errorMsg) <-
+      [ (v.settlement == settlementOf resolutionInfo, "is for another settlement")
+      , (v.allocation.admin == admin, "has another admin")
+      , (v.allocation.authorizer == funding.account, "is authorized by another account")
+      , (optional True (>= deadline) v.allocation.settlementDeadline, "expires before the settlement deadline")
+      , (not terms.allocationTerms.committed || v.allocation.committed, "is not committed")
+      ]
+  ]
+  where
+    deadline = addRelTime schedule.biddingClosesAt terms.allocationTerms.settlementWindow
+
+-- | Requires every allocation of the bid to have no transfer leg sides and to set nextIterationFunding.
+emptyTransferLegAllocations : AllocationsCheck t
+emptyTransferLegAllocations _ fundings =
+  [ "allocation " <> show funding.allocation <> " " <> errorMsg
+  | (_, (funding, v)) <- Map.toList fundings
+  , (False, errorMsg) <-
+      [ (null v.allocation.transferLegSides, "has transfer leg sides")
+      , (isSome v.allocation.nextIterationFunding, "does not enable iterated settlement")
+      ]
+  ]
+
+-- | Requires the bid to be for this resolution.
+bidForResolution : HasToInterface t Bid => ResolutionInfo -> BidCheck t
+bidForResolution resolutionInfo bid =
+  ["the bid is for another resolution" | (view (toInterface @Bid bid)).resolutionInfo /= resolutionInfo]
+
+-- | Requires the owner of every funding account, or its provider if it has no
+-- owner, to be a signatory of the bid. This prevents a bidder from putting
+-- another bidder's allocation in their own bid. The bid's signatories tie the bid to the funds.
+accountSignedBid : (HasSignatory t, HasToInterface t Bid) => t -> Unmet
+accountSignedBid bid =
+  [ "account " <> show funding.account <> " under admin " <> show admin <> " did not sign the bid"
+  | (admin, funding) <- Map.toList (view (toInterface @Bid bid)).fundings
+  , case accountSigner funding.account of
+      None -> True
+      Some signer -> signer `notElem` signatory bid
+  ]
+  where
+    accountSigner account = case account.owner of
+      Some owner -> Some owner
+      None -> account.provider
+
+-- | Requires the bid to use none of the seller's accounts under the same admin.
+noSellerAccountsInBid : HasToInterface t Bid => Map Party Funding -> t -> Unmet
+noSellerAccountsInBid sellerFundings bid =
+  [ "account " <> show funding.account <> " is used under admin " <> show admin <> " by the seller"
+  | (admin, funding) <- Map.toList (view (toInterface @Bid bid)).fundings
+  , Some sellerFunding <- [Map.lookup admin sellerFundings]
+  , sellerFunding.account == funding.account
+  ]
+
+-- | Requires no other bid to use one of the bid's accounts under the same admin.
+-- Pass the bids still kept, with ignoreUnlessAmong, and check consent with
+-- accountSignedBid before, so that only the owner of an account can make
+-- their own bids clash.
+distinctAccountsAmongBids : HasToInterface t Bid => [t] -> t -> Unmet
+distinctAccountsAmongBids bids bid =
+  [ "account " <> show funding.account <> " is used under admin " <> show admin <> " by another bid"
+  | (admin, funding) <- Map.toList (view (toInterface @Bid bid)).fundings
+  , fromOptional 0 (Map.lookup (funding.account, admin) uses) > 1
+  ]
+  where
+    uses = Map.fromListWithR (+)
+      [ ((otherFunding.account, otherAdmin), 1)
+      | other <- bids
+      , (otherAdmin, otherFunding) <- Map.toList (view (toInterface @Bid other)).fundings
+      ]
+
+
+-- Fetching and ignoring invalid bids
+---------------------------------------
+-- Fetches the bids of a resolution and their allocations once, and ignores the bids that fail a check.
+
+-- | A check on the bid alone.
+type BidCheck t = t -> Unmet
+
+-- | A check on the bid and its fetched allocations.
+type AllocationsCheck t = t -> Map Party (Funding, Alloc.AllocationView) -> Unmet
+
+-- | A check on the bid among the other bids still kept.
+type AmongBidsCheck t = [t] -> t -> Unmet
+
+-- | Fetches the bids and ignores those that fail a check, in three steps: the
+-- checks on the bid, then, only for the bids that pass, the checks on the bid
+-- and its fetched allocations, then the checks among the bids still kept.
+-- Every bid is fetched once, and a bid's allocations are fetched only when it
+-- passes the checks on the bid and there are checks on allocations. Returns the
+-- kept bids in their input order and the ignored bids with the first unmet
+-- condition. Aborts if a bid is presented twice.
+fetchAndIgnoreInvalidBids
+  : (HasFetch t, HasToInterface t Bid)
+  => [BidCheck t] -> [AllocationsCheck t] -> [AmongBidsCheck t]
+  -> [ContractId t] -> Update (Contracts t, Ignored t)
+fetchAndIgnoreInvalidBids bidChecks allocationsChecks amongBidsChecks cids = do
+  require "the presented bids are distinct" (unique cids)
+  bids <- forA cids $ \cid -> do
+    bid <- fetch cid
+    pure (cid, bid)
+  applyFilters
+    ( [ignoreUnless (\bid -> concat [check bid | check <- bidChecks])]
+   <> [ ignoreUnlessM (\bid -> do
+          fetchedFundings <- fetchFundingAllocations (view (toInterface @Bid bid)).fundings
+          pure (concat [check bid fetchedFundings | check <- allocationsChecks]))
+      | not (null allocationsChecks) ]
+   <> [ignoreUnlessAmong (\bids bid -> concat [check bids bid | check <- amongBidsChecks])] )
+    bids
+
+-- | Fetches the bids and ignores those that use one of the seller's accounts or
+-- share an account with another bid. Use it for bids that passed their
+-- checks at submission. It fetches no allocations.
+fetchAndIgnoreConflictingBids
+  : (HasFetch t, HasToInterface t Bid)
+  => Map Party Funding -> [ContractId t] -> Update (Contracts t, Ignored t)
+fetchAndIgnoreConflictingBids sellerFundings =
+  fetchAndIgnoreInvalidBids
+    [ noSellerAccountsInBid sellerFundings ]
+    []
+    [ distinctAccountsAmongBids ]
+
+
+-- Fetching allocations
+-----------------------
+-- Fetches the allocations of a party's fundings, for the checks at submission and for the seller.
+
+-- | Fetches the allocation of each funding, keyed by admin.
+fetchFundingAllocations : Map Party Funding -> Update (Map Party (Funding, Alloc.AllocationView))
+fetchFundingAllocations fundings = do
+  views <- forA (Map.toList fundings) $ \(admin, funding) -> do
+    allocation <- fetch funding.allocation
+    pure (admin, (funding, view allocation))
+  pure (Map.fromList views)
+
+
+-- Checking the seller
+----------------------
+-- Checks on the seller's funding, at submission or resolution. They abort, because the auction cannot run without the seller.
+
+-- | Requires every funding of the seller to meet the funding terms and be an
+-- empty transfer leg allocation, and the seller to reserve the most it can
+-- send: the supply of every lot in a forward auction, and the supply of every
+-- lot times its reserve price in a reverse auction.
+validSellerFunding
+  : ResolutionInfo -> AuctionTerms -> AuctionSchedule -> Map Party (Funding, Alloc.AllocationView) -> Unmet
+validSellerFunding resolutionInfo terms schedule fetchedSellerFundings =
+  [ "allocation " <> show funding.allocation <> " " <> errorMsg
+  | (admin, (funding, v)) <- Map.toList fetchedSellerFundings
+  , (False, errorMsg) <-
+      [ (null v.allocation.transferLegSides, "has transfer leg sides")
+      , (isSome v.allocation.nextIterationFunding, "does not enable iterated settlement")
+      , (v.settlement == settlementOf resolutionInfo, "is for another settlement")
+      , (v.allocation.admin == admin, "has another admin")
+      , (v.allocation.authorizer == funding.account, "is authorized by another account")
+      , (optional True (>= deadline) v.allocation.settlementDeadline, "expires before the settlement deadline")
+      , (not terms.allocationTerms.committed || v.allocation.committed, "is not committed")
+      ]
+  ]
+    <> [ errorMsg
+       | (instrument, mostSent) <- Map.toList mostSentPerInstrument
+       , errorMsg <- case Map.lookup instrument.admin fetchedSellerFundings of
+           None -> ["no allocation under admin " <> show instrument.admin]
+           Some (funding, v) ->
+             [ "allocation " <> show funding.allocation <> " reserves less than the " <> show mostSent
+                 <> " of " <> instrument.id <> " the seller can send"
+             | fromOptional 0.0 (v.allocation.nextIterationFunding >>= TextMap.lookup instrument.id) < mostSent
+             ]
+       ]
+  where
+    deadline = addRelTime schedule.biddingClosesAt terms.allocationTerms.settlementWindow
+    mostSentPerInstrument = case terms.direction of
+      Forward -> fmap (.supply) terms.lots
+      Reverse -> Map.fromList [(terms.payment, sum [lot.supply * lot.reservePrice | lot <- Map.values terms.lots])]
+
+-- | Fetches the seller's allocations and requires them to pass validSellerFunding.
+-- Call it when the seller funds the auction.
+requireValidSellerFunding
+  : ResolutionInfo -> AuctionTerms -> AuctionSchedule -> Map Party Funding -> Update ()
+requireValidSellerFunding resolutionInfo terms schedule sellerFundings = do
+  fetchedSellerFundings <- fetchFundingAllocations sellerFundings
+  requireMet (validSellerFunding resolutionInfo terms schedule fetchedSellerFundings)
+
+
+-- Building batches
+-------------------
+-- Groups the outcome's transfer legs into one settlement batch per instrument admin.
+
+data Batch = Batch
+  with
+    admin : Party
+    legs : [Alloc.TransferLeg]
+    -- ^ Legs that will be settled in the batch. They must all have the same admin.
+    fundings : [Funding]
+    -- ^ Fundings that have an allocation under the batch's admin and are used in the batch's legs.
+  deriving (Eq, Show)
+
+-- | Groups the legs by admin into one batch per admin. The fundings SHOULD
+-- be all the fundings of this settlement, and the legs SHOULD be all the
+-- legs of the settlement.
+--
+-- It does not check that every account on the legs has a funding. That is
+-- left to the bid filters before the outcome and to the settlement factory
+-- at settlement, because some cases might not want to abort in this
+-- function, for example not to complicate the completeness checks.
+buildBatchesByAccount
+  : [Map Party Funding]
+  -> [(Party, Alloc.TransferLeg)]
+  -> [Batch]
+buildBatchesByAccount allFundings allLegsToSettleWithAdmin =
+  [ Batch with admin; legs; fundings
+  | (admin, legs) <- allLegsToSettleByAdmin
+  , let accounts = accountsOnLegs legs
+  , let fundings =
+          [ funding
+          | byAdmin <- allFundings
+          , Some funding <- [Map.lookup admin byAdmin]
+          , funding.account `elem` accounts
+          ]
+  ]
+  where
+    allLegsToSettleByAdmin = Map.toList (Map.fromListWithR (<>) [(admin, [leg]) | (admin, leg) <- allLegsToSettleWithAdmin])
+    accountsOnLegs legs = dedup (concatMap (\leg -> [leg.sender, leg.receiver]) legs)
+
+
+-- Settling batches
+-------------------
+-- Exercises each batch's settlement factory to settle the allocations.
+
+data SettleBatchContext = SettleBatchContext
+  with
+    factoryCid : ContractId Alloc.SettlementFactory
+    extraArgs : ExtraArgs
+  deriving (Eq, Show)
+
+-- | Builds the FinalizedAllocation of one funding in a batch, given the
+-- batch's legs. settleBatches calls it once per funding. It does not see the
+-- allocation's contents or the other fundings in the batch.
+--
+-- The settlement factory rejects the batch unless every side of every leg is
+-- authorized by exactly one allocation. An allocation authorizes its own
+-- transferLegSides plus the extraTransferLegSides returned here.
+type Finalizer = [Alloc.TransferLeg] -> Funding -> Alloc.FinalizedAllocation
+
+-- | Settles every batch, using an allocation Finalizer each with its own extra args.
+settleBatches
+  : Finalizer
+  -> Alloc.SettlementInfo
+  -> Map Party SettleBatchContext
+  -> [Batch]
+  -> Update [Alloc.SettlementFactory_SettleBatchResult]
+settleBatches finalizer settlement contexts batches =
+  forA batches $ \batch -> do
+    context <- orAbort ("no settle batch context for admin " <> show batch.admin) (Map.lookup batch.admin contexts)
+    exercise context.factoryCid Alloc.SettlementFactory_SettleBatch with
+      settlement
+      transferLegs = batch.legs
+      allocations = map (finalizer batch.legs) batch.fundings
+      actors = settlement.executors
+      extraArgs = context.extraArgs
+
+-- | Finalizes an allocation for its last settlement iteration.
+--
+-- extraTransferLegSides holds all sides of the batch legs where the funding
+-- account is the sender or the receiver. nextIterationFunding is None, so
+-- the registry creates no next allocation and returns unused reserved funds
+-- to the authorizer.
+--
+-- Use When:
+--
+--  - every allocation has an empty transferLegSides, and sets 
+--    nextIterationFunding.
+--
+--  - each account has at most one allocation per admin in the batch.
+
+lastIterationFinalizer : Finalizer
+lastIterationFinalizer legs funding = Alloc.FinalizedAllocation with
+  allocationCid = funding.allocation
+  extraTransferLegSides =
+    [ side
+    | leg <- legs
+    , (account, side) <- transferLegSidesWithAuthorizer leg
+    , account == funding.account
+    ]
+  nextIterationFunding = None
+
+
+-- Cancelling unsettled allocations
+-----------------------------------
+-- Cancels the allocations that no batch settles.
+
+-- | The allocations of the fundings that no batch settles, each once.
+unsettledAllocations : [Map Party Funding] -> [Batch] -> [ContractId Alloc.Allocation]
+unsettledAllocations allFundings batches =
+  dedup
+    [ funding.allocation
+    | byAdmin <- allFundings
+    , funding <- Map.values byAdmin
+    , funding.allocation `notElem` settled
+    ]
+  where
+    settled = [funding.allocation | batch <- batches, funding <- batch.fundings]
+
+-- | Cancels the allocations as the settlement's executors, each with its extra
+-- args from the contexts.
+cancelAllocations
+  : Alloc.SettlementInfo
+  -> Map (ContractId Alloc.Allocation) ExtraArgs
+  -> [ContractId Alloc.Allocation]
+  -> Update [Alloc.AllocationResult]
+cancelAllocations settlement contexts allocationCids =
+  forA allocationCids $ \allocationCid -> do
+    extraArgs <- orAbort ("no cancel context for allocation " <> show allocationCid)
+      (Map.lookup allocationCid contexts)
+    exercise allocationCid Alloc.Allocation_Cancel with
+      actors = settlement.executors
+      extraArgs

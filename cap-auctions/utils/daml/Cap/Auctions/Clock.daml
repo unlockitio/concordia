@@ -1,0 +1,156 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Auctions.Clock
+  ( -- * Price clock
+    PriceClock (..)
+  , clockTick
+
+    -- * Dutch clock
+  , dutchClockPrice
+  , validDutchClock
+  , dutchClockReachesReserveBy
+
+    -- * English clock
+  , englishClockPrice
+  , validEnglishClock
+
+    -- * Quotes
+  , quotesAtClockPrice
+  , quotesAppended
+
+    -- * Metadata
+  , clockMeta
+  ) where
+
+import qualified DA.TextMap as TextMap
+import DA.Time (RelTime, convertRelTimeToMicroseconds, subTime)
+
+import Splice.Api.Token.MetadataV1 (Metadata (..))
+
+import Cap.Core.Utils (Unmet)
+import Cap.Auctions.Types (Direction (..), Quote (..))
+
+
+-- Price clock
+--------------
+
+data PriceClock = PriceClock
+  with
+    startPrice : Decimal
+    priceStep : Decimal
+    -- ^ How much the price moves at each tick, in units of the payment
+    -- instrument per unit of the lot. It is positive in every format and
+    -- direction; the clock functions decide whether it is added or subtracted.
+    tickInterval : RelTime
+    -- ^ The price is computed from the ledger time of the submission, which the
+    -- submitter chooses within the synchronizer's allowed skew. tickInterval should be
+    -- much longer than that skew, so a submitter cannot pick a better price by
+    -- shifting the ledger time, and much longer than the time a bidder needs to
+    -- submit, so network latency does not move a quote into the next tick. 
+    -- The longer the tickInterval the longer the auction will be depending on the priceStep
+  deriving (Eq, Show)
+
+-- | Returns the number of whole tick intervals between opensAt and now. Both
+-- durations are converted to microseconds, and the integer division rounds
+-- down, so the tick only advances once a full interval has passed. It is 0
+-- before opensAt and for the first interval after it.
+clockTick : RelTime -> Time -> Time -> Int
+clockTick tickInterval opensAt now =
+  max 0 (convertRelTimeToMicroseconds (subTime now opensAt) / convertRelTimeToMicroseconds tickInterval)
+
+
+-- Dutch clock
+--------------
+-- The price starts at startPrice and moves one priceStep per tickInterval
+-- towards the reserve price, where it stops. It falls in forward auctions and
+-- rises in reverse auctions. A quote is a claim at the current price, so
+-- earlier quotes are at prices further from the reserve price and are awarded
+-- first.
+
+dutchClockPrice : Direction -> Decimal -> PriceClock -> Time -> Time -> Decimal
+dutchClockPrice direction reservePrice clock opensAt now =
+  case direction of
+    Forward -> max reservePrice (clock.startPrice - moved)
+    Reverse -> min reservePrice (clock.startPrice + moved)
+  where
+    moved = intToDecimal (clockTick clock.tickInterval opensAt now) * clock.priceStep
+
+validDutchClock : Direction -> Decimal -> PriceClock -> Unmet
+validDutchClock direction reservePrice clock =
+  [ errorMsg
+  | (False, errorMsg) <-
+      [ (clock.priceStep > 0.0, "the price step is not positive")
+      , (convertRelTimeToMicroseconds clock.tickInterval > 0, "the tick interval is not positive")
+      , (clock.startPrice > 0.0, "the start price is not positive")
+      , (startsOnTheRightSide, "the start price is past the reserve price")
+      ]
+  ]
+  where
+    startsOnTheRightSide = case direction of
+      Forward -> clock.startPrice >= reservePrice
+      Reverse -> clock.startPrice <= reservePrice
+
+dutchClockReachesReserveBy : Direction -> Decimal -> PriceClock -> Time -> Time -> Unmet
+dutchClockReachesReserveBy direction reservePrice clock opensAt closesAt =
+  [ "the clock does not reach the reserve price by " <> show closesAt
+  | dutchClockPrice direction reservePrice clock opensAt closesAt /= reservePrice
+  ]
+
+
+-- English clock
+----------------
+-- The price starts at startPrice, at or past the reserve price, and moves one
+-- priceStep per tickInterval away from it, with no bound. It rises in forward
+-- auctions and falls in reverse auctions (where it stops at 0). A quote is the
+-- demand at the current price, and the auction ends when demand no longer
+-- exceeds the supply.
+
+englishClockPrice : Direction -> PriceClock -> Time -> Time -> Decimal
+englishClockPrice direction clock opensAt now =
+  case direction of
+    Forward -> clock.startPrice + moved
+    Reverse -> max 0.0 (clock.startPrice - moved)
+  where
+    moved = intToDecimal (clockTick clock.tickInterval opensAt now) * clock.priceStep
+
+validEnglishClock : Direction -> Decimal -> PriceClock -> Unmet
+validEnglishClock direction reservePrice clock =
+  [ errorMsg
+  | (False, errorMsg) <-
+      [ (clock.priceStep > 0.0, "the price step is not positive")
+      , (convertRelTimeToMicroseconds clock.tickInterval > 0, "the tick interval is not positive")
+      , (clock.startPrice > 0.0, "the start price is not positive")
+      , (startsOnTheRightSide, "the start price is short of the reserve price")
+      ]
+  ]
+  where
+    startsOnTheRightSide = case direction of
+      Forward -> clock.startPrice >= reservePrice
+      Reverse -> clock.startPrice <= reservePrice
+
+
+-- Quotes
+---------
+
+quotesAtClockPrice : Decimal -> [Quote] -> Unmet
+quotesAtClockPrice price quotes =
+  [ "the quote price " <> show quote.price <> " is not the clock price " <> show price
+  | quote <- quotes
+  , quote.price /= price
+  ]
+
+quotesAppended : [Quote] -> [Quote] -> Unmet
+quotesAppended oldQuotes newQuotes =
+  [ "the existing quotes are changed" | take (length oldQuotes) newQuotes /= oldQuotes ]
+
+
+-- Metadata
+-----------
+
+clockMeta : PriceClock -> Metadata
+clockMeta clock = Metadata with
+  values = TextMap.fromList
+    [ ("cap-auctions/clock/start-price", show clock.startPrice)
+    , ("cap-auctions/clock/price-step", show clock.priceStep)
+    , ("cap-auctions/clock/tick-interval-microseconds", show (convertRelTimeToMicroseconds clock.tickInterval))
+    ]

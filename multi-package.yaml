@@ -13,13 +13,9 @@ packages:
 - ./cap-auctions/interfaces/bid
 - ./cap-auctions/interfaces/settlement
 - ./cap-auctions/utils
-- ./cap-auctions/funding
-- ./cap-auctions-v2/types
-- ./cap-auctions-v2/utils
-- ./cap-auctions-v2/interfaces/settlement
-- ./cap-auctions-v2/interfaces/sale-proposal
-- ./cap-auctions-v2/interfaces/bid
-- ./cap-auctions-v2/interfaces/per-lot-quotes
+- ./cap-auctions/types
+- ./cap-auctions/interfaces/sale-proposal
+- ./cap-auctions/interfaces/single-lot-quotes
 - ./examples/governance/babydso/impl/ans
 - ./examples/governance/babydso/impl/config
 - ./examples/governance/babydso/impl/rights
@@ -28,6 +24,5 @@ packages:
 - ./examples/governance/babydso/demo
 - ./examples/governance/private-majority-vote/impl
 - ./examples/governance/private-majority-vote/demo
-- ./examples/auctions/sealed-bid-first-price/impl
-- ./examples/auctions/sealed-bid-first-price/impostors
-- ./examples/auctions/sealed-bid-first-price/demo
+- ./examples/auctions/sealed-single-lot/impl
+- ./examples/auctions/dutch-single-lot/impl

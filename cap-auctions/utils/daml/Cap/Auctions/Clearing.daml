@@ -1,0 +1,89 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | Cap.Auctions.Clearing holds the clearing steps: which
+-- quotes are awarded and how much, and the transfer legs that move the
+-- assets. 
+
+module Cap.Auctions.Clearing
+  ( Award (..)
+  , awardAmountPerQuote
+  , assignAmountsByPrice
+  ) where
+
+import DA.List (mapAccumL, sortOn)
+import qualified DA.Map as Map
+
+
+import Cap.Auctions.Types (Direction (..), LotTerms (..), Quote (..), RemainderPolicy (..))
+
+
+-- Awarding
+-----------
+-- Assigns amounts from a lot's supply to the quotes, best price first.
+
+data Award bidId = Award
+  with
+    bidId : bidId
+    price : Decimal
+    amount : Decimal
+  deriving (Eq, Show)
+
+-- | Returns the amount awarded to each quote of the lot. Quotes outside the
+-- reserve price are dropped (below it in forward auctions, above it in
+-- reverse auctions). The rest are grouped by price (highest price 
+-- first in forward auctions, lowest price first in reverse auctions), and
+-- given amounts from the lot's supply by assignAmountsByPrice.
+awardAmountPerQuote : Ord bidId => Direction -> RemainderPolicy -> LotTerms -> [(bidId, [Quote])] -> [Award bidId]
+awardAmountPerQuote direction remainderPolicy lotTerms quotesPerBid =
+  assignAmountsByPrice remainderPolicy lotTerms.amountStep lotTerms.supply quotesByPrice
+  where    
+    quotesByPrice = case direction of
+      Forward -> reverse (Map.values quotesPerPrice)
+      Reverse -> Map.values quotesPerPrice
+
+    quotesPerPrice = Map.fromListWithR (<>)
+      [(quote.price, [(bidId, quote)]) | (bidId, quotes) <- quotesPerBid, quote <- quotes, withinReserve quote.price]
+    
+    withinReserve price = case direction of
+      Forward -> price >= lotTerms.reservePrice
+      Reverse -> price <= lotTerms.reservePrice
+
+
+-- | Assigns each quote an amount from the remaining supply. The
+-- quotes are grouped by price (highest price first in forward auctions, lowest price first in reverse auctions). 
+-- If demand fits the remaining supply each price is awarded in full
+-- At the first price where it does not, the remaining supply is split in proportion to the
+-- quotes' amounts, rounded down to the amount step, and later prices get
+-- nothing. With AwardToBidders the units lost to rounding go one step
+-- at a time to the quotes with the largest rounding loss, ties broken by bid
+-- id. With ReturnToSeller they are not awarded.
+assignAmountsByPrice
+  : Ord bidId => RemainderPolicy -> Decimal -> Decimal -> [[(bidId, Quote)]] -> [Award bidId]
+assignAmountsByPrice _ _ _ [] = []
+assignAmountsByPrice remainderPolicy step remaining (quotesAtPrice :: worsePrices)
+  | remaining <= 0.0 = []
+  | demandAtCurrentPrice <= remaining =
+      [Award with bidId; price = quote.price; amount = quote.amount | (bidId, quote) <- quotesAtPrice]
+        <> assignAmountsByPrice remainderPolicy step (remaining - demandAtCurrentPrice) worsePrices
+  | otherwise =
+      let exactShare quote = remaining * quote.amount / demandAtCurrentPrice
+          lossOf quote = exactShare quote - roundDown (exactShare quote)
+          shares =
+            [ Award with bidId; price = quote.price; amount = roundDown (exactShare quote)
+            | (bidId, quote) <- sortOn (\(bidId, quote) -> (negate (lossOf quote), bidId)) quotesAtPrice
+            ]
+          remainder = remaining - sum (map (.amount) shares)
+      in case remainderPolicy of
+        ReturnToSeller -> shares
+        AwardToBidders -> snd (mapAccumL assignStep remainder shares)
+  where
+    demandAtCurrentPrice = sum [quote.amount | (_, quote) <- quotesAtPrice]
+
+    -- Rounds value down to the nearest multiple of step.
+    roundDown value =
+      intToDecimal (floor (value / step)) * step
+
+    assignStep remainder award =
+      if remainder >= step
+      then (remainder - step, award with amount = award.amount + step)
+      else (remainder, award)

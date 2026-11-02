@@ -60,10 +60,9 @@ template Probe
     nonconsuming choice Probe_RequireResolvedBy : ()
       with
         key : AuthenticKey
-        mechanism : Text
         resolution : ResolutionInfo
       controller owner
-      do requireResolvedBy key (coerceContractId self) mechanism resolution
+      do requireResolvedBy key (coerceContractId self) resolution
 
     nonconsuming choice Probe_RequireOpen : ()
       with
@@ -164,13 +163,13 @@ requireResolvedByAcceptsAnUnboundResolution : Script ()
 requireResolvedByAcceptsAnUnboundResolution = do
   (owner, probe) <- setupProbe "resolution-unbound"
   submit owner $ exerciseCmd probe Probe_RequireResolvedBy with
-    key = resolverKey owner; mechanism = "vote"; resolution = resolutionOf owner None "vote"
+    key = resolverKey owner; resolution = resolutionOf owner None "vote"
 
 requireResolvedByAcceptsAResolutionBoundToThisContract : Script ()
 requireResolvedByAcceptsAResolutionBoundToThisContract = do
   (owner, probe) <- setupProbe "resolution-bound"
   submit owner $ exerciseCmd probe Probe_RequireResolvedBy with
-    key = resolverKey owner; mechanism = "vote"
+    key = resolverKey owner
     resolution = resolutionOf owner (Some (coerceContractId probe)) "vote"
 
 requireResolvedByRefusesAnotherResolver : Script ()
@@ -179,7 +178,7 @@ requireResolvedByRefusesAnotherResolver = do
   other <- allocateParty "resolution-resolver-other"
   submitMustFailContaining "the resolution names the resolver" owner $
     exerciseCmd probe Probe_RequireResolvedBy with
-      key = resolverKey owner; mechanism = "vote"; resolution = resolutionOf other None "vote"
+      key = resolverKey owner; resolution = resolutionOf other None "vote"
 
 requireResolvedByRefusesAnotherRulesContract : Script ()
 requireResolvedByRefusesAnotherRulesContract = do
@@ -187,15 +186,8 @@ requireResolvedByRefusesAnotherRulesContract = do
   otherProbe <- submit owner $ createCmd Probe with owner
   submitMustFailContaining "the resolution is bound to no other resolver contract" owner $
     exerciseCmd probe Probe_RequireResolvedBy with
-      key = resolverKey owner; mechanism = "vote"
+      key = resolverKey owner
       resolution = resolutionOf owner (Some (coerceContractId otherProbe)) "vote"
-
-requireResolvedByRefusesAnotherMechanism : Script ()
-requireResolvedByRefusesAnotherMechanism = do
-  (owner, probe) <- setupProbe "resolution-mechanism"
-  submitMustFailContaining "the resolution names the mechanism vote" owner $
-    exerciseCmd probe Probe_RequireResolvedBy with
-      key = resolverKey owner; mechanism = "vote"; resolution = resolutionOf owner None "confirm"
 
 requireOpenChecksTheWindow : Script ()
 requireOpenChecksTheWindow = do

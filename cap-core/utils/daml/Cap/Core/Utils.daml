@@ -7,6 +7,17 @@ module Cap.Core.Utils
   , fetchCheckedAny
   , fetchGroup
 
+    -- * Ignoring contracts
+  , Unmet
+  , Contracts
+  , Ignored
+  , ContractFilter
+  , applyFilters
+  , ignoreUnless
+  , ignoreUnlessAmong
+  , ignoreUnlessM
+  , requireMet
+
     -- * Resolutions
   , requireResolvedBy
   , authoritiesOf
@@ -20,6 +31,7 @@ module Cap.Core.Utils
   , requireOpen
   , requireClosed
   , requireBeforeOpen
+  , requireBefore
   , requireExpired
 
     -- * Values
@@ -31,6 +43,7 @@ module Cap.Core.Utils
   , uniformValue
   ) where
 
+import DA.Action (foldlA)
 import DA.List (unique)
 import DA.Map (Map)
 import qualified DA.Map as Map
@@ -74,16 +87,64 @@ fetchGroup key cids = do
     pure (cid, contract)
 
 
--- | Checks that a resolution names this resolver, is bound to no other resolver
--- contract, and names this mechanism. The resolver passes its own key, its own
--- contract id, and the mechanism its choice runs.
-requireResolvedBy : AuthenticKey -> AnyContractId -> Text -> ResolutionInfo -> Update ()
-requireResolvedBy rKey self mechanism resolution = do
+-- | The conditions of a check that are not met. Empty when the check passes.
+type Unmet = [Text]
+
+type Contracts t = [(ContractId t, t)]
+
+type Ignored t = [(ContractId t, Text)]
+
+type ContractFilter t = Contracts t -> Update (Contracts t, Ignored t)
+
+-- | Runs the filters in order, each on the contracts the previous ones kept, and collects the ignored contracts.
+applyFilters : [ContractFilter t] -> Contracts t -> Update (Contracts t, Ignored t)
+applyFilters filters contracts = foldlA step (contracts, []) filters
+  where
+    step (kept, ignored) contractFilter = do
+      (stillKept, newlyIgnored) <- contractFilter kept
+      pure (stillKept, ignored <> newlyIgnored)
+
+-- | Ignores every contract with an unmet condition, with the first one as the reason.
+ignoreUnless : (t -> Unmet) -> ContractFilter t
+ignoreUnless unmet contracts = pure
+  ( [contract | (contract, []) <- checked]
+  , [(cid, reason) | ((cid, _), reason :: _) <- checked]
+  )
+  where
+    checked = [(contract, unmet c) | contract@(_, c) <- contracts]
+
+-- | Like ignoreUnless, for checks that run in Update, for example to fetch.
+ignoreUnlessM : (t -> Update Unmet) -> ContractFilter t
+ignoreUnlessM unmet contracts = do
+  checked <- forA contracts $ \contract@(_, c) -> do
+    result <- unmet c
+    pure (contract, result)
+  pure
+    ( [contract | (contract, []) <- checked]
+    , [(cid, reason) | ((cid, _), reason :: _) <- checked]
+    )
+
+-- | Like ignoreUnless, for checks that compare a contract with the other contracts still kept.
+ignoreUnlessAmong : ([t] -> t -> Unmet) -> ContractFilter t
+ignoreUnlessAmong unmet contracts = ignoreUnless (unmet (map snd contracts)) contracts
+
+-- | Aborts with the first unmet condition.
+requireMet : Unmet -> Update ()
+requireMet [] = pure ()
+requireMet (errorMsg :: _) = abort errorMsg
+
+
+-- | Checks that a resolution names this resolver and is bound to no other
+-- resolver contract. The resolver passes its own key and its own contract id.
+-- It does not check the mechanism; the resolver checks that where it picks the
+-- rule the mechanism names.
+requireResolvedBy : AuthenticKey -> AnyContractId -> ResolutionInfo -> Update ()
+requireResolvedBy rKey self resolution = do
   require ("the resolution names the resolver " <> show rKey) (resolution.resolver == rKey)
   require "the resolution is bound to no other resolver contract"
     (optional True (== self) resolution.resolverCid)
-  require ("the resolution names the mechanism " <> mechanism) (resolution.mechanism == mechanism)
 
+-- remove this function
 authoritiesOf : ResolutionInfo -> Set Party
 authoritiesOf resolution = resolution.resolver.authorities
 
@@ -113,6 +174,9 @@ requireClosed msg now closesAt = require msg (now >= closesAt)
 
 requireBeforeOpen : CanAssert m => Text -> Time -> Time -> m ()
 requireBeforeOpen msg now opensAt = require msg (now < opensAt)
+
+requireBefore : CanAssert m => Text -> Time -> Time -> m ()
+requireBefore msg now deadline = require msg (now < deadline)
 
 requireExpired : Text -> Time -> Optional Time -> Update ()
 requireExpired msg now expiresAt = case expiresAt of

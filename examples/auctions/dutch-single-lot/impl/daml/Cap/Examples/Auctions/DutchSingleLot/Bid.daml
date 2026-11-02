@@ -1,0 +1,124 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Examples.Auctions.DutchSingleLot.Bid where
+
+import DA.Map (Map)
+import qualified DA.Map as Map
+import DA.Set (Set)
+import qualified DA.Set as Set
+
+import Splice.Api.Token.MetadataV1
+import Splice.Util (require)
+
+import Cap.Core.Types (ResolutionInfo)
+import Cap.Core.Utils (orAbort, requireMet, requireOpen, single)
+import Cap.Auctions.Types (AuctionSchedule (..), AuctionTerms, Funding (..), HasSingleLotQuotes (..), Quote (..))
+import Cap.Auctions.Bid
+import Cap.Auctions.SingleLotQuotesBid
+import Cap.Auctions.Funding (fetchFundingAllocations)
+import Cap.Auctions.SingleLot (expectSingleLot, validSingleLotBid)
+import Cap.Auctions.Clock (PriceClock, clockMeta, dutchClockPrice, quotesAppended, quotesAtClockPrice)
+
+
+template DutchBidProposal
+  with
+    authorities : Set Party
+    resolutionInfo : ResolutionInfo
+    terms : AuctionTerms
+    schedule : AuctionSchedule
+    clock : PriceClock
+    invited : [Party]
+  where
+    signatory Set.toList authorities
+    observer invited
+
+    interface instance BidProposal for DutchBidProposal where
+      view = BidProposalView with
+        authorities
+        terms
+        invited = Some invited
+        availableActions = Map.fromList
+          [ (BPA_Accept, [[bidder] | bidder <- invited])
+          , (BPA_Withdraw, [Set.toList authorities])
+          ]
+        meta = clockMeta clock
+
+      bidProposal_acceptImpl _ arg = do
+        bidder <- orAbort "a bid is accepted by one bidder" (single arg.actors)
+        require "the bidder is invited" (bidder `elem` invited)
+        require "the resolution is this proposal's" (arg.resolutionInfo == resolutionInfo)
+        now <- getTime
+        requireOpen "the bidding window is open"
+          now schedule.biddingOpensAt (Some schedule.biddingClosesAt)
+        toInterfaceContractId <$> create DutchBid with
+          authorities; bidder; resolutionInfo; terms; schedule; clock
+          fundings = Map.empty
+          quotes = []
+
+      bidProposal_withdrawImpl _ _ =
+        pure BidProposal_WithdrawResult with meta = emptyMetadata
+
+
+template DutchBid
+  with
+    authorities : Set Party
+    bidder : Party
+    resolutionInfo : ResolutionInfo
+    terms : AuctionTerms
+    schedule : AuctionSchedule
+    clock : PriceClock
+    fundings : Map Party Funding
+    quotes : [Quote]
+  where
+    signatory Set.toList authorities, bidder
+
+    interface instance Bid for DutchBid where
+      view = BidView with
+        resolutionInfo; terms; schedule; fundings
+        availableActions = Map.fromList
+          [ (BA_Fund, [[bidder]])
+          , (BA_Quote, [[bidder]])
+          , (BA_Withdraw, [[bidder]])
+          , (BA_Close, [Set.toList authorities])
+          ]
+        meta = clockMeta clock
+
+      bid_fundImpl _ arg = do
+        let newBid = this with fundings = arg.fundings
+        singleLotTerms <- expectSingleLot terms
+        fetchedFundings <- fetchFundingAllocations newBid.fundings
+        requireMet (validSingleLotBid resolutionInfo terms schedule singleLotTerms newBid fetchedFundings)
+        toInterfaceContractId <$> create newBid
+
+      bid_withdrawImpl self _ = do
+        now <- getTime
+        require "the bidding window is open" (now < schedule.biddingClosesAt)
+        require "the bid has no claims" (null quotes)
+        archive (fromInterfaceContractId @DutchBid self)
+        pure Bid_WithdrawResult with bid = None; withdrawn = []; meta = emptyMetadata
+
+      bid_closeImpl self _ = do
+        archive (fromInterfaceContractId @DutchBid self)
+        pure Bid_CloseResult with meta = emptyMetadata
+
+      bid_expireImpl self _ = do
+        archive (fromInterfaceContractId @DutchBid self)
+        pure Bid_ExpireResult with meta = emptyMetadata
+
+    interface instance SingleLotQuotesBid for DutchBid where
+      view = SingleLotQuotesView with quotes
+
+      singleLotQuotesBid_quoteImpl _ arg = do
+        singleLotTerms <- expectSingleLot terms
+        now <- getTime
+        let price = dutchClockPrice singleLotTerms.direction singleLotTerms.lotTerms.reservePrice clock schedule.biddingOpensAt now
+            newQuotes = drop (length quotes) arg.quotes
+        require "the bid adds at least one claim" (not (null newQuotes))
+        requireMet (quotesAppended quotes arg.quotes <> quotesAtClockPrice price newQuotes)
+        let newBid = this with quotes = arg.quotes
+        fetchedFundings <- fetchFundingAllocations newBid.fundings
+        requireMet (validSingleLotBid resolutionInfo terms schedule singleLotTerms newBid fetchedFundings)
+        toInterfaceContractId <$> create newBid
+
+instance HasSingleLotQuotes DutchBid where
+  singleLotQuotes = (.quotes)

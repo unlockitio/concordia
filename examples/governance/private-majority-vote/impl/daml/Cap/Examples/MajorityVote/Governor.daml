@@ -156,7 +156,9 @@ resolveMajority
 resolveMajority governor self proposalCid ballotCids = do
   now <- getTime
   proposal <- fetch proposalCid
-  requireResolvedBy (governorKey governor) (coerceContractId self) majorityMechanismName proposal.resolution
+  requireResolvedBy (governorKey governor) (coerceContractId self) proposal.resolution
+  require ("the resolution names the mechanism " <> majorityMechanismName)
+    (proposal.resolution.mechanism == majorityMechanismName)
   require "the proposal is on this governor's electorate" (proposal.electorate == governor.electorate)
   let terms = proposal.terms
 
