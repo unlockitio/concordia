@@ -58,7 +58,7 @@ patterns; a helper never constrains a format, it only saves work.
 | Demo | A prototype frontend + backend driving the governance flow demo | end-to-end tests | **M5** |
 
 
-The interface layer is `Action` and `Executable`. Ballots and governors are
+The interface layer is `Action` and `Executable`. Ballots and resolvers are
 templates each app writes, read through the toolkit's type classes (`IsBallot`,
 `HasVotingRights`, `HasState`). The same two interfaces drive the Splice-shaped
 BabyDso flow and the private majority vote, and weighted voting needed no new

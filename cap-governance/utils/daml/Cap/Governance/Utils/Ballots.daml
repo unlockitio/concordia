@@ -28,7 +28,7 @@ import Cap.Governance.Utils.Count (Cast (..), Casts, Vote (..))
 
 
 ------------------  BALLOTS  ------------------
--- Used by the choice that resolves a proposal, over the ballots presented to it.
+-- Used at resolution, over the ballots presented to it.
 
 -- | What a resolution reads from a ballot: the votes it carries, by voter;
 -- the snapshots it took; the action it asks to authorize; and how the

@@ -19,14 +19,14 @@ import Splice.Util (HasCheckedFetch, fetchChecked, require)
 
 
 ------------------  VOTING RIGHTS  ------------------
--- Used by a governor to read voting weight from contracts whose templates it knows.
+-- Used by a resolver to read voting rights/weight from contracts whose templates it knows.
 
 -- | The voting rights a contract carries: each holder and its weight.
 class HasVotingRights t where
   rightsOf : t -> Map Party Decimal
 
 -- | Fetches the contracts in rightCids and checks them against rightKeys,
--- which the governor stores. Returns the voting rights under each key: each
+-- which the resolver stores. Returns the voting rights under each key: each
 -- holder and its weight. It does not add up the weight of each holder! Because
 -- a holder can have rights in several contracts.
 fetchVotingRights

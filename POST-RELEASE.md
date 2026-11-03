@@ -13,9 +13,7 @@ The library splits every behaviour across three surfaces:
   and `Settlement`. The fixed bodies check admission, windows and expiry. An
   extension implements the interface methods and inherits these checks; it
   cannot weaken them.
-- **Templates the app writes** — the governor, its mechanisms, the ballots and
-  the vote kinds in governance, and the auction contract in auctions. Each app
-  owns these, so each app can shape them.
+- **Templates the app writes** — the resolver, its mechanisms, the ballots, etc.
 - **The opt-in toolkit** — type classes (`IsBallot`, `HasVotingRights`, `HasState`)
   and helpers for fetching, taking snapshots, weighing and counting. An app uses the
   helpers it needs and writes its own code where one does not fit.
@@ -33,7 +31,7 @@ these.
 - **A new governable target.** The owner of a contract writes an action that
   names it by an `AuthenticKey`, and a `HasCheckedFetch` instance that computes
   that key from the contract, usually with `signedKey`. The owner signs the
-  action, and a governor can then authorize changes to the contract without
+  action, and a resolver can then authorize changes to the contract without
   depending on its package.
 - **Eligibility.** A voter's right to vote is a contract the app registers, read
   through `HasVotingRights` and `fetchVotingRights`. Institutions bring their own identity
@@ -43,11 +41,11 @@ these.
   action passes to `checkTarget`.
 - **A timing profile.** Voting windows are fields of the app's ballots.
   Execution windows are the `opensAt`, `cancelAfter` and `expiresAt` fields of the
-  `ExecutionCore` the governor sets when it authorizes an execution.
+  `ExecutionCore` the resolver sets when it authorizes an execution.
 
 ## New governance formats
 
-A new governance format is a new mechanism: a choice on the app's governor that
+A new governance format is a new mechanism: a choice on the app's resolver that
 counts its ballots with a quorum and a tally. `Quorum` and `Tally` are plain
 functions, so a format that needs a rule the toolkit does not have writes it and
 combines it with `decide`. A mechanism that counts a new kind of vote adds a

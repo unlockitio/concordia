@@ -99,6 +99,9 @@ concordia/
 │   ├── types/                         #   AuctionTerms, LotTerms, Quote, Funding
 │   ├── interfaces/{bid,sale-proposal,single-lot-quotes,settlement}
 │   └── utils/                         #   Funding, Clearing, SingleLot
+├── docs/governance/
+│   ├── intro.md                       # governance flows in Canton and the cap-governance architecture
+│   └── rationale.md                   # cap-governance design decisions
 ├── examples/governance/
 │   ├── babydso/                       # Splice DSO governance with weighted votes
 │   │                                  #   impl/{ans,config,rights,governance,action}, demo
@@ -112,7 +115,6 @@ concordia/
 ├── .github/workflows/ci.yml           # build and test on push and pull request to dev
 ├── multi-package.yaml                 # dpm workspace (build order)
 ├── DESIGN.md                          # map of the design docs
-├── cap-governance-rationale.md        # cap-governance design decisions
 ├── SCOPE.md                           # first-release scope, capability → milestone
 ├── POST-RELEASE.md                    # extension points for downstream modules
 ├── GLOSSARY.md                        # terms and where each is defined
@@ -121,7 +123,8 @@ concordia/
 └── README.md                          # this file
 ```
 
-[`cap-governance-rationale.md`](cap-governance-rationale.md) carries the
+[`docs/governance/intro.md`](docs/governance/intro.md) and
+[`docs/governance/rationale.md`](docs/governance/rationale.md) carry the
 tier-2 governance design.
 
 ## Building

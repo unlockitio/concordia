@@ -50,8 +50,8 @@ aMissingWeightSourceIsRefusedAtOpening = do
     openVoteCmd f f.sv1 (feeVote 0.05 2.0)
       (Map.delete (sourceKeyOf f "sv2-a" f.sv2) f.rightCids)
 
-aWeightSourceAddedAfterTheGovernorIsRefused : Script ()
-aWeightSourceAddedAfterTheGovernorIsRefused = do
+aWeightSourceAddedAfterTheResolverIsRefused : Script ()
+aWeightSourceAddedAfterTheResolverIsRefused = do
   f <- setupAs "added"
   added <- submit f.dso $ createCmd SvWeightSource with
     dso = f.dso
