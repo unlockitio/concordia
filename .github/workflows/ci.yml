@@ -18,7 +18,7 @@ concurrency:
 
 env:
   DPM_VERSION: 1.0.10
-  SDK_VERSION: 3.4.11
+  SDK_VERSION: 3.5.11
   DPM_REGISTRY_PATH: https://europe-docker.pkg.dev/v2/da-images/public/components/dpm
 
 jobs:

@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
-sdk-version: 3.4.11
+sdk-version: 3.5.11
 name: cap-governance-executable-v1
 version: 0.1.0
 source: daml

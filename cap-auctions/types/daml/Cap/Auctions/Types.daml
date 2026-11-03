@@ -51,6 +51,10 @@ data AllocationTerms = AllocationTerms
 data RemainderPolicy
   = AwardToBidders
   | ReturnToSeller
+  -- ^ The units left after the shares at the marginal price are rounded down
+  -- to the amount step are not awarded. They are whole multiples of the amount
+  -- step, and can be the whole remaining supply: two quotes tied at the top
+  -- price for a single item each get 0, and the item is not sold.
   deriving (Eq, Show)
 
 data LotTerms = LotTerms
