@@ -56,7 +56,7 @@ awardAmountPerQuote direction remainderPolicy lotTerms quotesPerBid =
 -- quotes' amounts, rounded down to the amount step, and later prices get
 -- nothing. With AwardToBidders the units lost to rounding go one step
 -- at a time to the quotes with the largest rounding loss, ties broken by bid
--- id. With ReturnToSeller they are not awarded.
+-- id. With ReturnToPrincipal they are not awarded.
 assignAmountsByPrice
   : Ord bidId => RemainderPolicy -> Decimal -> Decimal -> [[(bidId, Quote)]] -> [Award bidId]
 assignAmountsByPrice _ _ _ [] = []
@@ -74,7 +74,7 @@ assignAmountsByPrice remainderPolicy step remaining (quotesAtPrice :: worsePrice
             ]
           remainder = remaining - sum (map (.amount) shares)
       in case remainderPolicy of
-        ReturnToSeller -> shares
+        ReturnToPrincipal -> shares
         AwardToBidders -> snd (mapAccumL assignStep remainder shares)
   where
     demandAtCurrentPrice = sum [quote.amount | (_, quote) <- quotesAtPrice]

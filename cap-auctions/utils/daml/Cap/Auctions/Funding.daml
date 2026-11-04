@@ -13,7 +13,7 @@ module Cap.Auctions.Funding
   , emptyTransferLegAllocations
   , bidForResolution
   , accountSignedBid
-  , noSellerAccountsInBid
+  , noPrincipalAccountsInBid
   , distinctAccountsAmongBids
 
     -- * Fetching and ignoring invalid bids
@@ -26,9 +26,9 @@ module Cap.Auctions.Funding
     -- * Fetching allocations
   , fetchFundingAllocations
 
-    -- * Checking the seller
-  , validSellerFunding
-  , requireValidSellerFunding
+    -- * Checking the principal
+  , validPrincipalFunding
+  , requireValidPrincipalFunding
 
     -- * Building batches
   , Batch (..)
@@ -132,13 +132,13 @@ accountSignedBid bid =
       Some owner -> Some owner
       None -> account.provider
 
--- | Requires the bid to use none of the seller's accounts under the same admin.
-noSellerAccountsInBid : HasToInterface t Bid => Map Party Funding -> t -> Unmet
-noSellerAccountsInBid sellerFundings bid =
-  [ "account " <> show funding.account <> " is used under admin " <> show admin <> " by the seller"
+-- | Requires the bid to use none of the principal's accounts under the same admin.
+noPrincipalAccountsInBid : HasToInterface t Bid => Map Party Funding -> t -> Unmet
+noPrincipalAccountsInBid principalFundings bid =
+  [ "account " <> show funding.account <> " is used under admin " <> show admin <> " by the principal"
   | (admin, funding) <- Map.toList (view (toInterface @Bid bid)).fundings
-  , Some sellerFunding <- [Map.lookup admin sellerFundings]
-  , sellerFunding.account == funding.account
+  , Some principalFunding <- [Map.lookup admin principalFundings]
+  , principalFunding.account == funding.account
   ]
 
 -- | Requires no other bid to use one of the bid's accounts under the same admin.
@@ -197,22 +197,22 @@ fetchAndIgnoreInvalidBids bidChecks allocationsChecks amongBidsChecks cids = do
    <> [ignoreUnlessAmong (\bids bid -> concat [check bids bid | check <- amongBidsChecks])] )
     bids
 
--- | Fetches the bids and ignores those that use one of the seller's accounts or
+-- | Fetches the bids and ignores those that use one of the principal's accounts or
 -- share an account with another bid. Use it for bids that passed their
 -- checks at submission. It fetches no allocations.
 fetchAndIgnoreConflictingBids
   : (HasFetch t, HasToInterface t Bid)
   => Map Party Funding -> [ContractId t] -> Update (Contracts t, Ignored t)
-fetchAndIgnoreConflictingBids sellerFundings =
+fetchAndIgnoreConflictingBids principalFundings =
   fetchAndIgnoreInvalidBids
-    [ noSellerAccountsInBid sellerFundings ]
+    [ noPrincipalAccountsInBid principalFundings ]
     []
     [ distinctAccountsAmongBids ]
 
 
 -- Fetching allocations
 -----------------------
--- Fetches the allocations of a party's fundings, for the checks at submission and for the seller.
+-- Fetches the allocations of a party's fundings, for the checks at submission and for the principal.
 
 -- | Fetches the allocation of each funding, keyed by admin.
 fetchFundingAllocations : Map Party Funding -> Update (Map Party (Funding, Alloc.AllocationView))
@@ -223,19 +223,19 @@ fetchFundingAllocations fundings = do
   pure (Map.fromList views)
 
 
--- Checking the seller
+-- Checking the principal
 ----------------------
--- Checks on the seller's funding, at submission or resolution. They abort, because the auction cannot run without the seller.
+-- Checks on the principal's funding, at submission or resolution. They abort, because the auction cannot run without the principal.
 
--- | Requires every funding of the seller to meet the funding terms and be an
--- empty transfer leg allocation, and the seller to reserve the most it can
+-- | Requires every funding of the principal to meet the funding terms and be an
+-- empty transfer leg allocation, and the principal to reserve the most it can
 -- send: the supply of every lot in a forward auction, and the supply of every
 -- lot times its reserve price in a reverse auction.
-validSellerFunding
+validPrincipalFunding
   : ResolutionInfo -> AuctionTerms -> AuctionSchedule -> Map Party (Funding, Alloc.AllocationView) -> Unmet
-validSellerFunding resolutionInfo terms schedule fetchedSellerFundings =
+validPrincipalFunding resolutionInfo terms schedule fetchedPrincipalFundings =
   [ "allocation " <> show funding.allocation <> " " <> errorMsg
-  | (admin, (funding, v)) <- Map.toList fetchedSellerFundings
+  | (admin, (funding, v)) <- Map.toList fetchedPrincipalFundings
   , (False, errorMsg) <-
       [ (null v.allocation.transferLegSides, "has transfer leg sides")
       , (isSome v.allocation.nextIterationFunding, "does not enable iterated settlement")
@@ -248,11 +248,11 @@ validSellerFunding resolutionInfo terms schedule fetchedSellerFundings =
   ]
     <> [ errorMsg
        | (instrument, mostSent) <- Map.toList mostSentPerInstrument
-       , errorMsg <- case Map.lookup instrument.admin fetchedSellerFundings of
+       , errorMsg <- case Map.lookup instrument.admin fetchedPrincipalFundings of
            None -> ["no allocation under admin " <> show instrument.admin]
            Some (funding, v) ->
              [ "allocation " <> show funding.allocation <> " reserves less than the " <> show mostSent
-                 <> " of " <> instrument.id <> " the seller can send"
+                 <> " of " <> instrument.id <> " the principal can send"
              | fromOptional 0.0 (v.allocation.nextIterationFunding >>= TextMap.lookup instrument.id) < mostSent
              ]
        ]
@@ -262,13 +262,13 @@ validSellerFunding resolutionInfo terms schedule fetchedSellerFundings =
       Forward -> fmap (.supply) terms.lots
       Reverse -> Map.fromList [(terms.payment, sum [lot.supply * lot.reservePrice | lot <- Map.values terms.lots])]
 
--- | Fetches the seller's allocations and requires them to pass validSellerFunding.
--- Call it when the seller funds the auction.
-requireValidSellerFunding
+-- | Fetches the principal's allocations and requires them to pass validPrincipalFunding.
+-- Call it when the principal funds the auction.
+requireValidPrincipalFunding
   : ResolutionInfo -> AuctionTerms -> AuctionSchedule -> Map Party Funding -> Update ()
-requireValidSellerFunding resolutionInfo terms schedule sellerFundings = do
-  fetchedSellerFundings <- fetchFundingAllocations sellerFundings
-  requireMet (validSellerFunding resolutionInfo terms schedule fetchedSellerFundings)
+requireValidPrincipalFunding resolutionInfo terms schedule principalFundings = do
+  fetchedPrincipalFundings <- fetchFundingAllocations principalFundings
+  requireMet (validPrincipalFunding resolutionInfo terms schedule fetchedPrincipalFundings)
 
 
 -- Building batches
@@ -361,7 +361,6 @@ settleBatches finalizer settlement contexts batches =
 --    nextIterationFunding.
 --
 --  - each account has at most one allocation per admin in the batch.
-
 lastIterationFinalizer : Finalizer
 lastIterationFinalizer legs funding = Alloc.FinalizedAllocation with
   allocationCid = funding.allocation

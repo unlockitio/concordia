@@ -37,9 +37,9 @@ accountSigner account = case account.owner of
   Some owner -> Some owner
   None -> account.provider
 
-sellerSigners : Map Party Funding -> [Party]
-sellerSigners sellerFundings =
-  dedup [signer | funding <- Map.values sellerFundings, Some signer <- [accountSigner funding.account]]
+principalSigners : Map Party Funding -> [Party]
+principalSigners principalFundings =
+  dedup [signer | funding <- Map.values principalFundings, Some signer <- [accountSigner funding.account]]
 
 data DutchAuction_ResolveResult = DutchAuction_ResolveResult
   with
@@ -56,13 +56,13 @@ template DutchAuction
     terms : AuctionTerms
     schedule : AuctionSchedule
     clock : PriceClock
-    sellerFundings : Map Party Funding
+    principalFundings : Map Party Funding
   where
-    signatory Set.toList authorities, sellerSigners sellerFundings
+    signatory Set.toList authorities, principalSigners principalFundings
 
     ensure
-      not (Map.null sellerFundings)
-        && all (\funding -> isSome (accountSigner funding.account)) (Map.values sellerFundings)
+      not (Map.null principalFundings)
+        && all (\funding -> isSome (accountSigner funding.account)) (Map.values principalFundings)
 
     choice DutchAuction_Resolve : DutchAuction_ResolveResult
       with
@@ -74,13 +74,13 @@ template DutchAuction
       do
         requireResolvedBy (AuthenticKey with authorities; id = resolverId) (coerceContractId self) resolutionInfo
         singleLotTerms <- expectSingleLot terms
-        (keptBids, ignoredBids) <- fetchAndIgnoreConflictingBids sellerFundings bidCids
+        (keptBids, ignoredBids) <- fetchAndIgnoreConflictingBids principalFundings bidCids
         now <- getTime
         let claimed = sum [quote.amount | (_, bid) <- keptBids, quote <- singleLotQuotes bid]
         require "the bidding window is closed or the claims cover the supply"
           (now >= schedule.biddingClosesAt || claimed >= singleLotTerms.lotTerms.supply)
         result <- clearAndSettleSingleLotFromEmptyLegsAllocations
-          supportedMechanisms resolutionInfo singleLotTerms sellerFundings keptBids
+          supportedMechanisms resolutionInfo singleLotTerms principalFundings keptBids
           settleBatchContexts
         cancelled <- cancelAllocations (settlementOf resolutionInfo) cancelContexts result.unsettled
         forA_ (map fst keptBids <> map fst ignoredBids) $ \cid ->

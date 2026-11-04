@@ -5,7 +5,7 @@ is trusted to resolve the auction correctly and to spend the allocations
 correctly.
 
 The auction runs over a fixed set of invited bidders, named in `Auction.invited`
-before the seller accepts. Those bidders observe the `Auction`, so each is an
+before the principal accepts. Those bidders observe the `Auction`, so each is an
 informee of `Auction_Resolve` and reads the bid presentation. A bidder reads no
 other bidder's quote, before or after settlement, and the losers read neither the
 winner nor the winning price.
@@ -25,7 +25,7 @@ the other does nothing.
 Visibility is checked two ways. `sees` and `cannotSee` query one party's active
 contract set for one contract id, so most notes in the diagrams below are one
 line of test code. `visibleTo` returns a party's complete visible set;
-`whoSeesWhat` uses it to assert that the seller's set is unchanged across
+`whoSeesWhat` uses it to assert that the principal's set is unchanged across
 bidding.
 
 Both forms read the active contract set, so a `cannotSee` holds for every party
@@ -46,15 +46,15 @@ a dependency on the wallet client and on the V1 API.
 ## Fixture
 
 `setupAs` allocates the six parties, stands up both registries, and builds one
-`OneLotAuctionTerms`: the operator as sole authority, `basicAccount seller` for
-both seller legs, a single Widget as the lot, a `0.0` reserve, the two settlement
+`OneLotAuctionTerms`: the operator as sole authority, `basicAccount principal` for
+both principal legs, a single Widget as the lot, a `0.0` reserve, the two settlement
 factories pinned, and a three-day timeline — `entryClosesAt` at day 1, `biddingClosesAt`
 at day 2, `expiresAt` at day 3. Party names are namespaced per demo, so no two
 demos share a ledger contract.
 
-`openAuction` then opens one auction on those terms. The seller mints and
+`openAuction` then opens one auction on those terms. The principal mints and
 allocates its lot and payment allocations, the operator proposes
-`AuctionProposal`, and the seller accepts it into an `Auction` — which is
+`AuctionProposal`, and the principal accepts it into an `Auction` — which is
 the resolver, so the resolution info is pinned to that contract id. The operator
 then creates one empty `AuctionBid` seat per invited bidder. Nothing has been
 bid yet; the demos take it from there, opening bidding with
@@ -97,7 +97,7 @@ Each demo carries one claim. Dispatched here:
 | [`whoSeesWhat`](#1-whoseeswhat) | A losing bidder cannot see another bidder's bid, nor the settlement that names the winner and price |
 | [`lotGoesToTheHighestPresentedBid`](#2-lotgoestothehighestpresentedbid) | The lot goes to the highest presented bid at that bidder's own quoted price, and every loser's allocation is cancelled in the resolve that awards it |
 | [`settlementRunsThroughTheFactoriesTheTermsName`](#3-settlementrunsthroughthefactoriesthetermsname) | The award reads both settlement factories off `OneLotAuctionTerms`; it is not passed at settlement time |
-| [`aBidderCannotBlockTheSale`](#4-abiddercannotblockthesale) | Neither the winner nor a loser holds a veto at settlement time |
+| [`aBidderCannotBlockTheTrade`](#4-abiddercannotblockthetrade) | Neither the winner nor a loser holds a veto at settlement time |
 | [`settlementRejectsAnImpostorAllocation`](#5-settlementrejectsanimpostorallocation) | An impostor allocation whose view names the admin but which the admin did not sign cannot be settled | 
 
 
@@ -105,47 +105,47 @@ Each demo carries one claim. Dispatched here:
 
 One happy-path auction over three invited bidders, two of whom bid. The demo
 checks each contract against the parties that should and should not read it,
-asserts that the seller's complete visible set is unchanged across bidding, and
-follows the sale through to settlement.
+asserts that the principal's complete visible set is unchanged across bidding, and
+follows the trade through to settlement.
 
 ```mermaid
 sequenceDiagram
-    participant S as Seller
+    participant P as Principal
     participant O as Operator
     participant A as Alice
     participant B as Bob
     participant C as Carol
 
-    Note over S,C: Phase 1 — the lot is locked, then the auction
-    S->>S: allocates the lot and the payment leg, executors = [O]
-    O->>S: AuctionProposal — invited = A, B, C
-    S->>S: Accept — checks both allocations, creates Auction
-    Note over A,C: each observes the Auction; the seller signs it
-    Note over S: reads the Auction and its own two allocations
+    Note over P,C: Phase 1 — the lot is locked, then the auction
+    P->>P: allocates the lot and the payment leg, executors = [O]
+    O->>P: AuctionProposal — invited = A, B, C
+    P->>P: Accept — checks both allocations, creates Auction
+    Note over A,C: each observes the Auction; the principal signs it
+    Note over P: reads the Auction and its own two allocations
 
-    Note over S,C: Phase 2 — bidding, after entryClosesAt
+    Note over P,C: Phase 2 — bidding, after entryClosesAt
     A->>A: RequestAllocations at 100 — the request names the amount to lock
     A->>A: wallet allocates at both registries and accepts, 100 locked
     A->>O: Finalize — the quote and the two allocations
     B->>B: the same at 60
     B->>O: Finalize
-    Note over S: unchanged — no quote, no bidder, no amount
+    Note over P: unchanged — no quote, no bidder, no amount
     Note over A,B: neither can see the other's seal or quote
     Note over O: sees both quotes in full 
     Note over C: her empty seat stays live
 
-    Note over S,C: Phase 3 — resolve, after biddingClosesAt
+    Note over P,C: Phase 3 — resolve, after biddingClosesAt
     O->>O: presents A's bid, B's bid, and C's empty seat
     Note over A,C: each is an informee — each finds its own entry
     O->>O: mints AuctionSettlement — the two batches, off the terms
     Note over A,B: A (winner) sees the AuctionSettlement; B cannot — it names the winner and price
     O-->>B: seal cancelled, 60 back to B
-    Note over S,C: nothing has moved yet
+    Note over P,C: nothing has moved yet
 
-    Note over S,C: Phase 4 — Settlement_Settle
-    O->>S: payment batch — 100 from A to S
-    O->>A: lot batch — the lot from S to A
-    Note over S,C: ✓ both legs, one transaction, two registries
+    Note over P,C: Phase 4 — Settlement_Settle
+    O->>P: payment batch — 100 from A to P
+    O->>A: lot batch — the lot from P to A
+    Note over P,C: ✓ both legs, one transaction, two registries
     Note over B: learns it did not win, and that all three were presented
     Note over B: learns no winner and no quote
 ```
@@ -163,22 +163,22 @@ maximum of the presented quotes, not supplied by the operator.
 
 ```mermaid
 sequenceDiagram
-    participant S as Seller
+    participant P as Principal
     participant O as Operator
     participant A as Alice
     participant B as Bob
 
     A->>O: submits 100
     B->>O: submits 60
-    Note over S,B: bidding is closed, the lot is locked
+    Note over P,B: bidding is closed, the lot is locked
 
     O->>O: Auction_Resolve — presents both bids and Carol's seat
     O->>O: award at 100, the highest presented — first price, not second
     O-->>B: seal cancelled, 60 back, B pays nothing
 
     O->>O: Settlement_Settle
-    O->>S: 100 in, lot out
-    Note over S,B: ✓ both legs together
+    O->>P: 100 in, lot out
+    Note over P,B: ✓ both legs together
 
     O->>O: resolve again
     Note over O: ✗ the Auction archived itself in the first resolve
@@ -194,38 +194,38 @@ contract id in `paymentSettleFactory` and `lotSettleFactory`, and
 `resolveFirstPrice` reads them from there, so the operator names no factory at
 resolve or settle time.
 
-The seller and the bidder must therefore check the factories the terms name. The
+The principal and the bidder must therefore check the factories the terms name. The
 second half of the demo opens an auction whose terms name the impostor: the
-seller signs those terms in `AuctionProposal_Accept`, the bidder signs them in
+principal signs those terms in `AuctionProposal_Accept`, the bidder signs them in
 `OneLotBid_Finalize`, the payment batch settles, the lot batch does nothing, and
 the winner pays for nothing.
 
 
 ```mermaid
 sequenceDiagram
-    participant S as Seller
+    participant P as Principal
     participant O as Operator
     participant A as Alice
 
-    Note over S,A: an impostor factory claims the lot admin
+    Note over P,A: an impostor factory claims the lot admin
     O->>O: create ImpostorSettlementFactory, view.admin = lot admin
     Note over O: ✓ SettlementFactory_PublicFetch returns the lot admin — the view lies
     Note over O: ✗ but it is not the cid the terms name
 
-    Note over S,A: an honest auction on honest terms
+    Note over P,A: an honest auction on honest terms
     O->>O: Auction_Resolve — reads both factories off the terms
-    Note over S,A: ✓ 100 to S, lot to A
+    Note over P,A: ✓ 100 to P, lot to A
 
-    Note over S,A: an auction whose TERMS name the impostor
-    S->>S: signs Auction over those terms
+    Note over P,A: an auction whose TERMS name the impostor
+    P->>P: signs Auction over those terms
     A->>A: signs AuctionBid over those terms
     O->>O: Auction_Resolve
-    Note over S,A: ✗ payment moves, lot does not — A pays for nothing
+    Note over P,A: ✗ payment moves, lot does not — A pays for nothing
 ```
 
 
 
-## 4. `aBidderCannotBlockTheSale`
+## 4. `aBidderCannotBlockTheTrade`
 
 Alice bids 100 and wins, Bob bids 60 and loses. Each tries the same five ways out
 of its own seat and allocation once bidding has closed, and Alice tries five more
@@ -236,7 +236,7 @@ in the window between `Auction_Resolve` and `Settlement_Settle`, where the
 any party may exercise it. It is bounded by `requireExpired` against
 `terms.expiresAt`, and `Settlement_Settle` is bounded by `requireOpen` against
 the same instant. The two windows do not overlap, so a bidder can only expire its
-seat once the sale can no longer settle.
+seat once the trade can no longer settle.
 
 ```mermaid
 sequenceDiagram
@@ -274,7 +274,7 @@ sequenceDiagram
     Note over A: ✗ expiresAt has not passed
 
     O->>O: Settlement_Settle
-    Note over O,A: ✓ 100 to the seller, the lot to A
+    Note over O,A: ✓ 100 to the principal, the lot to A
 ```
 
 
@@ -290,7 +290,7 @@ allocation the admin did not sign, even one whose view names the admin correctly
 ```mermaid
 sequenceDiagram
     participant O as Operator
-    participant S as Seller
+    participant P as Principal
     participant A as Alice
 
     A->>A: ImpostorAllocation — signed by Alice, view.admin = payment admin

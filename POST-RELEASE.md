@@ -54,20 +54,20 @@ the future.
 
 ## New auction formats
 
-The released interfaces sell **one lot from one seller**: `OneLotAuctionTerms`
-names a single `lot : Lot` and a single pair of seller accounts, and a bid is a
+The released interfaces sell **one lot from one principal**: `OneLotAuctionTerms`
+names a single `lot : Lot` and a single pair of principal accounts, and a bid is a
 set of alternative quote schedules over that one lot. Formats that keep that
 shape — a second-price payment rule, a Dutch clock, multiple units of that
 lot's quantity — are new templates implementing `OneLotBid` and `Settlement`,
 deployed beside the released DARs. cap-auctions extends to them without
 changing.
 
-**Several lots and several sellers** carries on the released interfaces only as
+**Several lots and several principals** carries on the released interfaces only as
 bids that are won independently — one `OneLotBid` contract per lot, all naming
 the same `ResolutionInfo`. Anything that binds the lots together needs a new bid
 interface. Nothing ties a resolution to a single set of terms, so each bid
-carries its own `lot`, `reserve`, seller accounts and settlement factories, and the
-mechanism groups the presented bids by lot. A shared `saleId` settles them
+carries its own `lot`, `reserve`, principal accounts and settlement factories, and the
+mechanism groups the presented bids by lot. A shared `tradeId` settles them
 together. This is a deployment pattern on the released interfaces, not an
 addition to them; `cap-auctions/RATIONALE.md` sets out how it works and what it
 leaves out.

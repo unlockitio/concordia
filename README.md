@@ -75,7 +75,7 @@ does not know at compile time. Everything else is stored types and helpers.
   `cap-governance-utils` with the modules `Targets` (taking snapshots of
   targets, and checking them at execution under a `DriftPolicy` the action
   supplies), `Ballots`, `VotingRights` and `Count` (quorums and tallies).
-- **`cap-auctions`** — the `Bid`, `SingleLotQuotesBid`, `SaleProposal` and
+- **`cap-auctions`** — the `Bid`, `SingleLotQuotesBid`, `TradeProposal` and
   `Settlement` interfaces, the shared types, and `cap-auctions-utils` with the
   modules `Funding`, `Clearing` and `SingleLot`. Settlement composes with the
   Token Standard V2 rather than restating it.
@@ -97,7 +97,7 @@ concordia/
 │   └── tests/{unit,ledger}
 ├── cap-auctions/                      # Tier 2: auctions (Token Standard V2)
 │   ├── types/                         #   AuctionTerms, LotTerms, Quote, Funding
-│   ├── interfaces/{bid,sale-proposal,single-lot-quotes,settlement}
+│   ├── interfaces/{bid,trade-proposal,single-lot-quotes,settlement}
 │   └── utils/                         #   Funding, Clearing, SingleLot
 ├── docs/governance/
 │   ├── intro.md                       # governance flows in Canton and the cap-governance architecture
@@ -107,8 +107,9 @@ concordia/
 │   │                                  #   impl/{ans,config,rights,governance,action}, demo
 │   └── private-majority-vote/         # M2: private ballots, {impl,demo}
 ├── examples/auctions/
-│   ├── single-lot/                    # single-lot auction on cap-auctions, {impl}
-│   └── sealed-bid-first-price/        # M2: DEMOS.md only; the code was removed
+│   ├── sealed-single-lot/             # sealed-bid single-lot auction on cap-auctions, {impl}
+│   │                                  #   demo/DEMOS.md: M2 sealed-bid-first-price demos
+│   └── dutch-single-lot/              # Dutch single-lot auction on cap-auctions, {impl}
 ├── examples/lib/                      # vendored DARs only the examples need
 ├── lib/                               # vendored Token Standard DARs (prebuilt)
 ├── scripts/sandbox-test.sh            # sandbox integration run
@@ -124,8 +125,7 @@ concordia/
 ```
 
 [`docs/governance/intro.md`](docs/governance/intro.md) and
-[`docs/governance/rationale.md`](docs/governance/rationale.md) carry the
-tier-2 governance design.
+[`docs/governance/rationale.md`](docs/governance/rationale.md) carry the governance design.
 
 ## Building
 

@@ -47,7 +47,7 @@ import Cap.Auctions.Clearing (Award (..), awardAmountPerQuote)
 import Cap.Auctions.Funding
   ( AllocationsCheck, buildBatchesByAccount, fetchAndIgnoreInvalidBids
   , accountSignedBid, bidForResolution, distinctAccountsAmongBids, emptyTransferLegAllocations
-  , noSellerAccountsInBid, validFundingTerms
+  , noPrincipalAccountsInBid, validFundingTerms
   , SettleBatchContext, lastIterationFinalizer, settleBatches, settlementOf, unsettledAllocations
   )
 
@@ -151,17 +151,17 @@ validSingleLotBid resolutionInfo terms schedule singleLotTerms bid fetchedFundin
 
 -- | Fetches the bids and ignores every bid that fails a check: the checks of
 -- validSingleLotBid, and the checks that the bid uses none of the
--- seller's accounts and shares no account with another bid. Use it for bids
+-- principal's accounts and shares no account with another bid. Use it for bids
 -- whose template may not have run the checks at submission.
 fetchAndIgnoreInvalidSingleLotBids
   : (HasFetch t, HasSignatory t, HasToInterface t Bid, HasSingleLotQuotes t)
   => ResolutionInfo -> AuctionTerms -> AuctionSchedule -> SingleLotAuctionTerms -> Map Party Funding
   -> [ContractId t] -> Update (Contracts t, Ignored t)
-fetchAndIgnoreInvalidSingleLotBids resolutionInfo terms schedule singleLotTerms sellerFundings =
+fetchAndIgnoreInvalidSingleLotBids resolutionInfo terms schedule singleLotTerms principalFundings =
   fetchAndIgnoreInvalidBids
     [ bidForResolution resolutionInfo
     , accountSignedBid
-    , noSellerAccountsInBid sellerFundings
+    , noPrincipalAccountsInBid principalFundings
     , validSingleLotQuotes singleLotTerms
     ]
     [ validFundingTerms resolutionInfo terms schedule
@@ -202,7 +202,7 @@ nativePricingMechanisms : [PricingMechanism]
 nativePricingMechanisms = [payAsBidMechanism, uniformPriceMechanism, vickreyMechanism]
 
 -- | To get the mechanism that a ResolutionInfo names, among the ones a
--- resolver supports, so that the rule that runs is the one the seller and the
+-- resolver supports, so that the rule that runs is the one the principal and the
 -- bidders agreed to.
 pricingMechanismOf : [PricingMechanism] -> ResolutionInfo -> Optional PricingMechanism
 pricingMechanismOf supportedMechanisms resolutionInfo =
@@ -259,13 +259,13 @@ awardsOf terms quotesPerBid =
 -- | Clears the lot: awards amounts to the quotes, prices the awards with the
 -- pricing rule, and returns the transfer legs, each with the admin of its
 -- instrument. Bids are identified by their position in bids, so ties at the
--- marginal price go to the bid that comes first. Aborts if the seller or a
+-- marginal price go to the bid that comes first. Aborts if the principal or a
 -- winner has no funding for an instrument it trades.
 clearSingleLot 
   : (HasToInterface t Bid, HasSingleLotQuotes t)
   => PricingRule Int -> SingleLotAuctionTerms -> Map Party Funding -> Contracts t
   -> Update [(Party, Alloc.TransferLeg)]
-clearSingleLot pricingRule terms sellerFundings bids = do
+clearSingleLot pricingRule terms principalFundings bids = do
   let positionedBids = zip [0 .. length bids - 1] (map snd bids)
       quotesPerBid = [(position, singleLotQuotes bid) | (position, bid) <- positionedBids]
       awards = awardsOf terms quotesPerBid
@@ -277,20 +277,20 @@ clearSingleLot pricingRule terms sellerFundings bids = do
       Some lotAmount -> do
         let bv = view (toInterface @Bid bid)
             paymentAmount = fromOptional 0.0 (Map.lookup position paymentAmounts)
-        singleLotTradeLegs terms sellerFundings (show position) bv.fundings lotAmount paymentAmount
+        singleLotTradeLegs terms principalFundings (show position) bv.fundings lotAmount paymentAmount
   pure (concat transferLegsPerBid)
 
 singleLotTradeLegs
   : SingleLotAuctionTerms -> Map Party Funding -> Text -> Map Party Funding -> Decimal -> Decimal
   -> Update [(Party, Alloc.TransferLeg)]
-singleLotTradeLegs terms sellerFundings legId bidderFundings lotAmount paymentAmount = do
-  sellerPaymentF <- fundingUnder "the seller" sellerFundings terms.payment
-  sellerLotF <- fundingUnder "the seller" sellerFundings terms.lotInstrumentId
+singleLotTradeLegs terms principalFundings legId bidderFundings lotAmount paymentAmount = do
+  principalPaymentF <- fundingUnder "the principal" principalFundings terms.payment
+  principalLotF <- fundingUnder "the principal" principalFundings terms.lotInstrumentId
   bidderPaymentF <- fundingUnder ("bid " <> legId) bidderFundings terms.payment
   bidderLotF <- fundingUnder ("bid " <> legId) bidderFundings terms.lotInstrumentId
   let (paymentSenderF, paymentReceiverF, lotSenderF, lotReceiverF) = case terms.direction of
-        Forward -> (bidderPaymentF, sellerPaymentF, sellerLotF, bidderLotF)
-        Reverse -> (sellerPaymentF, bidderPaymentF, bidderLotF, sellerLotF)
+        Forward -> (bidderPaymentF, principalPaymentF, principalLotF, bidderLotF)
+        Reverse -> (principalPaymentF, bidderPaymentF, bidderLotF, principalLotF)
       paymentLeg =
         ( terms.payment.admin
         , Alloc.TransferLeg with
@@ -325,7 +325,7 @@ data ClearAndSettleResult = ClearAndSettleResult
   with
     settled : [Alloc.SettlementFactory_SettleBatchResult]
     unsettled : [ContractId Alloc.Allocation]
-    -- ^ The allocations of the seller and the bids that no batch settled. Cancel them with cancelAllocations.
+    -- ^ The allocations of the principal and the bids that no batch settled. Cancel them with cancelAllocations.
   deriving (Eq, Show)
 
 -- | Clears the lot and settles it in a single transaction, from allocations
@@ -335,27 +335,27 @@ data ClearAndSettleResult = ClearAndSettleResult
 -- fetchAndIgnoreInvalidBids or its own completeness check, and passes only
 -- those. The bids must be distinct, each must have passed
 -- validSingleLotBid or equivalent checks, no two may use the same
--- account under one admin, and none may use the seller's account. If one of
+-- account under one admin, and none may use the principal's account. If one of
 -- these does not hold, the settlement aborts.
 --
 -- Steps
 --
 -- 1. pricingMechanismOf: finds the mechanism the resolution info names among the supported ones, and aborts if there is none.
 -- 2. clearSingleLot: clears the bids, which keep their input order so positions and tie-breaks stay the same.
--- 3. buildBatchesByAccount: groups the legs into batches. It's given the seller's fundings plus the bids' fundings.
+-- 3. buildBatchesByAccount: groups the legs into batches. It's given the principal's fundings plus the bids' fundings.
 -- 4. settleBatches: settles every batch with lastIterationFinalizer and the settle batch context of its admin.
--- 5. unsettledAllocations: returns the allocations of the seller and the bids that no batch settled, for the caller to cancel.
+-- 5. unsettledAllocations: returns the allocations of the principal and the bids that no batch settled, for the caller to cancel.
 clearAndSettleSingleLotFromEmptyLegsAllocations
   : (HasToInterface t Bid, HasSingleLotQuotes t)
   => [PricingMechanism] -> ResolutionInfo -> SingleLotAuctionTerms -> Map Party Funding
   -> Contracts t
   -> Map Party SettleBatchContext
   -> Update ClearAndSettleResult
-clearAndSettleSingleLotFromEmptyLegsAllocations supportedMechanisms resolutionInfo singleLotTerms sellerFundings bids settleBatchContexts = do
+clearAndSettleSingleLotFromEmptyLegsAllocations supportedMechanisms resolutionInfo singleLotTerms principalFundings bids settleBatchContexts = do
   mechanism <- orAbort ("the mechanism " <> resolutionInfo.mechanism <> " is not supported")
     (pricingMechanismOf supportedMechanisms resolutionInfo)
-  allTransferLegs <- clearSingleLot mechanism.pricingRule singleLotTerms sellerFundings bids
-  let allFundings = sellerFundings :: [(view (toInterface @Bid bid)).fundings | (_, bid) <- bids]
+  allTransferLegs <- clearSingleLot mechanism.pricingRule singleLotTerms principalFundings bids
+  let allFundings = principalFundings :: [(view (toInterface @Bid bid)).fundings | (_, bid) <- bids]
       batches = buildBatchesByAccount allFundings allTransferLegs
       settlement = settlementOf resolutionInfo
   settled <- settleBatches lastIterationFinalizer settlement settleBatchContexts batches

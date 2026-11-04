@@ -24,7 +24,6 @@ data BidProposalView = BidProposalView
   with
     authorities : Set Party
     terms : AuctionTerms
-    invited : Optional [Party]
     availableActions : Map BidProposalAction [[Party]]
     meta : Metadata
   deriving (Eq, Show)
@@ -87,6 +86,8 @@ interface BidProposal where
       extraArgs : ExtraArgs
     controller actors
     do
+      require "the actors are entitled to accept"
+        (entitled (view this).availableActions BPA_Accept actors)
       require "the resolution is run by the proposal's authorities" 
         (resolutionInfo.resolver.authorities == (view this).authorities) -- this can be removed
       bidProposal_acceptImpl this self (BidProposal_Accept with ..)

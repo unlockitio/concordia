@@ -36,7 +36,6 @@ template DutchBidProposal
       view = BidProposalView with
         authorities
         terms
-        invited = Some invited
         availableActions = Map.fromList
           [ (BPA_Accept, [[bidder] | bidder <- invited])
           , (BPA_Withdraw, [Set.toList authorities])

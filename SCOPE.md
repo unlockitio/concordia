@@ -86,9 +86,9 @@ skeleton. A bid names the payment its bidder funded before casting — a Token
 Standard `Allocation`, the standard's own artifact — and records what it says,
 so a pricing rule reads the funding off the bid. One close bars casting and
 withdrawing alike, so the set of bids is fixed the moment bidding ends and each
-one is irrevocable from then. The seller locks the lot through a Token Standard
-allocation when accepting the sale, checked against the terms the same way the
-bids' allocations are, so the lot is committed before any bid is placed. A sale
+one is irrevocable from then. The principal locks the lot through a Token Standard
+allocation when accepting the trade, checked against the terms the same way the
+bids' allocations are, so the lot is committed before any bid is placed. A trade
 publishes its executors before bidding
 opens, so a bidder reads who can move their funds before committing any; a
 format that names none of the parties an award moves assets to or from makes

@@ -17,7 +17,7 @@ data-dependencies:
 - ../../../../cap-core/utils/.daml/dist/cap-core-utils-0.1.0.dar
 - ../../../../cap-auctions/types/.daml/dist/cap-auctions-types-0.1.0.dar
 - ../../../../cap-auctions/interfaces/bid/.daml/dist/cap-auctions-bid-0.1.0.dar
-- ../../../../cap-auctions/interfaces/sale-proposal/.daml/dist/cap-auctions-sale-proposal-0.1.0.dar
+- ../../../../cap-auctions/interfaces/trade-proposal/.daml/dist/cap-auctions-trade-proposal-0.1.0.dar
 - ../../../../cap-auctions/interfaces/single-lot-quotes/.daml/dist/cap-auctions-single-lot-quotes-0.1.0.dar
 - ../../../../cap-auctions/utils/.daml/dist/cap-auctions-utils-0.1.0.dar
 build-options:

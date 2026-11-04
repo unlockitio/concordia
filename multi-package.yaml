@@ -14,7 +14,7 @@ packages:
 - ./cap-auctions/interfaces/settlement
 - ./cap-auctions/utils
 - ./cap-auctions/types
-- ./cap-auctions/interfaces/sale-proposal
+- ./cap-auctions/interfaces/trade-proposal
 - ./cap-auctions/interfaces/single-lot-quotes
 - ./examples/governance/babydso/impl/ans
 - ./examples/governance/babydso/impl/config
