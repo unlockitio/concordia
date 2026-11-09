@@ -23,7 +23,7 @@ module Cap.Auctions.Clock
   ) where
 
 import qualified DA.TextMap as TextMap
-import DA.Time (RelTime, convertRelTimeToMicroseconds, subTime)
+import DA.Time (RelTime, addRelTime, convertRelTimeToMicroseconds, microseconds, subTime)
 
 import Splice.Api.Token.MetadataV1 (Metadata (..))
 
@@ -92,8 +92,8 @@ validDutchClock direction reservePrice clock =
 
 dutchClockReachesReserveBy : Direction -> Decimal -> PriceClock -> Time -> Time -> Unmet
 dutchClockReachesReserveBy direction reservePrice clock opensAt closesAt =
-  [ "the clock does not reach the reserve price by " <> show closesAt
-  | dutchClockPrice direction reservePrice clock opensAt closesAt /= reservePrice
+  [ "the clock does not reach the reserve price before " <> show closesAt
+  | dutchClockPrice direction reservePrice clock opensAt (closesAt `addRelTime` microseconds (-1)) /= reservePrice
   ]
 
 

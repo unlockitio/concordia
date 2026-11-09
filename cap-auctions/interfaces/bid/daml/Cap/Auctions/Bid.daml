@@ -9,7 +9,7 @@ import Splice.Api.Token.MetadataV1
 import Splice.Api.Token.AllocationV2 (Allocation)
 import Splice.Util (require)
 import Cap.Core.Types (ResolutionInfo)
-import Cap.Core.Utils (entitled, requireExpired, requireOpen)
+import Cap.Core.Utils (entitled, requireBefore, requireExpired, requireOpen)
 
 import Cap.Auctions.Types (AuctionSchedule, AuctionTerms, Funding)
 
@@ -20,11 +20,9 @@ data BidProposalAction
       id : Text
   deriving (Eq, Ord, Show)
 
-data BidProposalView = BidProposalView
+data BidProposal_AcceptResult = BidProposal_AcceptResult
   with
-    authorities : Set Party
-    terms : AuctionTerms
-    availableActions : Map BidProposalAction [[Party]]
+    bid : ContractId Bid
     meta : Metadata
   deriving (Eq, Show)
 
@@ -32,6 +30,49 @@ data BidProposal_WithdrawResult = BidProposal_WithdrawResult
   with
     meta : Metadata
   deriving (Eq, Show)
+
+
+data BidProposalView = BidProposalView
+  with
+    authorities : Set Party
+    resolutionInfo : Optional ResolutionInfo
+    terms : AuctionTerms
+    availableActions : Map BidProposalAction [[Party]]
+    meta : Metadata
+  deriving (Eq, Show)
+
+
+interface BidProposal where
+  viewtype BidProposalView
+
+  bidProposal_acceptImpl
+    : ContractId BidProposal -> BidProposal_Accept -> Update BidProposal_AcceptResult
+
+  bidProposal_withdrawImpl
+    : ContractId BidProposal -> BidProposal_Withdraw -> Update BidProposal_WithdrawResult
+
+  nonconsuming choice BidProposal_Accept : BidProposal_AcceptResult
+    with
+      actors : [Party]
+      resolutionInfo : ResolutionInfo
+      extraArgs : ExtraArgs
+    controller actors
+    do
+      require "the actors are entitled to accept"
+        (entitled (view this).availableActions BPA_Accept actors)
+      bidProposal_acceptImpl this self (BidProposal_Accept with ..)
+
+  choice BidProposal_Withdraw : BidProposal_WithdrawResult
+    with
+      actors : [Party]
+      extraArgs : ExtraArgs
+    controller actors
+    do
+      require "the actors are entitled to withdraw"
+        (entitled (view this).availableActions BPA_Withdraw actors)
+      bidProposal_withdrawImpl this self (BidProposal_Withdraw with ..)
+
+
 
 data BidAction
   = BA_Fund
@@ -42,14 +83,9 @@ data BidAction
       id : Text
   deriving (Eq, Ord, Show)
 
-data BidView = BidView
+data Bid_FundResult = Bid_FundResult
   with
-    resolutionInfo : ResolutionInfo
-    terms : AuctionTerms
-    schedule : AuctionSchedule
-    fundings : Map Party Funding
-    -- ^ allocation per admin, not instrumentId 
-    availableActions : Map BidAction [[Party]]
+    bid : ContractId Bid
     meta : Metadata
   deriving (Eq, Show)
 
@@ -70,42 +106,22 @@ data Bid_ExpireResult = Bid_ExpireResult
     meta : Metadata
   deriving (Eq, Show)
 
-interface BidProposal where
-  viewtype BidProposalView
+data BidView = BidView
+  with
+    resolutionInfo : ResolutionInfo
+    terms : AuctionTerms
+    schedule : AuctionSchedule
+    fundings : Map Party Funding
+    -- ^ allocation per admin, not instrumentId 
+    availableActions : Map BidAction [[Party]]
+    meta : Metadata
+  deriving (Eq, Show)
 
-  bidProposal_acceptImpl
-    : ContractId BidProposal -> BidProposal_Accept -> Update (ContractId Bid)
-
-  bidProposal_withdrawImpl
-    : ContractId BidProposal -> BidProposal_Withdraw -> Update BidProposal_WithdrawResult
-
-  nonconsuming choice BidProposal_Accept : ContractId Bid
-    with
-      actors : [Party]
-      resolutionInfo : ResolutionInfo
-      extraArgs : ExtraArgs
-    controller actors
-    do
-      require "the actors are entitled to accept"
-        (entitled (view this).availableActions BPA_Accept actors)
-      require "the resolution is run by the proposal's authorities" 
-        (resolutionInfo.resolver.authorities == (view this).authorities) -- this can be removed
-      bidProposal_acceptImpl this self (BidProposal_Accept with ..)
-
-  choice BidProposal_Withdraw : BidProposal_WithdrawResult
-    with
-      actors : [Party]
-      extraArgs : ExtraArgs
-    controller actors
-    do
-      require "the actors are entitled to withdraw"
-        (entitled (view this).availableActions BPA_Withdraw actors)
-      bidProposal_withdrawImpl this self (BidProposal_Withdraw with ..)
 
 interface Bid where
   viewtype BidView
 
-  bid_fundImpl : ContractId Bid -> Bid_Fund -> Update (ContractId Bid)
+  bid_fundImpl : ContractId Bid -> Bid_Fund -> Update Bid_FundResult
 
   bid_withdrawImpl : ContractId Bid -> Bid_Withdraw -> Update Bid_WithdrawResult
 
@@ -114,7 +130,7 @@ interface Bid where
   bid_expireImpl : ContractId Bid -> Bid_Expire -> Update Bid_ExpireResult
 
 
-  choice Bid_Fund : ContractId Bid -- needs to check that it is this bidders allocation 
+  choice Bid_Fund : Bid_FundResult 
     with
       actors : [Party]
       fundings : Map Party Funding
@@ -135,8 +151,11 @@ interface Bid where
       extraArgs : ExtraArgs
     controller actors
     do
+      let bv = view this
       require "the actors are entitled to withdraw"
-        (entitled (view this).availableActions BA_Withdraw actors)
+        (entitled bv.availableActions BA_Withdraw actors)
+      now <- getTime
+      requireBefore "bidding has not closed" now bv.schedule.biddingClosesAt
       bid_withdrawImpl this self (Bid_Withdraw with ..)
 
   nonconsuming choice Bid_Close : Bid_CloseResult

@@ -16,6 +16,8 @@ packages:
 - ./cap-auctions/types
 - ./cap-auctions/interfaces/trade-proposal
 - ./cap-auctions/interfaces/single-lot-quotes
+- ./cap-auctions/tests/unit
+- ./cap-auctions/tests/ledger
 - ./examples/governance/babydso/impl/ans
 - ./examples/governance/babydso/impl/config
 - ./examples/governance/babydso/impl/rights

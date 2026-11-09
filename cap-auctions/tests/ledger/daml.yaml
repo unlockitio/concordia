@@ -1,0 +1,39 @@
+# SPDX-License-Identifier: Apache-2.0
+
+sdk-version: 3.5.11
+name: cap-auctions-tests-ledger
+version: 0.1.0
+source: daml
+dependencies:
+- daml-prim
+- daml-stdlib
+- daml-script
+data-dependencies:
+- ../../../lib/splice-api-token-metadata-v1-1.0.0.dar
+- ../../../lib/splice-api-token-holding-v2-1.0.0.dar
+- ../../../lib/splice-api-token-allocation-v2-1.0.0.dar
+- ../../../lib/splice-api-token-allocation-instruction-v2-1.0.0.dar
+- ../../../lib/splice-api-token-allocation-request-v2-1.0.0.dar
+- ../../../lib/splice-token-standard-utils-2.0.1.dar
+- ../../../lib/splice-util-0.1.9.dar
+- ../lib/splice-api-token-transfer-instruction-v2-1.0.0.dar
+- ../lib/splice-api-token-holding-v1-1.0.0.dar
+- ../lib/splice-api-token-allocation-v1-1.0.0.dar
+- ../lib/splice-api-token-allocation-instruction-v1-1.0.0.dar
+- ../lib/splice-api-token-allocation-request-v1-1.0.0.dar
+- ../lib/splice-api-token-transfer-instruction-v1-1.0.0.dar
+- ../lib/splice-api-token-transfer-events-v2-1.0.0.dar
+- ../lib/splice-test-token-v1-1.0.2.dar
+- ../lib/splice-test-token-v2-1.0.2.dar
+- ../lib/splice-amulet-0.1.25.dar
+- ../lib/splice-util-token-standard-wallet-1.1.2.dar
+- ../../../cap-core/types/.daml/dist/cap-core-types-0.1.0.dar
+- ../../../cap-core/utils/.daml/dist/cap-core-utils-0.1.0.dar
+- ../../types/.daml/dist/cap-auctions-types-0.1.0.dar
+- ../../interfaces/bid/.daml/dist/cap-auctions-bid-0.1.0.dar
+- ../../interfaces/single-lot-quotes/.daml/dist/cap-auctions-single-lot-quotes-0.1.0.dar
+- ../../utils/.daml/dist/cap-auctions-utils-0.1.0.dar
+build-options:
+  - --target=2.3
+  - --explicit-serializable=yes
+  - -Wno-template-interface-depends-on-daml-script

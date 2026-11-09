@@ -1,0 +1,195 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Auctions.Tests.Harness where
+
+import DA.Map (Map)
+
+import Splice.Api.Token.MetadataV1 (ExtraArgs, emptyMetadata)
+import qualified Splice.Api.Token.AllocationV2 as Alloc
+
+import Cap.Core.Types (ResolutionInfo)
+import Cap.Core.Utils (Contracts, Ignored, orAbort)
+import Cap.Auctions.Types (AuctionSchedule, AuctionTerms (..), Funding, HasSingleLotQuotes (..), Quote)
+import Cap.Auctions.Bid
+import Cap.Auctions.SingleLotQuotesBid
+import Cap.Auctions.Funding
+  ( Batch, SettleBatchContext, cancelAllocations, fetchAndIgnoreConflictingBids, fetchFundingAllocations
+  , lastIterationFinalizer, settleBatches
+  )
+import Cap.Auctions.SingleLot
+  ( ClearAndSettleResult, SingleLotAuctionTerms, clearAndSettleSingleLotFromEmptyLegsAllocations
+  , clearSingleLot, expectSingleLot, fetchAndIgnoreInvalidSingleLotBids, nativePricingMechanisms, validSingleLotBid
+  )
+
+
+-- Bids
+-------
+
+-- A bid with single lot quotes. It runs no checks of its own, so tests can put invalid bids on the ledger.
+template TestBid
+  with
+    signatories : [Party]
+    observers : [Party]
+    resolutionInfo : ResolutionInfo
+    terms : AuctionTerms
+    schedule : AuctionSchedule
+    fundings : Map Party Funding
+    quotes : [Quote]
+    actions : Map BidAction [[Party]]
+  where
+    signatory signatories
+    observer observers
+
+    interface instance Bid for TestBid where
+      view = BidView with
+        resolutionInfo
+        terms
+        schedule
+        fundings
+        availableActions = actions
+        meta = emptyMetadata
+
+      bid_fundImpl _ arg = do
+        cid <- create this with fundings = arg.fundings
+        pure Bid_FundResult with bid = toInterfaceContractId cid; meta = emptyMetadata
+
+      bid_withdrawImpl self _ = do
+        archive (fromInterfaceContractId @TestBid self)
+        pure Bid_WithdrawResult with bid = None; withdrawn = []; meta = emptyMetadata
+
+      bid_closeImpl self _ = do
+        archive (fromInterfaceContractId @TestBid self)
+        pure Bid_CloseResult with meta = emptyMetadata
+
+      bid_expireImpl self _ = do
+        archive (fromInterfaceContractId @TestBid self)
+        pure Bid_ExpireResult with meta = emptyMetadata
+
+    interface instance SingleLotQuotesBid for TestBid where
+      view = SingleLotQuotesView with quotes
+
+      singleLotQuotesBid_quoteImpl _ arg = do
+        toInterfaceContractId <$> create this with quotes = arg.quotes
+
+instance HasSingleLotQuotes TestBid where
+  singleLotQuotes bid = bid.quotes
+
+-- Probe
+--------
+
+-- Runs single library functions in a choice, so that tests can call them on ledger contracts.
+template Probe
+  with
+    owners : [Party]
+  where
+    signatory owners
+
+    nonconsuming choice Probe_ShowAllocationId : Text
+      with
+        allocationCid : ContractId Alloc.Allocation
+      controller owners
+      do pure (show allocationCid)
+
+    nonconsuming choice Probe_ExpectSingleLot : SingleLotAuctionTerms
+      with
+        terms : AuctionTerms
+      controller owners
+      do expectSingleLot terms
+
+    nonconsuming choice Probe_ValidSingleLotBid : [Text]
+      with
+        resolutionInfo : ResolutionInfo
+        settlement : Alloc.SettlementInfo
+        terms : AuctionTerms
+        schedule : AuctionSchedule
+        bidCid : ContractId TestBid
+      controller owners
+      do
+        bid <- fetch bidCid
+        singleLotTerms <- expectSingleLot terms
+        fetchedFundings <- fetchFundingAllocations bid.fundings
+        pure (validSingleLotBid resolutionInfo settlement terms schedule singleLotTerms bid fetchedFundings)
+
+    nonconsuming choice Probe_FetchAndIgnoreConflictingBids : (Contracts TestBid, Ignored TestBid)
+      with
+        resolutionInfo : ResolutionInfo
+        principalFundings : Map Party Funding
+        bidCids : [ContractId TestBid]
+      controller owners
+      do fetchAndIgnoreConflictingBids resolutionInfo principalFundings bidCids
+
+    nonconsuming choice Probe_FetchAndIgnoreInvalidSingleLotBids : (Contracts TestBid, Ignored TestBid)
+      with
+        resolutionInfo : ResolutionInfo
+        settlement : Alloc.SettlementInfo
+        terms : AuctionTerms
+        schedule : AuctionSchedule
+        principalFundings : Map Party Funding
+        bidCids : [ContractId TestBid]
+      controller owners
+      do
+        singleLotTerms <- expectSingleLot terms
+        fetchAndIgnoreInvalidSingleLotBids resolutionInfo settlement terms schedule singleLotTerms principalFundings bidCids
+
+    nonconsuming choice Probe_FetchAndIgnoreInvalidSingleLotQuotesBids : ([ContractId SingleLotQuotesBid], Ignored SingleLotQuotesBid)
+      with
+        resolutionInfo : ResolutionInfo
+        settlement : Alloc.SettlementInfo
+        terms : AuctionTerms
+        schedule : AuctionSchedule
+        principalFundings : Map Party Funding
+        bidCids : [ContractId SingleLotQuotesBid]
+      controller owners
+      do
+        singleLotTerms <- expectSingleLot terms
+        (kept, ignored) <- fetchAndIgnoreInvalidSingleLotBids resolutionInfo settlement terms schedule singleLotTerms principalFundings bidCids
+        pure (map fst kept, ignored)
+
+    nonconsuming choice Probe_ClearSingleLot : [(Party, Alloc.TransferLeg)]
+      with
+        mechanism : Text
+        terms : AuctionTerms
+        principalFundings : Map Party Funding
+        bidCids : [ContractId TestBid]
+      controller owners
+      do
+        pricingMechanism <- orAbort ("no native mechanism " <> mechanism)
+          (find (\native -> native.name == mechanism) nativePricingMechanisms)
+        singleLotTerms <- expectSingleLot terms
+        bids <- forA bidCids $ \cid -> do
+          bid <- fetch cid
+          pure (cid, bid)
+        clearSingleLot pricingMechanism.pricingRule singleLotTerms principalFundings bids
+
+    nonconsuming choice Probe_ClearAndSettle : ClearAndSettleResult
+      with
+        resolutionInfo : ResolutionInfo
+        settlement : Alloc.SettlementInfo
+        terms : AuctionTerms
+        principalFundings : Map Party Funding
+        bidCids : [ContractId TestBid]
+        settleBatchContexts : Map Party SettleBatchContext
+      controller owners
+      do
+        singleLotTerms <- expectSingleLot terms
+        bids <- forA bidCids $ \cid -> do
+          bid <- fetch cid
+          pure (cid, bid)
+        clearAndSettleSingleLotFromEmptyLegsAllocations nativePricingMechanisms resolutionInfo settlement
+          singleLotTerms principalFundings bids settleBatchContexts
+
+    nonconsuming choice Probe_SettleBatches : [Alloc.SettlementFactory_SettleBatchResult]
+      with
+        settlement : Alloc.SettlementInfo
+        settleBatchContexts : Map Party SettleBatchContext
+        batches : [Batch]
+      controller owners
+      do settleBatches lastIterationFinalizer settlement settleBatchContexts batches
+
+    nonconsuming choice Probe_CancelAllocations : [Alloc.AllocationResult]
+      with
+        settlement : Alloc.SettlementInfo
+        cancelContexts : Map (ContractId Alloc.Allocation) ExtraArgs
+        allocationCids : [ContractId Alloc.Allocation]
+      controller owners
+      do cancelAllocations settlement cancelContexts allocationCids

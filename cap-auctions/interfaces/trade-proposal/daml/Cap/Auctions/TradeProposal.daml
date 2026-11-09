@@ -7,8 +7,9 @@ import DA.Map (Map)
 import Splice.Api.Token.MetadataV1
 import Splice.Util (require)
 import Cap.Core.Types (ResolutionInfo)
-import Cap.Core.Utils (entitled, requireBefore, requireExpired)
+import Cap.Core.Utils (entitled, requireBefore, requireExpired, requireMet)
 import Cap.Auctions.Types (AuctionSchedule, AuctionTerms, Funding)
+import Cap.Auctions.Terms (validAuctionSchedule, validAuctionTerms)
 
 data TradeProposalAction
   = SPA_Accept
@@ -73,6 +74,7 @@ interface TradeProposal where
         (entitled v.availableActions SPA_Accept actors)
       now <- getTime
       requireBefore "the acceptance window is open" now v.acceptBefore
+      requireMet (validAuctionTerms v.terms <> validAuctionSchedule v.schedule)
       tradeProposal_acceptImpl this self (TradeProposal_Accept with ..)
 
   choice TradeProposal_Reject : TradeProposal_RejectResult

@@ -39,7 +39,7 @@ import Splice.Util (HasCheckedFetch, require)
 
 import Cap.Core.Types (AuthenticKey, Snapshot (..), TargetReader)
 import Cap.Core.Utils (IsAnyValue (..), fetchCheckedAny, orAbort)
-import Cap.Governance.ActionV1 (Action, ActionView (..), action_readStateImpl)
+import Cap.Governance.ActionV1 (Action, action_readStateImpl)
 
 
 ------------------  ACTION  ------------------

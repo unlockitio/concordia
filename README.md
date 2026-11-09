@@ -110,7 +110,6 @@ concordia/
 │   ├── sealed-single-lot/             # sealed-bid single-lot auction on cap-auctions, {impl}
 │   │                                  #   demo/DEMOS.md: M2 sealed-bid-first-price demos
 │   └── dutch-single-lot/              # Dutch single-lot auction on cap-auctions, {impl}
-├── examples/lib/                      # vendored DARs only the examples need
 ├── lib/                               # vendored Token Standard DARs (prebuilt)
 ├── scripts/sandbox-test.sh            # sandbox integration run
 ├── .github/workflows/ci.yml           # build and test on push and pull request to dev

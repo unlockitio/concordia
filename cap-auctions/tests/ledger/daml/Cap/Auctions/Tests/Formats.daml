@@ -1,0 +1,128 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Auctions.Tests.Formats where
+
+import DA.Assert ((===))
+import DA.Foldable (forA_)
+import qualified DA.Map as Map
+import qualified DA.TextMap as TextMap
+import DA.Time (addRelTime)
+import Daml.Script
+
+import Splice.Api.Token.MetadataV1 (emptyMetadata)
+import Splice.Api.Token.HoldingV2 (Account (..))
+import qualified Splice.Api.Token.AllocationV2 as Alloc
+import Splice.Api.Token.AllocationInstructionV2 (AllocationInstructionResult_Output (..))
+import Splice.TokenStandard.Utils (basicAccount)
+import Splice.Testing.Tokens.TestTokenV2 (AccountConfig (..), PartyConfig (..))
+import Splice.Testing.Utils (discloseMany')
+import qualified Splice.Testing.Registries.AmuletRegistryV2 as AmuletRegistry
+import qualified Splice.Testing.Registries.TestTokenV2_RegistryV2 as TestTokenV2Registry
+import Splice.Testing.TokenStandard.WalletClientV2 (allocateV2, checkAccountBalance, checkBalance, listAllocationsV2)
+
+import Cap.Auctions.Types (Funding (..))
+
+import Cap.Auctions.Tests.Env
+import Cap.Auctions.Tests.Harness
+
+
+-- Testing accounts with a provider
+-----------------------------------
+
+-- A bidder paying from an account with a provider passes the checks and settles; the registry finds the account's config in the choice contexts.
+test_providerAccount_settles : Script ()
+test_providerAccount_settles = do
+  env <- setupTest "provider-account"
+  let providerAccount = Account with owner = Some env.alice; provider = Some env.outsider; id = ""
+  TestTokenV2Registry.makeAccountIfMissing AccountConfig with
+    admin = env.paymentAdmin
+    account = providerAccount
+    ownerConfig = PartyConfig with canInitiate = True; mustApprove = True
+    providerConfig = PartyConfig with canInitiate = False; mustApprove = False
+  TestTokenV2Registry.mint env.paymentRegistry providerAccount "USD" 100.0
+  principalLot <- allocateForThisLot env env.principal env.lot 10.0
+  principalUsd <- allocateForThisLot env env.principal env.payment 0.0
+  aliceLot <- allocateForThisLot env env.alice env.lot 0.0
+  result <- allocateV2 env.registries env.alice env.settlement Alloc.AllocationSpecification with
+    admin = env.paymentAdmin
+    authorizer = providerAccount
+    transferLegSides = []
+    settlementDeadline = Some (addRelTime env.schedule.biddingClosesAt env.terms.allocationTerms.settlementWindow)
+    nextIterationFunding = Some (TextMap.fromList [("USD", 32.0)])
+    committed = True
+    meta = emptyMetadata
+  aliceUsd <- case result.output of
+    AllocationInstructionResult_Completed allocation -> pure Funding with account = providerAccount; allocation
+    output -> fail ("the allocation was not created: " <> show output)
+  let principalFundings = Map.fromList [(env.lotAdmin, principalLot), (env.paymentAdmin, principalUsd)]
+      aliceFundings = Map.fromList [(env.lotAdmin, aliceLot), (env.paymentAdmin, aliceUsd)]
+  aliceCid <- submit env.alice $ createCmd env.unfundedBid with
+    fundings = aliceFundings
+  unmet <- submit env.authority $ exerciseCmd env.probe Probe_ValidSingleLotBid with
+    resolutionInfo = env.resolutionInfo
+    settlement = env.settlement
+    terms = env.terms
+    schedule = env.schedule
+    bidCid = aliceCid
+  unmet === []
+  (settleBatchContexts, disclosures) <- getSettleBatchContexts env [principalFundings, aliceFundings]
+  cleared <- submit (actAs env.authority <> discloseMany' disclosures) $ exerciseCmd env.probe Probe_ClearAndSettle with
+    resolutionInfo = env.resolutionInfo
+    settlement = env.settlement
+    terms = env.terms
+    principalFundings
+    bidCids = [aliceCid]
+    settleBatchContexts
+  length cleared.settled === 2
+  cleared.unsettled === []
+  checkAccountBalance env.alice providerAccount env.payment 68.0
+  checkBalance env.alice env.lot 104.0
+  checkBalance env.principal env.payment 1032.0
+  checkBalance env.principal env.lot 96.0
+  allocations <- listAllocationsV2 providerAccount env.alice
+  allocations === []
+
+
+-- Testing payment in Amulet
+----------------------------
+
+-- An auction paid in Amulet settles through the Amulet registry
+test_amuletPayment_settles : Script ()
+test_amuletPayment_settles = do
+  env0 <- setupTest "amulet-payment"
+  let env = env0 with terms = env0.terms with payment = env0.amulet.instrumentId
+  AmuletRegistry.tapFaucet env.amulet env.alice 100.0
+  principalLot <- allocateForThisLot env env.principal env.lot 10.0
+  principalAmulet <- allocateForThisLot env env.principal env.amulet.instrumentId 0.0
+  aliceAmulet <- allocateForThisLot env env.alice env.amulet.instrumentId 32.0
+  aliceLot <- allocateForThisLot env env.alice env.lot 0.0
+  let principalFundings = Map.fromList [(env.lotAdmin, principalLot), (env.amulet.dso, principalAmulet)]
+      aliceFundings = Map.fromList [(env.lotAdmin, aliceLot), (env.amulet.dso, aliceAmulet)]
+  aliceCid <- submit env.alice $ createCmd env.unfundedBid with
+    resolutionInfo = env.resolutionInfo
+    terms = env.terms
+    fundings = aliceFundings
+  unmet <- submit env.authority $ exerciseCmd env.probe Probe_ValidSingleLotBid with
+    resolutionInfo = env.resolutionInfo
+    settlement = env.settlement
+    terms = env.terms
+    schedule = env.schedule
+    bidCid = aliceCid
+  unmet === []
+  (settleBatchContexts, disclosures) <- getSettleBatchContexts env [principalFundings, aliceFundings]
+  cleared <- submit (actAs env.authority <> discloseMany' disclosures) $ exerciseCmd env.probe Probe_ClearAndSettle with
+    resolutionInfo = env.resolutionInfo
+    settlement = env.settlement
+    terms = env.terms
+    principalFundings
+    bidCids = [aliceCid]
+    settleBatchContexts
+  length cleared.settled === 2
+  cleared.unsettled === []
+  checkBalance env.alice env.amulet.instrumentId 68.0
+  checkBalance env.principal env.amulet.instrumentId 32.0
+  checkBalance env.alice env.lot 104.0
+  checkBalance env.principal env.lot 96.0
+  forA_ [env.principal, env.alice] $ \party -> do
+    allocations <- listAllocationsV2 (basicAccount party) party
+    allocations === []

@@ -15,7 +15,7 @@ import Cap.Core.Utils (orAbort, requireMet, requireOpen, single)
 import Cap.Auctions.Types (AuctionSchedule (..), AuctionTerms, Funding (..), HasSingleLotQuotes (..), Quote)
 import Cap.Auctions.Bid
 import Cap.Auctions.SingleLotQuotesBid
-import Cap.Auctions.Funding (fetchFundingAllocations)
+import Cap.Auctions.Funding (fetchFundingAllocations, settlementOf)
 import Cap.Auctions.SingleLot (expectSingleLot, validSingleLotBid)
 
 
@@ -33,6 +33,7 @@ template SingleLotBidProposal
     interface instance BidProposal for SingleLotBidProposal where
       view = BidProposalView with
         authorities
+        resolutionInfo = Some resolutionInfo
         terms
         availableActions = Map.fromList
           [ (BPA_Accept, [[bidder] | bidder <- invited])
@@ -43,14 +44,14 @@ template SingleLotBidProposal
       bidProposal_acceptImpl _ arg = do
         bidder <- orAbort "a bid is accepted by one bidder" (single arg.actors)
         require "the bidder is invited" (bidder `elem` invited)
-        require "the resolution is this proposal's" (arg.resolutionInfo == resolutionInfo)
         now <- getTime
         requireOpen "the bidding window is open"
           now schedule.biddingOpensAt (Some schedule.biddingClosesAt)
-        toInterfaceContractId <$> create SingleLotBid with
+        bid <- toInterfaceContractId <$> create SingleLotBid with
           authorities; bidder; resolutionInfo; terms; schedule
           fundings = Map.empty
           quotes = []
+        pure BidProposal_AcceptResult with bid; meta = emptyMetadata
 
       bidProposal_withdrawImpl _ _ =
         pure BidProposal_WithdrawResult with meta = emptyMetadata
@@ -83,12 +84,11 @@ template SingleLotBid
         let newBid = this with fundings = arg.fundings
         singleLotTerms <- expectSingleLot terms
         fetchedFundings <- fetchFundingAllocations newBid.fundings
-        requireMet (validSingleLotBid resolutionInfo terms schedule singleLotTerms newBid fetchedFundings)
-        toInterfaceContractId <$> create newBid
+        requireMet (validSingleLotBid resolutionInfo (settlementOf resolutionInfo terms.allocationTerms.executors) terms schedule singleLotTerms newBid fetchedFundings)
+        bid <- toInterfaceContractId <$> create newBid
+        pure Bid_FundResult with bid; meta = emptyMetadata
 
       bid_withdrawImpl self _ = do
-        now <- getTime
-        require "the bidding window is open" (now < schedule.biddingClosesAt)
         archive (fromInterfaceContractId @SingleLotBid self)
         pure Bid_WithdrawResult with bid = None; withdrawn = []; meta = emptyMetadata
 
@@ -107,7 +107,7 @@ template SingleLotBid
         let newBid = this with quotes = arg.quotes
         singleLotTerms <- expectSingleLot terms
         fetchedFundings <- fetchFundingAllocations newBid.fundings
-        requireMet (validSingleLotBid resolutionInfo terms schedule singleLotTerms newBid fetchedFundings)
+        requireMet (validSingleLotBid resolutionInfo (settlementOf resolutionInfo terms.allocationTerms.executors) terms schedule singleLotTerms newBid fetchedFundings)
         toInterfaceContractId <$> create newBid
 
 instance HasSingleLotQuotes SingleLotBid where

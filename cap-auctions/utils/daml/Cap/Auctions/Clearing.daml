@@ -14,7 +14,7 @@ import DA.List (mapAccumL, sortOn)
 import qualified DA.Map as Map
 
 
-import Cap.Auctions.Types (Direction (..), LotTerms (..), Quote (..), RemainderPolicy (..))
+import Cap.Auctions.Types (Direction (..), LotTerms (..), Quote (..))
 
 
 -- Awarding
@@ -33,9 +33,9 @@ data Award bidId = Award
 -- reverse auctions). The rest are grouped by price (highest price 
 -- first in forward auctions, lowest price first in reverse auctions), and
 -- given amounts from the lot's supply by assignAmountsByPrice.
-awardAmountPerQuote : Ord bidId => Direction -> RemainderPolicy -> LotTerms -> [(bidId, [Quote])] -> [Award bidId]
-awardAmountPerQuote direction remainderPolicy lotTerms quotesPerBid =
-  assignAmountsByPrice remainderPolicy lotTerms.amountStep lotTerms.supply quotesByPrice
+awardAmountPerQuote : Ord bidId => Direction -> LotTerms -> [(bidId, [Quote])] -> [Award bidId]
+awardAmountPerQuote direction lotTerms quotesPerBid =
+  assignAmountsByPrice lotTerms.amountStep lotTerms.supply quotesByPrice
   where    
     quotesByPrice = case direction of
       Forward -> reverse (Map.values quotesPerPrice)
@@ -54,17 +54,17 @@ awardAmountPerQuote direction remainderPolicy lotTerms quotesPerBid =
 -- If demand fits the remaining supply each price is awarded in full
 -- At the first price where it does not, the remaining supply is split in proportion to the
 -- quotes' amounts, rounded down to the amount step, and later prices get
--- nothing. With AwardToBidders the units lost to rounding go one step
--- at a time to the quotes with the largest rounding loss, ties broken by bid
--- id. With ReturnToPrincipal they are not awarded.
+-- nothing. The units lost to rounding go one step at a time to the quotes
+-- with the largest rounding loss, and between equal losses to the lower bid
+-- id. The caller chooses the bid ids, so the caller decides these ties.
 assignAmountsByPrice
-  : Ord bidId => RemainderPolicy -> Decimal -> Decimal -> [[(bidId, Quote)]] -> [Award bidId]
-assignAmountsByPrice _ _ _ [] = []
-assignAmountsByPrice remainderPolicy step remaining (quotesAtPrice :: worsePrices)
+  : Ord bidId => Decimal -> Decimal -> [[(bidId, Quote)]] -> [Award bidId]
+assignAmountsByPrice _ _ [] = []
+assignAmountsByPrice step remaining (quotesAtPrice :: worsePrices)
   | remaining <= 0.0 = []
   | demandAtCurrentPrice <= remaining =
-      [Award with bidId; price = quote.price; amount = quote.amount | (bidId, quote) <- quotesAtPrice]
-        <> assignAmountsByPrice remainderPolicy step (remaining - demandAtCurrentPrice) worsePrices
+      [Award with bidId; price = quote.price; amount = quote.amount | (bidId, quote) <- quotesAtPrice, quote.amount > 0.0]
+        <> assignAmountsByPrice step (remaining - demandAtCurrentPrice) worsePrices
   | otherwise =
       let exactShare quote = remaining * quote.amount / demandAtCurrentPrice
           lossOf quote = exactShare quote - roundDown (exactShare quote)
@@ -73,9 +73,7 @@ assignAmountsByPrice remainderPolicy step remaining (quotesAtPrice :: worsePrice
             | (bidId, quote) <- sortOn (\(bidId, quote) -> (negate (lossOf quote), bidId)) quotesAtPrice
             ]
           remainder = remaining - sum (map (.amount) shares)
-      in case remainderPolicy of
-        ReturnToPrincipal -> shares
-        AwardToBidders -> snd (mapAccumL assignStep remainder shares)
+      in filter (\award -> award.amount > 0.0) (snd (mapAccumL assignStep remainder shares))
   where
     demandAtCurrentPrice = sum [quote.amount | (_, quote) <- quotesAtPrice]
 

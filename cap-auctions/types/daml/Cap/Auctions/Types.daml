@@ -5,7 +5,6 @@ module Cap.Auctions.Types
   , Quote (..)
   , HasSingleLotQuotes (..)
   , AllocationTerms (..)
-  , RemainderPolicy (..)
   , LotTerms (..)
   , AuctionTerms (..)
   , AuctionSchedule (..)
@@ -41,24 +40,6 @@ data Funding = Funding
   deriving (Eq, Show)
 
 
--- | What happens to the units of a lot that are left over by rounding.
---
--- The supply is awarded to the quotes best price first. When the quotes at
--- one price ask for more than the supply that is left, that supply is split
--- among them in proportion to their amounts, and each share is rounded down
--- to a multiple of the amount step. The units lost to rounding are the
--- remainder.
---
--- Example: 10 units, amount step 1, three quotes for 5 units each at the same
--- price. Each share is 10 * 5 / 15 = 3.33, rounded down to 3, which leaves 1
--- unit. AwardToBidders gives it to one of the quotes (4, 3, 3).
--- ReturnToPrincipal does not award it (3, 3, 3).
-data RemainderPolicy
-  = AwardToBidders
-  | ReturnToPrincipal
-  -- ^ SHOULD NOT be used for single item auctions.
-  deriving (Eq, Show)
-
 data LotTerms = LotTerms
   with
     supply : Decimal
@@ -75,6 +56,9 @@ data AllocationTerms = AllocationTerms
     -- ^ The settlement deadline of every allocation of an auction is the
     -- biddingClosesAt of the auction's schedule plus settlementWindow.
     committed : Bool
+    -- ^ If True, the allocations of an auction cannot be withdrawn by owners
+    executors : Optional [Party]
+    -- ^ The executors of the auction's settlement. None sets them to the resolver's authorities.
   deriving (Eq, Show)
 
 
@@ -82,7 +66,6 @@ data AuctionTerms = AuctionTerms
   with
     direction : Direction
     lots : Map InstrumentId LotTerms
-    remainderPolicy : RemainderPolicy
     payment : InstrumentId
     allocationTerms : AllocationTerms
   deriving (Eq, Show)

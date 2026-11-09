@@ -1,0 +1,191 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Auctions.Tests.Clock where
+
+import DA.Assert ((===))
+import DA.Date (Month (..), date)
+import DA.Time (RelTime, addRelTime, hours, microseconds, time)
+import Daml.Script
+
+import Cap.Auctions.Types (Direction (..), Quote (..))
+import Cap.Auctions.Clock
+
+
+t0 : Time
+t0 = time (date 2026 Jan 1) 0 0 0
+
+at : RelTime -> Time
+at = addRelTime t0
+
+hour : RelTime
+hour = hours 1
+
+clock : Decimal -> Decimal -> PriceClock
+clock startPrice priceStep = PriceClock with startPrice; priceStep; tickInterval = hour
+
+
+-- Testing clockTick
+--------------------
+
+-- The tick is 0 before opening and during the first interval, and goes up by 1 at each interval boundary.
+test_clockTick_counts : Script ()
+test_clockTick_counts = do
+  clockTick hour t0 (at (hours (-3))) === 0
+  clockTick hour t0 t0 === 0
+  clockTick hour t0 (at (microseconds 3599999999)) === 0
+  clockTick hour t0 (at (hours 1)) === 1
+  clockTick hour t0 (at (microseconds 10799999999)) === 2
+  clockTick hour t0 (at (hours 3)) === 3
+
+
+-- Testing dutchClockPrice
+--------------------------
+
+-- The forward Dutch price starts at the start price, falls one step per tick and stops at the reserve.
+test_dutchClockPrice_forward : Script ()
+test_dutchClockPrice_forward = do
+  let price = dutchClockPrice Forward 5.0 (clock 8.0 1.0) t0
+  price t0 === 8.0
+  price (at (hours 1)) === 7.0
+  price (at (hours 2)) === 6.0
+  price (at (hours 3)) === 5.0
+  price (at (hours 30)) === 5.0
+
+-- The reverse Dutch price starts at the start price, rises one step per tick and stops at the reserve.
+test_dutchClockPrice_reverse : Script ()
+test_dutchClockPrice_reverse = do
+  let price = dutchClockPrice Reverse 5.0 (clock 2.0 1.0) t0
+  price t0 === 2.0
+  price (at (hours 2)) === 4.0
+  price (at (hours 3)) === 5.0
+  price (at (hours 30)) === 5.0
+
+
+-- Testing validDutchClock
+--------------------------
+
+-- Each invalid Dutch clock parameter is reported, and a start at the reserve is valid in both directions.
+test_validDutchClock_eachCondition : Script ()
+test_validDutchClock_eachCondition = do
+  validDutchClock Forward 5.0 (clock 8.0 1.0) === []
+  validDutchClock Forward 5.0 (clock 8.0 0.0) === ["the price step is not positive"]
+  validDutchClock Forward 5.0 (PriceClock with startPrice = 8.0; priceStep = 1.0; tickInterval = microseconds 0)
+    === ["the tick interval is not positive"]
+  validDutchClock Forward 0.0 (clock 0.0 1.0) === ["the start price is not positive"]
+  validDutchClock Forward 5.0 (clock 4.0 1.0) === ["the start price is past the reserve price"]
+  validDutchClock Forward 5.0 (clock 5.0 1.0) === []
+  validDutchClock Reverse 5.0 (clock 6.0 1.0) === ["the start price is past the reserve price"]
+  validDutchClock Reverse 5.0 (clock 5.0 1.0) === []
+
+
+-- Testing dutchClockReachesReserveBy
+-------------------------------------
+
+-- A clock that is still above the reserve just before closing is reported.
+test_dutchClockReachesReserveBy_slowClock : Script ()
+test_dutchClockReachesReserveBy_slowClock = do
+  let closesAt = at (hours 2)
+  dutchClockReachesReserveBy Forward 5.0 (clock 10.0 1.0) t0 closesAt
+    === ["the clock does not reach the reserve price before " <> show closesAt]
+
+-- A clock that reaches the reserve only at closing, when no one can quote, is reported.
+test_dutchClockReachesReserveBy_reserveOnlyAtClose : Script ()
+test_dutchClockReachesReserveBy_reserveOnlyAtClose = do
+  let closesAt = at (hours 2)
+  dutchClockReachesReserveBy Forward 5.0 (clock 7.0 1.0) t0 closesAt
+    === ["the clock does not reach the reserve price before " <> show closesAt]
+
+-- A clock that reaches the reserve before closing passes in both directions.
+test_dutchClockReachesReserveBy_reserveBeforeClose : Script ()
+test_dutchClockReachesReserveBy_reserveBeforeClose = do
+  dutchClockReachesReserveBy Forward 5.0 (clock 7.0 1.0) t0 (at (microseconds 7200000001)) === []
+  dutchClockReachesReserveBy Reverse 5.0 (clock 3.0 1.0) t0 (at (microseconds 7200000001)) === []
+
+
+-- Testing englishClockPrice
+----------------------------
+
+-- The forward English price rises one step per tick with no upper bound.
+test_englishClockPrice_forwardRises : Script ()
+test_englishClockPrice_forwardRises = do
+  let price = englishClockPrice Forward (clock 5.0 2.0) t0
+  price t0 === 5.0
+  price (at (hours 3)) === 11.0
+  price (at (hours 1000)) === 2005.0
+
+-- The reverse English price falls one step per tick and stops at 0.
+test_englishClockPrice_reverseFloorsAtZero : Script ()
+test_englishClockPrice_reverseFloorsAtZero = do
+  let price = englishClockPrice Reverse (clock 5.0 2.0) t0
+  price (at (hours 2)) === 1.0
+  price (at (hours 3)) === 0.0
+  price (at (hours 100)) === 0.0
+
+
+-- Testing validEnglishClock
+----------------------------
+
+-- A start price short of the reserve is reported in both directions.
+test_validEnglishClock_startShortOfReserve : Script ()
+test_validEnglishClock_startShortOfReserve = do
+  validEnglishClock Forward 5.0 (clock 5.0 1.0) === []
+  validEnglishClock Forward 5.0 (clock 4.0 1.0) === ["the start price is short of the reserve price"]
+  validEnglishClock Reverse 5.0 (clock 5.0 1.0) === []
+  validEnglishClock Reverse 5.0 (clock 6.0 1.0) === ["the start price is short of the reserve price"]
+
+
+-- Testing quotesAtClockPrice
+-----------------------------
+
+-- Each quote that is not at the clock price is reported.
+test_quotesAtClockPrice_eachOffPriceQuote : Script ()
+test_quotesAtClockPrice_eachOffPriceQuote = do
+  quotesAtClockPrice 7.0
+    [ (Quote with price = 7.0; amount = 1.0)
+    , (Quote with price = 7.0; amount = 2.0)
+    ]
+    === []
+  quotesAtClockPrice 7.0
+    [ (Quote with price = 6.0; amount = 1.0)
+    , (Quote with price = 7.0; amount = 2.0)
+    , (Quote with price = 8.0; amount = 1.0)
+    ]
+    === [ "the quote price 6.0 is not the clock price 7.0"
+        , "the quote price 8.0 is not the clock price 7.0" ]
+
+
+-- Testing quotesAppended
+-------------------------
+
+-- Adding quotes after the existing ones is accepted.
+test_quotesAppended_appendOnly : Script ()
+test_quotesAppended_appendOnly = do
+  quotesAppended [(Quote with price = 9.0; amount = 1.0)]
+    [ (Quote with price = 9.0; amount = 1.0)
+    , (Quote with price = 8.0; amount = 2.0)
+    ]
+    === []
+  quotesAppended [] [(Quote with price = 9.0; amount = 1.0)] === []
+  quotesAppended
+    [(Quote with price = 9.0; amount = 1.0)]
+    [(Quote with price = 9.0; amount = 1.0)]
+    === []
+
+-- Changing, reordering or removing an existing quote is reported.
+test_quotesAppended_changedQuotes : Script ()
+test_quotesAppended_changedQuotes = do
+  let old =
+        [ (Quote with price = 9.0; amount = 1.0)
+        , (Quote with price = 8.0; amount = 2.0)
+        ]
+  quotesAppended old
+    [ (Quote with price = 9.0; amount = 1.0)
+    , (Quote with price = 8.0; amount = 3.0)
+    ]
+    === ["the existing quotes are changed"]
+  quotesAppended old
+    [ (Quote with price = 8.0; amount = 2.0)
+    , (Quote with price = 9.0; amount = 1.0)
+    ]
+    === ["the existing quotes are changed"]
+  quotesAppended old [(Quote with price = 9.0; amount = 1.0)] === ["the existing quotes are changed"]

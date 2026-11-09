@@ -9,10 +9,10 @@ dependencies:
 - daml-stdlib
 data-dependencies:
 - ../../../../lib/splice-api-token-metadata-v1-1.0.0.dar
-- ../../../../lib/splice-util-0.1.7.dar
+- ../../../../lib/splice-util-0.1.9.dar
 - ../../../../lib/splice-api-token-holding-v2-1.0.0.dar
 - ../../../../lib/splice-api-token-allocation-v2-1.0.0.dar
-- ../../../../lib/splice-token-standard-utils-2.0.0.dar
+- ../../../../lib/splice-token-standard-utils-2.0.1.dar
 - ../../../../cap-core/types/.daml/dist/cap-core-types-0.1.0.dar
 - ../../../../cap-core/utils/.daml/dist/cap-core-utils-0.1.0.dar
 - ../../../../cap-auctions/types/.daml/dist/cap-auctions-types-0.1.0.dar
@@ -21,4 +21,4 @@ data-dependencies:
 - ../../../../cap-auctions/interfaces/single-lot-quotes/.daml/dist/cap-auctions-single-lot-quotes-0.1.0.dar
 - ../../../../cap-auctions/utils/.daml/dist/cap-auctions-utils-0.1.0.dar
 build-options:
-  - --target=2.1
+  - --target=2.3

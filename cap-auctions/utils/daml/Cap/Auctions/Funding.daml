@@ -68,32 +68,38 @@ import Cap.Auctions.Types (AuctionSchedule (..), AuctionTerms (..), Direction (.
 ------------------
 -- The token standard SettlementInfo that every allocation of an auction is made for.
 
--- compute settlementInfo from ResolutionInfo
-settlementOf : ResolutionInfo -> Alloc.SettlementInfo
-settlementOf resolutionInfo = Alloc.SettlementInfo with
-  executors = Set.toList resolutionInfo.resolver.authorities
-  id = resolutionInfo.id
-  cid = resolutionInfo.resolverCid
-  meta = emptyMetadata
+-- | The SettlementInfo of a resolution. Its id is the ResolutionInfo id, so
+-- the resolver must keep resolution ids unique among all resolutions whose
+-- settlements can share executors. The executors are the explicit executors
+-- if given, otherwise the resolver's authorities.
+settlementOf : ResolutionInfo -> Optional [Party] -> Alloc.SettlementInfo
+settlementOf resolutionInfo executors =
+    Alloc.SettlementInfo with
+      executors = fromOptional (Set.toList resolutionInfo.resolver.authorities) executors
+      id = resolutionInfo.id
+      cid = resolutionInfo.resolverCid
+      meta = emptyMetadata
 
-
--- Checks (missing checking the reserve, i think its currently being done in clearing)
+-- Checks 
 ---------
 -- Each check returns its unmet conditions. Use requireMet to abort on them, at
 -- submission or resolution, or ignoreUnless and ignoreUnlessAmong to ignore the bid at resolution.
 
+-- 
 -- | Requires every allocation of the bid to be for this settlement, under its
 -- admin, authorized by its account, not to expire before the auction's
 -- settlement deadline, and to be committed if the terms require it.
-validFundingTerms : ResolutionInfo -> AuctionTerms -> AuctionSchedule -> AllocationsCheck t
-validFundingTerms resolutionInfo terms schedule _ fundings =
+-- (checking the reserve, is currently being done in clearing)
+validFundingTerms : Alloc.SettlementInfo -> AuctionTerms -> AuctionSchedule -> AllocationsCheck t
+validFundingTerms settlement terms schedule _ fundings =
   [ "allocation " <> show funding.allocation <> " " <> errorMsg
   | (admin, (funding, v)) <- Map.toList fundings
   , (False, errorMsg) <-
-      [ (v.settlement == settlementOf resolutionInfo, "is for another settlement")
+      [ (v.settlement == settlement, "is for another settlement")
       , (v.allocation.admin == admin, "has another admin")
       , (v.allocation.authorizer == funding.account, "is authorized by another account")
       , (optional True (>= deadline) v.allocation.settlementDeadline, "expires before the settlement deadline")
+      , (optional True (>= deadline) v.expiresAt, "can be expired by the registry before the settlement deadline")
       , (not terms.allocationTerms.committed || v.allocation.committed, "is not committed")
       ]
   ]
@@ -172,13 +178,18 @@ type AllocationsCheck t = t -> Map Party (Funding, Alloc.AllocationView) -> Unme
 -- | A check on the bid among the other bids still kept.
 type AmongBidsCheck t = [t] -> t -> Unmet
 
--- | Fetches the bids and ignores those that fail a check, in three steps: the
--- checks on the bid, then, only for the bids that pass, the checks on the bid
--- and its fetched allocations, then the checks among the bids still kept.
--- Every bid is fetched once, and a bid's allocations are fetched only when it
--- passes the checks on the bid and there are checks on allocations. Returns the
--- kept bids in their input order and the ignored bids with the first unmet
--- condition. Aborts if a bid is presented twice.
+-- | Fetches the bids and ignores those that fail a check. Aborts if a bid is
+-- presented twice. The checks run in three steps, and each step is applied 
+-- only on the bids that the checks before it kept:
+--
+-- - bidChecks run on the bid alone.
+-- - allocationsChecks run on the bid and its fetched allocations. Allocations
+--   are fetched only in this step, so none are fetched for a bid ignored in
+--   the first step, or when there are no allocation checks.
+-- - amongBidsChecks run on each bid against the other bids still kept.
+--
+-- Every bid is fetched once. Returns the kept bids in their input order, and
+-- the ignored bids each with the first unmet condition that ignored it.
 fetchAndIgnoreInvalidBids
   : (HasFetch t, HasToInterface t Bid)
   => [BidCheck t] -> [AllocationsCheck t] -> [AmongBidsCheck t]
@@ -197,15 +208,18 @@ fetchAndIgnoreInvalidBids bidChecks allocationsChecks amongBidsChecks cids = do
    <> [ignoreUnlessAmong (\bids bid -> concat [check bids bid | check <- amongBidsChecks])] )
     bids
 
--- | Fetches the bids and ignores those that use one of the principal's accounts or
--- share an account with another bid. Use it for bids that passed their
--- checks at submission. It fetches no allocations.
+-- | Fetches the bids and ignores those that are for another resolution, use
+-- one of the principal's accounts, or share an account with another bid. Use
+-- it for bids that passed their checks at submission. It fetches no
+-- allocations.
 fetchAndIgnoreConflictingBids
   : (HasFetch t, HasToInterface t Bid)
-  => Map Party Funding -> [ContractId t] -> Update (Contracts t, Ignored t)
-fetchAndIgnoreConflictingBids principalFundings =
+  => ResolutionInfo -> Map Party Funding -> [ContractId t] -> Update (Contracts t, Ignored t)
+fetchAndIgnoreConflictingBids resolutionInfo principalFundings =
   fetchAndIgnoreInvalidBids
-    [ noPrincipalAccountsInBid principalFundings ]
+    [ bidForResolution resolutionInfo
+    , noPrincipalAccountsInBid principalFundings
+    ]
     []
     [ distinctAccountsAmongBids ]
 
@@ -232,29 +246,30 @@ fetchFundingAllocations fundings = do
 -- send: the supply of every lot in a forward auction, and the supply of every
 -- lot times its reserve price in a reverse auction.
 validPrincipalFunding
-  : ResolutionInfo -> AuctionTerms -> AuctionSchedule -> Map Party (Funding, Alloc.AllocationView) -> Unmet
-validPrincipalFunding resolutionInfo terms schedule fetchedPrincipalFundings =
+  : Alloc.SettlementInfo -> AuctionTerms -> AuctionSchedule -> Map Party (Funding, Alloc.AllocationView) -> Unmet
+validPrincipalFunding settlement terms schedule fetchedPrincipalFundings =
   [ "allocation " <> show funding.allocation <> " " <> errorMsg
   | (admin, (funding, v)) <- Map.toList fetchedPrincipalFundings
   , (False, errorMsg) <-
       [ (null v.allocation.transferLegSides, "has transfer leg sides")
       , (isSome v.allocation.nextIterationFunding, "does not enable iterated settlement")
-      , (v.settlement == settlementOf resolutionInfo, "is for another settlement")
+      , (v.settlement == settlement, "is for another settlement")
       , (v.allocation.admin == admin, "has another admin")
       , (v.allocation.authorizer == funding.account, "is authorized by another account")
       , (optional True (>= deadline) v.allocation.settlementDeadline, "expires before the settlement deadline")
+      , (optional True (>= deadline) v.expiresAt, "can be expired by the registry before the settlement deadline")
       , (not terms.allocationTerms.committed || v.allocation.committed, "is not committed")
       ]
   ]
-    <> [ errorMsg
+    <> [ "no allocation under admin " <> show admin
+       | admin <- dedup (terms.payment.admin :: map (.admin) (Map.keys terms.lots))
+       , not (Map.member admin fetchedPrincipalFundings)
+       ]
+    <> [ "allocation " <> show funding.allocation <> " reserves less than the " <> show mostSent
+           <> " of " <> instrument.id <> " the principal can send"
        | (instrument, mostSent) <- Map.toList mostSentPerInstrument
-       , errorMsg <- case Map.lookup instrument.admin fetchedPrincipalFundings of
-           None -> ["no allocation under admin " <> show instrument.admin]
-           Some (funding, v) ->
-             [ "allocation " <> show funding.allocation <> " reserves less than the " <> show mostSent
-                 <> " of " <> instrument.id <> " the principal can send"
-             | fromOptional 0.0 (v.allocation.nextIterationFunding >>= TextMap.lookup instrument.id) < mostSent
-             ]
+       , Some (funding, v) <- [Map.lookup instrument.admin fetchedPrincipalFundings]
+       , fromOptional 0.0 (v.allocation.nextIterationFunding >>= TextMap.lookup instrument.id) < mostSent
        ]
   where
     deadline = addRelTime schedule.biddingClosesAt terms.allocationTerms.settlementWindow
@@ -265,10 +280,10 @@ validPrincipalFunding resolutionInfo terms schedule fetchedPrincipalFundings =
 -- | Fetches the principal's allocations and requires them to pass validPrincipalFunding.
 -- Call it when the principal funds the auction.
 requireValidPrincipalFunding
-  : ResolutionInfo -> AuctionTerms -> AuctionSchedule -> Map Party Funding -> Update ()
-requireValidPrincipalFunding resolutionInfo terms schedule principalFundings = do
+  : Alloc.SettlementInfo -> AuctionTerms -> AuctionSchedule -> Map Party Funding -> Update ()
+requireValidPrincipalFunding settlement terms schedule principalFundings = do
   fetchedPrincipalFundings <- fetchFundingAllocations principalFundings
-  requireMet (validPrincipalFunding resolutionInfo terms schedule fetchedPrincipalFundings)
+  requireMet (validPrincipalFunding settlement terms schedule fetchedPrincipalFundings)
 
 
 -- Building batches

@@ -74,15 +74,16 @@ template DutchAuction
       do
         requireResolvedBy (AuthenticKey with authorities; id = resolverId) (coerceContractId self) resolutionInfo
         singleLotTerms <- expectSingleLot terms
-        (keptBids, ignoredBids) <- fetchAndIgnoreConflictingBids principalFundings bidCids
+        (keptBids, ignoredBids) <- fetchAndIgnoreConflictingBids resolutionInfo principalFundings bidCids
         now <- getTime
         let claimed = sum [quote.amount | (_, bid) <- keptBids, quote <- singleLotQuotes bid]
         require "the bidding window is closed or the claims cover the supply"
           (now >= schedule.biddingClosesAt || claimed >= singleLotTerms.lotTerms.supply)
+        let settlement = settlementOf resolutionInfo terms.allocationTerms.executors
         result <- clearAndSettleSingleLotFromEmptyLegsAllocations
-          supportedMechanisms resolutionInfo singleLotTerms principalFundings keptBids
+          supportedMechanisms resolutionInfo settlement singleLotTerms principalFundings keptBids
           settleBatchContexts
-        cancelled <- cancelAllocations (settlementOf resolutionInfo) cancelContexts result.unsettled
+        cancelled <- cancelAllocations settlement cancelContexts result.unsettled
         forA_ (map fst keptBids <> map fst ignoredBids) $ \cid ->
           exercise (toInterfaceContractId @Bid cid) Bid_Close with
             actors = Set.toList authorities

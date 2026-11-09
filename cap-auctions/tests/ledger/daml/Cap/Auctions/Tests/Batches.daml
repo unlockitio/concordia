@@ -1,0 +1,120 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Auctions.Tests.Batches where
+
+import DA.Assert ((===))
+import qualified DA.Map as Map
+import Daml.Script
+
+import Splice.Api.Token.MetadataV1 (emptyMetadata)
+import qualified Splice.Api.Token.AllocationV2 as Alloc
+import Splice.TokenStandard.Utils (basicAccount)
+import Splice.Testing.Utils (discloseMany', expectMessageContains, submitMustFail'')
+import Splice.Testing.TokenStandard.WalletClientV2 (checkBalance, checkUnlockedBalance, listAllocationsV2)
+
+import Cap.Auctions.Funding (Batch (..))
+
+import Cap.Auctions.Tests.Env
+import Cap.Auctions.Tests.Harness
+
+
+-- Testing settleBatches
+------------------------
+
+-- A batch whose admin has no settle batch context aborts.
+test_settleBatches_missingContext : Script ()
+test_settleBatches_missingContext = do
+  env <- setupTest "missing-settle-context"
+  principalLot <- allocateForThisLot env env.principal env.lot 10.0
+  submitMustFail'' (expectMessageContains ("no settle batch context for admin " <> show env.lotAdmin)) (actAs env.authority) $
+    exerciseCmd env.probe Probe_SettleBatches with
+      settlement = env.settlement
+      settleBatchContexts = Map.empty
+      batches = [Batch with admin = env.lotAdmin; legs = []; fundings = [principalLot]]
+
+-- Each batch settles at its registry with the settlement's executors as actors, the balances follow the legs, and the unused reservations are returned.
+test_settleBatches_settlesEachBatch : Script ()
+test_settleBatches_settlesEachBatch = do
+  env <- setupTest "settles-each-batch"
+  principalLot <- allocateForThisLot env env.principal env.lot 10.0
+  principalUsd <- allocateForThisLot env env.principal env.payment 0.0
+  aliceUsd <- allocateForThisLot env env.alice env.payment 40.0
+  aliceLot <- allocateForThisLot env env.alice env.lot 0.0
+  (settleBatchContexts, disclosures) <- getSettleBatchContexts env
+    [ Map.fromList [(env.lotAdmin, principalLot), (env.paymentAdmin, principalUsd)]
+    , Map.fromList [(env.lotAdmin, aliceLot), (env.paymentAdmin, aliceUsd)]
+    ]
+  settled <- submit (actAs env.authority <> discloseMany' disclosures) $ exerciseCmd env.probe Probe_SettleBatches with
+    settlement = env.settlement
+    settleBatchContexts
+    batches =
+      [ Batch with
+          admin = env.lotAdmin
+          legs =
+            [ Alloc.TransferLeg with
+                transferLegId = "0/lot"
+                sender = basicAccount env.principal
+                receiver = basicAccount env.alice
+                amount = 4.0
+                instrumentId = "LOT"
+                meta = emptyMetadata
+            ]
+          fundings = [principalLot, aliceLot]
+      , Batch with
+          admin = env.paymentAdmin
+          legs =
+            [ Alloc.TransferLeg with
+                transferLegId = "0/payment"
+                sender = basicAccount env.alice
+                receiver = basicAccount env.principal
+                amount = 32.0
+                instrumentId = "USD"
+                meta = emptyMetadata
+            ]
+          fundings = [principalUsd, aliceUsd]
+      ]
+  length settled === 2
+  checkBalance env.principal env.lot 96.0
+  checkBalance env.principal env.payment 1032.0
+  checkBalance env.alice env.lot 104.0
+  checkBalance env.alice env.payment 968.0
+  checkUnlockedBalance env.principal env.lot 96.0
+  checkUnlockedBalance env.alice env.payment 968.0
+  principalAllocations <- listAllocationsV2 (basicAccount env.principal) env.principal
+  principalAllocations === []
+  aliceAllocations <- listAllocationsV2 (basicAccount env.alice) env.alice
+  aliceAllocations === []
+
+
+-- Testing cancelAllocations
+----------------------------
+
+-- An allocation without a cancel context aborts.
+test_cancelAllocations_missingContext : Script ()
+test_cancelAllocations_missingContext = do
+  env <- setupTest "missing-cancel-context"
+  aliceUsd <- allocateForThisLot env env.alice env.payment 40.0
+  submitMustFail'' (expectMessageContains "no cancel context for allocation") (actAs env.authority) $
+    exerciseCmd env.probe Probe_CancelAllocations with
+      settlement = env.settlement
+      cancelContexts = Map.empty
+      allocationCids = [aliceUsd.allocation]
+
+-- Cancelling as the settlement's executors removes the allocations and unlocks the reserved funds.
+test_cancelAllocations_releasesFunds : Script ()
+test_cancelAllocations_releasesFunds = do
+  env <- setupTest "releases-funds"
+  aliceUsd <- allocateForThisLot env env.alice env.payment 40.0
+  aliceLot <- allocateForThisLot env env.alice env.lot 0.0
+  checkUnlockedBalance env.alice env.payment 960.0
+  let fundings = Map.fromList [(env.paymentAdmin, aliceUsd), (env.lotAdmin, aliceLot)]
+  (cancelContexts, disclosures) <- getCancelContexts env [fundings]
+  cancelled <- submit (actAs env.authority <> discloseMany' disclosures) $ exerciseCmd env.probe Probe_CancelAllocations with
+    settlement = env.settlement
+    cancelContexts
+    allocationCids = [aliceUsd.allocation, aliceLot.allocation]
+  length cancelled === 2
+  checkUnlockedBalance env.alice env.payment 1000.0
+  checkBalance env.alice env.payment 1000.0
+  allocations <- listAllocationsV2 (basicAccount env.alice) env.alice
+  allocations === []

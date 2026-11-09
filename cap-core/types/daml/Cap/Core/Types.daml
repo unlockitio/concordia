@@ -27,7 +27,7 @@ data ResolutionInfo = ResolutionInfo
     resolver : AuthenticKey 
     resolverCid : Optional AnyContractId
     mechanism : Text
-    id : Text
+    id : Text -- the resolver keeps it unique among resolutions whose settlements can share executors; it is the settlement id.
   deriving (Eq, Show)
 
 data ExecutionAction

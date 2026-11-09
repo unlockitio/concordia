@@ -1,0 +1,189 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Auctions.Tests.SingleLotPricing where
+
+import DA.Assert ((===))
+import DA.Foldable (forA_)
+import DA.Map (Map)
+import qualified DA.Map as Map
+import DA.Optional (fromOptional)
+import Daml.Script
+
+import Cap.Auctions.Types (Direction (..), LotTerms (..), Quote (..))
+import Cap.Auctions.Clearing (Award (..), awardAmountPerQuote)
+import Cap.Auctions.SingleLot
+  ( PricingRule, SingleLotAuctionTerms (..)
+  , nativePricingMechanisms, payAsBid, uniformPrice, vickrey
+  )
+
+import Cap.Auctions.Tests.Fixtures (checkCase, clearingCases, singleLotTerms)
+
+
+charges : PricingRule Int -> SingleLotAuctionTerms -> [(Int, [Quote])] -> Map Int Decimal
+charges rule terms bids = rule terms bids (awardAmountPerQuote terms.direction terms.lotTerms bids)
+
+
+-- Testing payAsBid
+-------------------
+
+-- A bid pays the price times the amount of each of its awards, summed.
+test_payAsBid_sumsTheBidsAwards : Script ()
+test_payAsBid_sumsTheBidsAwards = do
+  let terms = singleLotTerms with direction = Forward; lotTerms = (LotTerms with supply = 10.0; amountStep = 1.0; reservePrice = 0.0)
+  payAsBid terms
+    [ (0, [ (Quote with price = 7.0; amount = 3.0)
+          , (Quote with price = 6.0; amount = 2.0)
+          ])
+    , (1, [(Quote with price = 5.0; amount = 10.0)])
+    ]
+    [ (Award with bidId = 0; price = 7.0; amount = 3.0)
+    , (Award with bidId = 0; price = 6.0; amount = 2.0)
+    , (Award with bidId = 1; price = 5.0; amount = 5.0)
+    ]
+    === Map.fromList [(0, 33.0), (1, 25.0)]
+
+
+-- Testing uniformPrice
+-----------------------
+
+-- In a forward auction every winner pays the lowest awarded price.
+test_uniformPrice_forwardLowestAwardedPrice : Script ()
+test_uniformPrice_forwardLowestAwardedPrice = do
+  let terms = singleLotTerms with direction = Forward; lotTerms = (LotTerms with supply = 10.0; amountStep = 1.0; reservePrice = 0.0)
+  uniformPrice terms
+    [ (0, [(Quote with price = 9.0; amount = 4.0)])
+    , (1, [(Quote with price = 8.0; amount = 4.0)])
+    , (2, [(Quote with price = 7.0; amount = 4.0)])
+    ]
+    [ (Award with bidId = 0; price = 9.0; amount = 4.0)
+    , (Award with bidId = 1; price = 8.0; amount = 4.0)
+    , (Award with bidId = 2; price = 7.0; amount = 2.0)
+    ]
+    === Map.fromList [(0, 28.0), (1, 28.0), (2, 14.0)]
+
+-- In a reverse auction every winner is paid the highest awarded ask.
+test_uniformPrice_reverseHighestAwardedPrice : Script ()
+test_uniformPrice_reverseHighestAwardedPrice = do
+  let terms = singleLotTerms with direction = Reverse; lotTerms = (LotTerms with supply = 10.0; amountStep = 1.0; reservePrice = 10.0)
+  uniformPrice terms
+    [ (0, [(Quote with price = 3.0; amount = 4.0)])
+    , (1, [(Quote with price = 4.0; amount = 4.0)])
+    , (2, [(Quote with price = 5.0; amount = 4.0)])
+    ]
+    [ (Award with bidId = 0; price = 3.0; amount = 4.0)
+    , (Award with bidId = 1; price = 4.0; amount = 4.0)
+    , (Award with bidId = 2; price = 5.0; amount = 2.0)
+    ]
+    === Map.fromList [(0, 20.0), (1, 20.0), (2, 10.0)]
+
+
+-- Testing vickrey
+------------------
+
+-- For a single item the winner pays the second-highest price.
+test_vickrey_singleItemSecondPrice : Script ()
+test_vickrey_singleItemSecondPrice = do
+  let terms = singleLotTerms with direction = Forward; lotTerms = (LotTerms with supply = 1.0; amountStep = 1.0; reservePrice = 0.0)
+  charges vickrey terms
+    [ (0, [(Quote with price = 10.0; amount = 1.0)])
+    , (1, [(Quote with price = 8.0; amount = 1.0)])
+    , (2, [(Quote with price = 6.0; amount = 1.0)])
+    ]
+    === Map.fromList [(0, 8.0)]
+
+-- A single bidder for a single item pays the reserve price.
+test_vickrey_singleItemReserveWhenAlone : Script ()
+test_vickrey_singleItemReserveWhenAlone = do
+  let terms = singleLotTerms with direction = Forward; lotTerms = (LotTerms with supply = 1.0; amountStep = 1.0; reservePrice = 5.0)
+  charges vickrey terms [(0, [(Quote with price = 10.0; amount = 1.0)])] === Map.fromList [(0, 5.0)]
+
+-- In a reverse single-item auction the winner is paid the second-lowest ask, or the reserve when alone.
+test_vickrey_reverseSingleItem : Script ()
+test_vickrey_reverseSingleItem = do
+  let terms = singleLotTerms with direction = Reverse; lotTerms = (LotTerms with supply = 1.0; amountStep = 1.0; reservePrice = 10.0)
+  charges vickrey terms
+    [ (0, [(Quote with price = 3.0; amount = 1.0)])
+    , (1, [(Quote with price = 4.0; amount = 1.0)])
+    , (2, [(Quote with price = 6.0; amount = 1.0)])
+    ]
+    === Map.fromList [(0, 4.0)]
+  charges vickrey terms [(0, [(Quote with price = 3.0; amount = 1.0)])] === Map.fromList [(0, 10.0)]
+
+-- The price of a bid is computed without any of its quotes, not only the winning one.
+test_vickrey_removesEveryQuoteOfTheBid : Script ()
+test_vickrey_removesEveryQuoteOfTheBid = do
+  let terms = singleLotTerms with direction = Forward; lotTerms = (LotTerms with supply = 1.0; amountStep = 1.0; reservePrice = 0.0)
+  charges vickrey terms
+    [ (0, [ (Quote with price = 9.0; amount = 1.0)
+          , (Quote with price = 7.0; amount = 1.0)
+          ])
+    , (1, [(Quote with price = 6.0; amount = 1.0)])
+    ]
+    === Map.fromList [(0, 6.0)]
+
+-- With several units each winner pays the value of the quotes it displaces.
+test_vickrey_multiUnitDisplacedValue : Script ()
+test_vickrey_multiUnitDisplacedValue = do
+  let terms = singleLotTerms with direction = Forward; lotTerms = (LotTerms with supply = 10.0; amountStep = 1.0; reservePrice = 0.0)
+  charges vickrey terms
+    [ (0, [(Quote with price = 10.0; amount = 4.0)])
+    , (1, [(Quote with price = 8.0; amount = 4.0)])
+    , (2, [(Quote with price = 6.0; amount = 4.0)])
+    ]
+    === Map.fromList [(0, 12.0), (1, 12.0), (2, 0.0)]
+
+-- When two bids tie for one unit the winner pays the tied price.
+test_vickrey_tieAtTheMargin : Script ()
+test_vickrey_tieAtTheMargin = do
+  let terms = singleLotTerms with direction = Forward; lotTerms = (LotTerms with supply = 1.0; amountStep = 1.0; reservePrice = 0.0)
+  charges vickrey terms
+    [ (0, [(Quote with price = 5.0; amount = 1.0)])
+    , (1, [(Quote with price = 5.0; amount = 1.0)])
+    ]
+    === Map.fromList [(0, 5.0)]
+
+
+-- Testing the properties every pricing rule must hold
+------------------------------------------------------
+
+-- In every forward case no rule charges a bid more than its own quotes.
+test_pricing_forwardNeverAboveOwnQuotes : Script ()
+test_pricing_forwardNeverAboveOwnQuotes = do
+  forA_ [c | c <- clearingCases, c.direction == Forward] $ \c -> do
+    let terms = singleLotTerms with direction = c.direction; lotTerms = c.lotTerms
+        own = charges payAsBid terms c.bids
+    forA_ nativePricingMechanisms $ \mechanism ->
+      forA_ (Map.toList (charges mechanism.pricingRule terms c.bids)) $ \(bidId, charge) ->
+        checkCase (c.name <> ", " <> mechanism.name <> ": bid " <> show bidId <> " is charged " <> show charge)
+          (charge <= fromOptional 0.0 (Map.lookup bidId own))
+
+-- In every reverse case no rule pays a bid less than its own asks.
+test_pricing_reverseNeverBelowOwnAsks : Script ()
+test_pricing_reverseNeverBelowOwnAsks = do
+  forA_ [c | c <- clearingCases, c.direction == Reverse] $ \c -> do
+    let terms = singleLotTerms with direction = c.direction; lotTerms = c.lotTerms
+        own = charges payAsBid terms c.bids
+    forA_ nativePricingMechanisms $ \mechanism ->
+      forA_ (Map.toList (charges mechanism.pricingRule terms c.bids)) $ \(bidId, payment) ->
+        checkCase (c.name <> ", " <> mechanism.name <> ": bid " <> show bidId <> " is paid " <> show payment)
+          (payment >= fromOptional 0.0 (Map.lookup bidId own))
+
+-- In every forward case no rule charges less than the reserve price per awarded unit.
+test_pricing_forwardAtLeastReserve : Script ()
+test_pricing_forwardAtLeastReserve = do
+  forA_ [c | c <- clearingCases, c.direction == Forward] $ \c -> do
+    let terms = singleLotTerms with direction = c.direction; lotTerms = c.lotTerms
+        awarded = Map.fromListWithR (+) [(award.bidId, award.amount) | award <- awardAmountPerQuote terms.direction terms.lotTerms c.bids]
+    forA_ nativePricingMechanisms $ \mechanism ->
+      forA_ (Map.toList awarded) $ \(bidId, amount) ->
+        checkCase (c.name <> ", " <> mechanism.name <> ": bid " <> show bidId <> " is charged below the reserve")
+          (fromOptional 0.0 (Map.lookup bidId (charges mechanism.pricingRule terms c.bids)) >= c.lotTerms.reservePrice * amount)
+
+-- In every reverse case no rule pays out more than the supply times the reserve price, which is what the principal reserves.
+test_pricing_reverseWithinPrincipalReserve : Script ()
+test_pricing_reverseWithinPrincipalReserve = do
+  forA_ [c | c <- clearingCases, c.direction == Reverse] $ \c -> do
+    let terms = singleLotTerms with direction = c.direction; lotTerms = c.lotTerms
+    forA_ nativePricingMechanisms $ \mechanism ->
+      checkCase (c.name <> ", " <> mechanism.name <> ": payments exceed the principal's reservation")
+        (sum (Map.values (charges mechanism.pricingRule terms c.bids)) <= c.lotTerms.reservePrice * c.lotTerms.supply)

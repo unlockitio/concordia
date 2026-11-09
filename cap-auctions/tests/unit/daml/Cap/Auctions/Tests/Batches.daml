@@ -1,0 +1,194 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Auctions.Tests.Batches where
+
+import DA.Action (replicateA)
+import DA.Assert ((===))
+import qualified DA.Map as Map
+import Daml.Script
+
+import Splice.Api.Token.MetadataV1 (emptyMetadata)
+import qualified Splice.Api.Token.AllocationV2 as Alloc
+import Splice.TokenStandard.Utils (basicAccount)
+
+import Cap.Auctions.Types (Funding (..))
+import Cap.Auctions.Funding (Batch (..), buildBatchesByAccount, lastIterationFinalizer, unsettledAllocations)
+
+import Cap.Auctions.Tests.Fixtures (AllocationStandIn (..), aliceParty, bobParty, carolParty, lotAdminParty, paymentAdminParty, principalParty)
+
+
+-- Testing buildBatchesByAccount
+--------------------------------
+
+-- Each admin gets one batch with its legs and the fundings under it whose account is on those legs, so the loser's fundings are left out and the principal's are in both batches.
+test_buildBatchesByAccount_batchPerAdmin : Script ()
+test_buildBatchesByAccount_batchPerAdmin = do
+  owner <- allocateParty "owner"
+  [principalUsdCid, principalLotCid, aliceUsdCid, aliceLotCid, carolUsdCid, carolLotCid] <-
+    replicateA 6 (submit owner (createCmd AllocationStandIn with owner))
+  let principalUsd = Funding with account = basicAccount principalParty; allocation = coerceContractId principalUsdCid
+      principalLot = Funding with account = basicAccount principalParty; allocation = coerceContractId principalLotCid
+      aliceUsd = Funding with account = basicAccount aliceParty; allocation = coerceContractId aliceUsdCid
+      aliceLot = Funding with account = basicAccount aliceParty; allocation = coerceContractId aliceLotCid
+      carolUsd = Funding with account = basicAccount carolParty; allocation = coerceContractId carolUsdCid
+      carolLot = Funding with account = basicAccount carolParty; allocation = coerceContractId carolLotCid
+      paymentLeg = Alloc.TransferLeg with
+        transferLegId = "0/payment"
+        sender = basicAccount aliceParty
+        receiver = basicAccount principalParty
+        amount = 32.0
+        instrumentId = "USD"
+        meta = emptyMetadata
+      lotLeg = Alloc.TransferLeg with
+        transferLegId = "0/lot"
+        sender = basicAccount principalParty
+        receiver = basicAccount aliceParty
+        amount = 4.0
+        instrumentId = "LOT"
+        meta = emptyMetadata
+  buildBatchesByAccount
+    [ Map.fromList [(paymentAdminParty, principalUsd), (lotAdminParty, principalLot)]
+    , Map.fromList [(paymentAdminParty, aliceUsd), (lotAdminParty, aliceLot)]
+    , Map.fromList [(paymentAdminParty, carolUsd), (lotAdminParty, carolLot)]
+    ]
+    [(paymentAdminParty, paymentLeg), (lotAdminParty, lotLeg)]
+    === [ Batch with admin = lotAdminParty; legs = [lotLeg]; fundings = [principalLot, aliceLot]
+        , Batch with admin = paymentAdminParty; legs = [paymentLeg]; fundings = [principalUsd, aliceUsd]
+        ]
+
+-- When the lot and the payment share an admin, their legs go into one batch.
+test_buildBatchesByAccount_sharedAdmin : Script ()
+test_buildBatchesByAccount_sharedAdmin = do
+  owner <- allocateParty "owner"
+  [principalCid, aliceCid] <- replicateA 2 (submit owner (createCmd AllocationStandIn with owner))
+  let principal = Funding with account = basicAccount principalParty; allocation = coerceContractId principalCid
+      alice = Funding with account = basicAccount aliceParty; allocation = coerceContractId aliceCid
+      paymentLeg = Alloc.TransferLeg with
+        transferLegId = "0/payment"
+        sender = basicAccount aliceParty
+        receiver = basicAccount principalParty
+        amount = 32.0
+        instrumentId = "USD"
+        meta = emptyMetadata
+      lotLeg = Alloc.TransferLeg with
+        transferLegId = "0/lot"
+        sender = basicAccount principalParty
+        receiver = basicAccount aliceParty
+        amount = 4.0
+        instrumentId = "LOT"
+        meta = emptyMetadata
+  buildBatchesByAccount
+    [Map.fromList [(paymentAdminParty, principal)], Map.fromList [(paymentAdminParty, alice)]]
+    [(paymentAdminParty, paymentLeg), (paymentAdminParty, lotLeg)]
+    === [Batch with admin = paymentAdminParty; legs = [paymentLeg, lotLeg]; fundings = [principal, alice]]
+
+-- A funding under another admin is not put into a batch, even when its account is on the batch's legs.
+test_buildBatchesByAccount_sameAccountOtherAdmin : Script ()
+test_buildBatchesByAccount_sameAccountOtherAdmin = do
+  owner <- allocateParty "owner"
+  [principalUsdCid, aliceUsdCid, aliceLotCid] <- replicateA 3 (submit owner (createCmd AllocationStandIn with owner))
+  let principalUsd = Funding with account = basicAccount principalParty; allocation = coerceContractId principalUsdCid
+      aliceUsd = Funding with account = basicAccount aliceParty; allocation = coerceContractId aliceUsdCid
+      aliceLot = Funding with account = basicAccount aliceParty; allocation = coerceContractId aliceLotCid
+      paymentLeg = Alloc.TransferLeg with
+        transferLegId = "0/payment"
+        sender = basicAccount aliceParty
+        receiver = basicAccount principalParty
+        amount = 32.0
+        instrumentId = "USD"
+        meta = emptyMetadata
+  buildBatchesByAccount
+    [ Map.fromList [(paymentAdminParty, principalUsd)]
+    , Map.fromList [(paymentAdminParty, aliceUsd), (lotAdminParty, aliceLot)]
+    ]
+    [(paymentAdminParty, paymentLeg)]
+    === [Batch with admin = paymentAdminParty; legs = [paymentLeg]; fundings = [principalUsd, aliceUsd]]
+
+-- No legs, no batches.
+test_buildBatchesByAccount_noLegs : Script ()
+test_buildBatchesByAccount_noLegs = do
+  owner <- allocateParty "owner"
+  principalCid <- submit owner (createCmd AllocationStandIn with owner)
+  buildBatchesByAccount
+    [Map.fromList [(paymentAdminParty, Funding with account = basicAccount principalParty; allocation = coerceContractId principalCid)]]
+    []
+    === []
+
+
+-- Testing lastIterationFinalizer
+---------------------------------
+
+-- A funding authorizes every side of the batch's legs where its account is the sender or the receiver, and ends iteration.
+test_lastIterationFinalizer_sidesOfTheAccount : Script ()
+test_lastIterationFinalizer_sidesOfTheAccount = do
+  owner <- allocateParty "owner"
+  [principalCid, aliceCid] <- replicateA 2 (submit owner (createCmd AllocationStandIn with owner))
+  let principal = Funding with account = basicAccount principalParty; allocation = coerceContractId principalCid
+      alice = Funding with account = basicAccount aliceParty; allocation = coerceContractId aliceCid
+      aliceLeg = Alloc.TransferLeg with
+        transferLegId = "0/payment"
+        sender = basicAccount aliceParty
+        receiver = basicAccount principalParty
+        amount = 32.0
+        instrumentId = "USD"
+        meta = emptyMetadata
+      bobLeg = Alloc.TransferLeg with
+        transferLegId = "1/payment"
+        sender = basicAccount bobParty
+        receiver = basicAccount principalParty
+        amount = 24.0
+        instrumentId = "USD"
+        meta = emptyMetadata
+  lastIterationFinalizer [aliceLeg, bobLeg] principal
+    === Alloc.FinalizedAllocation with
+          allocationCid = principal.allocation
+          extraTransferLegSides =
+            [ Alloc.TransferLegSide with
+                transferLegId = "0/payment"
+                side = Alloc.ReceiverSide
+                otherside = basicAccount aliceParty
+                amount = 32.0
+                instrumentId = "USD"
+                meta = emptyMetadata
+            , Alloc.TransferLegSide with
+                transferLegId = "1/payment"
+                side = Alloc.ReceiverSide
+                otherside = basicAccount bobParty
+                amount = 24.0
+                instrumentId = "USD"
+                meta = emptyMetadata
+            ]
+          nextIterationFunding = None
+  lastIterationFinalizer [aliceLeg, bobLeg] alice
+    === Alloc.FinalizedAllocation with
+          allocationCid = alice.allocation
+          extraTransferLegSides =
+            [ Alloc.TransferLegSide with
+                transferLegId = "0/payment"
+                side = Alloc.SenderSide
+                otherside = basicAccount principalParty
+                amount = 32.0
+                instrumentId = "USD"
+                meta = emptyMetadata
+            ]
+          nextIterationFunding = None
+
+
+-- Testing unsettledAllocations
+-------------------------------
+
+-- The allocations of fundings in no batch are unsettled, each listed once even when two fundings share it.
+test_unsettledAllocations_notInAnyBatch : Script ()
+test_unsettledAllocations_notInAnyBatch = do
+  owner <- allocateParty "owner"
+  [principalCid, aliceCid, carolUsdCid, carolLotCid] <- replicateA 4 (submit owner (createCmd AllocationStandIn with owner))
+  let principal = Funding with account = basicAccount principalParty; allocation = coerceContractId principalCid
+      alice = Funding with account = basicAccount aliceParty; allocation = coerceContractId aliceCid
+      carolUsd = Funding with account = basicAccount carolParty; allocation = coerceContractId carolUsdCid
+      carolLot = Funding with account = basicAccount carolParty; allocation = coerceContractId carolLotCid
+      carol = Map.fromList [(paymentAdminParty, carolUsd), (lotAdminParty, carolLot)]
+      batch = Batch with admin = paymentAdminParty; legs = []; fundings = [principal, alice]
+  unsettledAllocations
+    [Map.fromList [(paymentAdminParty, principal)], Map.fromList [(paymentAdminParty, alice)], carol, carol]
+    [batch]
+    === [carolLot.allocation, carolUsd.allocation]

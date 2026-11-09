@@ -6,7 +6,6 @@ cap-governance/    approving effects on live state    — docs/governance/intro.
 cap-auctions/      selling
 
 examples/          formats built on the core, one per tier
-examples/lib/      vendored DARs only the examples need
 lib/               vendored Token Standard DARs the interfaces bind to
 ```
 

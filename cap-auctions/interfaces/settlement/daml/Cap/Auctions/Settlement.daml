@@ -10,12 +10,13 @@ import Splice.Util (require)
 import Cap.Core.Types (ExecutionAction (..), ExecutionCore, ResolutionInfo)
 import Cap.Core.Utils (entitled, requireExpired, requireOpen)
 import Cap.Auctions.Types (Funding)
-import Cap.Auctions.Funding (Batch, Finalizer, SettleBatchContext, cancelAllocations, settleBatches, settlementOf, unsettledAllocations)
+import Cap.Auctions.Funding (Batch, SettleBatchContext)
 
 data SettlementView = SettlementView
   with
     executionCore : ExecutionCore
     resolutionInfo : ResolutionInfo
+    executors : Optional [Party]
     batches : [Batch]
     fundings : [Map Party Funding]
     meta : Metadata
@@ -43,9 +44,9 @@ data Settlement_ExpireResult = Settlement_ExpireResult
 interface Settlement where
   viewtype SettlementView
 
-  settlement_cancelImpl : Settlement_Cancel -> Update Settlement_CancelResult
+  settlement_settleImpl : Settlement_Settle -> Update Settlement_SettleResult
 
-  settlement_finalizer : Finalizer
+  settlement_cancelImpl : Settlement_Cancel -> Update Settlement_CancelResult
 
   choice Settlement_Settle : Settlement_SettleResult
     with
@@ -55,15 +56,11 @@ interface Settlement where
     controller actors
     do
       let v = view this
-          settlement = settlementOf v.resolutionInfo
       now <- getTime
       requireOpen "the settlement window is open" now v.executionCore.opensAt v.executionCore.expiresAt
       require "the actors are entitled to settle"
         (entitled v.executionCore.availableActions EA_Execute actors)
-      require "the settlement settles at least one batch" (not (null v.batches))
-      batches <- settleBatches (settlement_finalizer this) settlement settleBatchContexts v.batches
-      cancelled <- cancelAllocations settlement cancelContexts (unsettledAllocations v.fundings v.batches)
-      pure Settlement_SettleResult with batches; cancelled; meta = emptyMetadata
+      settlement_settleImpl this (Settlement_Settle with ..)
 
   choice Settlement_Cancel : Settlement_CancelResult
     with
@@ -73,6 +70,8 @@ interface Settlement where
     do
       let v = view this
       now <- getTime
+      require "the cancellation window opens no earlier than the settlement window"
+        (v.executionCore.cancelAfter >= v.executionCore.opensAt)
       requireOpen "the cancellation window is open" now v.executionCore.cancelAfter None
       require "the actors are entitled to cancel"
         (entitled v.executionCore.availableActions EA_Cancel actors)

@@ -1,0 +1,491 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Auctions.Tests.ClearAndSettle where
+
+import DA.Assert ((===))
+import DA.Foldable (forA_)
+import DA.List (last, sort)
+import qualified DA.Map as Map
+import qualified DA.Set as Set
+import Daml.Script
+
+import Splice.Api.Token.MetadataV1 (emptyMetadata)
+import Splice.Api.Token.HoldingV2 (InstrumentId (..))
+import qualified Splice.Api.Token.AllocationV2 as Alloc
+import Splice.TokenStandard.Utils (basicAccount)
+import Splice.Testing.Utils (discloseMany', expectMessageContains, submitMustFail'')
+import Splice.Testing.TokenStandard.WalletClientV2 (checkBalance, listAllocationsV2)
+
+import qualified Splice.Testing.Registries.TestTokenV2_RegistryV2 as TestTokenV2Registry
+
+import Cap.Auctions.Types (Direction (..), LotTerms (..), Quote (..))
+import Cap.Auctions.Funding (settlementOf)
+import Cap.Auctions.SingleLot (ClearAndSettleResult (..), payAsBidMechanism, uniformPriceMechanism, vickreyMechanism)
+
+import Cap.Auctions.Tests.Env
+import Cap.Auctions.Tests.Harness
+
+
+-- Testing clearAndSettleSingleLotFromEmptyLegsAllocations
+----------------------------------------------------------
+
+-- A forward pay-as-bid auction with bids that pass validSingleLotBid settles the two bids within the reserve price, and cancelling the allocations of the bid below it leaves no allocations.
+test_clearAndSettle_forwardPayAsBid : Script ()
+test_clearAndSettle_forwardPayAsBid = do
+  env <- setupTest "forward-pay-as-bid"
+  principalLot <- allocateForThisLot env env.principal env.lot 10.0
+  principalPayment <- allocateForThisLot env env.principal env.payment 0.0
+  let principalFundings = Map.fromList [(env.lotAdmin, principalLot), (env.paymentAdmin, principalPayment)]
+
+  bids <- forA [(env.alice, 8.0, 40.0), (env.bob, 6.0, 24.0), (env.carol, 4.0, 16.0)] $ \(bidder, price, reserved) -> do
+    payment <- allocateForThisLot env bidder env.payment reserved
+    lot <- allocateForThisLot env bidder env.lot 0.0
+    let fundings = Map.fromList [(env.paymentAdmin, payment), (env.lotAdmin, lot)]
+    bidCid <- submit bidder $ createCmd env.unfundedBid with
+      signatories = [bidder]
+      fundings
+      quotes = [Quote with price; amount = 4.0]
+    unmet <- submit env.authority $ exerciseCmd env.probe Probe_ValidSingleLotBid with
+      resolutionInfo = env.resolutionInfo
+      settlement = env.settlement
+      terms = env.terms
+      schedule = env.schedule
+      bidCid
+    unmet === []
+    pure (bidCid, fundings)
+
+  let allFundings = principalFundings :: map snd bids
+  (settleBatchContexts, settleDisclosures) <- getSettleBatchContexts env allFundings
+  cleared <- submit (actAs env.authority <> discloseMany' settleDisclosures) $
+    exerciseCmd env.probe Probe_ClearAndSettle with
+      resolutionInfo = env.resolutionInfo
+      settlement = env.settlement
+      terms = env.terms
+      principalFundings
+      bidCids = map fst bids
+      settleBatchContexts
+  length cleared.settled === 2
+  let carolFundings = snd (last bids)
+  sort cleared.unsettled === sort [funding.allocation | funding <- Map.values carolFundings]
+  (cancelExtraArgs, cancelDisclosures) <- getCancelContexts env [carolFundings]
+  cancelled <- submit (actAs env.authority <> discloseMany' cancelDisclosures) $
+    exerciseCmd env.probe Probe_CancelAllocations with
+      settlement = env.settlement
+      cancelContexts = cancelExtraArgs
+      allocationCids = cleared.unsettled
+  length cancelled === 2
+  checkBalance env.principal env.lot 92.0
+  checkBalance env.principal env.payment 1056.0
+  checkBalance env.alice env.lot 104.0
+  checkBalance env.alice env.payment 968.0
+  checkBalance env.bob env.lot 104.0
+  checkBalance env.bob env.payment 976.0
+  checkBalance env.carol env.lot 100.0
+  checkBalance env.carol env.payment 1000.0
+  forA_ [env.principal, env.alice, env.bob, env.carol] $ \party -> do
+    allocations <- listAllocationsV2 (basicAccount party) party
+    allocations === []
+
+-- A resolution that names a mechanism the resolver does not support aborts before clearing.
+test_clearAndSettle_unsupportedMechanism : Script ()
+test_clearAndSettle_unsupportedMechanism = do
+  env <- setupTest "unsupported-mechanism"
+  submitMustFail'' (expectMessageContains "the mechanism unknown is not supported") (actAs env.authority) $
+    exerciseCmd env.probe Probe_ClearAndSettle with
+      resolutionInfo = (env.resolutionInfo with mechanism = "unknown")
+      settlement = env.settlement
+      terms = env.terms
+      principalFundings = Map.empty
+      bidCids = []
+      settleBatchContexts = Map.empty
+
+-- A reverse uniform price auction settles through the registries: the principal pays every winning seller the highest awarded ask from its USD reservation and receives their LOT, and the seller above the reserve keeps everything.
+test_clearAndSettle_reverseUniformPrice : Script ()
+test_clearAndSettle_reverseUniformPrice = do
+  env <- setupTest "reverse-uniform-price"
+  let resolutionInfo = env.resolutionInfo with mechanism = uniformPriceMechanism.name
+      terms = env.terms with direction = Reverse
+  principalUsd <- allocateForThisLot env env.principal env.payment 50.0
+  principalLot <- allocateForThisLot env env.principal env.lot 0.0
+  let principalFundings = Map.fromList [(env.paymentAdmin, principalUsd), (env.lotAdmin, principalLot)]
+  bids <- forA [(env.alice, 3.0), (env.bob, 4.0), (env.carol, 6.0)] $ \(seller, price) -> do
+    lot <- allocateForThisLot env seller env.lot 4.0
+    payment <- allocateForThisLot env seller env.payment 0.0
+    let fundings = Map.fromList [(env.lotAdmin, lot), (env.paymentAdmin, payment)]
+    bidCid <- submit seller $ createCmd env.unfundedBid with
+      signatories = [seller]
+      resolutionInfo
+      terms
+      fundings
+      quotes = [Quote with price; amount = 4.0]
+    pure (bidCid, fundings)
+  (settleBatchContexts, settleDisclosures) <- getSettleBatchContexts env (principalFundings :: map snd bids)
+  cleared <- submit (actAs env.authority <> discloseMany' settleDisclosures) $
+    exerciseCmd env.probe Probe_ClearAndSettle with
+      resolutionInfo
+      settlement = env.settlement
+      terms
+      principalFundings
+      bidCids = map fst bids
+      settleBatchContexts
+  let carolFundings = snd (last bids)
+  sort cleared.unsettled === sort [funding.allocation | funding <- Map.values carolFundings]
+  (cancelContexts, cancelDisclosures) <- getCancelContexts env [carolFundings]
+  submit (actAs env.authority <> discloseMany' cancelDisclosures) $
+    exerciseCmd env.probe Probe_CancelAllocations with
+      settlement = env.settlement
+      cancelContexts
+      allocationCids = cleared.unsettled
+  checkBalance env.principal env.lot 108.0
+  checkBalance env.principal env.payment 968.0
+  checkBalance env.alice env.lot 96.0
+  checkBalance env.alice env.payment 1016.0
+  checkBalance env.bob env.lot 96.0
+  checkBalance env.bob env.payment 1016.0
+  checkBalance env.carol env.lot 100.0
+  checkBalance env.carol env.payment 1000.0
+  forA_ [env.principal, env.alice, env.bob, env.carol] $ \party -> do
+    allocations <- listAllocationsV2 (basicAccount party) party
+    allocations === []
+
+-- With no bids, or no quote within the reserve, there are no batches, nothing aborts without settle contexts, and every allocation is unsettled.
+test_clearAndSettle_nothingToSettle : Script ()
+test_clearAndSettle_nothingToSettle = do
+  env <- setupTest "nothing-to-settle"
+  principalLot <- allocateForThisLot env env.principal env.lot 10.0
+  principalUsd <- allocateForThisLot env env.principal env.payment 0.0
+  carolUsd <- allocateForThisLot env env.carol env.payment 16.0
+  carolLot <- allocateForThisLot env env.carol env.lot 0.0
+  let principalFundings = Map.fromList [(env.lotAdmin, principalLot), (env.paymentAdmin, principalUsd)]
+  belowReserveCid <- submit env.carol $ createCmd env.unfundedBid with
+    signatories = [env.carol]
+    fundings = Map.fromList [(env.lotAdmin, carolLot), (env.paymentAdmin, carolUsd)]
+    quotes = [Quote with price = 4.0; amount = 4.0]
+  noBids <- submit env.authority $ exerciseCmd env.probe Probe_ClearAndSettle with
+    resolutionInfo = env.resolutionInfo
+    settlement = env.settlement
+    terms = env.terms
+    principalFundings
+    bidCids = []
+    settleBatchContexts = Map.empty
+  noBids === ClearAndSettleResult with settled = []; unsettled = [principalLot.allocation, principalUsd.allocation]
+  belowReserve <- submit env.authority $ exerciseCmd env.probe Probe_ClearAndSettle with
+    resolutionInfo = env.resolutionInfo
+    settlement = env.settlement
+    terms = env.terms
+    principalFundings
+    bidCids = [belowReserveCid]
+    settleBatchContexts = Map.empty
+  belowReserve === ClearAndSettleResult with
+    settled = []
+    unsettled = [principalLot.allocation, principalUsd.allocation, carolLot.allocation, carolUsd.allocation]
+
+-- When the lot and the payment share an admin, each party's single allocation authorizes both legs and one batch settles them.
+test_clearAndSettle_sharedAdmin : Script ()
+test_clearAndSettle_sharedAdmin = do
+  env <- setupTest "shared-admin"
+  let sharedLot = InstrumentId with admin = env.paymentAdmin; id = "LOT"
+      terms = env.terms with lots = Map.fromList [(sharedLot, LotTerms with supply = 10.0; amountStep = 1.0; reservePrice = 5.0)]
+  TestTokenV2Registry.mint env.paymentRegistry (basicAccount env.principal) "LOT" 100.0
+  principalFunding <- allocateForThisLot env env.principal sharedLot 10.0
+  aliceFunding <- allocateForThisLot env env.alice env.payment 32.0
+  aliceCid <- submit env.alice $ createCmd env.unfundedBid with
+    terms
+    fundings = Map.fromList [(env.paymentAdmin, aliceFunding)]
+  let principalFundings = Map.fromList [(env.paymentAdmin, principalFunding)]
+  (settleBatchContexts, disclosures) <- getSettleBatchContexts env [principalFundings, Map.fromList [(env.paymentAdmin, aliceFunding)]]
+  cleared <- submit (actAs env.authority <> discloseMany' disclosures) $ exerciseCmd env.probe Probe_ClearAndSettle with
+    resolutionInfo = env.resolutionInfo
+    settlement = env.settlement
+    terms
+    principalFundings
+    bidCids = [aliceCid]
+    settleBatchContexts
+  length cleared.settled === 1
+  cleared.unsettled === []
+  checkBalance env.principal sharedLot 96.0
+  checkBalance env.principal env.payment 1032.0
+  checkBalance env.alice sharedLot 4.0
+  checkBalance env.alice env.payment 968.0
+  forA_ [env.principal, env.alice] $ \party -> do
+    allocations <- listAllocationsV2 (basicAccount party) party
+    allocations === []
+
+-- With two resolver authorities and no explicit executors, the allocations name both authorities as executors and the settlement acts as both.
+test_clearAndSettle_twoAuthorities : Script ()
+test_clearAndSettle_twoAuthorities = do
+  env0 <- setupTest "two-authorities"
+  let resolutionInfo = env0.resolutionInfo with
+        resolver = env0.resolutionInfo.resolver with authorities = Set.fromList [env0.authority, env0.outsider]
+      env = env0 with resolutionInfo; settlement = settlementOf resolutionInfo None
+  probe <- submit (actAs [env.authority, env.outsider]) $ createCmd Probe with owners = [env.authority, env.outsider]
+  principalLot <- allocateForThisLot env env.principal env.lot 10.0
+  principalUsd <- allocateForThisLot env env.principal env.payment 0.0
+  aliceUsd <- allocateForThisLot env env.alice env.payment 32.0
+  aliceLot <- allocateForThisLot env env.alice env.lot 0.0
+  aliceCid <- submit env.alice $ createCmd env.unfundedBid with
+    observers = [env.authority, env.outsider]
+    resolutionInfo
+    terms = env.terms
+    fundings = Map.fromList [(env.lotAdmin, aliceLot), (env.paymentAdmin, aliceUsd)]
+  let principalFundings = Map.fromList [(env.lotAdmin, principalLot), (env.paymentAdmin, principalUsd)]
+  env.settlement.executors === sort [env.authority, env.outsider]
+  (settleBatchContexts, disclosures) <- getSettleBatchContexts env [principalFundings, Map.fromList [(env.lotAdmin, aliceLot), (env.paymentAdmin, aliceUsd)]]
+  cleared <- submit (actAs [env.authority, env.outsider] <> discloseMany' disclosures) $ exerciseCmd probe Probe_ClearAndSettle with
+    resolutionInfo
+    settlement = env.settlement
+    terms = env.terms
+    principalFundings
+    bidCids = [aliceCid]
+    settleBatchContexts
+  length cleared.settled === 2
+  checkBalance env.principal env.lot 96.0
+  checkBalance env.principal env.payment 1032.0
+  checkBalance env.alice env.lot 104.0
+  checkBalance env.alice env.payment 968.0
+
+-- With explicit executors, the allocations name them instead of the authorities and the settlement acts as them.
+test_clearAndSettle_explicitExecutors : Script ()
+test_clearAndSettle_explicitExecutors = do
+  env0 <- setupTest "explicit-executors"
+  let terms = env0.terms with allocationTerms = env0.terms.allocationTerms with executors = Some [env0.outsider]
+      env = env0 with terms; settlement = settlementOf env0.resolutionInfo (Some [env0.outsider])
+  probe <- submit env.outsider $ createCmd Probe with owners = [env.outsider]
+  principalLot <- allocateForThisLot env env.principal env.lot 10.0
+  principalUsd <- allocateForThisLot env env.principal env.payment 0.0
+  aliceUsd <- allocateForThisLot env env.alice env.payment 32.0
+  aliceLot <- allocateForThisLot env env.alice env.lot 0.0
+  aliceCid <- submit env.alice $ createCmd env.unfundedBid with
+    observers = [env.outsider]
+    resolutionInfo = env.resolutionInfo
+    terms
+    fundings = Map.fromList [(env.lotAdmin, aliceLot), (env.paymentAdmin, aliceUsd)]
+  let principalFundings = Map.fromList [(env.lotAdmin, principalLot), (env.paymentAdmin, principalUsd)]
+  env.settlement.executors === [env.outsider]
+  (settleBatchContexts, disclosures) <- getSettleBatchContexts env [principalFundings, Map.fromList [(env.lotAdmin, aliceLot), (env.paymentAdmin, aliceUsd)]]
+  cleared <- submit (actAs env.outsider <> discloseMany' disclosures) $ exerciseCmd probe Probe_ClearAndSettle with
+    resolutionInfo = env.resolutionInfo
+    settlement = env.settlement
+    terms
+    principalFundings
+    bidCids = [aliceCid]
+    settleBatchContexts
+  length cleared.settled === 2
+  checkBalance env.principal env.lot 96.0
+  checkBalance env.principal env.payment 1032.0
+  checkBalance env.alice env.lot 104.0
+  checkBalance env.alice env.payment 968.0
+
+
+-- Testing clearSingleLot
+-------------------------
+
+-- In a forward auction each winner gets one payment leg to the principal for its charge and one lot leg from the principal for its award, with leg ids from its position; quotes of one bid are summed and a loser gets no legs.
+test_clearSingleLot_forwardLegs : Script ()
+test_clearSingleLot_forwardLegs = do
+  env <- setupTest "forward-legs"
+  principalLot <- allocateForThisLot env env.principal env.lot 10.0
+  principalUsd <- allocateForThisLot env env.principal env.payment 0.0
+  bidCids <- forA
+    [ (env.alice, [(Quote with price = 8.0; amount = 3.0), (Quote with price = 7.0; amount = 2.0)])
+    , (env.bob, [Quote with price = 6.0; amount = 4.0])
+    , (env.carol, [Quote with price = 4.0; amount = 4.0])
+    ] $ \(bidder, quotes) -> do
+      payment <- allocateForThisLot env bidder env.payment 0.0
+      lot <- allocateForThisLot env bidder env.lot 0.0
+      submit bidder $ createCmd env.unfundedBid with
+        signatories = [bidder]
+        fundings = Map.fromList [(env.paymentAdmin, payment), (env.lotAdmin, lot)]
+        quotes
+  legs <- submit env.authority $ exerciseCmd env.probe Probe_ClearSingleLot with
+    mechanism = payAsBidMechanism.name
+    terms = env.terms
+    principalFundings = Map.fromList [(env.lotAdmin, principalLot), (env.paymentAdmin, principalUsd)]
+    bidCids
+  legs ===
+    [ (env.paymentAdmin, Alloc.TransferLeg with
+        transferLegId = "0/payment"
+        sender = basicAccount env.alice
+        receiver = basicAccount env.principal
+        amount = 38.0
+        instrumentId = "USD"
+        meta = emptyMetadata)
+    , (env.lotAdmin, Alloc.TransferLeg with
+        transferLegId = "0/lot"
+        sender = basicAccount env.principal
+        receiver = basicAccount env.alice
+        amount = 5.0
+        instrumentId = "LOT"
+        meta = emptyMetadata)
+    , (env.paymentAdmin, Alloc.TransferLeg with
+        transferLegId = "1/payment"
+        sender = basicAccount env.bob
+        receiver = basicAccount env.principal
+        amount = 24.0
+        instrumentId = "USD"
+        meta = emptyMetadata)
+    , (env.lotAdmin, Alloc.TransferLeg with
+        transferLegId = "1/lot"
+        sender = basicAccount env.principal
+        receiver = basicAccount env.bob
+        amount = 4.0
+        instrumentId = "LOT"
+        meta = emptyMetadata)
+    ]
+
+-- In a reverse auction the principal pays each winning seller and the seller sends the lot to the principal.
+test_clearSingleLot_reverseLegs : Script ()
+test_clearSingleLot_reverseLegs = do
+  env <- setupTest "reverse-legs"
+  let terms = env.terms with direction = Reverse
+  principalLot <- allocateForThisLot env env.principal env.lot 0.0
+  principalUsd <- allocateForThisLot env env.principal env.payment 50.0
+  bidCids <- forA [(env.alice, 3.0), (env.bob, 4.0), (env.carol, 6.0)] $ \(seller, price) -> do
+    payment <- allocateForThisLot env seller env.payment 0.0
+    lot <- allocateForThisLot env seller env.lot 4.0
+    submit seller $ createCmd env.unfundedBid with
+      signatories = [seller]
+      terms
+      fundings = Map.fromList [(env.paymentAdmin, payment), (env.lotAdmin, lot)]
+      quotes = [Quote with price; amount = 4.0]
+  legs <- submit env.authority $ exerciseCmd env.probe Probe_ClearSingleLot with
+    mechanism = payAsBidMechanism.name
+    terms
+    principalFundings = Map.fromList [(env.lotAdmin, principalLot), (env.paymentAdmin, principalUsd)]
+    bidCids
+  legs ===
+    [ (env.paymentAdmin, Alloc.TransferLeg with
+        transferLegId = "0/payment"
+        sender = basicAccount env.principal
+        receiver = basicAccount env.alice
+        amount = 12.0
+        instrumentId = "USD"
+        meta = emptyMetadata)
+    , (env.lotAdmin, Alloc.TransferLeg with
+        transferLegId = "0/lot"
+        sender = basicAccount env.alice
+        receiver = basicAccount env.principal
+        amount = 4.0
+        instrumentId = "LOT"
+        meta = emptyMetadata)
+    , (env.paymentAdmin, Alloc.TransferLeg with
+        transferLegId = "1/payment"
+        sender = basicAccount env.principal
+        receiver = basicAccount env.bob
+        amount = 16.0
+        instrumentId = "USD"
+        meta = emptyMetadata)
+    , (env.lotAdmin, Alloc.TransferLeg with
+        transferLegId = "1/lot"
+        sender = basicAccount env.bob
+        receiver = basicAccount env.principal
+        amount = 4.0
+        instrumentId = "LOT"
+        meta = emptyMetadata)
+    ]
+
+-- A winner charged nothing, Vickrey with a single bidder with reserve price 0, gets only the lot leg.
+test_clearSingleLot_zeroChargeLotOnly : Script ()
+test_clearSingleLot_zeroChargeLotOnly = do
+  env <- setupTest "zero-charge"
+  let terms = env.terms with lots = Map.fromList [(env.lot, LotTerms with supply = 10.0; amountStep = 1.0; reservePrice = 0.0)]
+  principalLot <- allocateForThisLot env env.principal env.lot 10.0
+  principalUsd <- allocateForThisLot env env.principal env.payment 0.0
+  aliceUsd <- allocateForThisLot env env.alice env.payment 32.0
+  aliceLot <- allocateForThisLot env env.alice env.lot 0.0
+  aliceCid <- submit env.alice $ createCmd env.unfundedBid with
+    terms
+    fundings = Map.fromList [(env.paymentAdmin, aliceUsd), (env.lotAdmin, aliceLot)]
+  legs <- submit env.authority $ exerciseCmd env.probe Probe_ClearSingleLot with
+    mechanism = vickreyMechanism.name
+    terms
+    principalFundings = Map.fromList [(env.lotAdmin, principalLot), (env.paymentAdmin, principalUsd)]
+    bidCids = [aliceCid]
+  legs ===
+    [ (env.lotAdmin, Alloc.TransferLeg with
+        transferLegId = "0/lot"
+        sender = basicAccount env.principal
+        receiver = basicAccount env.alice
+        amount = 4.0
+        instrumentId = "LOT"
+        meta = emptyMetadata)
+    ]
+
+-- When two bids tie for the last unit, the bid presented first wins, so the order the caller chooses decides the tie.
+test_clearSingleLot_tieToFirstPresented : Script ()
+test_clearSingleLot_tieToFirstPresented = do
+  env <- setupTest "tie-first"
+  let terms = env.terms with lots = Map.fromList [(env.lot, LotTerms with supply = 1.0; amountStep = 1.0; reservePrice = 5.0)]
+  principalLot <- allocateForThisLot env env.principal env.lot 1.0
+  principalUsd <- allocateForThisLot env env.principal env.payment 0.0
+  [aliceCid, bobCid] <- forA [env.alice, env.bob] $ \bidder -> do
+    payment <- allocateForThisLot env bidder env.payment 6.0
+    lot <- allocateForThisLot env bidder env.lot 0.0
+    submit bidder $ createCmd env.unfundedBid with
+      signatories = [bidder]
+      terms
+      fundings = Map.fromList [(env.paymentAdmin, payment), (env.lotAdmin, lot)]
+      quotes = [Quote with price = 6.0; amount = 1.0]
+  forA_ [([aliceCid, bobCid], env.alice), ([bobCid, aliceCid], env.bob)] $ \(bidCids, winner) -> do
+    legs <- submit env.authority $ exerciseCmd env.probe Probe_ClearSingleLot with
+      mechanism = payAsBidMechanism.name
+      terms
+      principalFundings = Map.fromList [(env.lotAdmin, principalLot), (env.paymentAdmin, principalUsd)]
+      bidCids
+    legs ===
+      [ (env.paymentAdmin, Alloc.TransferLeg with
+          transferLegId = "0/payment"
+          sender = basicAccount winner
+          receiver = basicAccount env.principal
+          amount = 6.0
+          instrumentId = "USD"
+          meta = emptyMetadata)
+      , (env.lotAdmin, Alloc.TransferLeg with
+          transferLegId = "0/lot"
+          sender = basicAccount env.principal
+          receiver = basicAccount winner
+          amount = 1.0
+          instrumentId = "LOT"
+          meta = emptyMetadata)
+      ]
+
+-- A winner without a lot funding, or a principal without a payment funding, aborts the clearing.
+test_clearSingleLot_missingFunding : Script ()
+test_clearSingleLot_missingFunding = do
+  env <- setupTest "missing-funding"
+  principalLot <- allocateForThisLot env env.principal env.lot 10.0
+  principalUsd <- allocateForThisLot env env.principal env.payment 0.0
+  aliceUsd <- allocateForThisLot env env.alice env.payment 32.0
+  aliceLot <- allocateForThisLot env env.alice env.lot 0.0
+  let bid = env.unfundedBid with
+        fundings = Map.fromList [(env.paymentAdmin, aliceUsd), (env.lotAdmin, aliceLot)]
+  withoutLotCid <- submit env.alice $ createCmd bid with fundings = Map.fromList [(env.paymentAdmin, aliceUsd)]
+  fundedCid <- submit env.alice $ createCmd bid
+  submitMustFail'' (expectMessageContains ("bid 0 has no funding under admin " <> show env.lotAdmin)) (actAs env.authority) $
+    exerciseCmd env.probe Probe_ClearSingleLot with
+      mechanism = payAsBidMechanism.name
+      terms = env.terms
+      principalFundings = Map.fromList [(env.lotAdmin, principalLot), (env.paymentAdmin, principalUsd)]
+      bidCids = [withoutLotCid]
+  submitMustFail'' (expectMessageContains ("the principal has no funding under admin " <> show env.paymentAdmin)) (actAs env.authority) $
+    exerciseCmd env.probe Probe_ClearSingleLot with
+      mechanism = payAsBidMechanism.name
+      terms = env.terms
+      principalFundings = Map.fromList [(env.lotAdmin, principalLot)]
+      bidCids = [fundedCid]
+
+
+-- Testing expectSingleLot
+--------------------------
+
+-- Terms with no lot or with two lots abort, so the single lot helpers never run on them.
+test_expectSingleLot_notOneLot : Script ()
+test_expectSingleLot_notOneLot = do
+  env <- setupTest "not-one-lot"
+  let secondLot = InstrumentId with admin = env.lotAdmin; id = "LOT2"
+  forA_
+    [ env.terms with lots = Map.empty
+    , env.terms with lots = Map.insert secondLot (LotTerms with supply = 1.0; amountStep = 1.0; reservePrice = 1.0) env.terms.lots
+    ] $ \terms ->
+      submitMustFail'' (expectMessageContains "the auction has exactly one lot") (actAs env.authority) $
+        exerciseCmd env.probe Probe_ExpectSingleLot with terms

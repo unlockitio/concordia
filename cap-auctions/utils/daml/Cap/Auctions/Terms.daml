@@ -1,0 +1,61 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | Cap.Auctions.Terms checks that the terms and the schedule of an auction are
+-- well formed. Each check returns its unmet conditions.
+
+module Cap.Auctions.Terms
+  ( validLotTerms
+  , validAuctionTerms
+  , validAuctionSchedule
+  ) where
+
+import qualified DA.Map as Map
+import DA.Time (convertRelTimeToMicroseconds)
+
+import Cap.Core.Utils (Unmet)
+import Cap.Auctions.Types (AuctionSchedule (..), AuctionTerms (..), LotTerms (..))
+
+
+-- | Requires the supply and the amount step to be positive, the supply to be a
+-- multiple of the amount step, and the reserve price not to be negative.
+validLotTerms : LotTerms -> Unmet
+validLotTerms lot =
+  [ errorMsg
+  | (False, errorMsg) <-
+      [ (lot.supply > 0.0, "the supply is not positive")
+      , (lot.amountStep > 0.0, "the amount step is not positive")
+      , (supplyIsMultipleOfStep, "the supply is not a multiple of the amount step")
+      , (lot.reservePrice >= 0.0, "the reserve price is negative")
+      ]
+  ]
+  where
+    supplyIsMultipleOfStep =
+      if lot.amountStep <= 0.0
+      then True
+      else intToDecimal (floor (lot.supply / lot.amountStep)) * lot.amountStep == lot.supply
+
+-- | Requires the auction to have at least one lot, every lot to pass
+-- validLotTerms, no lot to be the payment instrument, a positive settlement
+-- window, and if there are executors not to be empty.
+validAuctionTerms : AuctionTerms -> Unmet
+validAuctionTerms terms =
+  [ "the auction has no lots" | Map.null terms.lots ]
+    <> [ "lot " <> show instrument <> ": " <> errorMsg
+       | (instrument, lot) <- Map.toList terms.lots
+       , errorMsg <- validLotTerms lot
+       ]
+    <> [ "the lot " <> show instrument <> " is the payment instrument"
+       | instrument <- Map.keys terms.lots
+       , instrument == terms.payment
+       ]
+    <> [ "the settlement window is not positive"
+       | convertRelTimeToMicroseconds terms.allocationTerms.settlementWindow <= 0
+       ]
+    <> [ "the executors are empty" | terms.allocationTerms.executors == Some [] ]
+
+-- | Requires the bidding window not to be empty and the bids to expire after
+-- bidding closes.
+validAuctionSchedule : AuctionSchedule -> Unmet
+validAuctionSchedule schedule =
+  [ "the bidding window is empty" | schedule.biddingOpensAt >= schedule.biddingClosesAt ]
+    <> [ "the bids expire no later than bidding closes" | schedule.expiresAt <= schedule.biddingClosesAt ]

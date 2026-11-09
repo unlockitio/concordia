@@ -13,7 +13,8 @@ import Splice.Util (require)
 import Cap.Core.Types (ResolutionInfo)
 import Cap.Auctions.Types (AuctionSchedule, AuctionTerms (..))
 import Cap.Auctions.TradeProposal
-import Cap.Auctions.Funding (requireValidPrincipalFunding)
+import Cap.Auctions.Funding (requireValidPrincipalFunding, settlementOf)
+import Cap.Auctions.Terms (validAuctionSchedule, validAuctionTerms)
 
 import Cap.Auctions.SingleLot (pricingMechanismOf)
 
@@ -33,7 +34,10 @@ template SingleLotTradeProposal
     signatory Set.toList authorities
     observer principal
 
-    ensure Map.size terms.lots == 1 && isSome (pricingMechanismOf supportedMechanisms resolutionInfo)
+    ensure
+      Map.size terms.lots == 1
+        && isSome (pricingMechanismOf supportedMechanisms resolutionInfo)
+        && null (validAuctionTerms terms <> validAuctionSchedule schedule)
 
     interface instance TradeProposal for SingleLotTradeProposal where
       view = TradeProposalView with
@@ -48,7 +52,7 @@ template SingleLotTradeProposal
       tradeProposal_acceptImpl _ arg = do
         require "every principal account is the principal's"
           (all (\funding -> accountSigner funding.account == Some principal) (Map.values arg.fundings))
-        requireValidPrincipalFunding resolutionInfo terms schedule arg.fundings
+        requireValidPrincipalFunding (settlementOf resolutionInfo terms.allocationTerms.executors) terms schedule arg.fundings
         auctionCid <- create SingleLotAuction with
           authorities; resolverId; resolutionInfo; terms; schedule
           principalFundings = arg.fundings

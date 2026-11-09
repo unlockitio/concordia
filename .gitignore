@@ -1,8 +1,10 @@
 # Daml / dpm build artifacts
 .daml/
 *.dar
+
 # but vendored official Token Standard DARs are dependencies, not build output
 !lib/*.dar
+!cap-auctions/tests/lib/*.dar
 .daml-script-cache/
 
 # Editor / IDE
@@ -38,3 +40,6 @@ M1-DELIVERY-COMMENT.md
 M2-DELIVERY-COMMENT.md
 M3-DELIVERY-COMMENT.md
 DESIGN_old.md
+
+# Notes of what to add to the auction docs
+docs/auctions/considerations.md

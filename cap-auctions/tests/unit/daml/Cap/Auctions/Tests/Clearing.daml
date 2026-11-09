@@ -1,0 +1,251 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Auctions.Tests.Clearing where
+
+import DA.Assert ((===))
+import DA.Foldable (forA_)
+import DA.List (sortOn)
+import Daml.Script
+
+import Cap.Auctions.Types (Direction (..), LotTerms (..), Quote (..))
+import Cap.Auctions.Clearing (Award (..), assignAmountsByPrice, awardAmountPerQuote)
+
+import Cap.Auctions.Tests.Fixtures (checkCase, clearingCases)
+
+
+sorted : [Award Int] -> [Award Int]
+sorted = sortOn (\a -> (a.bidId, a.price))
+
+
+-- Testing assignAmountsByPrice
+-------------------------------
+
+-- The leftover unit goes to the lowest bid id if equal quotes at same price.
+test_assignAmountsByPrice_splitsSupplyAmongEqualQuotes : Script ()
+test_assignAmountsByPrice_splitsSupplyAmongEqualQuotes = do
+  let awards = awardAmountPerQuote Forward (LotTerms with supply = 10.0; amountStep = 1.0; reservePrice = 0.0)
+        [ (0, [(Quote with price = 5.0; amount = 5.0)])
+        , (1, [(Quote with price = 5.0; amount = 5.0)])
+        , (2, [(Quote with price = 5.0; amount = 5.0)])
+        ]
+  sorted awards ===
+    [ (Award with bidId = 0; price = 5.0; amount = 4.0)
+    , (Award with bidId = 1; price = 5.0; amount = 3.0)
+    , (Award with bidId = 2; price = 5.0; amount = 3.0)
+    ]
+
+-- Each price whose demand fits the remaining supply is filled in full before the next price gets something.
+test_assignAmountsByPrice_fillsPricesThatFit : Script ()
+test_assignAmountsByPrice_fillsPricesThatFit = do
+  let awards = awardAmountPerQuote Forward (LotTerms with supply = 10.0; amountStep = 1.0; reservePrice = 0.0)
+        [ (0, [(Quote with price = 9.0; amount = 3.0)])
+        , (1, [(Quote with price = 8.0; amount = 4.0)])
+        , (2, [(Quote with price = 7.0; amount = 6.0)])
+        ]
+  sorted awards ===
+    [ (Award with bidId = 0; price = 9.0; amount = 3.0)
+    , (Award with bidId = 1; price = 8.0; amount = 4.0)
+    , (Award with bidId = 2; price = 7.0; amount = 3.0)
+    ]
+
+-- Once the supply is shared at one price, worse prices get nothing.
+test_assignAmountsByPrice_nothingAfterTheSplit : Script ()
+test_assignAmountsByPrice_nothingAfterTheSplit = do
+  let awards = awardAmountPerQuote Forward (LotTerms with supply = 9.0; amountStep = 1.0; reservePrice = 0.0)
+        [ (0, [(Quote with price = 9.0; amount = 7.0)])
+        , (1, [(Quote with price = 9.0; amount = 7.0)])
+        , (2, [(Quote with price = 8.0; amount = 5.0)])
+        ]
+  sorted awards ===
+    [ (Award with bidId = 0; price = 9.0; amount = 5.0)
+    , (Award with bidId = 1; price = 9.0; amount = 4.0)
+    ]
+
+-- The leftover step goes to the quote that lost the most to rounding, even when it has the highest bid id.
+test_assignAmountsByPrice_remainderToLargestLoss : Script ()
+test_assignAmountsByPrice_remainderToLargestLoss = do
+  let awards = assignAmountsByPrice 1.0 7.0
+        [ [ (0, (Quote with price = 1.0; amount = 2.0))
+          , (1, (Quote with price = 1.0; amount = 3.0))
+          , (2, (Quote with price = 1.0; amount = 5.0))
+          ]
+        ]
+  sorted awards ===
+    [ (Award with bidId = 0; price = 1.0; amount = 1.0)
+    , (Award with bidId = 1; price = 1.0; amount = 2.0)
+    , (Award with bidId = 2; price = 1.0; amount = 4.0)
+    ]
+
+-- Between equal rounding losses the leftover step goes to the lowest bid id, whatever the list order.
+test_assignAmountsByPrice_remainderTieByBidId : Script ()
+test_assignAmountsByPrice_remainderTieByBidId = do
+  let awards = assignAmountsByPrice 1.0 10.0
+        [ [ (2, (Quote with price = 1.0; amount = 5.0))
+          , (1, (Quote with price = 1.0; amount = 5.0))
+          , (0, (Quote with price = 1.0; amount = 5.0))
+          ]
+        ]
+  sorted awards ===
+    [ (Award with bidId = 0; price = 1.0; amount = 4.0)
+    , (Award with bidId = 1; price = 1.0; amount = 3.0)
+    , (Award with bidId = 2; price = 1.0; amount = 3.0)
+    ]
+
+-- Quotes left with nothing, by rounding or by a zero amount, are not in the result.
+test_assignAmountsByPrice_noZeroAwards : Script ()
+test_assignAmountsByPrice_noZeroAwards = do
+  let awards = assignAmountsByPrice 1.0 1.0
+        [ [ (0, (Quote with price = 5.0; amount = 1.0))
+          , (1, (Quote with price = 5.0; amount = 1.0))
+          ]
+        ]
+  awards === [(Award with bidId = 0; price = 5.0; amount = 1.0)]
+  assignAmountsByPrice 1.0 10.0
+    [ [ (0, (Quote with price = 5.0; amount = 0.0))
+      , (1, (Quote with price = 5.0; amount = 2.0))
+      ]
+    ]
+    === [(Award with bidId = 1; price = 5.0; amount = 2.0)]
+
+-- In every clearing case the total awarded is at most the supply.
+test_assignAmountsByPrice_neverExceedsSupply : Script ()
+test_assignAmountsByPrice_neverExceedsSupply =
+  forA_ clearingCases $ \c -> do
+    let awards = awardAmountPerQuote c.direction c.lotTerms c.bids
+    checkCase c.name (sum (map (.amount) awards) <= c.lotTerms.supply)
+
+-- In every clearing case each award is not negative, is a multiple of the step, and is at most what the bid quoted at that price.
+test_assignAmountsByPrice_awardsWithinQuoteAndStep : Script ()
+test_assignAmountsByPrice_awardsWithinQuoteAndStep =
+  forA_ clearingCases $ \c -> do
+    let awards = awardAmountPerQuote c.direction c.lotTerms c.bids
+        quoted bidId price = sum
+          [ quote.amount | (otherId, quotes) <- c.bids
+          , otherId == bidId
+          , quote <- quotes
+          , quote.price == price
+          ]
+        awardedAt bidId price = sum [a.amount | a <- awards, a.bidId == bidId, a.price == price]
+    forA_ awards $ \a -> do
+      checkCase (c.name <> ": an award is negative") (a.amount >= 0.0)
+      checkCase (c.name <> ": an award is not a multiple of the step") (isMultipleOf c.lotTerms.amountStep a.amount)
+      checkCase (c.name <> ": a bid is awarded more than it quoted at a price")
+        (awardedAt a.bidId a.price <= quoted a.bidId a.price)
+  where
+    isMultipleOf step value = intToDecimal (floor (value / step)) * step == value
+
+-- In every clearing case the total awarded is the supply or the demand within the reserve, whichever is smaller.
+test_assignAmountsByPrice_usesWholeSupply : Script ()
+test_assignAmountsByPrice_usesWholeSupply =
+  forA_ clearingCases $ \c -> do
+    let awards = awardAmountPerQuote c.direction c.lotTerms c.bids
+        eligible = sum
+          [ quote.amount | (_, quotes) <- c.bids
+          , quote <- quotes
+          , withinReserve c.direction c.lotTerms quote
+          ]
+    sum (map (.amount) awards) === min c.lotTerms.supply eligible
+  where
+    withinReserve Forward lotTerms quote = quote.price >= lotTerms.reservePrice
+    withinReserve Reverse lotTerms quote = quote.price <= lotTerms.reservePrice
+
+-- A quote for the whole of a large supply at the marginal price clears without overflow.
+test_assignAmountsByPrice_largeQuoteAtTheMargin : Script ()
+test_assignAmountsByPrice_largeQuoteAtTheMargin = do
+  let supply = 10000000000.0
+      awards = awardAmountPerQuote Forward (LotTerms with supply = supply; amountStep = 1.0; reservePrice = 0.0)
+        [ (0, [(Quote with price = 1.0; amount = supply)])
+        , (1, [(Quote with price = 1.0; amount = 1.0)])
+        ]
+  sorted awards ===
+    [ (Award with bidId = 0; price = 1.0; amount = 9999999999.0)
+    , (Award with bidId = 1; price = 1.0; amount = 1.0)
+    ]
+
+
+-- Testing awardAmountPerQuote
+------------------------------
+
+-- In a forward auction the highest price is filled first.
+test_awardAmountPerQuote_forwardHighestFirst : Script ()
+test_awardAmountPerQuote_forwardHighestFirst = do
+  let awards = awardAmountPerQuote Forward (LotTerms with supply = 5.0; amountStep = 1.0; reservePrice = 0.0)
+          [ (0, [(Quote with price = 6.0; amount = 5.0)])
+          , (1, [(Quote with price = 9.0; amount = 5.0)])
+          ]
+  awards === [(Award with bidId = 1; price = 9.0; amount = 5.0)]
+
+-- In a reverse auction the lowest ask is filled first.
+test_awardAmountPerQuote_reverseLowestFirst : Script ()
+test_awardAmountPerQuote_reverseLowestFirst = do
+  let awards = awardAmountPerQuote Reverse (LotTerms with supply = 5.0; amountStep = 1.0; reservePrice = 10.0)
+          [ (0, [(Quote with price = 6.0; amount = 5.0)])
+          , (1, [(Quote with price = 3.0; amount = 5.0)])
+          ]
+  awards === [(Award with bidId = 1; price = 3.0; amount = 5.0)]
+
+-- In a forward auction a quote just below the reserve gets nothing and a quote at the reserve can win.
+test_awardAmountPerQuote_forwardReserveBoundary : Script ()
+test_awardAmountPerQuote_forwardReserveBoundary = do
+  let awards = awardAmountPerQuote Forward (LotTerms with supply = 30.0; amountStep = 1.0; reservePrice = 5.0)
+        [ (0, [(Quote with price = 4.9999999999; amount = 10.0)])
+        , (1, [(Quote with price = 5.0; amount = 10.0)])
+        , (2, [(Quote with price = 6.0; amount = 10.0)])
+        ]
+  sorted awards ===
+    [ (Award with bidId = 1; price = 5.0; amount = 10.0)
+    , (Award with bidId = 2; price = 6.0; amount = 10.0)
+    ]
+
+-- In a reverse auction an ask just above the reserve gets nothing and an ask at the reserve can win.
+test_awardAmountPerQuote_reverseReserveBoundary : Script ()
+test_awardAmountPerQuote_reverseReserveBoundary = do
+  let awards = awardAmountPerQuote Reverse (LotTerms with supply = 30.0; amountStep = 1.0; reservePrice = 5.0)
+        [ (0, [(Quote with price = 5.0000000001; amount = 10.0)])
+        , (1, [(Quote with price = 5.0; amount = 10.0)])
+        , (2, [(Quote with price = 4.0; amount = 10.0)])
+        ]
+  sorted awards ===
+    [ (Award with bidId = 1; price = 5.0; amount = 10.0)
+    , (Award with bidId = 2; price = 4.0; amount = 10.0)
+    ]
+
+-- In every clearing case reversing the order of the bids changes no award.
+test_awardAmountPerQuote_independentOfBidOrder : Script ()
+test_awardAmountPerQuote_independentOfBidOrder =
+  forA_ clearingCases $ \c ->
+    sorted (awardAmountPerQuote c.direction c.lotTerms (reverse c.bids))
+      === sorted (awardAmountPerQuote c.direction c.lotTerms c.bids)
+
+-- A single item goes whole to the best quote: the highest bid in a forward auction, the lowest ask in a reverse one.
+test_awardAmountPerQuote_singleItemToBestQuote : Script ()
+test_awardAmountPerQuote_singleItemToBestQuote = do
+  awardAmountPerQuote Forward (LotTerms with supply = 1.0; amountStep = 1.0; reservePrice = 0.0)
+    [ (0, [(Quote with price = 10.0; amount = 1.0)])
+    , (1, [(Quote with price = 8.0; amount = 1.0)])
+    , (2, [(Quote with price = 6.0; amount = 1.0)])
+    ]
+    === [(Award with bidId = 0; price = 10.0; amount = 1.0)]
+  awardAmountPerQuote Reverse (LotTerms with supply = 1.0; amountStep = 1.0; reservePrice = 10.0)
+    [ (0, [(Quote with price = 3.0; amount = 1.0)])
+    , (1, [(Quote with price = 4.0; amount = 1.0)])
+    , (2, [(Quote with price = 6.0; amount = 1.0)])
+    ]
+    === [(Award with bidId = 0; price = 3.0; amount = 1.0)]
+
+-- With no supply nothing is awarded.
+test_awardAmountPerQuote_zeroSupply : Script ()
+test_awardAmountPerQuote_zeroSupply =
+  awardAmountPerQuote Forward (LotTerms with supply = 0.0; amountStep = 1.0; reservePrice = 0.0) [(0, [(Quote with price = 5.0; amount = 5.0)])] === []
+
+-- Quotes of different bids at the marginal price share the remaining supply in proportion to their amounts.
+test_awardAmountPerQuote_splitsAcrossBids : Script ()
+test_awardAmountPerQuote_splitsAcrossBids = do
+  let awards = awardAmountPerQuote Forward (LotTerms with supply = 6.0; amountStep = 1.0; reservePrice = 0.0)
+          [ (0, [(Quote with price = 5.0; amount = 4.0)])
+          , (1, [(Quote with price = 5.0; amount = 8.0)])
+          ]
+  sorted awards ===
+    [ (Award with bidId = 0; price = 5.0; amount = 2.0)
+    , (Award with bidId = 1; price = 5.0; amount = 4.0)
+    ]

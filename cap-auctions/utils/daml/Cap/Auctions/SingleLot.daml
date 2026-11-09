@@ -41,14 +41,14 @@ import Cap.Core.Utils (Contracts, Ignored, Unmet, orAbort, single)
 import Cap.Auctions.Bid (Bid)
 import Cap.Auctions.Types
   ( AuctionSchedule, AuctionTerms (..), Direction (..), Funding (..), HasSingleLotQuotes (..)
-  , LotTerms (..), Quote (..), RemainderPolicy
+  , LotTerms (..), Quote (..)
   )
 import Cap.Auctions.Clearing (Award (..), awardAmountPerQuote)
 import Cap.Auctions.Funding
   ( AllocationsCheck, buildBatchesByAccount, fetchAndIgnoreInvalidBids
   , accountSignedBid, bidForResolution, distinctAccountsAmongBids, emptyTransferLegAllocations
   , noPrincipalAccountsInBid, validFundingTerms
-  , SettleBatchContext, lastIterationFinalizer, settleBatches, settlementOf, unsettledAllocations
+  , SettleBatchContext, lastIterationFinalizer, settleBatches, unsettledAllocations
   )
 
 
@@ -58,7 +58,6 @@ import Cap.Auctions.Funding
 data SingleLotAuctionTerms = SingleLotAuctionTerms
   with
     direction : Direction
-    remainderPolicy : RemainderPolicy
     payment : InstrumentId
     lotInstrumentId : InstrumentId
     lotTerms : LotTerms
@@ -70,21 +69,21 @@ expectSingleLot terms = do
   (lotInstrumentId, lotTerms) <- orAbort "the auction has exactly one lot" (single (Map.toList terms.lots))
   pure SingleLotAuctionTerms with
     direction = terms.direction
-    remainderPolicy = terms.remainderPolicy
     payment = terms.payment
     ..
 
 
 -- Quotes
 ---------
--- Checks that every quote amount is a multiple of the amount step, that a
--- bid has a funding for every admin its quotes need, and that the funding of
--- the instrument the bid sends reserves the most the quotes can need.
 
--- | Requires every quote amount and price to be positive, every quote amount
--- to be a multiple of the amount step, and a funding under the payment admin
--- and, if there are quotes, under the lot's admin. Call it when the quotes
--- change and when the fundings change.
+-- | Checks the quotes of a bid and the fundings they need:
+--
+-- - every quote amount and price is positive;
+-- - every quote amount is a multiple of the amount step;
+-- - no quote amount is more than the supply, so clearing cannot overflow;
+-- - the bid has a funding under the admin of the instrument it sends, the
+--   payment in a forward auction and the lot in a reverse auction, so the bid
+--   is backed before it quotes
 validSingleLotQuotes
   : (HasToInterface t Bid, HasSingleLotQuotes t) => SingleLotAuctionTerms -> t -> Unmet
 validSingleLotQuotes terms bid =
@@ -94,13 +93,20 @@ validSingleLotQuotes terms bid =
        | quote <- quotes
        , intToDecimal (floor (quote.amount / terms.lotTerms.amountStep)) * terms.lotTerms.amountStep /= quote.amount
        ]
+    <> [ "the quote amount " <> show quote.amount <> " is more than the supply " <> show terms.lotTerms.supply
+       | quote <- quotes
+       , quote.amount > terms.lotTerms.supply
+       ]
     <> [ "no allocation under admin " <> show admin
-       | admin <- dedup (terms.payment.admin :: [terms.lotInstrumentId.admin | not (null quotes)])
+       | admin <- dedup (sentAdmin :: [receivedAdmin | not (null quotes)])
        , not (Map.member admin fundings)
        ]
   where
     quotes = singleLotQuotes bid
     fundings = (view (toInterface @Bid bid)).fundings
+    (sentAdmin, receivedAdmin) = case terms.direction of
+      Forward -> (terms.payment.admin, terms.lotInstrumentId.admin)
+      Reverse -> (terms.lotInstrumentId.admin, terms.payment.admin)
 
 -- | Requires the funding of the instrument the bid sends to reserve the most
 -- the quotes within the reserve price can need: the price times the amount of
@@ -137,14 +143,14 @@ quotesReserved terms bid fundings =
 -- with fetchFundingAllocations, whenever the bid is created, funded or quoted.
 validSingleLotBid
   : (HasSignatory t, HasToInterface t Bid, HasSingleLotQuotes t)
-  => ResolutionInfo -> AuctionTerms -> AuctionSchedule -> SingleLotAuctionTerms
+  => ResolutionInfo -> Alloc.SettlementInfo -> AuctionTerms -> AuctionSchedule -> SingleLotAuctionTerms
   -> t -> Map Party (Funding, Alloc.AllocationView) -> Unmet
-validSingleLotBid resolutionInfo terms schedule singleLotTerms bid fetchedFundings =
+validSingleLotBid resolutionInfo settlement terms schedule singleLotTerms bid fetchedFundings =
   concat
     [ bidForResolution resolutionInfo bid
     , accountSignedBid bid
     , validSingleLotQuotes singleLotTerms bid
-    , validFundingTerms resolutionInfo terms schedule bid fetchedFundings
+    , validFundingTerms settlement terms schedule bid fetchedFundings
     , emptyTransferLegAllocations bid fetchedFundings
     , quotesReserved singleLotTerms bid fetchedFundings
     ]
@@ -152,19 +158,22 @@ validSingleLotBid resolutionInfo terms schedule singleLotTerms bid fetchedFundin
 -- | Fetches the bids and ignores every bid that fails a check: the checks of
 -- validSingleLotBid, and the checks that the bid uses none of the
 -- principal's accounts and shares no account with another bid. Use it for bids
--- whose template may not have run the checks at submission.
+-- whose template may not have run the checks at submission. The resolver must
+-- pass only bids whose allocations it can fetch: an allocation that was
+-- withdrawn, expired or is not visible to the resolver aborts the resolution
+-- instead of ignoring the bid.
 fetchAndIgnoreInvalidSingleLotBids
   : (HasFetch t, HasSignatory t, HasToInterface t Bid, HasSingleLotQuotes t)
-  => ResolutionInfo -> AuctionTerms -> AuctionSchedule -> SingleLotAuctionTerms -> Map Party Funding
+  => ResolutionInfo -> Alloc.SettlementInfo -> AuctionTerms -> AuctionSchedule -> SingleLotAuctionTerms -> Map Party Funding
   -> [ContractId t] -> Update (Contracts t, Ignored t)
-fetchAndIgnoreInvalidSingleLotBids resolutionInfo terms schedule singleLotTerms principalFundings =
+fetchAndIgnoreInvalidSingleLotBids resolutionInfo settlement terms schedule singleLotTerms principalFundings =
   fetchAndIgnoreInvalidBids
     [ bidForResolution resolutionInfo
     , accountSignedBid
     , noPrincipalAccountsInBid principalFundings
     , validSingleLotQuotes singleLotTerms
     ]
-    [ validFundingTerms resolutionInfo terms schedule
+    [ validFundingTerms settlement terms schedule
     , emptyTransferLegAllocations
     , quotesReserved singleLotTerms
     ]
@@ -208,8 +217,11 @@ pricingMechanismOf : [PricingMechanism] -> ResolutionInfo -> Optional PricingMec
 pricingMechanismOf supportedMechanisms resolutionInfo =
   find (\mechanism -> mechanism.name == resolutionInfo.mechanism) supportedMechanisms
 
--- bidId is used to sort bids if its int it is the position of the bid in the input list.
--- It can be cid and not controlled by the resolver.
+-- | A pricing rule returns what each awarded bid pays, or is paid in a reverse
+-- auction. The bidId identifies each bid and breaks ties: when the remaining
+-- supply is shared among quotes at the same price and a step is left over
+-- after rounding, the lower bidId gets it. The caller chooses the bidIds, so
+-- the caller decides ties.
 type PricingRule bidId =
   SingleLotAuctionTerms -> [(bidId, [Quote])] -> [Award bidId] -> Map bidId Decimal
 
@@ -240,27 +252,26 @@ vickrey terms quotesPerBid awards =
           + terms.lotTerms.reservePrice * (terms.lotTerms.supply - sum (map (.amount) as))
       valueOf bidId = sum [award.price * award.amount | award <- awards, award.bidId == bidId]
       awardsWithout bidId =
-        awardsOf terms (filter (\(otherId, _) -> otherId /= bidId) quotesPerBid)
+        awardAmountPerQuote terms.direction terms.lotTerms (filter (\(otherId, _) -> otherId /= bidId) quotesPerBid)
   in Map.fromList
       [ (bidId, welfare (awardsWithout bidId) - (welfare awards - valueOf bidId))
       | bidId <- dedup (map (.bidId) awards)
       ]
 
 
-awardsOf : Ord bidId => SingleLotAuctionTerms -> [(bidId, [Quote])] -> [Award bidId]
-awardsOf terms quotesPerBid =
-  filter (\award -> award.amount > 0.0)
-    (awardAmountPerQuote terms.direction terms.remainderPolicy terms.lotTerms quotesPerBid)
-
-
 -- Clearing
 -----------
 
 -- | Clears the lot: awards amounts to the quotes, prices the awards with the
--- pricing rule, and returns the transfer legs, each with the admin of its
--- instrument. Bids are identified by their position in bids, so ties at the
--- marginal price go to the bid that comes first. Aborts if the principal or a
+-- pricing rule, and returns the transfer legs. Aborts if the principal or a
 -- winner has no funding for an instrument it trades.
+--
+-- Bids are identified by their position in bids. When the remaining supply is
+-- shared among quotes at the same price, a step left over after rounding goes
+-- to the bid that comes first. The party that passes the bids, usually the
+-- resolver, decides who gets it, and it also decides which bids take part.
+-- How the order and the set of bids are chosen is handled by the
+-- implementation.
 clearSingleLot 
   : (HasToInterface t Bid, HasSingleLotQuotes t)
   => PricingRule Int -> SingleLotAuctionTerms -> Map Party Funding -> Contracts t
@@ -268,7 +279,7 @@ clearSingleLot
 clearSingleLot pricingRule terms principalFundings bids = do
   let positionedBids = zip [0 .. length bids - 1] (map snd bids)
       quotesPerBid = [(position, singleLotQuotes bid) | (position, bid) <- positionedBids]
-      awards = awardsOf terms quotesPerBid
+      awards = awardAmountPerQuote terms.direction terms.lotTerms quotesPerBid
       lotAmounts = Map.fromListWithR (+) [(award.bidId, award.amount) | award <- awards]
       paymentAmounts = pricingRule terms quotesPerBid awards
   transferLegsPerBid <- forA positionedBids $ \(position, bid) ->
@@ -337,26 +348,23 @@ data ClearAndSettleResult = ClearAndSettleResult
 -- validSingleLotBid or equivalent checks, no two may use the same
 -- account under one admin, and none may use the principal's account. If one of
 -- these does not hold, the settlement aborts.
---
--- Steps
---
--- 1. pricingMechanismOf: finds the mechanism the resolution info names among the supported ones, and aborts if there is none.
--- 2. clearSingleLot: clears the bids, which keep their input order so positions and tie-breaks stay the same.
--- 3. buildBatchesByAccount: groups the legs into batches. It's given the principal's fundings plus the bids' fundings.
--- 4. settleBatches: settles every batch with lastIterationFinalizer and the settle batch context of its admin.
--- 5. unsettledAllocations: returns the allocations of the principal and the bids that no batch settled, for the caller to cancel.
+
 clearAndSettleSingleLotFromEmptyLegsAllocations
   : (HasToInterface t Bid, HasSingleLotQuotes t)
-  => [PricingMechanism] -> ResolutionInfo -> SingleLotAuctionTerms -> Map Party Funding
+  => [PricingMechanism] -> ResolutionInfo -> Alloc.SettlementInfo -> SingleLotAuctionTerms -> Map Party Funding
   -> Contracts t
   -> Map Party SettleBatchContext
   -> Update ClearAndSettleResult
-clearAndSettleSingleLotFromEmptyLegsAllocations supportedMechanisms resolutionInfo singleLotTerms principalFundings bids settleBatchContexts = do
+clearAndSettleSingleLotFromEmptyLegsAllocations supportedMechanisms resolutionInfo settlement singleLotTerms principalFundings bids settleBatchContexts = do
+  -- finds the mechanism the resolution info names among the supported ones, and aborts if there is none.
   mechanism <- orAbort ("the mechanism " <> resolutionInfo.mechanism <> " is not supported")
     (pricingMechanismOf supportedMechanisms resolutionInfo)
+  -- clears the bids and builds legs  
   allTransferLegs <- clearSingleLot mechanism.pricingRule singleLotTerms principalFundings bids
+  -- groups the legs into batches.
   let allFundings = principalFundings :: [(view (toInterface @Bid bid)).fundings | (_, bid) <- bids]
       batches = buildBatchesByAccount allFundings allTransferLegs
-      settlement = settlementOf resolutionInfo
+  -- settles every batch with lastIterationFinalizer and the settle batch context of its admin.
   settled <- settleBatches lastIterationFinalizer settlement settleBatchContexts batches
+  -- returns the allocations of the principal and the bids that no batch settled
   pure ClearAndSettleResult with settled; unsettled = unsettledAllocations allFundings batches
