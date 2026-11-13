@@ -1,0 +1,42 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | Who may act: actor groups, entitlements, and whether a resolver may
+-- resolve a resolution.
+module Cap.Core.Utils.Admission
+  ( admitActors
+  , entitled
+  , requireResolvedBy
+  ) where
+
+import DA.Map (Map)
+import qualified DA.Map as Map
+
+import Splice.Api.Token.MetadataV1 (AnyContractId)
+import Splice.Util (require)
+
+import Cap.Core.Types (AuthenticKey, ResolutionInfo (..))
+
+
+-- | Admits the actors when they include every party of some non-empty group.
+-- The actors may be a superset of the group: the group [alice] admits the
+-- actors [alice, bob].
+admitActors : [[Party]] -> [Party] -> Bool
+admitActors groups sigs =
+  any (all (`elem` sigs)) (filter (not . null) groups)
+
+entitled : Ord k => Map k [[Party]] -> k -> [Party] -> Bool
+entitled availableActions action actors =
+  case Map.lookup action availableActions of
+    None -> False
+    Some groups -> admitActors groups actors
+
+
+-- | Checks that a resolution names this resolver and is bound to no other
+-- resolver contract. The resolver passes its own key and its own contract id.
+-- It does not check the mechanism; the resolver checks that where it picks the
+-- rule the mechanism names.
+requireResolvedBy : AuthenticKey -> AnyContractId -> ResolutionInfo -> Update ()
+requireResolvedBy rKey self resolution = do
+  require ("the resolution names the resolver " <> show rKey) (resolution.resolver == rKey)
+  require "the resolution is bound to no other resolver contract"
+    (optional True (== self) resolution.resolverCid)

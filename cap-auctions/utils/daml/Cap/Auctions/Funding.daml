@@ -46,7 +46,7 @@ module Cap.Auctions.Funding
 import DA.List (dedup)
 import DA.Map (Map)
 import qualified DA.Map as Map
-import DA.Optional (fromOptional, isSome)
+import DA.Optional (fromOptional, fromSomeNote, isSome)
 import qualified DA.Set as Set
 import qualified DA.TextMap as TextMap
 import DA.Time (addRelTime)
@@ -58,7 +58,7 @@ import Splice.TokenStandard.Utils (transferLegSidesWithAuthorizer)
 import Cap.Core.Types (ResolutionInfo (..))
 import Cap.Core.Utils
   ( Check, ContractFilter, Unmet
-  , ignoreFailing, ignoreUnlessM, orAbort, requireMet )
+  , ignoreFailing, ignoreUnlessM, requireMet )
 import Cap.Auctions.Bid (Bid)
 import Cap.Auctions.Types (AuctionSchedule (..), AuctionTerms (..), Direction (..), Funding (..))
 
@@ -81,7 +81,7 @@ settlementOf resolutionInfo executors =
 
 -- Checks 
 ---------
--- Each check returns its unmet conditions. Use requireMet or requireChecks to
+-- Each check returns its unmet conditions. Use requireMet or requireMetFrom to
 -- abort on them, at submission or resolution, or ignoreFailing to ignore the
 -- bid at resolution.
 
@@ -172,7 +172,7 @@ distinctAccountsAmongBids bids bid =
 ------------------------
 -- A resolver fetches the bids with fetchGroup, keyed by its resolution, so
 -- that a bid presented twice or of another resolution aborts. It then aborts
--- on the checks that are its own error with requireChecks, and ignores the
+-- on the checks that are its own error with requireMetFrom, and ignores the
 -- bids that fail the others with ignoreFailing, ignoreFailingAllocations and
 -- applyFilters (Cap.Core.Utils).
 
@@ -330,7 +330,7 @@ settleBatches
   -> Update [Alloc.SettlementFactory_SettleBatchResult]
 settleBatches finalizer settlement contexts batches =
   forA batches $ \batch -> do
-    context <- orAbort ("no settle batch context for admin " <> show batch.admin) (Map.lookup batch.admin contexts)
+    let context = fromSomeNote ("no settle batch context for admin " <> show batch.admin) (Map.lookup batch.admin contexts)
     exercise context.factoryCid Alloc.SettlementFactory_SettleBatch with
       settlement
       transferLegs = batch.legs
@@ -388,8 +388,8 @@ cancelAllocations
   -> Update [Alloc.AllocationResult]
 cancelAllocations settlement contexts allocationCids =
   forA allocationCids $ \allocationCid -> do
-    extraArgs <- orAbort ("no cancel context for allocation " <> show allocationCid)
-      (Map.lookup allocationCid contexts)
+    let extraArgs = fromSomeNote ("no cancel context for allocation " <> show allocationCid)
+          (Map.lookup allocationCid contexts)
     exercise allocationCid Alloc.Allocation_Cancel with
       actors = settlement.executors
       extraArgs

@@ -1,0 +1,43 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | Checks return their unmet conditions; requireMet and requireMetFrom abort
+-- on them. Cap.Core.Utils.Filters ignores the contracts that fail them.
+module Cap.Core.Utils.Checks
+  ( Unmet
+  , Check
+  , AmongCheck
+  , unmetFrom
+  , requireMet
+  , requireMetFrom
+  ) where
+
+
+-- | The conditions of a check that are not met. Empty when the check passes.
+type Unmet = [Text]
+
+-- | A check on one contract alone.
+type Check t = t -> Unmet
+
+-- | A check on one contract among the others presented with it.
+type AmongCheck t = [t] -> t -> Unmet
+
+-- | The unmet conditions of every contract, one contract after the other:
+-- first the checks on the contract alone, then the checks among all the
+-- contracts.
+unmetFrom : [Check t] -> [AmongCheck t] -> [t] -> Unmet
+unmetFrom checks amongChecks contracts =
+  concat [check c | c <- contracts, check <- checks]
+    <> concat [check contracts c | c <- contracts, check <- amongChecks]
+
+-- | Aborts with the first unmet condition.
+requireMet : Unmet -> Update ()
+requireMet [] = pure ()
+requireMet (errorMsg :: _) = abort errorMsg
+
+-- | Aborts with the first unmet condition of any contract. Use it for the
+-- conditions that are the error of the party presenting the contracts. Run it
+-- on every contract presented, before ignoring any: run on the kept contracts
+-- only, a condition it checks would not abort on a contract already ignored.
+requireMetFrom : [Check t] -> [AmongCheck t] -> [t] -> Update ()
+requireMetFrom checks amongChecks contracts =
+  requireMet (unmetFrom checks amongChecks contracts)

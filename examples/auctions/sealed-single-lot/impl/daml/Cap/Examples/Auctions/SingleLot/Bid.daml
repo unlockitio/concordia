@@ -6,12 +6,13 @@ import DA.Map (Map)
 import qualified DA.Map as Map
 import DA.Set (Set)
 import qualified DA.Set as Set
+import DA.Optional (fromSomeNote)
 
 import Splice.Api.Token.MetadataV1
 import Splice.Util (HasCheckedFetch (..), require)
 
 import Cap.Core.Types (ResolutionInfo)
-import Cap.Core.Utils (orAbort, requireMet, requireOpen, single)
+import Cap.Core.Utils (requireMet, requireOpen, singleOptional)
 import Cap.Auctions.Types (AuctionSchedule (..), AuctionTerms, Funding (..), HasSingleLotQuotes (..), Quote)
 import Cap.Auctions.Bid
 import Cap.Auctions.SingleLotQuotesBid
@@ -42,7 +43,7 @@ template SingleLotBidProposal
         meta = emptyMetadata
 
       bidProposal_acceptImpl _ arg = do
-        bidder <- orAbort "a bid is accepted by one bidder" (single arg.actors)
+        let bidder = fromSomeNote "a bid is accepted by one bidder" (singleOptional arg.actors)
         require "the bidder is invited" (bidder `elem` invited)
         now <- getTime
         requireOpen "the bidding window is open"

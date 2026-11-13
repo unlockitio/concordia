@@ -87,7 +87,7 @@ or contract id the decision was made against. An action declares its `targets`
 when it is created and can fix parts of their snapshots then. `snapshotStates`
 and `snapshotCids` fill the parts the action left open with the target's current
 state or contract id, and `mergeSnapshots` merges those snapshots into the
-action's targets. At execution, `checkTarget` compares the target's live state
+action's targets. At execution, `fetchTargetMatchingSnapshot` compares the target's live state
 with the snapshot state using the action's
 `DriftPolicy`. It refuses the execution if the target changed in a way the
 policy does not allow.
@@ -95,7 +95,7 @@ policy does not allow.
 **Example:** a target's fee is 1%, and voters approve action A to raise it to 2%.
 Before A executes, action B raises the fee to 3%. If A then executes, it
 lowers the fee from 3% to 2%, which nobody voted for. With a snapshot of the fee at 1%
-and the `unchanged` policy, `checkTarget` sees that the fee is now 3% and
+and the `unchanged` policy, `fetchTargetMatchingSnapshot` sees that the fee is now 3% and
 refuses A.
 
 Other policies allow some changes. Take the same target with a fee of 1% and a
@@ -154,7 +154,7 @@ flowchart LR
   Action -. "reads state" .-> Targets
   Resolver -- "② Action_AuthorizeExecution<br/>outcome + snapshots" --> Action
   Action -- "mergeSnapshots, creates" --> Executable
-  Executable -- "③ Executable_Execute<br/>checkTarget + DriftPolicy" --> Targets
+  Executable -- "③ Executable_Execute<br/>fetchTargetMatchingSnapshot + DriftPolicy" --> Targets
 ```
 
 1. When a ballot is cast or at resolution, the governance app reads the
@@ -164,7 +164,7 @@ flowchart LR
    `outcome` (vote aggregation) and the snapshots. The action merges them into its own targets
    using `mergeSnapshots` and creates an `Executable`.
 3. An entitled actor exercises `Executable_Execute` and presents the target
-   contracts (`targetCids`). `checkTarget` compares each target's live state with its snapshot using
+   contracts (`targetCids`). `fetchTargetMatchingSnapshot` compares each target's live state with its snapshot using
    the action's `DriftPolicy`, and the action then changes the targets.
 
 

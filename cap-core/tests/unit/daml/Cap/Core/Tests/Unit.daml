@@ -59,15 +59,15 @@ isOpenHasAnInclusiveFloorAndAnExclusiveCeiling = do
 
 singleNeedsExactlyOneElement : Script ()
 singleNeedsExactlyOneElement = do
-  single ([] : [Int]) === None
-  single [1 : Int] === Some 1
-  single [1, 2 : Int] === None
+  singleOptional ([] : [Int]) === None
+  singleOptional [1 : Int] === Some 1
+  singleOptional [1, 2 : Int] === None
 
 uniformValueNeedsANonEmptyUniformList : Script ()
 uniformValueNeedsANonEmptyUniformList = do
-  uniformValue ([] : [Int]) === None
-  uniformValue [1, 1 : Int] === Some 1
-  uniformValue [1, 2 : Int] === None
+  uniformOptional ([] : [Int]) === None
+  uniformOptional [1, 1 : Int] === Some 1
+  uniformOptional [1, 2 : Int] === None
 
 isAnyValueRoundTrips : Script ()
 isAnyValueRoundTrips = do

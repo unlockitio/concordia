@@ -1,0 +1,74 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Governance.Tests.Votes where
+
+import DA.Assert ((===))
+import DA.Foldable (forA_)
+import qualified DA.Map as Map
+import Daml.Script
+
+import Splice.Api.Token.MetadataV1 (AnyValue (..))
+
+import Cap.Governance.BallotV1 (Vote (..))
+import Cap.Governance.Utils.Count (Cast (..))
+import Cap.Governance.Utils.Votes
+
+import Cap.Governance.Tests.Support
+
+
+-- The standard decoders accept exactly what their encoders produce, and pass
+-- Abstained and Absent through.
+standardDecodersAreExactAndKeepAbstentions : Script ()
+standardDecodersAreExactAndKeepAbstentions = do
+  forA_ [Voted "yes", Abstained, Absent] $ \(vote : Vote Text) ->
+    decodeTextVote (encodeTextVote vote) === Some vote
+  forA_ [Voted 0.25, Abstained, Absent] $ \(vote : Vote Decimal) ->
+    decodeDecimalVote (encodeDecimalVote vote) === Some vote
+  decodeDecimalVote (Voted (AV_Int 1)) === None
+  decodeDecimalVote (Voted (AV_Text "0.5")) === None
+  decodeTextVote (Voted (AV_Decimal 0.5)) === None
+
+-- A vote that does not decode is reported by votesDecodable only, and the
+-- value check runs only on the votes that decode.
+votesSatisfyReportsEachFailureOnce : Script ()
+votesSatisfyReportsEachFailureOnce = do
+  [yes, maybe, wrongKind, abstains] <- forA ["yes", "maybe", "kind", "abstains"] $ \n ->
+    allocateParty ("votes-once-" <> n)
+  let ballot = TestBallot $ Map.fromList
+        [ (yes, Voted (AV_Text "yes"))
+        , (maybe, Voted (AV_Text "maybe"))
+        , (wrongKind, Voted (AV_Int 1))
+        , (abstains, Abstained)
+        ]
+  votesDecodable decodeTextVote ballot
+    === ["the vote of " <> show wrongKind <> " does not decode as the kind this mechanism counts"]
+  votesSatisfy decodeTextVote (optionAmong ["yes", "no"]) ballot
+    === ["the vote of " <> show maybe <> ": the option \"maybe\" is not among [\"yes\",\"no\"]"]
+
+-- The voters come from the weights map: a voter without a ballot, or whose
+-- vote does not decode, is Absent; one outside the map is not counted.
+castsCountsTheVotersOfTheWeightsMap : Script ()
+castsCountsTheVotersOfTheWeightsMap = do
+  [yes, abstains, wrongKind, noBallot, outside] <-
+    forA ["yes", "abstains", "kind", "no-ballot", "outside"] $ \n -> allocateParty ("casts-" <> n)
+  let ballots =
+        [ TestBallot $ Map.fromList [(yes, Voted (AV_Text "yes")), (abstains, Abstained)]
+        , TestBallot $ Map.fromList [(wrongKind, Voted (AV_Int 1)), (outside, Voted (AV_Text "no"))]
+        ]
+      weights = Map.fromList [(yes, 2.0), (abstains, 1.0), (wrongKind, 1.5), (noBallot, 3.0)]
+  casts decodeTextVote weights ballots === Map.fromList
+    [ (yes, Cast with weight = 2.0; vote = Voted "yes")
+    , (abstains, Cast with weight = 1.0; vote = Abstained)
+    , (wrongKind, Cast with weight = 1.5; vote = Absent)
+    , (noBallot, Cast with weight = 3.0; vote = Absent)
+    ]
+
+-- Both bounds are inclusive, and None leaves a side open.
+withinBoundsIsInclusiveAndOpenOnNone : Script ()
+withinBoundsIsInclusiveAndOpenOnNone = do
+  withinBounds (Some 0.0) (Some 1.0) 0.0 === []
+  withinBounds (Some 0.0) (Some 1.0) 1.0 === []
+  withinBounds (Some 0.0) (Some 1.0) (-0.5) === ["the value -0.5 is below the minimum 0.0"]
+  withinBounds (Some 0.0) (Some 1.0) 1.5 === ["the value 1.5 is above the maximum 1.0"]
+  withinBounds None (Some 1.0) (-100.0) === []
+  withinBounds (Some 0.0) None 100.0 === []

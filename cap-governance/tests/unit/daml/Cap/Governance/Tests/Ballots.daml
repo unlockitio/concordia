@@ -1,0 +1,28 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Governance.Tests.Ballots where
+
+import DA.Assert ((===))
+import qualified DA.Map as Map
+import Daml.Script
+
+import Cap.Governance.BallotV1 (Vote (..))
+import Cap.Governance.Utils.Ballots
+
+import Cap.Governance.Tests.Support
+
+
+-- Every ballot of a voter who appears twice fails, whatever the order, and on
+-- ballots with several voters only the shared voter is reported.
+distinctVotersFailsEveryBallotOfARepeatedVoter : Script ()
+distinctVotersFailsEveryBallotOfARepeatedVoter = do
+  [twice, once, alone] <- forA ["twice", "once", "alone"] $ \n -> allocateParty ("distinct-" <> n)
+  let votesOf' parties = TestBallot $ Map.fromList [(p, Voted "yes") | p <- parties]
+      first = votesOf' [twice]
+      second = votesOf' [twice, once]
+      third = votesOf' [alone]
+      repeated = ["the voter " <> show twice <> " is on another ballot"]
+  map (distinctVotersAmongBallots [first, second, third]) [first, second, third]
+    === [repeated, repeated, []]
+  map (distinctVotersAmongBallots [third, second, first]) [first, second, third]
+    === [repeated, repeated, []]

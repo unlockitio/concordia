@@ -38,7 +38,7 @@ these.
   or KYC system and mint these contracts only to eligible parties.
 - **A drift policy per action.** Whether an approved outcome executes over a
   target that changed since its snapshot is decided by the `DriftPolicy` the
-  action passes to `checkTarget`.
+  action passes to `fetchTargetMatchingSnapshot`.
 - **A timing profile.** Voting windows are fields of the app's ballots.
   Execution windows are the `opensAt`, `cancelAfter` and `expiresAt` fields of the
   `ExecutionCore` the resolver sets when it authorizes an execution.

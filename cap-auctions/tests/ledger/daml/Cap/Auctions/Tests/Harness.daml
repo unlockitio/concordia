@@ -3,13 +3,14 @@
 module Cap.Auctions.Tests.Harness where
 
 import DA.Map (Map)
+import DA.Optional (fromSomeNote)
 
 import Splice.Api.Token.MetadataV1 (ExtraArgs, emptyMetadata)
 import qualified Splice.Api.Token.AllocationV2 as Alloc
 import Splice.Util (HasCheckedFetch (..))
 
 import Cap.Core.Types (ResolutionInfo)
-import Cap.Core.Utils (Contracts, Ignored, fetchGroup, orAbort)
+import Cap.Core.Utils (Contracts, Ignored, fetchGroup)
 import Cap.Auctions.Types (AuctionSchedule, AuctionTerms (..), Funding, HasSingleLotQuotes (..), Quote)
 import Cap.Auctions.Bid
 import Cap.Auctions.SingleLotQuotesBid
@@ -158,8 +159,8 @@ template Probe
         bidCids : [ContractId TestBid]
       controller owners
       do
-        pricingMechanism <- orAbort ("no native mechanism " <> mechanism)
-          (find (\native -> native.name == mechanism) nativePricingMechanisms)
+        let pricingMechanism = fromSomeNote ("no native mechanism " <> mechanism)
+              (find (\native -> native.name == mechanism) nativePricingMechanisms)
         singleLotTerms <- expectSingleLot terms
         bids <- forA bidCids $ \cid -> do
           bid <- fetch cid

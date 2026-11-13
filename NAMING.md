@@ -4,96 +4,87 @@
 
 Naming conventions for the Daml packages in this repository.
 
-
-### Domain specific naming
+## General
 
 - Use `listXXX`, `acceptXXX`, `rejectXXX`, `withdrawXXX` for managing
-  proposals, requests etc.
-- Use only the term `amount`, not `quantity` or `number`, because the three are
-  easily confused.
-- Use `sender`/`receiver`, not `payer`/`payee`.
+  proposals and requests.
+- Use only the term `amount`, never `quantity` or `number`.
+- Use `sender`/`receiver`, never `payer`/`payee`.
+- Name flags `enableXXX`, never `disableXXX`.
 
-### Fields
+## Interfaces and choices
 
-- Use a plural name for list fields.
-- Use the suffix `contract_id` for fields that store contract ids and
-  `party_id` for fields that store party ids. In Splice this rule applies to
-  Protobuf messages.
-
-### Choice return types
-
-- A choice `X` returns a type named `XResult`: `Foo_Bar` returns
-  `Foo_BarResult`. Splice enforces this in CI with
-  `scripts/check-daml-return-types.sh`. Tests, `*_Fetch` choices and a fixed
-  list of older choices such as `AmuletRules_Transfer` are exempt.
-
-### Config parameters
-
-- Name flags `enableXXX`, not `disableXXX`, to avoid a double negation.
-
-
-## Interfaces, choices and results
-
-The interface naming follows the Splice token standard so that CAP interfaces
-read the same way as the interfaces they compose with.
-
-- Interfaces are PascalCase nouns: `Bid`, `Settlement`, `Executable`.
-- The view type is `<Interface>View`: `BidView`, `ExecutableView`.
-- Choices are `<Interface>_<Verb>`: `Bid_Withdraw`, `SaleProposal_Accept`.
-- A choice that returns a record returns `<Interface>_<Verb>Result`:
-  `Bid_WithdrawResult`. Every result record has a `meta : Metadata` field.
-- The implementation method behind a choice is `<interface>_<verb>Impl`, with
-  the interface name in camelCase: `bid_withdrawImpl`, `saleProposal_acceptImpl`.
+- Name an interface with a PascalCase noun.
+- Name its view type `<Interface>View`.
+- Name its choices `<Interface>_<Verb>`.
+- Name the record a choice returns `<Interface>_<Verb>Result`. Tests and
+  `*_Fetch` choices are exempt.
+- Name the implementation method behind a choice `<interface>_<verb>Impl`, with
+  the interface name in camelCase.
 
 ## Available actions
 
-- The action type of an interface is `<Interface>Action`: `BidAction`,
-  `SaleProposalAction`, `ExecutionAction`.
-- Constructors are `<Initials>_<Verb>`, where the initials abbreviate the
-  interface name: `BA_Withdraw`, `BPA_Accept`, `SPA_Reject`, `EA_Execute`.
-- Every action type ends with `<Initials>_Custom with id : Text`, for
-  implementation-specific actions.
-- The verb in a constructor matches the verb in the choice it entitles:
-  `BA_Withdraw` entitles `Bid_Withdraw`.
-- The field holding the entitlements is `availableActions : Map <Interface>Action [[Party]]`.
+- Name the action type of an interface `<Interface>Action`.
+- Name its constructors `<Initials>_<Verb>`, where the initials abbreviate the
+  interface name, and the verb is the verb of the choice the constructor
+  entitles.
+- Name the constructor for implementation-specific actions
+  `<Initials>_Custom with id : Text`.
+- Name the field holding the entitlements
+  `availableActions : Map <Interface>Action [[Party]]`.
 
 ## Choice arguments
 
-- `actors : [Party]` is the controller of a choice that requires entitlement.
-- `actor : Party` is the controller of a choice any single party may exercise,
-  such as `Executable_Expire`.
-- `extraArgs : ExtraArgs` is the last argument of every choice that takes
-  context from the caller.
+- Name the controller of a choice that requires entitlement `actors : [Party]`.
+- Name the controller of a choice any single party may exercise
+  `actor : Party`.
+- Name the argument carrying context from the caller `extraArgs : ExtraArgs`.
 
 ## Fields
 
-- `authorities : Set Party` is the set of parties that sign a contract or key.
-- `meta : Metadata` is the metadata field on views and results.
-- A field holding a contract id ends in `Cid` (`resolverCid`, `factoryCid`),
-  and a collection of contract ids ends in `Cids` (`targetCids`,
-  `executionCids`). A field named `cid` is used only when the record has no
-  other contract id to distinguish.
-- A field holding a point in time ends in `At`: `opensAt`, `biddingClosesAt`,
-  `expiresAt`, `requestedAt`.
-- A field holding one end of a window is `<verb>After` or `<verb>Before`:
-  `cancelAfter`, `acceptBefore`.
-- Collection fields are plural: `quotes`, `fundings`, `snapshots`, `lots`.
-- A `Map` keyed by party is named for its values, not its keys: `fundings : Map Party Funding`.
+- Name the set of parties that sign a contract or key `authorities : Set Party`.
+- Name the metadata field on views and results `meta : Metadata`.
+- End a field holding a contract id in `Cid`, and a collection of contract ids
+  in `Cids`. Name a field `cid` only when the record has no other contract id.
+- End a field holding a point in time in `At`.
+- Name a field holding one end of a window `<verb>After` or `<verb>Before`.
+- Use a plural name for collection fields.
+- Name a `Map` keyed by party for its values, not its keys.
+- In Protobuf messages, end fields that store contract ids in `contract_id`
+  and fields that store party ids in `party_id`.
 
-## Functions
+## Checks
 
-- `require<Condition>` checks a condition and aborts with the given message
-  when it fails: `requireOpen`, `requireExpired`, `requireResolvedBy`.
-- `is<Condition>` returns a `Bool` for the same kind of check: `isOpen`,
-  `isPresent`.
-- `unmet<Condition>` returns the error message of every part of the condition
-  that fails, and an empty list when the condition holds. The matching
-  `require<Condition>` aborts with the first message, and the matching
-  `ignoreBidsWithout<Condition>` uses the first message as the reason.
-- `<field>Of` reads a value out of a view or record: `bidderOf`, `sellerOf`,
-  `authoritiesOf`.
-- `ignoreBidsWith<Reason>` and `ignoreBidsWithout<Reason>` are bid filters of
-  type `BidFilter`. They return the kept bids and the ignored bids with a reason.
-- `fetch<Thing>` fetches contracts: `fetchAllocations`, `fetchCheckedAny`.
+- Name a check, a function returning `Unmet`, for the condition that holds
+  when it passes.
+- Name a type of check `<Thing>Check`, for what it checks.
+- Name a function that aborts when a single condition fails
+  `require<Condition>`.
+- Name a function that returns a `Bool` for a condition `is<Condition>`.
+- Name a function that does something and aborts when a condition fails for
+  both: `<action><Thing>Matching<Condition>` or
+  `<action><Thing>Without<Condition>`. Do not use a `Checked` suffix; 
 
+## Filters and fetches
 
+- Name a contract filter `ignore<What it ignores>`.
+- Name a function that fetches contracts `fetch<Thing>`.
+
+## Optional results
+
+- End the name of a pure function that may have no result in `Optional`.
+- Do not add the suffix to a lookup, named `lookup<Thing>`, or to a
+  conversion, named `from<Representation>` or `decode<Thing>`.
+- Name a function that returns the value or fails `expect<Thing>`.
+
+## Conversions
+
+- Name a type-class conversion between any type and a generic representation
+  `to<Representation>` / `from<Representation>`, for the representation.
+- Name the two sides of an agreed format for one kind of value
+  `encode<Thing>` / `decode<Thing>`, for the value.
+- Name a function argument that takes a decoder `decode<Thing>`.
+
+## Reading values
+
+- Name a function that reads a value out of a view or record `<field>Of`.

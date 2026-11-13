@@ -1,0 +1,48 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | Structural fetches: each contract is fetched once, and a contract
+-- presented twice or of another group aborts.
+module Cap.Core.Utils.Fetch
+  ( HasCheckedFetch (..)
+  , signedKey
+  , fetchCheckedAny
+  , fetchGroup
+  ) where
+
+import DA.List (unique)
+import qualified DA.Set as Set
+
+import Splice.Api.Token.MetadataV1 (AnyContractId)
+import Splice.Util (HasCheckedFetch (..), fetchChecked, require)
+
+import Cap.Core.Types (AuthenticKey (..))
+
+
+-- | The key of a contract built from its signatories, for use in a
+-- HasCheckedFetch instance so that fetchChecked also checks who signed it.
+signedKey : HasSignatory t => Text -> t -> AuthenticKey
+signedKey id contract = AuthenticKey with authorities = Set.fromList (signatory contract); id
+
+-- | Fetches a contract named by an AnyContractId as its concrete template and
+-- checks its key, returning the typed contract id with the contract.
+fetchCheckedAny
+  : (HasFetch t, HasCheckedFetch t k)
+  => k -> AnyContractId -> Update (ContractId t, t)
+fetchCheckedAny key cid = do
+  let typed = coerceContractId cid
+  contract <- fetchChecked key typed
+  pure (typed, contract)
+
+-- | Fetches the presented contracts, each once, and checks that each one
+-- belongs to the given group key, for example the resolution it is counted
+-- in. Aborts if a contract is presented twice or belongs to another group:
+-- the party presenting them chose the list, so these are its errors and are
+-- never ignored. An empty list returns no contracts.
+fetchGroup
+  : (HasFetch t, HasCheckedFetch t k)
+  => k -> [ContractId t] -> Update [(ContractId t, t)]
+fetchGroup key cids = do
+  require "the presented contracts are distinct" (unique cids)
+  forA cids $ \cid -> do
+    contract <- fetchChecked key cid
+    pure (cid, contract)

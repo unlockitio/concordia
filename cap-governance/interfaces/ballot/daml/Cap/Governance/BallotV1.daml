@@ -7,7 +7,9 @@ module Cap.Governance.BallotV1 where
 
 import Prelude hiding (Action)
 
+import DA.Foldable (Foldable (..))
 import DA.Map (Map)
+import DA.Traversable (Traversable (..))
 
 import Splice.Api.Token.MetadataV1
 import Splice.Util (HasCheckedFetch (..))
@@ -21,6 +23,25 @@ data Vote a
   | Abstained    -- present but chose no option
   | Voted a
   deriving (Eq, Show)
+
+-- | Maps the payload of a Voted vote, leaving Abstained and Absent as they
+-- are: fmap toAnyValue turns a Vote Text into a Vote AnyValue.
+instance Functor Vote where
+  fmap f (Voted v) = Voted (f v)
+  fmap _ Abstained = Abstained
+  fmap _ Absent = Absent
+
+instance Foldable Vote where
+  foldr f z (Voted v) = f v z
+  foldr _ z _ = z
+
+-- | Decodes the payload of a Voted vote, leaving Abstained and Absent as they
+-- are: Traversable.mapA fromAnyValue turns a Vote AnyValue into an
+-- Optional (Vote Text), None when the payload does not decode.
+instance Traversable Vote where
+  mapA f (Voted v) = Voted <$> f v
+  mapA _ Abstained = pure Abstained
+  mapA _ Absent = pure Absent
 
 data BallotView = BallotView
   with

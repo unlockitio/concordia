@@ -1,0 +1,50 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | Shared fixtures for the unit tests.
+module Cap.Governance.Tests.Support
+  ( TestBallot (..)
+  , Dummy (..)
+  , dummyCids
+  , keyIn
+  ) where
+
+import DA.Map (Map)
+import qualified DA.Map as Map
+import qualified DA.Set as Set
+import Daml.Script hiding (AnyContractId)
+
+import Splice.Api.Token.MetadataV1 (AnyContractId)
+
+import Cap.Core.Types (AuthenticKey (..))
+import Cap.Governance.BallotV1 (Vote)
+import Cap.Governance.Utils.Ballots (IsBallot (..))
+
+
+-- | A ballot carrying only votes. The tests that use it read nothing else, so
+-- the other IsBallot methods are stubs.
+data TestBallot v = TestBallot with
+    votes : Map Party (Vote v)
+  deriving (Eq, Show)
+
+instance IsBallot (TestBallot v) v where
+  votesOf ballot = ballot.votes
+  snapshotsOf _ = Map.empty
+  actionOf _ = error "a TestBallot names no action"
+  consume _ = pure ()
+
+
+-- | A contract created only to get contract ids for snapshots.
+template Dummy
+  with
+    owner : Party
+    tag : Int
+  where
+    signatory owner
+
+dummyCids : Party -> Int -> Script [AnyContractId]
+dummyCids owner n = forA [1 .. n] $ \tag ->
+  coerceContractId <$> submit owner (createCmd Dummy with owner; tag)
+
+-- | A target key under one party.
+keyIn : Party -> Text -> AuthenticKey
+keyIn party id = AuthenticKey with authorities = Set.fromList [party]; id

@@ -1,0 +1,62 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Governance.Tests.Execution where
+
+import DA.Assert ((===))
+import Daml.Script
+
+import Splice.Api.Token.MetadataV1 (AnyValue (..))
+
+import Cap.Core.Types (Snapshot (..))
+import Cap.Governance.Utils.Targets.Execution
+
+import Cap.Governance.Tests.Support
+
+
+-- Drift policies
+-----------------
+
+data Fees = Fees with
+    transferFee : Decimal
+    epoch : Int
+  deriving (Eq, Show)
+
+unchangedNeedsTheSameState : Script ()
+unchangedNeedsTheSameState = do
+  unchanged (Fees 0.01 3) (Fees 0.01 3) === True
+  unchanged (Fees 0.01 3) (Fees 0.01 4) === False
+
+allowAnyDriftAcceptsEveryState : Script ()
+allowAnyDriftAcceptsEveryState = do
+  allowAnyDrift (Fees 0.01 3) (Fees 0.02 4) === True
+
+sameOnComparesOnlyTheProjection : Script ()
+sameOnComparesOnlyTheProjection = do
+  sameOn (.transferFee) (Fees 0.01 3) (Fees 0.01 4) === True
+  sameOn (.transferFee) (Fees 0.01 3) (Fees 0.02 3) === False
+
+bothOfNeedsBothPolicies : Script ()
+bothOfNeedsBothPolicies = do
+  let policy = bothOf (sameOn (.transferFee)) (sameOn (.epoch))
+  policy (Fees 0.01 3) (Fees 0.01 3) === True
+  policy (Fees 0.01 3) (Fees 0.01 4) === False
+  policy (Fees 0.01 3) (Fees 0.02 3) === False
+
+
+-- Target state
+---------------
+
+-- No recorded state passes; a recorded state that does not decode fails;
+-- otherwise the drift policy decides.
+targetStateMatchesDecodesAndAppliesThePolicy : Script ()
+targetStateMatchesDecodesAndAppliesThePolicy = do
+  owner <- allocateParty "state-matches"
+  let key = keyIn owner "fees"
+      recorded state = Snapshot with state; cid = None
+  targetStateMatches (unchanged : DriftPolicy Int) key (recorded None) 6 === []
+  targetStateMatches (unchanged : DriftPolicy Int) key (recorded (Some (AV_Text "5"))) 5
+    === ["the snapshot state of " <> show key <> " does not decode"]
+  targetStateMatches (unchanged : DriftPolicy Int) key (recorded (Some (AV_Int 5))) 5 === []
+  targetStateMatches (unchanged : DriftPolicy Int) key (recorded (Some (AV_Int 5))) 6
+    === ["the target " <> show key <> " has drifted from its snapshot"]
+  targetStateMatches (allowAnyDrift : DriftPolicy Int) key (recorded (Some (AV_Int 5))) 6 === []

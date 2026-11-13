@@ -1,0 +1,140 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+{-# LANGUAGE AllowAmbiguousTypes #-}
+
+-- | Targets at execution: whether the live target still matches what was
+-- snapshotted for it. Used by an executable, in the action's package, to fetch
+-- each target it acts on. Every check here aborts with requireMet: targets
+-- are never ignored.
+module Cap.Governance.Utils.Targets.Execution
+  ( -- * Drift policies
+    DriftPolicy
+  , unchanged
+  , allowAnyDrift
+  , sameOn
+  , bothOf
+
+    -- * Checks
+  , presentedTargetsMatchSnapshots
+  , targetCidMatches
+  , targetStateMatches
+  , identityOnlySnapshot
+
+    -- * Fetching targets
+  , fetchTargetMatchingSnapshot
+  , fetchTargetMatchingIdentity
+  ) where
+
+import DA.Map (Map)
+import qualified DA.Map as Map
+import DA.Optional (fromSomeNote, isNone)
+
+import Splice.Api.Token.MetadataV1
+import Splice.Util (HasCheckedFetch)
+
+import Cap.Core.Types (AuthenticKey, Snapshot (..))
+import Cap.Core.Utils (IsAnyValue (..), Unmet, fetchCheckedAny, requireMet)
+import Cap.Governance.Utils.Targets.Snapshots (HasState (..))
+
+
+------------------  DRIFT POLICIES  ------------------
+
+-- | Whether a target's live state still satisfies the state snapshotted for
+-- it, as driftPolicy snapshot live.
+type DriftPolicy a = a -> a -> Bool
+
+unchanged : Eq a => DriftPolicy a
+unchanged = (==)
+
+allowAnyDrift : DriftPolicy a
+allowAnyDrift _ _ = True
+
+sameOn : Eq b => (a -> b) -> DriftPolicy a
+sameOn f snapshot live = f snapshot == f live
+
+bothOf : DriftPolicy a -> DriftPolicy a -> DriftPolicy a
+bothOf p q snapshot live = p snapshot live && q snapshot live
+
+
+------------------  CHECKS  ------------------
+
+-- | Validates that the presented targets are exactly the snapshotted ones:
+-- every snapshotted target presented, and nothing presented that has no
+-- snapshot.
+presentedTargetsMatchSnapshots : (Ord k, Show k) => Map k a -> Map k b -> Unmet
+presentedTargetsMatchSnapshots snapshots targetCids =
+  [ "the snapshotted target " <> show key <> " was not presented"
+  | key <- Map.keys snapshots
+  , not (Map.member key targetCids)
+  ]
+    <> [ "the presented target " <> show key <> " has no snapshot"
+       | key <- Map.keys targetCids
+       , not (Map.member key snapshots)
+       ]
+
+-- | Validates that the presented contract is the one the snapshot recorded,
+-- when it records one.
+targetCidMatches : AuthenticKey -> Snapshot -> AnyContractId -> Unmet
+targetCidMatches key snapshot cid =
+  [ "the contract presented for the target " <> show key
+      <> " is not the one its snapshot recorded: presented " <> show cid
+      <> ", recorded " <> show snapshot.cid
+  | not (optional True (== cid) snapshot.cid)
+  ]
+
+-- | Validates that the live state satisfies the snapshotted state under the
+-- drift policy, when the snapshot records a state.
+targetStateMatches : IsAnyValue a => DriftPolicy a -> AuthenticKey -> Snapshot -> a -> Unmet
+targetStateMatches driftPolicy key snapshot live = case snapshot.state of
+  None -> []
+  Some raw -> case fromAnyValue raw of
+    None -> ["the snapshot state of " <> show key <> " does not decode"]
+    Some snapshotState ->
+      [ "the target " <> show key <> " has drifted from its snapshot"
+      | not (driftPolicy snapshotState live)
+      ]
+
+-- | Validates that the snapshot records no state, only the target's identity.
+identityOnlySnapshot : AuthenticKey -> Snapshot -> Unmet
+identityOnlySnapshot key snapshot =
+  [ "the target " <> show key <> " is not snapshotted by identity alone"
+  | not (isNone snapshot.state)
+  ]
+
+
+------------------  FETCHING TARGETS  ------------------
+
+-- | Checks one presented target against its snapshot: the snapshotted cid if
+-- any, the key, and the snapshotted state against the live stateOf under the
+-- drift policy. Returns the checked contract to act on.
+fetchTargetMatchingSnapshot
+  : forall t a. (HasFetch t, HasCheckedFetch t AuthenticKey, HasState t a, IsAnyValue a)
+  => DriftPolicy a -> AuthenticKey -> Map AuthenticKey Snapshot -> Map AuthenticKey AnyContractId
+  -> Update (ContractId t, t)
+fetchTargetMatchingSnapshot driftPolicy key snapshots targetCids = do
+  let (snapshot, cid) = expectPresentedSnapshot key snapshots targetCids
+  requireMet (targetCidMatches key snapshot cid)
+  (typed, contract) <- fetchCheckedAny @t key cid
+  requireMet (targetStateMatches driftPolicy key snapshot (stateOf contract))
+  pure (typed, contract)
+
+-- | Checks one presented target snapshotted by identity alone: the
+-- snapshotted cid if any, and the key. Returns the checked contract to act on.
+fetchTargetMatchingIdentity
+  : forall t. (HasFetch t, HasCheckedFetch t AuthenticKey)
+  => AuthenticKey -> Map AuthenticKey Snapshot -> Map AuthenticKey AnyContractId
+  -> Update (ContractId t, t)
+fetchTargetMatchingIdentity key snapshots targetCids = do
+  let (snapshot, cid) = expectPresentedSnapshot key snapshots targetCids
+  requireMet (targetCidMatches key snapshot cid <> identityOnlySnapshot key snapshot)
+  fetchCheckedAny @t key cid
+
+-- | The snapshot of a target and the contract presented for it. Fails if the
+-- target has no snapshot or was not presented.
+expectPresentedSnapshot
+  : AuthenticKey -> Map AuthenticKey Snapshot -> Map AuthenticKey AnyContractId
+  -> (Snapshot, AnyContractId)
+expectPresentedSnapshot key snapshots targetCids =
+  ( fromSomeNote ("the target " <> show key <> " has no snapshot") (Map.lookup key snapshots)
+  , fromSomeNote ("the snapshotted target " <> show key <> " was not presented") (Map.lookup key targetCids)
+  )

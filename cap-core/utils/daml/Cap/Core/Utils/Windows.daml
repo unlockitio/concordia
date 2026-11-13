@@ -1,0 +1,34 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | Time windows: whether a window is open, closed or not yet open.
+module Cap.Core.Utils.Windows
+  ( isOpen
+  , requireOpen
+  , requireClosed
+  , requireBeforeOpen
+  , requireBefore
+  , requireExpired
+  ) where
+
+import Splice.Util (require)
+
+
+isOpen : Time -> Time -> Optional Time -> Bool
+isOpen now opensAt closesAt = now >= opensAt && optional True (now <) closesAt
+
+requireOpen : CanAssert m => Text -> Time -> Time -> Optional Time -> m ()
+requireOpen msg now opensAt closesAt = require msg (isOpen now opensAt closesAt)
+
+requireClosed : CanAssert m => Text -> Time -> Time -> m ()
+requireClosed msg now closesAt = require msg (now >= closesAt)
+
+requireBeforeOpen : CanAssert m => Text -> Time -> Time -> m ()
+requireBeforeOpen msg now opensAt = require msg (now < opensAt)
+
+requireBefore : CanAssert m => Text -> Time -> Time -> m ()
+requireBefore msg now deadline = require msg (now < deadline)
+
+requireExpired : Text -> Time -> Optional Time -> Update ()
+requireExpired msg now expiresAt = case expiresAt of
+  None -> abort "this contract has no expiry"
+  Some e -> require msg (now >= e)

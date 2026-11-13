@@ -1,0 +1,69 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | Filters ignore the contracts that fail a check, each with its first unmet
+-- condition, and keep the others in their input order.
+module Cap.Core.Utils.Filters
+  ( Contracts
+  , Ignored
+  , ContractFilter
+  , applyFilters
+  , ignoreUnless
+  , ignoreUnlessAmong
+  , ignoreUnlessM
+  , ignoreFailing
+  ) where
+
+import DA.Action (foldlA)
+
+import Cap.Core.Utils.Checks (AmongCheck, Check, Unmet)
+
+
+type Contracts t = [(ContractId t, t)]
+
+type Ignored t = [(ContractId t, Text)]
+
+type ContractFilter t = Contracts t -> Update (Contracts t, Ignored t)
+
+-- | Runs the filters in order, each on the contracts the previous ones kept, and collects the ignored contracts.
+applyFilters : [ContractFilter t] -> Contracts t -> Update (Contracts t, Ignored t)
+applyFilters filters contracts = foldlA step (contracts, []) filters
+  where
+    step (kept, ignored) contractFilter = do
+      (stillKept, newlyIgnored) <- contractFilter kept
+      pure (stillKept, ignored <> newlyIgnored)
+
+-- | Ignores every contract with an unmet condition, with the first one as the reason.
+ignoreUnless : (t -> Unmet) -> ContractFilter t
+ignoreUnless unmet contracts = pure
+  ( [contract | (contract, []) <- checked]
+  , [(cid, reason) | ((cid, _), reason :: _) <- checked]
+  )
+  where
+    checked = [(contract, unmet c) | contract@(_, c) <- contracts]
+
+-- | Like ignoreUnless, for checks that run in Update, for example to fetch.
+ignoreUnlessM : (t -> Update Unmet) -> ContractFilter t
+ignoreUnlessM unmet contracts = do
+  checked <- forA contracts $ \contract@(_, c) -> do
+    result <- unmet c
+    pure (contract, result)
+  pure
+    ( [contract | (contract, []) <- checked]
+    , [(cid, reason) | ((cid, _), reason :: _) <- checked]
+    )
+
+-- | Like ignoreUnless, for checks that compare a contract with the other contracts still kept.
+ignoreUnlessAmong : ([t] -> t -> Unmet) -> ContractFilter t
+ignoreUnlessAmong unmet contracts = ignoreUnless (unmet (map snd contracts)) contracts
+
+-- | Ignores the contracts that fail a check, each with its first unmet
+-- condition. Use it for the conditions that are the error of the party behind
+-- a contract, such as a voter or a bidder. The checks among contracts run only
+-- on the contracts the checks on the contract alone kept. Every check must
+-- follow from the contracts and the ledger alone, so that any party presenting
+-- them ignores the same contracts.
+ignoreFailing : [Check t] -> [AmongCheck t] -> ContractFilter t
+ignoreFailing checks amongChecks = applyFilters
+  [ ignoreUnless (\c -> concatMap (\check -> check c) checks)
+  , ignoreUnlessAmong (\cs c -> concatMap (\check -> check cs c) amongChecks)
+  ]

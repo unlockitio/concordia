@@ -9,16 +9,17 @@ import qualified DA.Map as Map
 import DA.Set (Set)
 import qualified DA.Set as Set
 import qualified DA.TextMap as TextMap
+import DA.Optional (fromSomeNote)
 
 import Splice.Api.Token.MetadataV1
 import Splice.Util (HasCheckedFetch (..))
 
 import Cap.Core.Types (AuthenticKey (..), Snapshot (..), ExecutionCore (..))
-import Cap.Core.Utils (IsAnyValue (..), orAbort, signedKey)
+import Cap.Core.Utils (IsAnyValue (..), signedKey)
 import Cap.Governance.ActionV1
 import Cap.Governance.ExecutableV1
 import Cap.Governance.Utils
-  ( HasState (..), checkIdentity, checkTarget, mergeSnapshots
+  ( HasState (..), fetchTargetMatchingIdentity, fetchTargetMatchingSnapshot, mergeSnapshots
   , readIdentity, readState, requireSameKeys, unchanged )
 
 import Cap.Examples.BabyDso.Ans
@@ -72,8 +73,8 @@ template SetFeesAction
         | otherwise = abort ("this action names no target " <> show tkey)
 
       action_authorizeExecutionImpl _ arg = do
-        fees <-
-          orAbort "the execution carries no fees this action can apply" (arg.outcome >>= fromAnyValue)
+        let fees =
+              fromSomeNote "the execution carries no fees this action can apply" (arg.outcome >>= fromAnyValue)
         snapshots <- mergeSnapshots (setFeesTargets amuletAuthority dso) arg.snapshots
         cid <- create FeeUpdate with
           amuletAuthority; dso; fees
@@ -138,9 +139,9 @@ template FeeUpdate
 
       executable_executeImpl targetCids _ = do
         requireSameKeys snapshots targetCids
-        (configCid, _) <- checkTarget @AmuletConfig unchanged
+        (configCid, _) <- fetchTargetMatchingSnapshot @AmuletConfig unchanged
           (configTargetKey amuletAuthority) snapshots targetCids
-        (ansCid, _) <- checkIdentity @AnsRules (ansTargetKey dso) snapshots targetCids
+        (ansCid, _) <- fetchTargetMatchingIdentity @AnsRules (ansTargetKey dso) snapshots targetCids
         updatedConfig <- exercise configCid
           AmuletConfig_SetFee with newTransferFee = fees.transferFee
         updatedAns <- exercise ansCid

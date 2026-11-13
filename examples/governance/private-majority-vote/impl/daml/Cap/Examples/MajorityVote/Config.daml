@@ -17,7 +17,7 @@ import Cap.Core.Utils (IsAnyValue (..), signedKey)
 import Cap.Governance.ActionV1
 import Cap.Governance.ExecutableV1
 import Cap.Governance.Utils
-  ( HasState (..), TargetReader, checkTarget, mergeSnapshots, readState, requireSameKeys )
+  ( HasState (..), TargetReader, fetchTargetMatchingSnapshot, mergeSnapshots, readState, requireSameKeys )
 
 
 configId : Text
@@ -77,7 +77,7 @@ template ConfigUpdate
 
       executable_executeImpl targetCids _ = do
         requireSameKeys snapshots targetCids
-        (configCid, _) <- checkTarget @Config (==) (configTargetKey dso) snapshots targetCids
+        (configCid, _) <- fetchTargetMatchingSnapshot @Config (==) (configTargetKey dso) snapshots targetCids
         updated <- exercise configCid Config_Set with newSetting
         pure Executable_ExecuteResult with
           created = [coerceContractId updated]

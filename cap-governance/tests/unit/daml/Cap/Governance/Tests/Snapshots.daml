@@ -1,0 +1,70 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Governance.Tests.Snapshots where
+
+import DA.Assert ((===))
+import qualified DA.Map as Map
+import Daml.Script hiding (AnyContractId)
+
+import Splice.Api.Token.MetadataV1 (AnyValue (..))
+
+import Cap.Core.Types (Snapshot (..))
+import Cap.Governance.Utils.Targets.Snapshots
+
+import Cap.Governance.Tests.Support
+
+
+open : Snapshot
+open = Snapshot with state = None; cid = None
+
+-- Open parts may be filled; a state or contract the action fixed, a state of a
+-- target whose contract it fixed, and a target it does not name are reported,
+-- all of them.
+snapshotsMergeWithoutConflictsReportsEveryConflict : Script ()
+snapshotsMergeWithoutConflictsReportsEveryConflict = do
+  owner <- allocateParty "merge-conflicts"
+  [c1, c2] <- dummyCids owner 2
+  let [k1, k2, k3, k9] = map (keyIn owner) ["k1", "k2", "k3", "k9"]
+      actionSnapshots = Map.fromList
+        [ (k1, open)
+        , (k2, open with state = Some (AV_Int 1))
+        , (k3, open with cid = Some c1)
+        ]
+  snapshotsMergeWithoutConflicts actionSnapshots
+    (Map.fromList [(k1, Snapshot with state = Some (AV_Int 2); cid = Some c2)]) === []
+  snapshotsMergeWithoutConflicts actionSnapshots (Map.fromList
+      [ (k2, open with state = Some (AV_Int 2))
+      , (k3, Snapshot with state = Some (AV_Int 3); cid = Some c2)
+      , (k9, open with state = Some (AV_Int 9))
+      ])
+    === [ "the action names no snapshot target " <> show k9
+        , "the resolution takes a state snapshot of " <> show k2 <> " that the action fixed"
+        , "the resolution takes a contract snapshot of " <> show k3 <> " that the action fixed"
+        , "the resolution takes a state snapshot of " <> show k3 <> ", whose contract the action fixed"
+        ]
+
+-- The merge fills the open parts, keeps what the action fixed, drops targets
+-- it does not name and leaves untaken targets open.
+mergeSnapshotsFillsOnlyTheOpenParts : Script ()
+mergeSnapshotsFillsOnlyTheOpenParts = do
+  owner <- allocateParty "merge-fills"
+  [c1, c2, c3] <- dummyCids owner 3
+  let [k1, k2, k3, k4, k9] = map (keyIn owner) ["k1", "k2", "k3", "k4", "k9"]
+      actionSnapshots = Map.fromList
+        [ (k1, open)
+        , (k2, open with state = Some (AV_Int 2))
+        , (k3, open with cid = Some c3)
+        , (k4, open)
+        ]
+      resolutionSnapshots = Map.fromList
+        [ (k1, Snapshot with state = Some (AV_Int 1); cid = Some c1)
+        , (k2, open with cid = Some c2)
+        , (k3, open with cid = Some c1)
+        , (k9, open with state = Some (AV_Int 9))
+        ]
+  mergeSnapshots actionSnapshots resolutionSnapshots === Map.fromList
+    [ (k1, Snapshot with state = Some (AV_Int 1); cid = Some c1)
+    , (k2, Snapshot with state = Some (AV_Int 2); cid = Some c2)
+    , (k3, open with cid = Some c3)
+    , (k4, open)
+    ]

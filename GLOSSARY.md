@@ -74,7 +74,7 @@ reader you supply); `mergeSnapshots` merges them into the action's targets.
 `Cap.Governance.Utils.Targets`.
 
 **Drift** — the change a target is allowed between its snapshot and being acted
-on, judged by a policy the action supplies. `DriftPolicy` and `checkTarget` in
+on, judged by a policy the action supplies. `DriftPolicy` and `fetchTargetMatchingSnapshot` in
 `Cap.Governance.Utils.Targets`.
 
 **Action** — implemented by the owner of a target to let a decentralized party authorize

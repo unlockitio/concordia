@@ -38,7 +38,7 @@ import DA.List (sort, sortOn)
 import DA.Map (Map)
 import qualified DA.Map as Map
 import DA.Optional (mapOptional)
-import Cap.Core.Utils (uniformValue)
+import Cap.Core.Utils (uniformOptional)
 import Cap.Governance.BallotV1 (Vote (..))
 
 
@@ -119,7 +119,7 @@ anyOf quorums casts = any (\quorum -> quorum casts) quorums
 -- unanimity not reached). It uses only Voted casts.
 
 unanimous : Eq a => Tally a a
-unanimous casts = uniformValue (map fst (weightedVotes casts))
+unanimous casts = uniformOptional (map fst (weightedVotes casts))
 
 plurality : Ord a => Tally a a
 plurality casts =

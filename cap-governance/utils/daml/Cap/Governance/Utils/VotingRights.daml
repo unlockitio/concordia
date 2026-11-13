@@ -13,6 +13,9 @@ module Cap.Governance.Utils.VotingRights
   , fetchVotersPerContract
   , fetchWeightsFromOneContract
   , fetchVotersFromOneContract
+
+    -- * Weights
+  , equalWeights
   ) where
 
 import DA.Map (Map)
@@ -105,3 +108,10 @@ fetchVotersFromOneContract
   => k -> ContractId t -> Update (Set Party)
 fetchVotersFromOneContract rightsKey rightsCid =
   fetchVotersPerContract (Set.singleton rightsKey) (Map.singleton rightsKey rightsCid)
+
+
+------------------  WEIGHTS  ------------------
+
+-- | Weight 1 for every voter in the set.
+equalWeights : Set Party -> Map Party Decimal
+equalWeights voters = Map.fromList [(voter, 1.0) | voter <- Set.toList voters]

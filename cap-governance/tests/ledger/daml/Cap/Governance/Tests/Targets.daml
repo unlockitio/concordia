@@ -2,17 +2,12 @@
 
 module Cap.Governance.Tests.Targets where
 
-import Prelude hiding (Action)
-
 import DA.Assert ((===))
 import qualified DA.Map as Map
 import Daml.Script hiding (AnyContractId)
 
-import Splice.Api.Token.MetadataV1
-
-import Cap.Core.Types (AuthenticKey (..), Snapshot (..))
+import Cap.Core.Types (AuthenticKey, Snapshot (..))
 import Cap.Core.Utils (IsAnyValue (..))
-import Cap.Governance.ActionV1 (Action)
 
 import Cap.Governance.Tests.Harness
 import Cap.Governance.Tests.Support
@@ -29,265 +24,80 @@ setup ns = do
   pure Env with ..
 
 target : Env -> Text -> Int -> Script (ContractId Target)
-target env tag value = submit env.owner $ createCmd Target with
-  owner = env.owner; tag; value; readers = []
+target env tag value = submit env.owner $ createCmd Target with owner = env.owner; tag; value
 
 keyOf : Env -> Text -> AuthenticKey
 keyOf env = targetKey env.owner
 
-emptySnapshot : Snapshot
-emptySnapshot = Snapshot with state = None; cid = None
+open : Snapshot
+open = Snapshot with state = None; cid = None
 
-stateOf' : Int -> Snapshot
-stateOf' value = Snapshot with state = Some (toAnyValue value); cid = None
-
-cidOf : ContractId Target -> Snapshot
-cidOf cid = Snapshot with state = None; cid = Some (coerceContractId cid)
+stateSnapshot : Int -> Snapshot
+stateSnapshot value = open with state = Some (toAnyValue value)
 
 
-snapshotStatesTakesTheOpenTargets : Script ()
-snapshotStatesTakesTheOpenTargets = do
+-- Only targets the action left fully open are read: a target whose reader
+-- returns no state stays open, and a target the action fixed is not read, so
+-- it need not be presented.
+snapshotStatesWithReadsOnlyTheOpenTargets : Script ()
+snapshotStatesWithReadsOnlyTheOpenTargets = do
   env <- setup "snapshot-states"
-  t1 <- target env "t1" 5
-  t2 <- target env "t2" (-1)
-  taken <- submit env.owner $ exerciseCmd env.probe Probe_SnapshotStates with
-    targets = Map.fromList [(keyOf env "t1", emptySnapshot), (keyOf env "t2", emptySnapshot)]
-    targetCids = Map.fromList [(keyOf env "t1", coerceContractId t1), (keyOf env "t2", coerceContractId t2)]
-  taken === Map.fromList [(keyOf env "t1", stateOf' 5)]
+  read <- target env "read" 5
+  unread <- target env "unread" (-1)
+  taken <- submit env.owner $ exerciseCmd env.probe Probe_SnapshotStatesWith with
+    actionSnapshots = Map.fromList
+      [ (keyOf env "read", open)
+      , (keyOf env "unread", open)
+      , (keyOf env "fixed", stateSnapshot 7)
+      ]
+    targetCids = Map.fromList
+      [ (keyOf env "read", coerceContractId read)
+      , (keyOf env "unread", coerceContractId unread)
+      ]
+  taken === Map.fromList [(keyOf env "read", stateSnapshot 5)]
 
-snapshotStatesSkipsTargetsTheActionFixed : Script ()
-snapshotStatesSkipsTargetsTheActionFixed = do
-  env <- setup "snapshot-targets"
-  t1 <- target env "t1" 5
-  taken <- submit env.owner $ exerciseCmd env.probe Probe_SnapshotStates with
-    targets = Map.fromList [(keyOf env "t1", stateOf' 3)]
-    targetCids = Map.fromList [(keyOf env "t1", coerceContractId t1)]
-  taken === Map.empty
-
-snapshotStatesRefusesATargetTheActionDoesNotName : Script ()
-snapshotStatesRefusesATargetTheActionDoesNotName = do
-  env <- setup "snapshot-extra"
-  t1 <- target env "t1" 5
-  t2 <- target env "t2" 7
-  submitMustFailContaining "the action names the presented target" env.owner $
-    exerciseCmd env.probe Probe_SnapshotStates with
-      targets = Map.fromList [(keyOf env "t1", emptySnapshot)]
-      targetCids = Map.fromList [(keyOf env "t1", coerceContractId t1), (keyOf env "t2", coerceContractId t2)]
-
-snapshotCidsRefusesATargetTheActionDoesNotName : Script ()
-snapshotCidsRefusesATargetTheActionDoesNotName = do
-  env <- setup "snapshot-cids-extra"
-  t1 <- target env "t1" 5
-  t2 <- target env "t2" 7
-  submitMustFailContaining "the action names the presented target" env.owner $
-    exerciseCmd env.probe Probe_SnapshotCids with
-      targets = Map.fromList [(keyOf env "t1", emptySnapshot)]
-      targetCids = Map.fromList [(keyOf env "t1", coerceContractId t1), (keyOf env "t2", coerceContractId t2)]
-
-snapshotStatesRefusesAMissingTarget : Script ()
-snapshotStatesRefusesAMissingTarget = do
-  env <- setup "snapshot-missing"
-  submitMustFailContaining "a target the action names was not presented" env.owner $
-    exerciseCmd env.probe Probe_SnapshotStates with
-      targets = Map.fromList [(keyOf env "t1", emptySnapshot)]; targetCids = Map.empty
-
-snapshotCidsRecordsThePresentedContract : Script ()
-snapshotCidsRecordsThePresentedContract = do
+-- A contract is recorded for every target whose contract the action left
+-- open, including one whose state it fixed; a target whose contract it fixed
+-- is not read, so it need not be presented.
+snapshotCidsWithRecordsOnlyTheOpenContracts : Script ()
+snapshotCidsWithRecordsOnlyTheOpenContracts = do
   env <- setup "snapshot-cids"
-  t1 <- target env "t1" 5
-  taken <- submit env.owner $ exerciseCmd env.probe Probe_SnapshotCids with
-    targets = Map.fromList [(keyOf env "t1", emptySnapshot)]
-    targetCids = Map.fromList [(keyOf env "t1", coerceContractId t1)]
-  taken === Map.fromList [(keyOf env "t1", cidOf t1)]
+  openCid <- target env "open" 1
+  stateFixed <- target env "state-fixed" 2
+  cidFixed <- target env "cid-fixed" 3
+  taken <- submit env.owner $ exerciseCmd env.probe Probe_SnapshotCidsWith with
+    actionSnapshots = Map.fromList
+      [ (keyOf env "open", open)
+      , (keyOf env "state-fixed", stateSnapshot 2)
+      , (keyOf env "cid-fixed", open with cid = Some (coerceContractId cidFixed))
+      ]
+    targetCids = Map.fromList
+      [ (keyOf env "open", coerceContractId openCid)
+      , (keyOf env "state-fixed", coerceContractId stateFixed)
+      ]
+  taken === Map.fromList
+    [ (keyOf env "open", open with cid = Some (coerceContractId openCid))
+    , (keyOf env "state-fixed", open with cid = Some (coerceContractId stateFixed))
+    ]
 
-snapshotCidsChecksTheKey : Script ()
-snapshotCidsChecksTheKey = do
-  env <- setup "snapshot-cids-key"
-  t2 <- target env "t2" 5
-  submitMustFailContaining "Contract group identifier mismatch" env.owner $
-    exerciseCmd env.probe Probe_SnapshotCids with
-      targets = Map.fromList [(keyOf env "t1", emptySnapshot)]
-      targetCids = Map.fromList [(keyOf env "t1", coerceContractId t2)]
-
-dummyAction : Env -> Map.Map AuthenticKey Snapshot -> Script (ContractId Action)
-dummyAction env targets = do
-  cid <- submit env.owner $ createCmd DummyAction with
-    owner = env.owner; readers = []; authorizers = [[env.owner]]; targets
-  pure (toInterfaceContractId cid)
-
-snapshotStatesUsesTheActionsReaderAndTargets : Script ()
-snapshotStatesUsesTheActionsReaderAndTargets = do
-  env <- setup "snapshot-states-action"
-  t1 <- target env "t1" 5
-  t2 <- target env "t2" 7
-  actionCid <- dummyAction env
-    (Map.fromList [(keyOf env "t1", emptySnapshot), (keyOf env "t2", stateOf' 3)])
-  taken <- submit env.owner $ exerciseCmd env.probe Probe_SnapshotStatesOfAction with
-    actionCid
-    targetCids = Map.fromList [(keyOf env "t1", coerceContractId t1), (keyOf env "t2", coerceContractId t2)]
-  taken === Map.fromList [(keyOf env "t1", stateOf' 5)]
-
-snapshotCidsUsesTheActionsReaderAndTargets : Script ()
-snapshotCidsUsesTheActionsReaderAndTargets = do
-  env <- setup "snapshot-cids-action"
-  t1 <- target env "t1" 5
-  actionCid <- dummyAction env (Map.fromList [(keyOf env "t1", emptySnapshot)])
-  taken <- submit env.owner $ exerciseCmd env.probe Probe_SnapshotCidsOfAction with
-    actionCid
-    targetCids = Map.fromList [(keyOf env "t1", coerceContractId t1)]
-  taken === Map.fromList [(keyOf env "t1", cidOf t1)]
-
-mergeSnapshotsFillsTheOpenParts : Script ()
-mergeSnapshotsFillsTheOpenParts = do
-  env <- setup "merge-ok"
-  merged <- submit env.owner $ exerciseCmd env.probe Probe_MergeSnapshots with
-    targets = Map.fromList [(keyOf env "t1", emptySnapshot), (keyOf env "t2", emptySnapshot)]
-    taken = Map.fromList [(keyOf env "t1", stateOf' 5)]
-  merged === Map.fromList [(keyOf env "t1", stateOf' 5), (keyOf env "t2", emptySnapshot)]
-
-mergeSnapshotsRefusesASnapshotOfAnUnknownTarget : Script ()
-mergeSnapshotsRefusesASnapshotOfAnUnknownTarget = do
-  env <- setup "merge-unknown"
-  submitMustFailContaining "the action names the snapshot target" env.owner $
-    exerciseCmd env.probe Probe_MergeSnapshots with
-      targets = Map.fromList [(keyOf env "t1", emptySnapshot)]
-      taken = Map.fromList [(keyOf env "t9", stateOf' 5)]
-
-mergeSnapshotsRefusesAStateOverAFixedState : Script ()
-mergeSnapshotsRefusesAStateOverAFixedState = do
-  env <- setup "merge-state"
-  submitMustFailContaining "takes no state snapshot of" env.owner $
-    exerciseCmd env.probe Probe_MergeSnapshots with
-      targets = Map.fromList [(keyOf env "t1", stateOf' 3)]
-      taken = Map.fromList [(keyOf env "t1", stateOf' 5)]
-
-mergeSnapshotsRefusesAContractOverAFixedContract : Script ()
-mergeSnapshotsRefusesAContractOverAFixedContract = do
-  env <- setup "merge-cid"
-  t1 <- target env "t1" 5
-  t1b <- target env "t1" 6
-  submitMustFailContaining "takes no contract snapshot of" env.owner $
-    exerciseCmd env.probe Probe_MergeSnapshots with
-      targets = Map.fromList [(keyOf env "t1", cidOf t1)]
-      taken = Map.fromList [(keyOf env "t1", cidOf t1b)]
-
-mergeSnapshotsRefusesAStateForAFixedContract : Script ()
-mergeSnapshotsRefusesAStateForAFixedContract = do
-  env <- setup "merge-state-cid"
-  t1 <- target env "t1" 5
-  submitMustFailContaining "whose contract the action fixed" env.owner $
-    exerciseCmd env.probe Probe_MergeSnapshots with
-      targets = Map.fromList [(keyOf env "t1", cidOf t1)]
-      taken = Map.fromList [(keyOf env "t1", stateOf' 5)]
-
-requireSameKeysAcceptsExactlyTheSnapshottedTargets : Script ()
-requireSameKeysAcceptsExactlyTheSnapshottedTargets = do
-  env <- setup "same-keys"
-  t1 <- target env "t1" 5
-  t2 <- target env "t2" 5
-  let snapshots = Map.fromList [(keyOf env "t1", emptySnapshot)]
-  submit env.owner $ exerciseCmd env.probe Probe_RequireSameKeys with
-    snapshots; targetCids = Map.fromList [(keyOf env "t1", coerceContractId t1)]
-  submitMustFailContaining "was not presented" env.owner $
-    exerciseCmd env.probe Probe_RequireSameKeys with snapshots; targetCids = Map.empty
-  submitMustFailContaining "every presented target has a snapshot" env.owner $
-    exerciseCmd env.probe Probe_RequireSameKeys with
-      snapshots; targetCids = Map.fromList [(keyOf env "t1", coerceContractId t1), (keyOf env "t2", coerceContractId t2)]
-
-checkTargetAcceptsATargetThatStillMatchesItsSnapshot : Script ()
-checkTargetAcceptsATargetThatStillMatchesItsSnapshot = do
-  env <- setup "check-ok"
-  t1 <- target env "t1" 5
-  result <- submit env.owner $ exerciseCmd env.probe Probe_CheckTarget with
-    key = keyOf env "t1"
-    snapshots = Map.fromList [(keyOf env "t1", stateOf' 5)]
-    targetCids = Map.fromList [(keyOf env "t1", coerceContractId t1)]
-  result === t1
-
-checkTargetRefusesAKeyWithoutSnapshot : Script ()
-checkTargetRefusesAKeyWithoutSnapshot = do
-  env <- setup "check-no-snapshot"
-  t1 <- target env "t1" 5
-  submitMustFailContaining "has no snapshot" env.owner $
-    exerciseCmd env.probe Probe_CheckTarget with
-      key = keyOf env "t1"; snapshots = Map.empty
-      targetCids = Map.fromList [(keyOf env "t1", coerceContractId t1)]
-
-checkTargetRefusesAMissingTarget : Script ()
-checkTargetRefusesAMissingTarget = do
-  env <- setup "check-missing"
-  submitMustFailContaining "was not presented" env.owner $
-    exerciseCmd env.probe Probe_CheckTarget with
-      key = keyOf env "t1"; snapshots = Map.fromList [(keyOf env "t1", emptySnapshot)]; targetCids = Map.empty
-
-checkTargetRefusesAnotherContractThanTheSnapshottedOne : Script ()
-checkTargetRefusesAnotherContractThanTheSnapshottedOne = do
-  env <- setup "check-cid"
-  t1 <- target env "t1" 5
-  t1b <- target env "t1" 5
-  submitMustFailContaining "is the one its snapshot recorded" env.owner $
-    exerciseCmd env.probe Probe_CheckTarget with
-      key = keyOf env "t1"
-      snapshots = Map.fromList [(keyOf env "t1", cidOf t1)]
-      targetCids = Map.fromList [(keyOf env "t1", coerceContractId t1b)]
-
-checkTargetRefusesAContractUnderAnotherKey : Script ()
-checkTargetRefusesAContractUnderAnotherKey = do
-  env <- setup "check-key"
-  t2 <- target env "t2" 5
-  submitMustFailContaining "Contract group identifier mismatch" env.owner $
-    exerciseCmd env.probe Probe_CheckTarget with
-      key = keyOf env "t1"
-      snapshots = Map.fromList [(keyOf env "t1", emptySnapshot)]
-      targetCids = Map.fromList [(keyOf env "t1", coerceContractId t2)]
-
-checkTargetRefusesAContractSignedByAnotherParty : Script ()
-checkTargetRefusesAContractSignedByAnotherParty = do
-  env <- setup "check-signer"
-  other <- allocateParty "check-signer-other"
-  forged <- submit other $ createCmd Target with owner = other; tag = "t1"; value = 5; readers = [env.owner]
-  submitMustFailContaining "Contract group identifier mismatch" env.owner $
-    exerciseCmd env.probe Probe_CheckTarget with
-      key = keyOf env "t1"
-      snapshots = Map.fromList [(keyOf env "t1", emptySnapshot)]
-      targetCids = Map.fromList [(keyOf env "t1", coerceContractId forged)]
-
-checkTargetRefusesADriftedState : Script ()
-checkTargetRefusesADriftedState = do
-  env <- setup "check-drift"
-  t1 <- target env "t1" 6
+-- The drift check runs on the contract that is fetched: a target still in its
+-- snapshotted state is returned, and one whose live state changed aborts.
+fetchTargetMatchingSnapshotChecksTheFetchedState : Script ()
+fetchTargetMatchingSnapshotChecksTheFetchedState = do
+  env <- setup "fetch-matching"
+  unchangedCid <- target env "unchanged" 5
+  drifted <- target env "drifted" 6
+  let snapshots = Map.fromList
+        [ (keyOf env "unchanged", stateSnapshot 5)
+        , (keyOf env "drifted", stateSnapshot 5)
+        ]
+      targetCids = Map.fromList
+        [ (keyOf env "unchanged", coerceContractId unchangedCid)
+        , (keyOf env "drifted", coerceContractId drifted)
+        ]
+  fetched <- submit env.owner $ exerciseCmd env.probe Probe_FetchTargetMatchingSnapshot with
+    key = keyOf env "unchanged"; snapshots; targetCids
+  fetched === unchangedCid
   submitMustFailContaining "has drifted from its snapshot" env.owner $
-    exerciseCmd env.probe Probe_CheckTarget with
-      key = keyOf env "t1"
-      snapshots = Map.fromList [(keyOf env "t1", stateOf' 5)]
-      targetCids = Map.fromList [(keyOf env "t1", coerceContractId t1)]
-
-checkTargetRefusesASnapshotThatDoesNotDecode : Script ()
-checkTargetRefusesASnapshotThatDoesNotDecode = do
-  env <- setup "check-decode"
-  t1 <- target env "t1" 5
-  submitMustFailContaining "does not decode" env.owner $
-    exerciseCmd env.probe Probe_CheckTarget with
-      key = keyOf env "t1"
-      snapshots = Map.fromList [(keyOf env "t1", Snapshot with state = Some (AV_Text "x"); cid = None)]
-      targetCids = Map.fromList [(keyOf env "t1", coerceContractId t1)]
-
-checkIdentityAcceptsAnIdentityOnlySnapshot : Script ()
-checkIdentityAcceptsAnIdentityOnlySnapshot = do
-  env <- setup "identity-ok"
-  t1 <- target env "t1" 5
-  result <- submit env.owner $ exerciseCmd env.probe Probe_CheckIdentity with
-    key = keyOf env "t1"
-    snapshots = Map.fromList [(keyOf env "t1", emptySnapshot)]
-    targetCids = Map.fromList [(keyOf env "t1", coerceContractId t1)]
-  result === t1
-
-checkIdentityRefusesASnapshotWithAState : Script ()
-checkIdentityRefusesASnapshotWithAState = do
-  env <- setup "identity-state"
-  t1 <- target env "t1" 5
-  submitMustFailContaining "is snapshotted by identity alone" env.owner $
-    exerciseCmd env.probe Probe_CheckIdentity with
-      key = keyOf env "t1"
-      snapshots = Map.fromList [(keyOf env "t1", stateOf' 5)]
-      targetCids = Map.fromList [(keyOf env "t1", coerceContractId t1)]
+    exerciseCmd env.probe Probe_FetchTargetMatchingSnapshot with
+      key = keyOf env "drifted"; snapshots; targetCids

@@ -29,7 +29,7 @@ import DA.Foldable (maximum, minimum)
 import DA.List (dedup)
 import DA.Map (Map)
 import qualified DA.Map as Map
-import DA.Optional (fromOptional)
+import DA.Optional (fromOptional, fromSomeNote)
 import qualified DA.TextMap as TextMap
 
 import Splice.Api.Token.MetadataV1 (emptyMetadata)
@@ -37,7 +37,7 @@ import Splice.Api.Token.HoldingV2 (InstrumentId)
 import qualified Splice.Api.Token.AllocationV2 as Alloc
 
 import Cap.Core.Types (ResolutionInfo)
-import Cap.Core.Utils (ContractFilter, Contracts, Unmet, applyFilters, ignoreFailing, orAbort, single)
+import Cap.Core.Utils (ContractFilter, Contracts, Unmet, applyFilters, ignoreFailing, singleOptional)
 import Cap.Auctions.Bid (Bid)
 import Cap.Auctions.Types
   ( AuctionSchedule, AuctionTerms (..), Direction (..), Funding (..), HasSingleLotQuotes (..)
@@ -66,7 +66,7 @@ data SingleLotAuctionTerms = SingleLotAuctionTerms
 -- | Returns the auction's lot, and aborts unless the auction has exactly one.
 expectSingleLot : AuctionTerms -> Update SingleLotAuctionTerms
 expectSingleLot terms = do
-  (lotInstrumentId, lotTerms) <- orAbort "the auction has exactly one lot" (single (Map.toList terms.lots))
+  let (lotInstrumentId, lotTerms) = fromSomeNote "the auction has exactly one lot" (singleOptional (Map.toList terms.lots))
   pure SingleLotAuctionTerms with
     direction = terms.direction
     payment = terms.payment
@@ -299,10 +299,10 @@ singleLotTradeLegs
   : SingleLotAuctionTerms -> Map Party Funding -> Text -> Map Party Funding -> Decimal -> Decimal
   -> Update [(Party, Alloc.TransferLeg)]
 singleLotTradeLegs terms principalFundings legId bidderFundings lotAmount paymentAmount = do
-  principalPaymentF <- fundingUnder "the principal" principalFundings terms.payment
-  principalLotF <- fundingUnder "the principal" principalFundings terms.lotInstrumentId
-  bidderPaymentF <- fundingUnder ("bid " <> legId) bidderFundings terms.payment
-  bidderLotF <- fundingUnder ("bid " <> legId) bidderFundings terms.lotInstrumentId
+  let principalPaymentF = fundingUnder "the principal" principalFundings terms.payment
+      principalLotF = fundingUnder "the principal" principalFundings terms.lotInstrumentId
+      bidderPaymentF = fundingUnder ("bid " <> legId) bidderFundings terms.payment
+      bidderLotF = fundingUnder ("bid " <> legId) bidderFundings terms.lotInstrumentId
   let (paymentSenderF, paymentReceiverF, lotSenderF, lotReceiverF) = case terms.direction of
         Forward -> (bidderPaymentF, principalPaymentF, principalLotF, bidderLotF)
         Reverse -> (principalPaymentF, bidderPaymentF, bidderLotF, principalLotF)
@@ -329,7 +329,7 @@ singleLotTradeLegs terms principalFundings legId bidderFundings lotAmount paymen
   pure (if paymentAmount > 0.0 then [paymentLeg, lotLeg] else [lotLeg])
   where
     fundingUnder who fundings instrument =
-      orAbort (who <> " has no funding under admin " <> show instrument.admin)
+      fromSomeNote (who <> " has no funding under admin " <> show instrument.admin)
         (Map.lookup instrument.admin fundings)
 
 
@@ -361,8 +361,8 @@ clearAndSettleSingleLotFromEmptyLegsAllocations
   -> Update ClearAndSettleResult
 clearAndSettleSingleLotFromEmptyLegsAllocations supportedMechanisms resolutionInfo settlement singleLotTerms principalFundings bids settleBatchContexts = do
   -- finds the mechanism the resolution info names among the supported ones, and aborts if there is none.
-  mechanism <- orAbort ("the mechanism " <> resolutionInfo.mechanism <> " is not supported")
-    (pricingMechanismOf supportedMechanisms resolutionInfo)
+  let mechanism = fromSomeNote ("the mechanism " <> resolutionInfo.mechanism <> " is not supported")
+        (pricingMechanismOf supportedMechanisms resolutionInfo)
   -- clears the bids and builds legs  
   allTransferLegs <- clearSingleLot mechanism.pricingRule singleLotTerms principalFundings bids
   -- groups the legs into batches.
