@@ -1,0 +1,225 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+-- The happy paths drawn in DEMOS.md. Both auctions sell 10
+-- LOT at a reserve price of 5 USD, with the authority and executer, the operator
+module Cap.Examples.Auctions.Demo where
+
+import DA.Assert ((===))
+import DA.Foldable (forA_)
+import qualified DA.Map as Map
+import qualified DA.Set as Set
+import DA.Time (addRelTime, hours)
+import Daml.Script hiding (AnyContractId)
+
+import Splice.TokenStandard.Utils (basicAccount)
+import Splice.Testing.Utils (discloseMany', emptyExtraArgs)
+import Splice.Testing.TokenStandard.WalletClientV2 (checkBalance, listAllocationsV2)
+
+import Cap.Auctions.Types (Quote (..))
+import Cap.Auctions.Bid
+import Cap.Auctions.SingleLotQuotesBid
+import Cap.Auctions.TradeProposal
+import Cap.Auctions.Funding (settlementOf)
+import Cap.Auctions.SingleLot (uniformPriceMechanism)
+import Cap.Auctions.Clock (PriceClock (..))
+
+import Cap.Examples.Auctions.SingleLot.TradeProposal (SingleLotTradeProposal (..))
+import Cap.Examples.Auctions.SingleLot.Auction (SingleLotAuction, SingleLotAuction_Resolve (..))
+import Cap.Examples.Auctions.SingleLot.Bid (SingleLotBid, SingleLotBidProposal (..))
+import Cap.Examples.Auctions.DutchSingleLot.TradeProposal (DutchTradeProposal (..))
+import Cap.Examples.Auctions.DutchSingleLot.Auction (DutchAuction, DutchAuction_Resolve (..))
+import Cap.Examples.Auctions.DutchSingleLot.Bid (DutchBid, DutchBidProposal (..))
+
+import Cap.Auctions.Tests.Env (TestEnv (..), allocateForThisLot, getCancelContexts, getSettleBatchContexts, setupTest)
+
+
+-- Sealed single lot, uniform price
+-----------------------------------
+
+-- Alice quotes 6 at 8, Bob 6 at 7 and Carol 3 at 5.5. Alice is filled for 6
+-- and Bob for the 4 that remain, both at 7, the price of the worst winning
+-- quote. Carol is not filled and her allocations are cancelled.
+sealedSingleLotUniformPrice : Script ()
+sealedSingleLotUniformPrice = do
+  base <- setupTest "sealed-uniform"
+  let resolutionInfo = base.resolutionInfo with mechanism = uniformPriceMechanism.name
+      env = base with resolutionInfo; settlement = settlementOf resolutionInfo None
+      operator = env.authority
+      authorities = Set.singleton operator
+
+  -- Setup: the principal funds the lot and accepts the trade proposal.
+  principalLot <- allocateForThisLot env env.principal env.lot 10.0
+  principalPayment <- allocateForThisLot env env.principal env.payment 0.0
+  let principalFundings = Map.fromList [(env.lotAdmin, principalLot), (env.paymentAdmin, principalPayment)]
+  tradeProposal <- submit operator $ createCmd SingleLotTradeProposal with
+    authorities
+    resolverId = resolutionInfo.resolver.id
+    principal = env.principal
+    resolutionInfo
+    terms = env.terms
+    schedule = env.schedule
+    acceptBefore = env.schedule.biddingOpensAt
+  accepted <- submit env.principal $
+    exerciseCmd (toInterfaceContractId @TradeProposal tradeProposal) TradeProposal_Accept with
+      actors = [env.principal]
+      fundings = principalFundings
+      extraArgs = emptyExtraArgs
+  let auction = coerceContractId accepted.trade : ContractId SingleLotAuction
+  bidProposal <- submit operator $ createCmd SingleLotBidProposal with
+    authorities
+    resolutionInfo
+    terms = env.terms
+    schedule = env.schedule
+    invited = [env.alice, env.bob, env.carol]
+
+  -- Bidding: each bidder accepts the bid proposal, funds its bid with what its
+  -- quote needs, and quotes once.
+  setTime env.schedule.biddingOpensAt
+  bids <- forA [(env.alice, 8.0, 6.0), (env.bob, 7.0, 6.0), (env.carol, 5.5, 3.0)] $ \(bidder, price, amount) -> do
+    seat <- submit bidder $
+      exerciseCmd (toInterfaceContractId @BidProposal bidProposal) BidProposal_Accept with
+        actors = [bidder]
+        resolutionInfo
+        extraArgs = emptyExtraArgs
+    payment <- allocateForThisLot env bidder env.payment (price * amount)
+    lot <- allocateForThisLot env bidder env.lot 0.0
+    let fundings = Map.fromList [(env.paymentAdmin, payment), (env.lotAdmin, lot)]
+    funded <- submit bidder $ exerciseCmd seat.bid Bid_Fund with
+      actors = [bidder]
+      fundings
+      extraArgs = emptyExtraArgs
+    quoted <- submit bidder $
+      exerciseCmd (toInterfaceContractId @SingleLotQuotesBid (fromInterfaceContractId @SingleLotBid funded.bid))
+        SingleLotQuotesBid_Quote with
+          actors = [bidder]
+          quotes = [Quote with price; amount]
+          extraArgs = emptyExtraArgs
+    pure (fromInterfaceContractId @SingleLotBid quoted, fundings)
+
+  -- The bids are sealed: no bidder reads another bidder's bid.
+  [(aliceBid, _), (bobBid, _), (carolBid, carolFundings)] <- pure bids
+  queryContractId env.alice bobBid >>= (=== None)
+  queryContractId env.bob aliceBid >>= (=== None)
+  queryContractId env.carol aliceBid >>= (=== None)
+
+  -- Resolve: the operator presents every bid after biddingClosesAt. The
+  -- resolution clears, settles both batches and cancels Carol's allocations in
+  -- one transaction.
+  setTime env.schedule.biddingClosesAt
+  (settleBatchContexts, settleDisclosures) <- getSettleBatchContexts env (principalFundings :: map snd bids)
+  (cancelContexts, cancelDisclosures) <- getCancelContexts env [carolFundings]
+  result <- submit (actAs operator <> discloseMany' (settleDisclosures <> cancelDisclosures)) $
+    exerciseCmd auction SingleLotAuction_Resolve with
+      bidCids = map fst bids
+      settleBatchContexts
+      cancelContexts
+      extraArgs = emptyExtraArgs
+  length result.settled === 2
+  length result.cancelled === 2
+  result.ignoredBids === []
+
+  -- Alice pays 42 of her 48 and Bob 28 of his 42; the rest is returned.
+  checkBalance env.principal env.lot 90.0
+  checkBalance env.principal env.payment 1070.0
+  checkBalance env.alice env.lot 106.0
+  checkBalance env.alice env.payment 958.0
+  checkBalance env.bob env.lot 104.0
+  checkBalance env.bob env.payment 972.0
+  checkBalance env.carol env.lot 100.0
+  checkBalance env.carol env.payment 1000.0
+  forA_ [env.principal, env.alice, env.bob, env.carol] $ \party ->
+    listAllocationsV2 (basicAccount party) party >>= (=== [])
+  forA_ [aliceBid, bobBid, carolBid] $ \bid ->
+    queryContractId operator bid >>= (=== None)
+
+
+-- Dutch single lot, pay-as-bid
+-------------------------------
+
+-- The price starts at 10 when bidding opens and falls by 1 every hour. Alice
+-- claims 6 two hours in, at 8, and Bob claims 4 three hours in, at 7. The
+-- claims then cover the supply, so the operator resolves before
+-- biddingClosesAt. Each bidder pays its own price.
+dutchSingleLotPayAsBid : Script ()
+dutchSingleLotPayAsBid = do
+  env <- setupTest "dutch-pay-as-bid"
+  let resolutionInfo = env.resolutionInfo
+      operator = env.authority
+      authorities = Set.singleton operator
+      clock = PriceClock with startPrice = 10.0; priceStep = 1.0; tickInterval = hours 1
+
+  -- Setup: the principal funds the lot and accepts the trade proposal.
+  principalLot <- allocateForThisLot env env.principal env.lot 10.0
+  principalPayment <- allocateForThisLot env env.principal env.payment 0.0
+  let principalFundings = Map.fromList [(env.lotAdmin, principalLot), (env.paymentAdmin, principalPayment)]
+  tradeProposal <- submit operator $ createCmd DutchTradeProposal with
+    authorities
+    resolverId = resolutionInfo.resolver.id
+    principal = env.principal
+    resolutionInfo
+    terms = env.terms
+    schedule = env.schedule
+    clock
+    acceptBefore = env.schedule.biddingOpensAt
+  accepted <- submit env.principal $
+    exerciseCmd (toInterfaceContractId @TradeProposal tradeProposal) TradeProposal_Accept with
+      actors = [env.principal]
+      fundings = principalFundings
+      extraArgs = emptyExtraArgs
+  let auction = coerceContractId accepted.trade : ContractId DutchAuction
+  bidProposal <- submit operator $ createCmd DutchBidProposal with
+    authorities
+    resolutionInfo
+    terms = env.terms
+    schedule = env.schedule
+    clock
+    invited = [env.alice, env.bob]
+
+  -- Bidding: each bidder waits for its price, then accepts the bid proposal,
+  -- funds its bid and claims at the clock price.
+  bids <- forA [(env.alice, 2, 8.0, 6.0), (env.bob, 3, 7.0, 4.0)] $ \(bidder, tick, price, amount) -> do
+    setTime (addRelTime env.schedule.biddingOpensAt (hours tick))
+    seat <- submit bidder $
+      exerciseCmd (toInterfaceContractId @BidProposal bidProposal) BidProposal_Accept with
+        actors = [bidder]
+        resolutionInfo
+        extraArgs = emptyExtraArgs
+    payment <- allocateForThisLot env bidder env.payment (price * amount)
+    lot <- allocateForThisLot env bidder env.lot 0.0
+    let fundings = Map.fromList [(env.paymentAdmin, payment), (env.lotAdmin, lot)]
+    funded <- submit bidder $ exerciseCmd seat.bid Bid_Fund with
+      actors = [bidder]
+      fundings
+      extraArgs = emptyExtraArgs
+    quoted <- submit bidder $
+      exerciseCmd (toInterfaceContractId @SingleLotQuotesBid (fromInterfaceContractId @DutchBid funded.bid))
+        SingleLotQuotesBid_Quote with
+          actors = [bidder]
+          quotes = [Quote with price; amount]
+          extraArgs = emptyExtraArgs
+    pure (fromInterfaceContractId @DutchBid quoted, fundings)
+
+  -- Resolve early: the claims cover the supply three hours in, long before
+  -- biddingClosesAt. Every allocation is settled, so there is nothing to cancel.
+  (settleBatchContexts, settleDisclosures) <- getSettleBatchContexts env (principalFundings :: map snd bids)
+  result <- submit (actAs operator <> discloseMany' settleDisclosures) $
+    exerciseCmd auction DutchAuction_Resolve with
+      bidCids = map fst bids
+      settleBatchContexts
+      cancelContexts = Map.empty
+      extraArgs = emptyExtraArgs
+  length result.settled === 2
+  result.cancelled === []
+  result.ignoredBids === []
+
+  -- Alice pays 48 and Bob 28, exactly what each reserved.
+  checkBalance env.principal env.lot 90.0
+  checkBalance env.principal env.payment 1076.0
+  checkBalance env.alice env.lot 106.0
+  checkBalance env.alice env.payment 952.0
+  checkBalance env.bob env.lot 104.0
+  checkBalance env.bob env.payment 972.0
+  forA_ [env.principal, env.alice, env.bob] $ \party ->
+    listAllocationsV2 (basicAccount party) party >>= (=== [])
+  forA_ (map fst bids) $ \bid ->
+    queryContractId operator bid >>= (=== None)

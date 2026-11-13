@@ -14,6 +14,7 @@ SANDBOX_PID=""
 DARS=(
   "$ROOT/examples/governance/private-majority-vote/demo/.daml/dist/cap-example-majority-vote-demo-0.1.0.dar"
   "$ROOT/examples/governance/babydso/demo/.daml/dist/cap-example-babydso-demo-0.1.0.dar"
+  "$ROOT/examples/auctions/demo/.daml/dist/cap-example-auctions-demo-0.1.0.dar"
 )
 
 # "dpm sandbox" forks a java child, so killing the wrapper pid alone leaves the

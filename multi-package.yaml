@@ -28,3 +28,4 @@ packages:
 - ./examples/governance/private-majority-vote/demo
 - ./examples/auctions/sealed-single-lot/impl
 - ./examples/auctions/dutch-single-lot/impl
+- ./examples/auctions/demo
