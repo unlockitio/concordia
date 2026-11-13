@@ -45,13 +45,15 @@ don't have.
 ### Admitting votes
 
 A vote counts only if its voter has the right to vote, has not voted already,
-and voted for something the mechanism counts. `weightedCastsOf` and
-`castsOf` refuse:
+and voted for something the mechanism counts. A resolver passes the ballots
+through `votesDecodable`, `votersEligible` and `distinctVotersAmongBallots`,
+and the weights through `nonNegativeWeights`, before `casts` counts them. They
+refuse:
 
 - a voter who appears on two ballots;
 - a voter with no weight;
 - a negative weight;
-- a vote that the mechanism's `voteOf` does not accept.
+- a vote that the mechanism's decoder does not accept.
 
 **Example:** a ballot template carries votes of type `Approve | Reject | SetFee
 Decimal`, and a yes/no mechanism counts only `Approve` and `Reject`. 

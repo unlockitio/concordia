@@ -30,9 +30,9 @@ snapshotsMergeWithoutConflictsReportsEveryConflict = do
         , (k2, open with state = Some (AV_Int 1))
         , (k3, open with cid = Some c1)
         ]
-  snapshotsMergeWithoutConflicts actionSnapshots
+  validSnapshotsToMerge actionSnapshots
     (Map.fromList [(k1, Snapshot with state = Some (AV_Int 2); cid = Some c2)]) === []
-  snapshotsMergeWithoutConflicts actionSnapshots (Map.fromList
+  validSnapshotsToMerge actionSnapshots (Map.fromList
       [ (k2, open with state = Some (AV_Int 2))
       , (k3, Snapshot with state = Some (AV_Int 3); cid = Some c2)
       , (k9, open with state = Some (AV_Int 9))

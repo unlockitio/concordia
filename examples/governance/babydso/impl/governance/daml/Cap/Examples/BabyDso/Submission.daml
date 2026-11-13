@@ -10,13 +10,15 @@ import DA.Set (Set)
 import qualified DA.Set as Set
 import DA.TextMap (TextMap)
 import qualified DA.TextMap as TextMap
+import qualified DA.Traversable as Traversable
 
 import Splice.Api.Token.MetadataV1
 import Splice.Util (HasCheckedFetch (..), require)
 
 import Cap.Core.Types (AuthenticKey, Snapshot, ResolutionInfo (..))
+import Cap.Core.Utils (IsAnyValue (..))
 import Cap.Governance.ActionV1 (Action)
-import Cap.Governance.Utils (IsBallot (..), Vote (..))
+import Cap.Governance.BallotV1 (Ballot, BallotView (..), Vote (..))
 
 
 confirmationMechanismName : Text
@@ -25,20 +27,28 @@ confirmationMechanismName = "confirmation"
 weightedVoteMechanismName : Text
 weightedVoteMechanismName = "weighted-vote"
 
-data DsoVote
-  = V_Choice Int
-  | V_Confirm AnyValue
-  | V_Parameters (TextMap Decimal)
-  deriving (Eq, Show)
 
-acceptsVote : Text -> DsoVote -> Bool
-acceptsVote mechanism vote = case vote of
-  V_Parameters _ -> mechanism == weightedVoteMechanismName
-  V_Confirm _ -> mechanism == confirmationMechanismName
-  V_Choice _ -> False
+------------------  VOTE KINDS  ------------------
+-- Both ballots are counted through the Ballot interface, so their votes are
+-- AnyValue in the view.
+--
+-- The weighted vote is a set of named numbers, such as the transfer fee and
+-- the entry fee, encoded as AV_Map of AV_Decimal. Cap.Governance.Utils.Votes
+-- has no structured vote kind yet, so BabyDso defines the pair here.
+--
+-- The confirmation vote is the outcome itself, already an AnyValue: it is
+-- exposed as is and decoded with Some.
 
-sameParameters : [DsoVote] -> Bool
-sameParameters votes = case [map fst (TextMap.toList parameters) | V_Parameters parameters <- votes] of
+-- | Encodes named numbers as AV_Map of AV_Decimal.
+encodeParametersVote : Vote (TextMap Decimal) -> Vote AnyValue
+encodeParametersVote = fmap toAnyValue
+
+-- | Decodes named numbers from AV_Map of AV_Decimal.
+decodeParametersVote : Vote AnyValue -> Optional (Vote (TextMap Decimal))
+decodeParametersVote = Traversable.mapA fromAnyValue
+
+sameParameters : [TextMap Decimal] -> Bool
+sameParameters votes = case map (map fst . TextMap.toList) votes of
   [] -> True
   first :: rest -> all (== first) rest
 
@@ -51,20 +61,20 @@ template SharedBallot
     actionCid : ContractId Action
     openingWeights : Map Party Decimal
     snapshots : Map AuthenticKey Snapshot
-    votes : Map Party DsoVote
+    votes : Map Party (TextMap Decimal)
     votingClosesAt : Time
     expiresAt : Time
   where
     signatory dso
     observer Set.toList svs, Map.keys openingWeights
 
-    ensure all (acceptsVote resolution.mechanism) (Map.values votes)
+    ensure resolution.mechanism == weightedVoteMechanismName
       && sameParameters (Map.values votes)
 
     choice SharedBallot_Cast : ContractId SharedBallot
       with
         voter : Party
-        vote : DsoVote
+        vote : TextMap Decimal
       controller voter
       do
         now <- getTime
@@ -79,14 +89,16 @@ template SharedBallot
         now <- getTime
         require "the shared ballot has expired" (now >= expiresAt)
 
+    interface instance Ballot for SharedBallot where
+      view = BallotView with
+        resolution; snapshots; actionCid
+        votes = fmap (encodeParametersVote . Voted) votes
+        consumers = [dso]
+        meta = emptyMetadata
+
 instance HasCheckedFetch SharedBallot ResolutionInfo where
   contractGroupId ballot = ballot.resolution
 
-instance IsBallot SharedBallot DsoVote where
-  votesOf ballot = fmap Voted ballot.votes
-  snapshotsOf ballot = ballot.snapshots
-  actionOf ballot = ballot.actionCid
-  consume = archive
 
 
 template SvConfirmation
@@ -95,17 +107,13 @@ template SvConfirmation
     confirmer : Party
     resolution : ResolutionInfo
     actionCid : ContractId Action
-    vote : DsoVote
+    vote : AnyValue -- the outcome the confirmer confirms
     snapshots : Map AuthenticKey Snapshot
     expiresAt : Time
   where
     signatory dso, confirmer
 
-    ensure acceptsVote resolution.mechanism vote
-
-    choice SvConfirmation_Consume : ()
-      controller dso
-      do pure ()
+    ensure resolution.mechanism == confirmationMechanismName
 
     choice SvConfirmation_Expire : ()
       controller dso
@@ -113,11 +121,13 @@ template SvConfirmation
         now <- getTime
         require "the confirmation has expired" (now >= expiresAt)
 
+    interface instance Ballot for SvConfirmation where
+      view = BallotView with
+        resolution; snapshots; actionCid
+        votes = Map.singleton confirmer (Voted vote)
+        consumers = [dso]
+        meta = emptyMetadata
+
 instance HasCheckedFetch SvConfirmation ResolutionInfo where
   contractGroupId confirmation = confirmation.resolution
 
-instance IsBallot SvConfirmation DsoVote where
-  votesOf confirmation = Map.fromList [(confirmation.confirmer, Voted confirmation.vote)]
-  snapshotsOf confirmation = confirmation.snapshots
-  actionOf confirmation = confirmation.actionCid
-  consume cid = exercise cid SvConfirmation_Consume

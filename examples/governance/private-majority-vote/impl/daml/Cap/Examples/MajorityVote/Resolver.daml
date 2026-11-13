@@ -14,11 +14,11 @@ import Splice.Api.Token.MetadataV1
 import Splice.Util (require)
 
 import Cap.Core.Types (AuthenticKey (..), ExecutionAction (..), ExecutionCore (..), ResolutionInfo (..))
-import Cap.Core.Utils (IsAnyValue (..), fetchGroup, requireClosed, requireResolvedBy)
+import Cap.Core.Utils (IsAnyValue (..), fetchGroup, requireClosed, requireMetFrom, requireResolvedBy)
 import Cap.Governance.ActionV1
 import Cap.Governance.Utils
-  ( Tally, Verdict (..), atLeastVotes, agreedAction, consumeBallots, decide, weightedVotes
-  , castsOf )
+  ( Tally, Verdict (..), atLeastVotes, casts, consumeBallots, decide, distinctVotersAmongBallots
+  , equalWeights, expectUniformAction, votersEligible, weightedVotes )
 
 import Cap.Examples.MajorityVote.Ballot
 
@@ -170,14 +170,14 @@ resolveMajority resolver self proposalCid ballotCids = do
       (b.opensAt == terms.entryClosesAt
         && b.closesAt == terms.votingClosesAt
         && b.expiresAt == terms.expiresAt)
-  action <- agreedAction ballots
-  require "the ballots vote on the proposal's action" (action == terms.actionCid)
+  require "the ballots vote on the proposal's action" (expectUniformAction ballots == terms.actionCid)
 
-  casts <- castsOf Some resolver.electorate ballots
+  requireMetFrom [votersEligible resolver.electorate] [distinctVotersAmongBallots] ballots
+  let counted = casts Some (equalWeights resolver.electorate) ballots
   require "the presented ballots cover the roll" (sort (map (.voter) ballots) == sort proposal.roll)
   consumeBallots cids
 
-  let verdict = decide (atLeastVotes 1) (majorityOf (intToDecimal (Set.size resolver.electorate))) casts
+  let verdict = decide (atLeastVotes 1) (majorityOf (intToDecimal (Set.size resolver.electorate))) counted
   created <- case verdict of
     Decided winner | winner == yay -> do
       result <- exercise terms.actionCid Action_AuthorizeExecution with

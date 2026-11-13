@@ -46,7 +46,7 @@ aStaleWeightSourceIsRefusedAtOpening = do
 aMissingWeightSourceIsRefusedAtOpening : Script ()
 aMissingWeightSourceIsRefusedAtOpening = do
   f <- setupAs "missing"
-  submitMustFailContaining "the presented voting rights are exactly the ones under the right keys" f f.sv1 $
+  submitMustFailContaining "were not presented" f f.sv1 $
     openVoteCmd f f.sv1 (feeVote 0.05 2.0)
       (Map.delete (sourceKeyOf f "sv2-a" f.sv2) f.rightCids)
 
@@ -59,7 +59,7 @@ aWeightSourceAddedAfterTheResolverIsRefused = do
     name = "sv3-b"
     sv = f.sv3
     weight = 4.0
-  submitMustFailContaining "the presented voting rights are exactly the ones under the right keys" f f.sv1 $
+  submitMustFailContaining "are not under a right key" f f.sv1 $
     openVoteCmd f f.sv1 (feeVote 0.05 2.0)
       (Map.insert (sourceKeyOf f "sv3-b" f.sv3) added f.rightCids)
 

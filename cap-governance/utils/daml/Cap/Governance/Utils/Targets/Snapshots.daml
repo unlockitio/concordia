@@ -20,7 +20,7 @@ module Cap.Governance.Utils.Targets.Snapshots
   , snapshotCidsWith
 
     -- * Merging snapshots
-  , snapshotsMergeWithoutConflicts
+  , validSnapshotsToMerge
   , mergeSnapshots
   , mergeSnapshotsWithoutConflicts
   ) where
@@ -124,8 +124,8 @@ snapshotCids action targetCids =
 -- action names, and fills only parts the action left open, that is, a state
 -- or contract the action did not fix, and no state of a target whose contract
 -- the action fixed.
-snapshotsMergeWithoutConflicts : Map AuthenticKey Snapshot -> Map AuthenticKey Snapshot -> Unmet
-snapshotsMergeWithoutConflicts actionSnapshots resolutionSnapshots =
+validSnapshotsToMerge : Map AuthenticKey Snapshot -> Map AuthenticKey Snapshot -> Unmet
+validSnapshotsToMerge actionSnapshots resolutionSnapshots =
   [ "the action names no snapshot target " <> show key
   | key <- Map.keys resolutionSnapshots
   , not (Map.member key actionSnapshots)
@@ -145,7 +145,7 @@ snapshotsMergeWithoutConflicts actionSnapshots resolutionSnapshots =
 
 -- | The snapshots an action authorizes an execution with: its targets, with
 -- the parts it left open filled from the snapshots the resolution took. Check
--- snapshotsMergeWithoutConflicts first, or use
+-- validSnapshotsToMerge first, or use
 -- mergeSnapshotsWithoutConflicts: a snapshot of a target the action does not
 -- name is dropped, and a part the action fixed wins.
 mergeSnapshots : Map AuthenticKey Snapshot -> Map AuthenticKey Snapshot -> Map AuthenticKey Snapshot
@@ -158,10 +158,10 @@ mergeSnapshots actionSnapshots resolutionSnapshots =
            state = optional snapshot.state Some target.state
            cid = optional snapshot.cid Some target.cid)
 
--- | mergeSnapshots, aborting unless snapshotsMergeWithoutConflicts holds.
+-- | mergeSnapshots, aborting unless validSnapshotsToMerge holds.
 -- Is not type aware of target templates
 mergeSnapshotsWithoutConflicts
   : Map AuthenticKey Snapshot -> Map AuthenticKey Snapshot -> Update (Map AuthenticKey Snapshot)
 mergeSnapshotsWithoutConflicts actionSnapshots resolutionSnapshots = do
-  requireMet (snapshotsMergeWithoutConflicts actionSnapshots resolutionSnapshots)
+  requireMet (validSnapshotsToMerge actionSnapshots resolutionSnapshots)
   pure (mergeSnapshots actionSnapshots resolutionSnapshots)

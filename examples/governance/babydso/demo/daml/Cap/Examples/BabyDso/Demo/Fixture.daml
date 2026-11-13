@@ -127,8 +127,8 @@ feeParameters transferFee entryFee = TextMap.fromList
   , (entryFeeField, entryFee)
   ]
 
-feeVote : Decimal -> Decimal -> DsoVote
-feeVote transferFee entryFee = V_Parameters (feeParameters transferFee entryFee)
+feeVote : Decimal -> Decimal -> TextMap Decimal
+feeVote = feeParameters
 
 feeValue : Decimal -> Decimal -> AnyValue
 feeValue transferFee entryFee = AV_Map (fmap AV_Decimal (feeParameters transferFee entryFee))
@@ -154,7 +154,7 @@ sourceKeyOf f name sv = RightKey with authKey = sourceKey f.dso name; sv
 
 
 openVoteCmd
-  : Fixture -> Party -> DsoVote -> Map RightKey (ContractId SvWeightSource)
+  : Fixture -> Party -> TextMap Decimal -> Map RightKey (ContractId SvWeightSource)
   -> Commands (ContractId SharedBallot)
 openVoteCmd f proposer vote rightCids =
   exerciseCmd f.resolverCid DsoResolver_OpenVote with
@@ -165,14 +165,14 @@ openVoteCmd f proposer vote rightCids =
     expiresAt = f.terms.expiresAt
     targetCids = targetCidsOf f
 
-openVoteAs : Fixture -> Party -> DsoVote -> Script (ContractId SharedBallot)
+openVoteAs : Fixture -> Party -> TextMap Decimal -> Script (ContractId SharedBallot)
 openVoteAs f proposer vote =
   submit (actAs proposer <> readAs f.dso) (openVoteCmd f proposer vote f.rightCids)
 
-castCmd : Party -> ContractId SharedBallot -> DsoVote -> Commands (ContractId SharedBallot)
+castCmd : Party -> ContractId SharedBallot -> TextMap Decimal -> Commands (ContractId SharedBallot)
 castCmd voter ballotCid vote = exerciseCmd ballotCid SharedBallot_Cast with voter; vote
 
-castAs : Fixture -> Party -> ContractId SharedBallot -> DsoVote -> Script (ContractId SharedBallot)
+castAs : Fixture -> Party -> ContractId SharedBallot -> TextMap Decimal -> Script (ContractId SharedBallot)
 castAs f voter ballotCid vote = submit (actAs voter <> readAs f.dso) (castCmd voter ballotCid vote)
 
 resolveVoteAs
@@ -189,7 +189,7 @@ confirmAs f confirmer confirmed =
     confirmer
     resolution = f.confirmResolution
     actionCid = toInterfaceContractId @Action f.actionCid
-    vote = V_Confirm confirmed
+    vote = confirmed
     targetCids = targetCidsOf f
     expiresAt = f.terms.expiresAt
 

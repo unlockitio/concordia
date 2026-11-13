@@ -104,8 +104,8 @@ sequenceDiagram
 
     Note over AA,ANS: Resolve, after votingClosesAt
     SV1->>R: DsoResolver_ResolveVote — resolution, [ballotCid]
-    R->>B: fetchGroup, requireClosed, weightedCastsOf
-    R->>B: consumeBallots — archive
+    R->>B: fetchGroup, requireClosed, requireMetFrom (votesDecodable, votersEligible, distinctVotersAmongBallots), casts
+    R->>B: consumeBallots — Ballot_Consume
     R->>R: decide (atLeastShareOfTotal 2 3) weightedMedianByField — 9.0 cast of 6.0 needed
     Note over R: Decided (transferFee 0.05, entryFee 2.0)
     R->>ACT: Action_AuthorizeExecution — actors [dso], outcome, snapshots from the ballot
@@ -114,7 +114,7 @@ sequenceDiagram
 
     Note over AA,ANS: Execute, after opensAt
     SV2->>X: Executable_Execute — actors [SV2], targetCids
-    X->>X: requireOpen, entitled EA_Execute, requireSameKeys
+    X->>X: requireOpen, entitled EA_Execute, presentedTargetsMatchSnapshots
     X->>CFG: fetchTargetMatchingSnapshot unchanged — the snapshot transferFee is unchanged
     X->>ANS: fetchTargetMatchingIdentity — the contract id is unchanged
     X->>CFG: AmuletConfig_SetFee 0.05 — epoch 4
@@ -217,7 +217,7 @@ sequenceDiagram
     OP->>R: Resolver_ResolveMajority — proposalCid, three ballots
     R->>P: fetch, requireResolvedBy
     R->>BL: fetchGroup, requireClosed, check the ballot windows and actionCid
-    R->>R: castsOf — the ballots cover the roll
+    R->>R: requireMetFrom (votersEligible, distinctVotersAmongBallots), casts — the ballots cover the roll
     R->>BL: consumeBallots — PrivateBallot_Consume
     R->>R: decide majorityOf — 2 yay of 3
     Note over R: Decided yay
@@ -228,7 +228,7 @@ sequenceDiagram
 
     Note over DSO,CFG: Execute, after votingClosesAt
     A->>X: Executable_Execute — actors [Alice], targetCids {config}
-    X->>X: requireOpen, entitled EA_Execute, requireSameKeys
+    X->>X: requireOpen, entitled EA_Execute, presentedTargetsMatchSnapshots
     X->>CFG: fetchTargetMatchingSnapshot (==) — setting is still "sync-a"
     X->>CFG: Config_Set "sync-b"
     Note over CFG: setting "sync-b"

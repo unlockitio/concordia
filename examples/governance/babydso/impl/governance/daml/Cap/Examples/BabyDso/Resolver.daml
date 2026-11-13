@@ -17,14 +17,15 @@ import Splice.Util (HasCheckedFetch (..), fetchChecked, require)
 
 import Cap.Core.Types (AuthenticKey (..), ExecutionAction (..), ExecutionCore (..), ResolutionInfo (..))
 import Cap.Core.Utils
-  ( IsAnyValue (..), fetchGroup, requireClosed, requireResolvedBy, signedKey )
+  ( IsAnyValue (..), fetchGroup, requireClosed, requireMet, requireMetFrom, requireResolvedBy, signedKey )
 import Cap.Governance.ActionV1
+import Cap.Governance.BallotV1 (Ballot)
 import Cap.Governance.ExecutableV1 (Executable)
 import Cap.Governance.Utils
   ( Cast (..), HasVotingRights (..), Tally, Verdict (..), Vote (..), atLeastShareOfTotal, atLeastVotes
-  , agreedAction, agreedSnapshots, consumeBallots, decide, snapshotStates, fetchWeightsPerContract, unanimous
-  , weightedCastsOf
-  , castsOf, weightedMedian )
+  , casts, consumeBallots, decide, distinctVotersAmongBallots, equalWeights, expectUniformAction
+  , expectUniformSnapshots, fetchWeightsPerContract, nonNegativeWeights, snapshotStates, unanimous
+  , votersEligible, votesDecodable, weightedMedian )
 
 import Cap.Examples.BabyDso.Rights
 import Cap.Examples.BabyDso.Submission
@@ -57,7 +58,7 @@ template DsoResolver
         actionCid : ContractId Action
         rightCids : Map RightKey (ContractId SvWeightSource)
         targetCids : Map AuthenticKey AnyContractId
-        vote : DsoVote
+        vote : TextMap Decimal
         votingClosesAt : Time
         expiresAt : Time
       controller proposer
@@ -85,7 +86,7 @@ template DsoResolver
         requireResolvedBy (resolverKey this) (coerceContractId self) resolution
         require ("the resolution names the mechanism " <> weightedVoteMechanismName) (resolution.mechanism == weightedVoteMechanismName)
         ballot <- fetchChecked resolution ballotCid
-        archive ballotCid
+        consumeBallots [toInterfaceContractId @Ballot ballotCid]
         resolveWeightedVote this ballot
 
     nonconsuming choice DsoResolver_Confirm : ContractId SvConfirmation
@@ -93,7 +94,7 @@ template DsoResolver
         confirmer : Party
         resolution : ResolutionInfo
         actionCid : ContractId Action
-        vote : DsoVote
+        vote : AnyValue
         targetCids : Map AuthenticKey AnyContractId
         expiresAt : Time
       controller confirmer
@@ -119,7 +120,7 @@ template DsoResolver
         require ("the resolution names the mechanism " <> confirmationMechanismName) (resolution.mechanism == confirmationMechanismName)
         presented <- fetchGroup resolution confirmationCids
         let (cids, confirmations) = unzip presented
-        consumeBallots cids
+        consumeBallots (map (toInterfaceContractId @Ballot) cids)
         resolveConfirmations this confirmations
 
 resolverKey : DsoResolver -> AuthenticKey
@@ -152,8 +153,17 @@ resolveWeightedVote resolver ballot = do
 
   let actionCid = ballot.actionCid
       snapshots = ballot.snapshots
-  casts <- weightedCastsOf parametersOf ballot.openingWeights [ballot]
-  let verdict = decide (atLeastShareOfTotal 2 3) weightedMedianByField casts
+  -- The window and the opening weights are read from the typed ballot; the
+  -- votes are counted through the Ballot interface.
+  let weights = ballot.openingWeights
+      ballots = [toInterface @Ballot ballot]
+  requireMet (nonNegativeWeights weights)
+  requireMetFrom
+    [votesDecodable decodeParametersVote, votersEligible (Set.fromList (Map.keys weights))]
+    [distinctVotersAmongBallots]
+    ballots
+  let counted = casts decodeParametersVote weights ballots
+      verdict = decide (atLeastShareOfTotal 2 3) weightedMedianByField counted
   executions <- case verdict of
     Decided winner -> do
       let opensAt = now `addRelTime` resolver.executionDelay
@@ -172,10 +182,6 @@ resolveWeightedVote resolver ballot = do
       pure result.executionCids
     _ -> pure []
   pure ResolveResult with verdict; executions
-
-parametersOf : DsoVote -> Optional (TextMap Decimal)
-parametersOf (V_Parameters parameters) = Some parameters
-parametersOf _ = None
 
 weightedMedianByField : Tally (TextMap Decimal) (TextMap Decimal)
 weightedMedianByField casts = case [parameters | Cast with vote = Voted parameters <- Map.values casts] of
@@ -198,10 +204,15 @@ resolveConfirmations
 resolveConfirmations resolver confirmations = do
   now <- getTime
   require "no confirmation has expired" (all ((now <) . (.expiresAt)) confirmations)
-  actionCid <- agreedAction confirmations
-  snapshots <- agreedSnapshots confirmations
-  casts <- castsOf confirmedOf resolver.svs confirmations
-  let verdict = decide (atLeastVotes (byzantineQuorum (Set.size resolver.svs))) unanimous casts
+  -- The expiry is read from the typed confirmations; the votes are counted
+  -- through the Ballot interface. A confirmation's vote is the outcome itself,
+  -- so it is decoded with Some.
+  let ballots = map (toInterface @Ballot) confirmations
+      actionCid = expectUniformAction ballots
+      snapshots = expectUniformSnapshots ballots
+  requireMetFrom [votersEligible resolver.svs] [distinctVotersAmongBallots] ballots
+  let counted = casts Some (equalWeights resolver.svs) ballots
+      verdict = decide (atLeastVotes (byzantineQuorum (Set.size resolver.svs))) unanimous counted
   outcome <- case verdict of
     Decided outcome -> pure outcome
     _ -> abort "too few svs confirmed one outcome"
@@ -221,10 +232,6 @@ resolveConfirmations resolver confirmations = do
   pure ResolveResult with
     verdict = Decided outcome
     executions = result.executionCids
-
-confirmedOf : DsoVote -> Optional AnyValue
-confirmedOf (V_Confirm value) = Some value
-confirmedOf _ = None
 
 byzantineQuorum : Int -> Int
 byzantineQuorum voters =

@@ -14,6 +14,7 @@ data-dependencies:
 - ../../../../../cap-core/utils/.daml/dist/cap-core-utils-0.1.0.dar
 - ../../../../../cap-governance/interfaces/executable/.daml/dist/cap-governance-executable-v1-0.1.0.dar
 - ../../../../../cap-governance/interfaces/action/.daml/dist/cap-governance-action-v1-0.1.0.dar
+- ../../../../../cap-governance/interfaces/ballot/.daml/dist/cap-governance-ballot-v1-0.1.0.dar
 - ../../../../../cap-governance/utils/.daml/dist/cap-governance-utils-0.1.0.dar
 - ../rights/.daml/dist/cap-example-babydso-rights-0.1.0.dar
 build-options:
