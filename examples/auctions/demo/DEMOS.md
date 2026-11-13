@@ -123,7 +123,7 @@ sequenceDiagram
     O->>AU: SingleLotAuction_Resolve — bidCids, settleBatchContexts, cancelContexts
     AU->>AU: requireResolvedBy — this auction is the resolver of resolutionInfo
     AU->>AU: requireClosed — the bidding window is closed
-    AU->>BID: fetchAndIgnoreConflictingBids — for this resolution, no principal account, no shared account
+    AU->>BID: fetchGroup (for this resolution), then ignoreConflictingBids — no principal account, no shared account
     AU->>AU: clearSingleLot uniformPrice — A 6, B 4, C 0, at 7
     AU->>AU: buildBatchesByAccount — one batch per admin
     AU->>AF: SettlementFactory_SettleBatch — 42 A→P, 28 B→P, lastIterationFinalizer
@@ -235,7 +235,7 @@ sequenceDiagram
     Note over O,WF: Resolve — before biddingClosesAt
     O->>AU: DutchAuction_Resolve — bidCids, settleBatchContexts, cancelContexts
     AU->>AU: requireResolvedBy — this auction is the resolver of resolutionInfo
-    AU->>BID: fetchAndIgnoreConflictingBids — for this resolution, no principal account, no shared account
+    AU->>BID: fetchGroup (for this resolution), then ignoreConflictingBids — no principal account, no shared account
     AU->>AU: the window is closed or the claims cover the supply — 10 ≥ 10
     AU->>AU: clearSingleLot payAsBid — A 6 at 8, B 4 at 7
     AU->>AU: buildBatchesByAccount — one batch per admin

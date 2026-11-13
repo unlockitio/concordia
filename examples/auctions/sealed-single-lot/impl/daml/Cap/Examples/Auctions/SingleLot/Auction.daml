@@ -15,10 +15,10 @@ import qualified Splice.Api.Token.AllocationV2 as Alloc
 import Splice.Api.Token.HoldingV2 (Account (..))
 
 import Cap.Core.Types (AuthenticKey (..), ResolutionInfo)
-import Cap.Core.Utils (Ignored, requireClosed, requireResolvedBy)
+import Cap.Core.Utils (Ignored, fetchGroup, requireClosed, requireResolvedBy)
 import Cap.Auctions.Types (AuctionSchedule (..), AuctionTerms, Funding (..))
 import Cap.Auctions.Bid (Bid, Bid_Close (..))
-import Cap.Auctions.Funding (SettleBatchContext, cancelAllocations, fetchAndIgnoreConflictingBids, settlementOf)
+import Cap.Auctions.Funding (SettleBatchContext, cancelAllocations, ignoreConflictingBids, settlementOf)
 import Cap.Auctions.SingleLot
   ( PricingMechanism, clearAndSettleSingleLotFromEmptyLegsAllocations, expectSingleLot, nativePricingMechanisms )
 
@@ -72,7 +72,8 @@ template SingleLotAuction
         now <- getTime
         requireClosed "the bidding window is closed" now schedule.biddingClosesAt
         singleLotTerms <- expectSingleLot terms
-        (keptBids, ignoredBids) <- fetchAndIgnoreConflictingBids resolutionInfo principalFundings bidCids
+        presented <- fetchGroup resolutionInfo bidCids
+        (keptBids, ignoredBids) <- ignoreConflictingBids principalFundings presented
         let settlement = settlementOf resolutionInfo terms.allocationTerms.executors
         result <- clearAndSettleSingleLotFromEmptyLegsAllocations
           supportedMechanisms resolutionInfo settlement singleLotTerms principalFundings keptBids

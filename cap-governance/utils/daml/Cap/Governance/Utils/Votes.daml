@@ -1,0 +1,59 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | The standard vote kinds: an option label (Text) and a number (Decimal).
+-- See "Vote encoding" in docs/governance/considerations.md.
+--
+-- A mechanism counts one kind. Its decoder, passed as decodeVote, checks the
+-- shape of a vote only; the values the mechanism accepts are checked apart,
+-- with optionAmong or withinBounds through votesSatisfy, so that each failure
+-- has its own message.
+module Cap.Governance.Utils.Votes
+  ( -- * Decoders
+    textVote
+  , decimalVote
+
+    -- * Value checks
+  , optionAmong
+  , withinBounds
+  ) where
+
+import Splice.Api.Token.MetadataV1 (AnyValue)
+
+import Cap.Core.Utils (IsAnyValue (..), Unmet)
+
+
+------------------  DECODERS  ------------------
+-- The decoders of the standard kinds, for ballots counted through the Ballot
+-- interface. Decoding is exact: an AV_Text is a Text vote and an AV_Decimal a
+-- Decimal vote; any other constructor, AV_Int included, does not decode.
+
+-- | Decodes an option label: AV_Text.
+textVote : AnyValue -> Optional Text
+textVote = fromAnyValue
+
+-- | Decodes a number: AV_Decimal.
+decimalVote : AnyValue -> Optional Decimal
+decimalVote = fromAnyValue
+
+
+------------------  VALUE CHECKS  ------------------
+-- Checks on a decoded vote. Use them through votesSatisfy.
+
+-- | Validates that the label is one of the options. Labels compare exactly:
+-- case-sensitive and untrimmed.
+optionAmong : [Text] -> Text -> Unmet
+optionAmong options label =
+  [ "the option " <> show label <> " is not among " <> show options
+  | label `notElem` options
+  ]
+
+-- | Validates that the value is within the bounds, both inclusive. None leaves
+-- that side unbounded.
+withinBounds : Optional Decimal -> Optional Decimal -> Decimal -> Unmet
+withinBounds minimum maximum value =
+  [ "the value " <> show value <> " is below the minimum " <> show m
+  | Some m <- [minimum], value < m
+  ]
+    <> [ "the value " <> show value <> " is above the maximum " <> show m
+       | Some m <- [maximum], value > m
+       ]

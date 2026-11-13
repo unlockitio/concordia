@@ -1,0 +1,51 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | The ballot interface: lets a resolver count ballots from templates it does
+-- not know. Votes are exposed as AnyValue; a resolver decodes them as the kind
+-- its mechanism counts.
+module Cap.Governance.BallotV1 where
+
+import Prelude hiding (Action)
+
+import DA.Map (Map)
+
+import Splice.Api.Token.MetadataV1
+import Splice.Util (HasCheckedFetch (..))
+
+import Cap.Core.Types (AuthenticKey, ResolutionInfo, Snapshot)
+import Cap.Governance.ActionV1 (Action)
+
+
+data Vote a
+  = Absent       -- eligible but no vote presented
+  | Abstained    -- present but chose no option
+  | Voted a
+  deriving (Eq, Show)
+
+data BallotView = BallotView
+  with
+    resolution : ResolutionInfo             -- the resolution the ballot is counted in
+    votes : Map Party (Vote AnyValue)       -- the votes it carries, by voter (singleton for contract per voter)
+    snapshots : Map AuthenticKey Snapshot   -- the snapshots it took
+    actionCid : ContractId Action           -- the action it asks to authorize
+    consumers : [Party]                     -- the parties that consume it once counted
+    meta : Metadata
+  deriving (Eq, Show)
+
+
+interface Ballot where
+  viewtype BallotView
+
+  -- | Consumes the ballot once counted, so it cannot be counted again.
+  choice Ballot_Consume : ()
+    controller (view this).consumers
+    do pure ()
+
+
+-- | Shows a ballot by its view, for the messages of checked fetches.
+instance Show Ballot where
+  show ballot = "Ballot " <> show (view ballot)
+
+-- | A ballot belongs to the resolution its view names.
+instance HasCheckedFetch Ballot ResolutionInfo where
+  contractGroupId ballot = (view ballot).resolution

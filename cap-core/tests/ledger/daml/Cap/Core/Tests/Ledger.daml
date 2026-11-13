@@ -113,11 +113,11 @@ fetchGroupReturnsTheGroup = do
   result <- submit owner $ exerciseCmd probe Probe_FetchGroup with group = "g"; cids = [a, b]
   result === [a, b]
 
-fetchGroupRefusesAnEmptyList : Script ()
-fetchGroupRefusesAnEmptyList = do
+fetchGroupReturnsNothingForAnEmptyList : Script ()
+fetchGroupReturnsNothingForAnEmptyList = do
   (owner, probe) <- setupProbe "group-empty"
-  submitMustFailContaining "a resolution presents at least one contract" owner $
-    exerciseCmd probe Probe_FetchGroup with group = "g"; cids = []
+  result <- submit owner $ exerciseCmd probe Probe_FetchGroup with group = "g"; cids = []
+  result === []
 
 fetchGroupRefusesADuplicate : Script ()
 fetchGroupRefusesADuplicate = do

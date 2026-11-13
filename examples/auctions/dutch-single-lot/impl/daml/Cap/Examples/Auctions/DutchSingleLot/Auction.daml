@@ -16,10 +16,10 @@ import Splice.Api.Token.HoldingV2 (Account (..))
 import Splice.Util (require)
 
 import Cap.Core.Types (AuthenticKey (..), ResolutionInfo)
-import Cap.Core.Utils (Ignored, requireResolvedBy)
+import Cap.Core.Utils (Ignored, fetchGroup, requireResolvedBy)
 import Cap.Auctions.Types (AuctionSchedule (..), AuctionTerms, Funding (..), HasSingleLotQuotes (..))
 import Cap.Auctions.Bid (Bid, Bid_Close (..))
-import Cap.Auctions.Funding (SettleBatchContext, cancelAllocations, fetchAndIgnoreConflictingBids, settlementOf)
+import Cap.Auctions.Funding (SettleBatchContext, cancelAllocations, ignoreConflictingBids, settlementOf)
 import Cap.Auctions.SingleLot
   ( PricingMechanism, clearAndSettleSingleLotFromEmptyLegsAllocations, expectSingleLot
   , payAsBidMechanism, uniformPriceMechanism
@@ -74,7 +74,8 @@ template DutchAuction
       do
         requireResolvedBy (AuthenticKey with authorities; id = resolverId) (coerceContractId self) resolutionInfo
         singleLotTerms <- expectSingleLot terms
-        (keptBids, ignoredBids) <- fetchAndIgnoreConflictingBids resolutionInfo principalFundings bidCids
+        presented <- fetchGroup resolutionInfo bidCids
+        (keptBids, ignoredBids) <- ignoreConflictingBids principalFundings presented
         now <- getTime
         let claimed = sum [quote.amount | (_, bid) <- keptBids, quote <- singleLotQuotes bid]
         require "the bidding window is closed or the claims cover the supply"

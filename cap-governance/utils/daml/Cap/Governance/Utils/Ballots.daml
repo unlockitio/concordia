@@ -2,94 +2,222 @@
 
 module Cap.Governance.Utils.Ballots
   ( IsBallot (..)
-  , castsOf
-  , weightedCastsOf
+
+    -- * Checks
+  , ballotForAction
+  , ballotWithSnapshots
+  , votesDecodable
+  , votesSatisfy
+  , votersEligible
+  , distinctVotersAmongBallots
+  , votersSignedBallot
+  , ballotSignedBy
+  , consumableBy
+
+    -- * Agreement
+  , uniformAction
+  , uniformSnapshots
+
+    -- * Casting
+  , casts
+  , equalWeights
+
+    -- * Ledger
   , consumeBallots
-  , agreedAction
-  , agreedSnapshots
   ) where
 
 import Prelude hiding (Action)
 
-import DA.Foldable (forA_, mapA_)
-import DA.List (unique)
+import DA.Foldable (mapA_)
 import DA.Map (Map)
 import qualified DA.Map as Map
-import DA.Optional (fromOptional)
+import DA.Optional (fromOptional, isNone)
 import DA.Set (Set)
 import qualified DA.Set as Set
 
-import Splice.Util (require)
+import Splice.Api.Token.MetadataV1 (AnyValue)
 
 import Cap.Core.Types (AuthenticKey, Snapshot)
-import Cap.Core.Utils (uniformValue, orAbort)
+import Cap.Core.Utils (AmongCheck, Check, Unmet, uniformValue)
 import Cap.Governance.ActionV1 (Action)
-import Cap.Governance.Utils.Count (Cast (..), Casts, Vote (..))
+import Cap.Governance.BallotV1 (Ballot, Ballot_Consume (..), Vote (..))
+import Cap.Governance.Utils.Count (Cast (..), Casts)
 
 
 ------------------  BALLOTS  ------------------
--- Used at resolution, over the ballots presented to it.
+-- Used at resolution, over the ballots presented to it. A resolver fetches
+-- them with fetchGroup, keyed by its resolution, so that a ballot presented
+-- twice or of another resolution aborts; it then checks them with
+-- requireChecks and ignoreFailing (Cap.Core.Utils) and counts them. It counts
+-- ballots of templates it knows through their own IsBallot instances, and
+-- ballots of templates it does not know through the Ballot interface, which
+-- is one more IsBallot instance.
 
 -- | What a resolution reads from a ballot: the votes it carries, by voter;
 -- the snapshots it took; the action it asks to authorize; and how the
--- resolution retires it once counted.
+-- resolution consumes it once counted.
 class IsBallot b v | b -> v where
   votesOf : b -> Map Party (Vote v)
   snapshotsOf : b -> Map AuthenticKey Snapshot
   actionOf : b -> ContractId Action
   consume : ContractId b -> Update ()
 
--- | The casts of every eligible voter in the set, with equal weights: every
--- voter gets weight 1, and a voter with no presented vote is Absent.
--- voteOf returns the vote as the kind the mechanism counts, or None for
--- another kind. Refuses: a voter appearing on two ballots, a vote of another
--- kind than the mechanism counts, and a voter outside the set.
-castsOf
-  : IsBallot b v
-  => (v -> Optional a) -> Set Party -> [b] -> Update (Casts a)
-castsOf voteOf voters =
-  weightedCastsOf voteOf (Map.fromList [(voter, 1.0) | voter <- Set.toList voters])
 
--- | The casts of every eligible voter in the map, each counting with its
--- weight; a voter with no presented vote is Absent. voteOf returns the
--- vote as the kind the mechanism counts, or None for another kind. Refuses:
--- a voter appearing on two ballots, a vote of another kind than the mechanism
--- counts, a voter missing from the map, and a negative weight.
-weightedCastsOf
-  : IsBallot b v
-  => (v -> Optional a) -> Map Party Decimal -> [b] -> Update (Casts a)
-weightedCastsOf voteOf weights ballots = do
-  let pairs = concatMap (Map.toList . votesOf) ballots
-  require "the presented ballots come from distinct voters" (unique (map fst pairs))
-  forA_ (Map.toList weights) $ \(voter, weight) ->
-    require ("the weight of the voter " <> show voter <> " is not negative") (weight >= 0.0)
-  presented <- Map.fromList <$> forA pairs (\(voter, raw) -> do
-    require ("the voter " <> show voter <> " has no right to vote") (Map.member voter weights)
-    vote <- case raw of
-      Voted v -> Voted <$> orAbort
-        ("the vote of " <> show voter <> " is not of the kind this mechanism counts")
-        (voteOf v)
-      Abstained -> pure Abstained
-      Absent -> pure Absent
-    pure (voter, vote))
-  pure (Map.fromList
-    [ (voter, Cast with weight; vote = fromOptional Absent (Map.lookup voter presented))
-    | (voter, weight) <- Map.toList weights ])
+------------------  INTERFACE  ------------------
+-- An interface ballot is read like any other IsBallot, with its votes as
+-- AnyValue: a resolver decodes them by passing fromAnyValue as decodeVote,
+-- e.g. fromAnyValue @Decimal. Any package can implement Ballot, and its view
+-- says whatever the implementing template declares, so a resolver counting
+-- through the interface must also check who stands behind each ballot, with
+-- votersSignedBallot or ballotSignedBy, and consumableBy.
 
--- | Consumes every presented ballot, so it cannot be counted again.
+instance IsBallot Ballot AnyValue where
+  votesOf ballot = (view ballot).votes
+  snapshotsOf ballot = (view ballot).snapshots
+  actionOf ballot = (view ballot).actionCid
+  consume cid = exercise cid Ballot_Consume
+
+
+------------------  CHECKS  ------------------
+-- Each check returns the unmet conditions of one ballot. Pass the ones that
+-- are the error of the party resolving, such as a ballot for another action,
+-- to requireChecks, which aborts on any of them; and the ones that are the
+-- error of a voter, such as a voter without rights, to ignoreFailing, which
+-- ignores the ballots that fail them. A mechanism adds its own checks, for
+-- example on a ballot's expiry or voting window, as further Checks.
+
+-- | Validates that the ballot asks for the given action.
+ballotForAction : IsBallot b v => ContractId Action -> Check b
+ballotForAction actionCid ballot =
+  ["the ballot asks for another action" | actionOf ballot /= actionCid]
+
+-- | Validates that the ballot carries exactly the given snapshots.
+ballotWithSnapshots : IsBallot b v => Map AuthenticKey Snapshot -> Check b
+ballotWithSnapshots snapshots ballot =
+  ["the ballot carries other snapshots" | snapshotsOf ballot /= snapshots]
+
+-- | Validates that decodeVote decodes every vote on the ballot, that is, every
+-- vote is of the kind the mechanism counts.
+votesDecodable : IsBallot b v => (v -> Optional a) -> Check b
+votesDecodable decodeVote ballot =
+  [ "the vote of " <> show voter <> " does not decode as the kind this mechanism counts"
+  | (voter, Voted v) <- Map.toList (votesOf ballot)
+  , isNone (decodeVote v)
+  ]
+
+-- | Validates every decoded vote on the ballot with a value check, such as
+-- optionAmong or withinBounds. Votes that do not decode are skipped: they are
+-- votesDecodable's to report, so that each failure is reported once.
+votesSatisfy : IsBallot b v => (v -> Optional a) -> (a -> Unmet) -> Check b
+votesSatisfy decodeVote check ballot =
+  [ "the vote of " <> show voter <> ": " <> errorMsg
+  | (voter, Voted v) <- Map.toList (votesOf ballot)
+  , Some vote <- [decodeVote v]
+  , errorMsg <- check vote
+  ]
+
+-- | Validates that every voter on the ballot is in the set of eligible voters.
+votersEligible : IsBallot b v => Set Party -> Check b
+votersEligible voters ballot =
+  [ "the voter " <> show voter <> " has no right to vote"
+  | voter <- Map.keys (votesOf ballot)
+  , not (Set.member voter voters)
+  ]
+
+-- | Validates that no other ballot carries a vote of one of the ballot's voters.
+-- Every ballot of a voter who appears twice fails it, so which ballot is
+-- counted never depends on the order they are presented in.
+distinctVotersAmongBallots : IsBallot b v => AmongCheck b
+distinctVotersAmongBallots ballots ballot =
+  [ "the voter " <> show voter <> " is on another ballot"
+  | voter <- Map.keys (votesOf ballot)
+  , fromOptional 0 (Map.lookup voter uses) > 1
+  ]
+  where
+    uses = Map.fromListWithR (+)
+      [(voter, 1) | other <- ballots, voter <- Map.keys (votesOf other)]
+
+-- | Validates that every voter on the ballot is a signatory of it. Use it for
+-- ballots each voter signs, so that no ballot carries the vote of a voter who
+-- did not cast it.
+votersSignedBallot : (HasSignatory b, IsBallot b v) => Check b
+votersSignedBallot ballot =
+  [ "the voter " <> show voter <> " did not sign the ballot"
+  | voter <- Map.keys (votesOf ballot)
+  , voter `notElem` signatory ballot
+  ]
+
+-- | Validates that the parties are signatories of the ballot. Use it for
+-- ballots the resolver's own choices create, passing the resolver's
+-- authorities, so that only ballots it vouched for are counted.
+ballotSignedBy : HasSignatory b => [Party] -> Check b
+ballotSignedBy parties ballot =
+  [ "the ballot is not signed by " <> show party
+  | party <- parties
+  , party `notElem` signatory ballot
+  ]
+
+-- | Validates that the consumers a Ballot names are among the actors, so that
+-- consuming it after counting cannot fail. Pass the parties resolving.
+consumableBy : [Party] -> Check Ballot
+consumableBy actors ballot =
+  [ "the ballot names the consumer " <> show consumer <> ", who is not resolving"
+  | consumer <- (view ballot).consumers
+  , consumer `notElem` actors
+  ]
+
+
+------------------  AGREEMENT  ------------------
+-- For a mechanism that takes the action and the snapshots from the ballots
+-- themselves rather than from a proposal. Use them with requireChecks:
+-- a lenient resolution needs an action and snapshots to check the ballots
+-- against that do not come from the ballots it filters.
+
+-- | The action every ballot asks for, or None when they differ or there are none.
+uniformAction : IsBallot b v => [b] -> Optional (ContractId Action)
+uniformAction = uniformValue . map actionOf
+
+-- | The snapshots every ballot carries, or None when they differ or there are none.
+uniformSnapshots : IsBallot b v => [b] -> Optional (Map AuthenticKey Snapshot)
+uniformSnapshots = uniformValue . map snapshotsOf
+
+
+------------------  CASTING  ------------------
+
+-- | The cast of every voter in the weights map, each counting with its
+-- weight. A voter with no counted vote is Absent: one with no ballot, and one
+-- whose ballot was ignored. Pass ballots that passed votesDecodable,
+-- votersEligible and distinctVotersAmongBallots: a vote of another kind is
+-- dropped, a voter outside the map is not counted, and of two votes of the
+-- same voter only one is. The weights must not be negative; check them with
+-- nonNegativeWeights when they do not come from fetchVotingRights.
+casts : IsBallot b v => (v -> Optional a) -> Map Party Decimal -> [b] -> Casts a
+casts decodeVote weights ballots = Map.fromList
+  [ (voter, Cast with weight; vote = fromOptional Absent (Map.lookup voter counted))
+  | (voter, weight) <- Map.toList weights
+  ]
+  where
+    counted = Map.fromList
+      [ (voter, vote)
+      | ballot <- ballots
+      , (voter, raw) <- Map.toList (votesOf ballot)
+      , Some vote <- [convert raw]
+      ]
+    convert (Voted v) = Voted <$> decodeVote v
+    convert Abstained = Some Abstained
+    convert Absent = Some Absent
+
+-- | Weight 1 for every voter in the set.
+equalWeights : Set Party -> Map Party Decimal
+equalWeights voters = Map.fromList [(voter, 1.0) | voter <- Set.toList voters]
+
+
+------------------  LEDGER  ------------------
+
+-- | Consumes every presented ballot, so it cannot be counted again. Ballots
+-- fetched with fetchGroup all belong to the resolution, so the ignored ones
+-- can be consumed too when they are of a template the resolver knows. Through
+-- the Ballot interface, consume only the kept ballots: an ignored one may name
+-- consumers who are not resolving.
 consumeBallots : IsBallot b v => [ContractId b] -> Update ()
 consumeBallots = mapA_ consume
-
--- checks that all actions match and return the action 
-agreedAction : IsBallot b v => [b] -> Update (ContractId Action)
-agreedAction ballots = do
-  require "at least one ballot is presented" (not (null ballots))
-  orAbort "the presented ballots ask for different actions"
-    (uniformValue (map actionOf ballots))
-
--- checks that all snapshots match and returns the snapshots.
-agreedSnapshots : IsBallot b v => [b] -> Update (Map AuthenticKey Snapshot)
-agreedSnapshots ballots = do
-  require "at least one ballot is presented" (not (null ballots))
-  orAbort "the presented ballots carry different snapshots"
-    (uniformValue (map snapshotsOf ballots))

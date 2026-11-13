@@ -8,7 +8,7 @@ import DA.Set (Set)
 import qualified DA.Set as Set
 
 import Splice.Api.Token.MetadataV1
-import Splice.Util (require)
+import Splice.Util (HasCheckedFetch (..), require)
 
 import Cap.Core.Types (ResolutionInfo)
 import Cap.Core.Utils (orAbort, requireMet, requireOpen, single)
@@ -112,3 +112,9 @@ template SingleLotBid
 
 instance HasSingleLotQuotes SingleLotBid where
   singleLotQuotes = (.quotes)
+
+
+-- | A bid belongs to the resolution it names, so that fetchGroup aborts on a
+-- bid of another resolution.
+instance HasCheckedFetch SingleLotBid ResolutionInfo where
+  contractGroupId bid = bid.resolutionInfo

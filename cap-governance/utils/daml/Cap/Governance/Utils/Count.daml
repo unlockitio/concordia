@@ -39,13 +39,8 @@ import DA.Map (Map)
 import qualified DA.Map as Map
 import DA.Optional (mapOptional)
 import Cap.Core.Utils (uniformValue)
+import Cap.Governance.BallotV1 (Vote (..))
 
-
-data Vote a
-  = Absent       -- eligible but no vote presented
-  | Abstained    -- present but chose no option
-  | Voted a
-  deriving (Eq, Show)
 
 data Cast a = Cast
   with

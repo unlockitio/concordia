@@ -12,7 +12,7 @@ import Splice.Api.Token.MetadataV1 (emptyMetadata)
 import qualified Splice.Api.Token.AllocationV2 as Alloc
 import Splice.Api.Token.AllocationInstructionV2 (AllocationInstructionResult_Output (..))
 import Splice.TokenStandard.Utils (basicAccount)
-import Splice.Testing.Utils (discloseMany', expectUnmetRequirement, submitMustFail'')
+import Splice.Testing.Utils (discloseMany', expectMessageContains, expectUnmetRequirement, submitMustFail'')
 import Splice.Testing.TokenStandard.WalletClientV2 (allocateV2)
 
 import Cap.Auctions.Types (Funding (..), Quote (..))
@@ -22,24 +22,24 @@ import Cap.Auctions.Tests.Env
 import Cap.Auctions.Tests.Harness
 
 
--- Testing fetchAndIgnoreConflictingBids
+-- Testing fetchGroup and ignoreConflictingBids
 ----------------------------------------
 
 -- A bid presented twice aborts the resolution.
-test_fetchAndIgnoreConflictingBids_duplicateBid : Script ()
-test_fetchAndIgnoreConflictingBids_duplicateBid = do
+test_ignoreConflictingBids_duplicateBid : Script ()
+test_ignoreConflictingBids_duplicateBid = do
   env <- setupTest "duplicate-bid"
   bidCid <- submit env.alice $ createCmd env.unfundedBid with
     quotes = []
-  submitMustFail'' (expectUnmetRequirement "the presented bids are distinct") (actAs env.authority) $
+  submitMustFail'' (expectUnmetRequirement "the presented contracts are distinct") (actAs env.authority) $
     exerciseCmd env.probe Probe_FetchAndIgnoreConflictingBids with
       resolutionInfo = env.resolutionInfo
       principalFundings = Map.empty
       bidCids = [bidCid, bidCid]
 
 -- No bids give nothing kept and nothing ignored.
-test_fetchAndIgnoreConflictingBids_noBids : Script ()
-test_fetchAndIgnoreConflictingBids_noBids = do
+test_ignoreConflictingBids_noBids : Script ()
+test_ignoreConflictingBids_noBids = do
   env <- setupTest "no-bids"
   result <- submit env.authority $ exerciseCmd env.probe Probe_FetchAndIgnoreConflictingBids with
     resolutionInfo = env.resolutionInfo
@@ -47,9 +47,24 @@ test_fetchAndIgnoreConflictingBids_noBids = do
     bidCids = []
   result === ([], [])
 
+-- A bid for another resolution aborts the resolution: the resolver chose the bids.
+test_ignoreConflictingBids_otherResolutionAborts : Script ()
+test_ignoreConflictingBids_otherResolutionAborts = do
+  env <- setupTest "other-resolution"
+  validCid <- submit env.alice $ createCmd env.unfundedBid with quotes = []
+  otherCid <- submit env.bob $ createCmd env.unfundedBid with
+    signatories = [env.bob]
+    resolutionInfo = env.resolutionInfo with id = "other"
+    quotes = []
+  submitMustFail'' (expectMessageContains "Contract group identifier mismatch") (actAs env.authority) $
+    exerciseCmd env.probe Probe_FetchAndIgnoreConflictingBids with
+      resolutionInfo = env.resolutionInfo
+      principalFundings = Map.empty
+      bidCids = [validCid, otherCid]
+
 -- Kept bids stay in the order they were presented, and an ignored bid carries the first unmet condition of the first check it fails.
-test_fetchAndIgnoreConflictingBids_keepsOrderAndFirstReason : Script ()
-test_fetchAndIgnoreConflictingBids_keepsOrderAndFirstReason = do
+test_ignoreConflictingBids_keepsOrderAndFirstReason : Script ()
+test_ignoreConflictingBids_keepsOrderAndFirstReason = do
   env <- setupTest "keeps-order"
   principalUsd <- allocateForThisLot env env.principal env.payment 0.0
   [carolUsd, aliceUsd, bobUsd] <- forA [env.carol, env.alice, env.bob] $ \bidder -> allocateForThisLot env bidder env.payment 24.0
@@ -59,7 +74,6 @@ test_fetchAndIgnoreConflictingBids_keepsOrderAndFirstReason = do
   carolCid <- submit env.carol $ createCmd bid with signatories = [env.carol]; fundings = Map.fromList [(env.paymentAdmin, carolUsd)]
   aliceCid <- submit env.alice $ createCmd bid with
     signatories = [env.alice]
-    resolutionInfo = env.resolutionInfo with id = "other"
     fundings = Map.fromList [(env.paymentAdmin, aliceUsd with account = basicAccount env.principal)]
   bobCid <- submit env.bob $ createCmd bid with signatories = [env.bob]; fundings = Map.fromList [(env.paymentAdmin, bobUsd)]
   (kept, ignored) <- submit env.authority $ exerciseCmd env.probe Probe_FetchAndIgnoreConflictingBids with
@@ -67,11 +81,11 @@ test_fetchAndIgnoreConflictingBids_keepsOrderAndFirstReason = do
     principalFundings = Map.fromList [(env.paymentAdmin, principalUsd)]
     bidCids = [carolCid, aliceCid, bobCid]
   map fst kept === [carolCid, bobCid]
-  ignored === [(aliceCid, "the bid is for another resolution")]
+  ignored === [(aliceCid, "account " <> show (basicAccount env.principal) <> " is used under admin " <> show env.paymentAdmin <> " by the principal")]
 
 -- A bid using the principal's account under the same admin is ignored.
-test_fetchAndIgnoreConflictingBids_principalAccount : Script ()
-test_fetchAndIgnoreConflictingBids_principalAccount = do
+test_ignoreConflictingBids_principalAccount : Script ()
+test_ignoreConflictingBids_principalAccount = do
   env <- setupTest "principal-account"
   principalUsd <- allocateForThisLot env env.principal env.payment 0.0
   bidCid <- submit env.principal $ createCmd env.unfundedBid with
@@ -86,8 +100,8 @@ test_fetchAndIgnoreConflictingBids_principalAccount = do
   ignored === [(bidCid, "account " <> show principalUsd.account <> " is used under admin " <> show env.paymentAdmin <> " by the principal")]
 
 -- Two bids using one account under the same admin are both ignored.
-test_fetchAndIgnoreConflictingBids_sharedAccount : Script ()
-test_fetchAndIgnoreConflictingBids_sharedAccount = do
+test_ignoreConflictingBids_sharedAccount : Script ()
+test_ignoreConflictingBids_sharedAccount = do
   env <- setupTest "shared-account"
   [firstUsd, secondUsd] <- forA [1, 2] $ \_ -> allocateForThisLot env env.alice env.payment 24.0
   let bid = env.unfundedBid with
@@ -103,26 +117,26 @@ test_fetchAndIgnoreConflictingBids_sharedAccount = do
   ignored === [(firstCid, shared), (secondCid, shared)]
 
 -- A bid already ignored for another reason does not knock out a valid bid that shares its account.
-test_fetchAndIgnoreConflictingBids_amongOnlyKeptBids : Script ()
-test_fetchAndIgnoreConflictingBids_amongOnlyKeptBids = do
+test_ignoreConflictingBids_amongOnlyKeptBids : Script ()
+test_ignoreConflictingBids_amongOnlyKeptBids = do
   env <- setupTest "among-kept"
   [validUsd, foreignUsd] <- forA [1, 2] $ \_ -> allocateForThisLot env env.alice env.payment 24.0
   let bid = env.unfundedBid with
         quotes = [Quote with price = 6.0; amount = 4.0]
   validCid <- submit env.alice $ createCmd bid with fundings = Map.fromList [(env.paymentAdmin, validUsd)]
+  let principalLot = foreignUsd with account = basicAccount env.principal
   foreignCid <- submit env.alice $ createCmd bid with
-    resolutionInfo = env.resolutionInfo with id = "other"
-    fundings = Map.fromList [(env.paymentAdmin, foreignUsd)]
+    fundings = Map.fromList [(env.paymentAdmin, foreignUsd), (env.lotAdmin, principalLot)]
   (kept, ignored) <- submit env.authority $ exerciseCmd env.probe Probe_FetchAndIgnoreConflictingBids with
     resolutionInfo = env.resolutionInfo
-    principalFundings = Map.empty
+    principalFundings = Map.fromList [(env.lotAdmin, principalLot)]
     bidCids = [foreignCid, validCid]
   map fst kept === [validCid]
-  ignored === [(foreignCid, "the bid is for another resolution")]
+  ignored === [(foreignCid, "account " <> show principalLot.account <> " is used under admin " <> show env.lotAdmin <> " by the principal")]
 
 -- The conflicting-bids filter fetches no allocations, so a bid whose allocation was cancelled is kept.
-test_fetchAndIgnoreConflictingBids_cancelledAllocation : Script ()
-test_fetchAndIgnoreConflictingBids_cancelledAllocation = do
+test_ignoreConflictingBids_cancelledAllocation : Script ()
+test_ignoreConflictingBids_cancelledAllocation = do
   env <- setupTest "conflicting-cancelled"
   aliceUsd <- allocateForThisLot env env.alice env.payment 24.0
   (cancelExtraArgs, disclosures) <- getCancelContexts env [Map.fromList [(env.paymentAdmin, aliceUsd)]]
@@ -141,12 +155,12 @@ test_fetchAndIgnoreConflictingBids_cancelledAllocation = do
   ignored === []
 
 
--- Testing fetchAndIgnoreInvalidSingleLotBids
+-- Testing fetchGroup and ignoreInvalidSingleLotBids
 ---------------------------------------------
 
 -- Every check is wired in: one bid fails each, in the bid-only, allocation and among-bids steps, and only the valid bid is kept, with the ignored bids in step order.
-test_fetchAndIgnoreInvalidSingleLotBids_eachCheck : Script ()
-test_fetchAndIgnoreInvalidSingleLotBids_eachCheck = do
+test_ignoreInvalidSingleLotBids_eachCheck : Script ()
+test_ignoreInvalidSingleLotBids_eachCheck = do
   env <- setupTest "each-check"
   principalUsd <- allocateForThisLot env env.principal env.payment 0.0
   principalLot <- allocateForThisLot env env.principal env.lot 10.0
@@ -194,7 +208,6 @@ test_fetchAndIgnoreInvalidSingleLotBids_eachCheck = do
   validCid <- submit env.bob $ createCmd bid with
     signatories = [env.bob]
     fundings = Map.fromList [(env.paymentAdmin, bobUsd), (env.lotAdmin, bobLot)]
-  otherResolutionCid <- submit env.alice $ createCmd bid with resolutionInfo = env.resolutionInfo with id = "other"
   unsignedCid <- submit env.carol $ createCmd bid with signatories = [env.carol]
   principalAccountCid <- submit env.principal $ createCmd bid with
     signatories = [env.principal]
@@ -212,15 +225,14 @@ test_fetchAndIgnoreInvalidSingleLotBids_eachCheck = do
     schedule = env.schedule
     principalFundings = Map.fromList [(env.paymentAdmin, principalUsd), (env.lotAdmin, principalLot)]
     bidCids =
-      [ validCid, otherResolutionCid, unsignedCid, principalAccountCid, badQuoteCid
+      [ validCid, unsignedCid, principalAccountCid, badQuoteCid
       , otherSettlementCid, legSidesCid, underReservedCid, firstSharedCid, secondSharedCid
       ]
   [otherSettlementId, legSidesId, underReservedId] <- forA [otherSettlementUsd, withLegSidesUsd, underReservedUsd] $ \funding ->
     submit env.authority $ exerciseCmd env.probe Probe_ShowAllocationId with allocationCid = funding.allocation
   map fst kept === [validCid]
   ignored ===
-    [ (otherResolutionCid, "the bid is for another resolution")
-    , (unsignedCid, "account " <> show aliceLot.account <> " under admin " <> show env.lotAdmin <> " did not sign the bid")
+    [ (unsignedCid, "account " <> show aliceLot.account <> " under admin " <> show env.lotAdmin <> " did not sign the bid")
     , (principalAccountCid, "account " <> show principalLot.account <> " is used under admin " <> show env.lotAdmin <> " by the principal")
     , (badQuoteCid, "the quote price 0.0 is not positive")
     , (otherSettlementCid, "allocation " <> otherSettlementId <> " is for another settlement")
@@ -231,8 +243,8 @@ test_fetchAndIgnoreInvalidSingleLotBids_eachCheck = do
     ]
 
 -- A resolver that knows only the interface gets the same result from SingleLotQuotesBid contract ids, including the signatory check.
-test_fetchAndIgnoreInvalidSingleLotBids_interfaceIds : Script ()
-test_fetchAndIgnoreInvalidSingleLotBids_interfaceIds = do
+test_ignoreInvalidSingleLotBids_interfaceIds : Script ()
+test_ignoreInvalidSingleLotBids_interfaceIds = do
   env <- setupTest "interface-ids"
   aliceUsd <- allocateForThisLot env env.alice env.payment 24.0
   aliceLot <- allocateForThisLot env env.alice env.lot 0.0
@@ -252,8 +264,8 @@ test_fetchAndIgnoreInvalidSingleLotBids_interfaceIds = do
   ignored === [(unsignedCid, "account " <> show aliceLot.account <> " under admin " <> show env.lotAdmin <> " did not sign the bid")]
 
 -- A bid ignored by a bid-only check has no allocations fetched, so its cancelled allocation does not abort the resolution.
-test_fetchAndIgnoreInvalidSingleLotBids_noFetchAfterBidCheckFails : Script ()
-test_fetchAndIgnoreInvalidSingleLotBids_noFetchAfterBidCheckFails = do
+test_ignoreInvalidSingleLotBids_noFetchAfterBidCheckFails : Script ()
+test_ignoreInvalidSingleLotBids_noFetchAfterBidCheckFails = do
   env <- setupTest "no-fetch"
   aliceUsd <- allocateForThisLot env env.alice env.payment 24.0
   aliceLot <- allocateForThisLot env env.alice env.lot 0.0
@@ -262,8 +274,8 @@ test_fetchAndIgnoreInvalidSingleLotBids_noFetchAfterBidCheckFails = do
     settlement = env.settlement
     cancelContexts = cancelExtraArgs
     allocationCids = [aliceUsd.allocation]
-  bidCid <- submit env.alice $ createCmd env.unfundedBid with
-    resolutionInfo = env.resolutionInfo with id = "other"
+  bidCid <- submit env.carol $ createCmd env.unfundedBid with
+    signatories = [env.carol]
     fundings = Map.fromList [(env.paymentAdmin, aliceUsd), (env.lotAdmin, aliceLot)]
     quotes = [Quote with price = 6.0; amount = 4.0]
   (kept, ignored) <- submit env.authority $ exerciseCmd env.probe Probe_FetchAndIgnoreInvalidSingleLotBids with
@@ -274,11 +286,11 @@ test_fetchAndIgnoreInvalidSingleLotBids_noFetchAfterBidCheckFails = do
     principalFundings = Map.empty
     bidCids = [bidCid]
   kept === []
-  ignored === [(bidCid, "the bid is for another resolution")]
+  ignored === [(bidCid, "account " <> show aliceLot.account <> " under admin " <> show env.lotAdmin <> " did not sign the bid")]
 
 -- A bid that passes the bid-only checks but whose allocation was cancelled aborts the resolution, as the function documents; the resolver must leave such bids out.
-test_fetchAndIgnoreInvalidSingleLotBids_cancelledAllocationAborts : Script ()
-test_fetchAndIgnoreInvalidSingleLotBids_cancelledAllocationAborts = do
+test_ignoreInvalidSingleLotBids_cancelledAllocationAborts : Script ()
+test_ignoreInvalidSingleLotBids_cancelledAllocationAborts = do
   env <- setupTest "cancelled-aborts"
   aliceUsd <- allocateForThisLot env env.alice env.payment 24.0
   aliceLot <- allocateForThisLot env env.alice env.lot 0.0

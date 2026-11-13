@@ -7,7 +7,7 @@ import DA.Set (Set)
 
 import Splice.Api.Token.MetadataV1
 import Splice.Api.Token.AllocationV2 (Allocation)
-import Splice.Util (require)
+import Splice.Util (HasCheckedFetch (..), require)
 import Cap.Core.Types (ResolutionInfo)
 import Cap.Core.Utils (entitled, requireBefore, requireExpired, requireOpen)
 
@@ -178,3 +178,11 @@ interface Bid where
       requireExpired "the bid has expired" now (Some (view this).schedule.expiresAt)
       bid_expireImpl this self (Bid_Expire with ..)
 
+
+instance Show Bid where
+  show bid = "Bid " <> show (view bid)
+
+-- | A bid belongs to the resolution its view names, so that fetchGroup aborts
+-- on a bid of another resolution.
+instance HasCheckedFetch Bid ResolutionInfo where
+  contractGroupId bid = (view bid).resolutionInfo

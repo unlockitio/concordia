@@ -9,7 +9,7 @@ module Cap.Auctions.SingleLot
   , validSingleLotQuotes
   , quotesReserved
   , validSingleLotBid
-  , fetchAndIgnoreInvalidSingleLotBids
+  , ignoreInvalidSingleLotBids
   , PricingRule
   , payAsBid
   , uniformPrice
@@ -37,7 +37,7 @@ import Splice.Api.Token.HoldingV2 (InstrumentId)
 import qualified Splice.Api.Token.AllocationV2 as Alloc
 
 import Cap.Core.Types (ResolutionInfo)
-import Cap.Core.Utils (Contracts, Ignored, Unmet, orAbort, single)
+import Cap.Core.Utils (ContractFilter, Contracts, Unmet, applyFilters, ignoreFailing, orAbort, single)
 import Cap.Auctions.Bid (Bid)
 import Cap.Auctions.Types
   ( AuctionSchedule, AuctionTerms (..), Direction (..), Funding (..), HasSingleLotQuotes (..)
@@ -45,7 +45,7 @@ import Cap.Auctions.Types
   )
 import Cap.Auctions.Clearing (Award (..), awardAmountPerQuote)
 import Cap.Auctions.Funding
-  ( AllocationsCheck, buildBatchesByAccount, fetchAndIgnoreInvalidBids
+  ( AllocationsCheck, buildBatchesByAccount, ignoreFailingAllocations
   , accountSignedBid, bidForResolution, distinctAccountsAmongBids, emptyTransferLegAllocations
   , noPrincipalAccountsInBid, validFundingTerms
   , SettleBatchContext, lastIterationFinalizer, settleBatches, unsettledAllocations
@@ -155,29 +155,33 @@ validSingleLotBid resolutionInfo settlement terms schedule singleLotTerms bid fe
     , quotesReserved singleLotTerms bid fetchedFundings
     ]
 
--- | Fetches the bids and ignores every bid that fails a check: the checks of
--- validSingleLotBid, and the checks that the bid uses none of the
--- principal's accounts and shares no account with another bid. Use it for bids
--- whose template may not have run the checks at submission. The resolver must
--- pass only bids whose allocations it can fetch: an allocation that was
--- withdrawn, expired or is not visible to the resolver aborts the resolution
--- instead of ignoring the bid.
-fetchAndIgnoreInvalidSingleLotBids
-  : (HasFetch t, HasSignatory t, HasToInterface t Bid, HasSingleLotQuotes t)
-  => ResolutionInfo -> Alloc.SettlementInfo -> AuctionTerms -> AuctionSchedule -> SingleLotAuctionTerms -> Map Party Funding
-  -> [ContractId t] -> Update (Contracts t, Ignored t)
-fetchAndIgnoreInvalidSingleLotBids resolutionInfo settlement terms schedule singleLotTerms principalFundings =
-  fetchAndIgnoreInvalidBids
-    [ bidForResolution resolutionInfo
-    , accountSignedBid
-    , noPrincipalAccountsInBid principalFundings
-    , validSingleLotQuotes singleLotTerms
-    ]
-    [ validFundingTerms settlement terms schedule
-    , emptyTransferLegAllocations
-    , quotesReserved singleLotTerms
-    ]
-    [ distinctAccountsAmongBids ]
+-- | Ignores every bid that fails a check: the checks of validSingleLotBid
+-- other than the resolution, which fetchGroup checks, and the checks that the
+-- bid uses none of the principal's accounts and shares no account with
+-- another bid. Use it for bids whose template may not have run the checks at
+-- submission. The checks on the bid alone run first, then the checks on its
+-- allocations, fetched only for the bids still kept, then the checks among the
+-- bids still kept. The resolver must pass only bids whose allocations it can
+-- fetch: an allocation that was withdrawn, expired or is not visible to the
+-- resolver aborts the resolution instead of ignoring the bid.
+ignoreInvalidSingleLotBids
+  : (HasSignatory t, HasToInterface t Bid, HasSingleLotQuotes t)
+  => Alloc.SettlementInfo -> AuctionTerms -> AuctionSchedule -> SingleLotAuctionTerms -> Map Party Funding
+  -> ContractFilter t
+ignoreInvalidSingleLotBids settlement terms schedule singleLotTerms principalFundings = applyFilters
+  [ ignoreFailing
+      [ accountSignedBid
+      , noPrincipalAccountsInBid principalFundings
+      , validSingleLotQuotes singleLotTerms
+      ]
+      []
+  , ignoreFailingAllocations
+      [ validFundingTerms settlement terms schedule
+      , emptyTransferLegAllocations
+      , quotesReserved singleLotTerms
+      ]
+  , ignoreFailing [] [distinctAccountsAmongBids]
+  ]
 
 
 -- Pricing
@@ -343,7 +347,7 @@ data ClearAndSettleResult = ClearAndSettleResult
 -- with empty transfer legs.
 --
 -- The caller decides which bids take part, for example with
--- fetchAndIgnoreInvalidBids or its own completeness check, and passes only
+-- ignoreInvalidSingleLotBids or its own completeness check, and passes only
 -- those. The bids must be distinct, each must have passed
 -- validSingleLotBid or equivalent checks, no two may use the same
 -- account under one admin, and none may use the principal's account. If one of

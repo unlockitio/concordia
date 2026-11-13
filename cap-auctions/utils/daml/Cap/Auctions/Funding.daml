@@ -16,12 +16,10 @@ module Cap.Auctions.Funding
   , noPrincipalAccountsInBid
   , distinctAccountsAmongBids
 
-    -- * Fetching and ignoring invalid bids
-  , BidCheck
+    -- * Ignoring invalid bids
   , AllocationsCheck
-  , AmongBidsCheck
-  , fetchAndIgnoreInvalidBids
-  , fetchAndIgnoreConflictingBids
+  , ignoreFailingAllocations
+  , ignoreConflictingBids
 
     -- * Fetching allocations
   , fetchFundingAllocations
@@ -45,7 +43,7 @@ module Cap.Auctions.Funding
   , cancelAllocations
   ) where
 
-import DA.List (dedup, unique)
+import DA.List (dedup)
 import DA.Map (Map)
 import qualified DA.Map as Map
 import DA.Optional (fromOptional, isSome)
@@ -56,10 +54,11 @@ import DA.Time (addRelTime)
 import Splice.Api.Token.MetadataV1
 import qualified Splice.Api.Token.AllocationV2 as Alloc
 import Splice.TokenStandard.Utils (transferLegSidesWithAuthorizer)
-import Splice.Util (require)
 
 import Cap.Core.Types (ResolutionInfo (..))
-import Cap.Core.Utils (Contracts, Ignored, Unmet, applyFilters, ignoreUnless, ignoreUnlessAmong, ignoreUnlessM, orAbort, requireMet)
+import Cap.Core.Utils
+  ( Check, ContractFilter, Unmet
+  , ignoreFailing, ignoreUnlessM, orAbort, requireMet )
 import Cap.Auctions.Bid (Bid)
 import Cap.Auctions.Types (AuctionSchedule (..), AuctionTerms (..), Direction (..), Funding (..))
 
@@ -82,8 +81,9 @@ settlementOf resolutionInfo executors =
 
 -- Checks 
 ---------
--- Each check returns its unmet conditions. Use requireMet to abort on them, at
--- submission or resolution, or ignoreUnless and ignoreUnlessAmong to ignore the bid at resolution.
+-- Each check returns its unmet conditions. Use requireMet or requireChecks to
+-- abort on them, at submission or resolution, or ignoreFailing to ignore the
+-- bid at resolution.
 
 -- 
 -- | Requires every allocation of the bid to be for this settlement, under its
@@ -117,8 +117,11 @@ emptyTransferLegAllocations _ fundings =
       ]
   ]
 
--- | Requires the bid to be for this resolution.
-bidForResolution : HasToInterface t Bid => ResolutionInfo -> BidCheck t
+-- | Requires the bid to be for this resolution. Use it at submission. At
+-- resolution, fetching the bids with fetchGroup keyed by the resolution
+-- already aborts on a bid of another resolution: the resolver chose the bids,
+-- so it is its error.
+bidForResolution : HasToInterface t Bid => ResolutionInfo -> Check t
 bidForResolution resolutionInfo bid =
   ["the bid is for another resolution" | (view (toInterface @Bid bid)).resolutionInfo /= resolutionInfo]
 
@@ -148,7 +151,7 @@ noPrincipalAccountsInBid principalFundings bid =
   ]
 
 -- | Requires no other bid to use one of the bid's accounts under the same admin.
--- Pass the bids still kept, with ignoreUnlessAmong, and check consent with
+-- Pass the bids still kept, with ignoreFailing, and check consent with
 -- accountSignedBid before, so that only the owner of an account can make
 -- their own bids clash.
 distinctAccountsAmongBids : HasToInterface t Bid => [t] -> t -> Unmet
@@ -165,63 +168,35 @@ distinctAccountsAmongBids bids bid =
       ]
 
 
--- Fetching and ignoring invalid bids
----------------------------------------
--- Fetches the bids of a resolution and their allocations once, and ignores the bids that fail a check.
-
--- | A check on the bid alone.
-type BidCheck t = t -> Unmet
+-- Ignoring invalid bids
+------------------------
+-- A resolver fetches the bids with fetchGroup, keyed by its resolution, so
+-- that a bid presented twice or of another resolution aborts. It then aborts
+-- on the checks that are its own error with requireChecks, and ignores the
+-- bids that fail the others with ignoreFailing, ignoreFailingAllocations and
+-- applyFilters (Cap.Core.Utils).
 
 -- | A check on the bid and its fetched allocations.
 type AllocationsCheck t = t -> Map Party (Funding, Alloc.AllocationView) -> Unmet
 
--- | A check on the bid among the other bids still kept.
-type AmongBidsCheck t = [t] -> t -> Unmet
-
--- | Fetches the bids and ignores those that fail a check. Aborts if a bid is
--- presented twice. The checks run in three steps, and each step is applied 
--- only on the bids that the checks before it kept:
---
--- - bidChecks run on the bid alone.
--- - allocationsChecks run on the bid and its fetched allocations. Allocations
---   are fetched only in this step, so none are fetched for a bid ignored in
---   the first step, or when there are no allocation checks.
--- - amongBidsChecks run on each bid against the other bids still kept.
---
--- Every bid is fetched once. Returns the kept bids in their input order, and
--- the ignored bids each with the first unmet condition that ignored it.
-fetchAndIgnoreInvalidBids
-  : (HasFetch t, HasToInterface t Bid)
-  => [BidCheck t] -> [AllocationsCheck t] -> [AmongBidsCheck t]
-  -> [ContractId t] -> Update (Contracts t, Ignored t)
-fetchAndIgnoreInvalidBids bidChecks allocationsChecks amongBidsChecks cids = do
-  require "the presented bids are distinct" (unique cids)
-  bids <- forA cids $ \cid -> do
-    bid <- fetch cid
-    pure (cid, bid)
-  applyFilters
-    ( [ignoreUnless (\bid -> concat [check bid | check <- bidChecks])]
-   <> [ ignoreUnlessM (\bid -> do
-          fetchedFundings <- fetchFundingAllocations (view (toInterface @Bid bid)).fundings
-          pure (concat [check bid fetchedFundings | check <- allocationsChecks]))
-      | not (null allocationsChecks) ]
-   <> [ignoreUnlessAmong (\bids bid -> concat [check bids bid | check <- amongBidsChecks])] )
+-- | Fetches the allocations of every bid, once per bid, and ignores the bids
+-- that fail a check on them. Put it after the checks on the bid alone in
+-- applyFilters, so that no allocations are fetched for a bid already ignored.
+-- With no checks it fetches nothing.
+ignoreFailingAllocations : HasToInterface t Bid => [AllocationsCheck t] -> ContractFilter t
+ignoreFailingAllocations [] bids = pure (bids, [])
+ignoreFailingAllocations checks bids =
+  ignoreUnlessM (\bid -> do
+      fetchedFundings <- fetchFundingAllocations (view (toInterface @Bid bid)).fundings
+      pure (concat [check bid fetchedFundings | check <- checks]))
     bids
 
--- | Fetches the bids and ignores those that are for another resolution, use
--- one of the principal's accounts, or share an account with another bid. Use
--- it for bids that passed their checks at submission. It fetches no
--- allocations.
-fetchAndIgnoreConflictingBids
-  : (HasFetch t, HasToInterface t Bid)
-  => ResolutionInfo -> Map Party Funding -> [ContractId t] -> Update (Contracts t, Ignored t)
-fetchAndIgnoreConflictingBids resolutionInfo principalFundings =
-  fetchAndIgnoreInvalidBids
-    [ bidForResolution resolutionInfo
-    , noPrincipalAccountsInBid principalFundings
-    ]
-    []
-    [ distinctAccountsAmongBids ]
+-- | Ignores the bids that use one of the principal's accounts or share an
+-- account with another bid. Use it for bids that passed their checks at
+-- submission. It fetches no allocations.
+ignoreConflictingBids : HasToInterface t Bid => Map Party Funding -> ContractFilter t
+ignoreConflictingBids principalFundings =
+  ignoreFailing [noPrincipalAccountsInBid principalFundings] [distinctAccountsAmongBids]
 
 
 -- Fetching allocations

@@ -18,6 +18,13 @@ module Cap.Core.Utils
   , ignoreUnlessM
   , requireMet
 
+    -- * Checks
+  , Check
+  , AmongCheck
+  , unmetOf
+  , requireChecks
+  , ignoreFailing
+
     -- * Resolutions
   , requireResolvedBy
   , authoritiesOf
@@ -59,7 +66,7 @@ import Splice.Util (HasCheckedFetch (..), fetchChecked, require)
 import Cap.Core.Types (AuthenticKey (..), ResolutionInfo (..))
 
 
--- | The key of a contract built from its actual signatories, for use in a
+-- | The key of a contract built from its signatories, for use in a
 -- HasCheckedFetch instance so that fetchChecked also checks who signed it.
 signedKey : HasSignatory t => Text -> t -> AuthenticKey
 signedKey id contract = AuthenticKey with authorities = Set.fromList (signatory contract); id
@@ -74,12 +81,14 @@ fetchCheckedAny key cid = do
   contract <- fetchChecked key typed
   pure (typed, contract)
 
--- | Fetches a non-empty list of distinct contracts and checks that each one
--- belongs to the given group key.
+-- | Fetches the presented contracts, each once, and checks that each one
+-- belongs to the given group key, for example the resolution it is counted
+-- in. Aborts if a contract is presented twice or belongs to another group:
+-- the party presenting them chose the list, so these are its errors and are
+-- never ignored. An empty list returns no contracts.
 fetchGroup
   : (HasFetch t, HasCheckedFetch t k)
   => k -> [ContractId t] -> Update [(ContractId t, t)]
-fetchGroup _ [] = fail "a resolution presents at least one contract"
 fetchGroup key cids = do
   require "the presented contracts are distinct" (unique cids)
   forA cids $ \cid -> do
@@ -132,6 +141,41 @@ ignoreUnlessAmong unmet contracts = ignoreUnless (unmet (map snd contracts)) con
 requireMet : Unmet -> Update ()
 requireMet [] = pure ()
 requireMet (errorMsg :: _) = abort errorMsg
+
+
+-- | A check on one contract alone.
+type Check t = t -> Unmet
+
+-- | A check on one contract among the others presented with it.
+type AmongCheck t = [t] -> t -> Unmet
+
+-- | The unmet conditions of every contract, one contract after the other:
+-- first the checks on the contract alone, then the checks among all the
+-- contracts.
+unmetOf : [Check t] -> [AmongCheck t] -> [t] -> Unmet
+unmetOf checks amongChecks contracts =
+  concat [check c | c <- contracts, check <- checks]
+    <> concat [check contracts c | c <- contracts, check <- amongChecks]
+
+-- | Aborts with the first unmet condition of any contract. Use it for the
+-- conditions that are the error of the party presenting the contracts. Run it
+-- on every contract presented, before ignoring any: run on the kept contracts
+-- only, a condition it checks would not abort on a contract already ignored.
+requireChecks : [Check t] -> [AmongCheck t] -> [t] -> Update ()
+requireChecks checks amongChecks contracts =
+  requireMet (unmetOf checks amongChecks contracts)
+
+-- | Ignores the contracts that fail a check, each with its first unmet
+-- condition. Use it for the conditions that are the error of the party behind
+-- a contract, such as a voter or a bidder. The checks among contracts run only
+-- on the contracts the checks on the contract alone kept. Every check must
+-- follow from the contracts and the ledger alone, so that any party presenting
+-- them ignores the same contracts.
+ignoreFailing : [Check t] -> [AmongCheck t] -> ContractFilter t
+ignoreFailing checks amongChecks = applyFilters
+  [ ignoreUnless (\c -> concatMap (\check -> check c) checks)
+  , ignoreUnlessAmong (\cs c -> concatMap (\check -> check cs c) amongChecks)
+  ]
 
 
 -- | Checks that a resolution names this resolver and is bound to no other

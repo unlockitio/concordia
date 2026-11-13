@@ -14,5 +14,6 @@ data-dependencies:
 - ../../cap-core/utils/.daml/dist/cap-core-utils-0.1.0.dar
 - ../interfaces/executable/.daml/dist/cap-governance-executable-v1-0.1.0.dar
 - ../interfaces/action/.daml/dist/cap-governance-action-v1-0.1.0.dar
+- ../interfaces/ballot/.daml/dist/cap-governance-ballot-v1-0.1.0.dar
 build-options:
   - --target=2.3

@@ -6,19 +6,20 @@ import DA.Map (Map)
 
 import Splice.Api.Token.MetadataV1 (ExtraArgs, emptyMetadata)
 import qualified Splice.Api.Token.AllocationV2 as Alloc
+import Splice.Util (HasCheckedFetch (..))
 
 import Cap.Core.Types (ResolutionInfo)
-import Cap.Core.Utils (Contracts, Ignored, orAbort)
+import Cap.Core.Utils (Contracts, Ignored, fetchGroup, orAbort)
 import Cap.Auctions.Types (AuctionSchedule, AuctionTerms (..), Funding, HasSingleLotQuotes (..), Quote)
 import Cap.Auctions.Bid
 import Cap.Auctions.SingleLotQuotesBid
 import Cap.Auctions.Funding
-  ( Batch, SettleBatchContext, cancelAllocations, fetchAndIgnoreConflictingBids, fetchFundingAllocations
+  ( Batch, SettleBatchContext, cancelAllocations, fetchFundingAllocations, ignoreConflictingBids
   , lastIterationFinalizer, settleBatches
   )
 import Cap.Auctions.SingleLot
   ( ClearAndSettleResult, SingleLotAuctionTerms, clearAndSettleSingleLotFromEmptyLegsAllocations
-  , clearSingleLot, expectSingleLot, fetchAndIgnoreInvalidSingleLotBids, nativePricingMechanisms, validSingleLotBid
+  , clearSingleLot, expectSingleLot, ignoreInvalidSingleLotBids, nativePricingMechanisms, validSingleLotBid
   )
 
 
@@ -116,7 +117,9 @@ template Probe
         principalFundings : Map Party Funding
         bidCids : [ContractId TestBid]
       controller owners
-      do fetchAndIgnoreConflictingBids resolutionInfo principalFundings bidCids
+      do
+        presented <- fetchGroup resolutionInfo bidCids
+        ignoreConflictingBids principalFundings presented
 
     nonconsuming choice Probe_FetchAndIgnoreInvalidSingleLotBids : (Contracts TestBid, Ignored TestBid)
       with
@@ -129,7 +132,8 @@ template Probe
       controller owners
       do
         singleLotTerms <- expectSingleLot terms
-        fetchAndIgnoreInvalidSingleLotBids resolutionInfo settlement terms schedule singleLotTerms principalFundings bidCids
+        presented <- fetchGroup resolutionInfo bidCids
+        ignoreInvalidSingleLotBids settlement terms schedule singleLotTerms principalFundings presented
 
     nonconsuming choice Probe_FetchAndIgnoreInvalidSingleLotQuotesBids : ([ContractId SingleLotQuotesBid], Ignored SingleLotQuotesBid)
       with
@@ -142,7 +146,8 @@ template Probe
       controller owners
       do
         singleLotTerms <- expectSingleLot terms
-        (kept, ignored) <- fetchAndIgnoreInvalidSingleLotBids resolutionInfo settlement terms schedule singleLotTerms principalFundings bidCids
+        presented <- fetchGroup resolutionInfo bidCids
+        (kept, ignored) <- ignoreInvalidSingleLotBids settlement terms schedule singleLotTerms principalFundings presented
         pure (map fst kept, ignored)
 
     nonconsuming choice Probe_ClearSingleLot : [(Party, Alloc.TransferLeg)]
@@ -193,3 +198,6 @@ template Probe
         allocationCids : [ContractId Alloc.Allocation]
       controller owners
       do cancelAllocations settlement cancelContexts allocationCids
+
+instance HasCheckedFetch TestBid ResolutionInfo where
+  contractGroupId bid = bid.resolutionInfo

@@ -5,9 +5,11 @@ module Cap.Governance.Utils
   , module Cap.Governance.Utils.Ballots
   , module Cap.Governance.Utils.VotingRights
   , module Cap.Governance.Utils.Count
+  , module Cap.Governance.Utils.Votes
   ) where
 
 import Cap.Governance.Utils.Ballots
 import Cap.Governance.Utils.Count
 import Cap.Governance.Utils.Targets
 import Cap.Governance.Utils.VotingRights
+import Cap.Governance.Utils.Votes
