@@ -12,7 +12,8 @@ import Splice.Util (HasCheckedFetch (..), require)
 import Cap.Core.Types (ResolutionInfo)
 import Cap.Core.Utils (requireExpired, requireOpen)
 import Cap.Governance.ActionV1 (Action)
-import Cap.Governance.Utils (IsBallot (..), Vote (..))
+import Cap.Governance.Utils.VotingRights (partyAsOwnerId)
+import Cap.Governance.Utils (IsVoteRecord (..), Vote (..))
 
 yay : Text
 yay = "yay"
@@ -67,8 +68,8 @@ template PrivateBallot
 instance HasCheckedFetch PrivateBallot ResolutionInfo where
   contractGroupId ballot = ballot.resolution
 
-instance IsBallot PrivateBallot Text where
-  votesOf ballot = Map.fromList [(ballot.voter, optional Absent Voted ballot.vote)]
+instance IsVoteRecord PrivateBallot Text where
+  votesOf ballot = Map.fromList [(partyAsOwnerId ballot.voter, optional Absent Voted ballot.vote)]
   snapshotsOf _ = Map.empty
-  actionOf ballot = ballot.actionCid
+  actionOf ballot = Some ballot.actionCid
   consume cid = exercise cid PrivateBallot_Consume

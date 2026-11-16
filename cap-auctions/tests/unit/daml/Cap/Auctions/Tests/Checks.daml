@@ -18,11 +18,11 @@ import Splice.TokenStandard.Utils (basicAccount)
 
 import Cap.Auctions.Types (Direction (..), Funding (..), LotTerms (..), Quote (..))
 import Cap.Auctions.Funding
-  ( accountSignedBid, bidForResolution, distinctAccountsAmongBids, emptyTransferLegAllocations
-  , noPrincipalAccountsInBid, settlementOf, validFundingTerms, validPrincipalFunding
+  ( validBidSignatory, validBidResolution, distinctAccountsAmongBids, validEmptyTransferLegs
+  , validBidAccounts, settlementOf, validFundingTerms, validPrincipalFunding
   )
 import Cap.Auctions.Terms (validAuctionSchedule, validAuctionTerms, validLotTerms)
-import Cap.Auctions.SingleLot (quotesReserved, validSingleLotBid, validSingleLotQuotes)
+import Cap.Auctions.SingleLot (validQuoteReserve, validSingleLotBid, validSingleLotQuotes)
 
 import Cap.Auctions.Tests.Fixtures
 
@@ -213,7 +213,7 @@ test_validFundingTerms_reportsEachAllocation = do
         ]
 
 
--- Testing emptyTransferLegAllocations
+-- Testing validEmptyTransferLegs
 --------------------------------------
 
 -- An allocation with transfer leg sides is reported.
@@ -230,7 +230,7 @@ test_emptyTransferLegAllocations_legSides = do
         amount = 24.0
         instrumentId = "USD"
         meta = emptyMetadata
-  emptyTransferLegAllocations unfundedBid
+  validEmptyTransferLegs unfundedBid
     (Map.fromList [(paymentAdminParty, (usd, validUsdAllocation with allocation = validUsdAllocation.allocation with transferLegSides = [side]))])
     === ["allocation " <> show usd.allocation <> " has transfer leg sides"]
 
@@ -241,10 +241,10 @@ test_emptyTransferLegAllocations_nextIterationFunding = do
   usdCid <- submit owner (createCmd AllocationStandIn with owner)
   let usd = Funding with account = basicAccount aliceParty; allocation = coerceContractId usdCid
       validUsdAllocation = validAllocationView aliceParty paymentAdminParty []
-  emptyTransferLegAllocations unfundedBid
+  validEmptyTransferLegs unfundedBid
     (Map.fromList [(paymentAdminParty, (usd, validUsdAllocation with allocation = validUsdAllocation.allocation with nextIterationFunding = None))])
     === ["allocation " <> show usd.allocation <> " does not enable iterated settlement"]
-  emptyTransferLegAllocations unfundedBid (Map.fromList [(paymentAdminParty, (usd, validUsdAllocation))])
+  validEmptyTransferLegs unfundedBid (Map.fromList [(paymentAdminParty, (usd, validUsdAllocation))])
     === []
 
 
@@ -344,10 +344,10 @@ test_validPrincipalFunding_sameTermsAsBids = do
     ] $ \changed -> do
       let usdOnly = Map.fromList [(paymentAdminParty, (usd, changed))]
       validPrincipalFunding (settlementOf resolution None) auctionTerms auctionSchedule (Map.fromList [(paymentAdminParty, (usd, changed)), lotEntry])
-        === emptyTransferLegAllocations unfundedBid usdOnly <> validFundingTerms (settlementOf resolution None) auctionTerms auctionSchedule unfundedBid usdOnly
+        === validEmptyTransferLegs unfundedBid usdOnly <> validFundingTerms (settlementOf resolution None) auctionTerms auctionSchedule unfundedBid usdOnly
 
 
--- Testing bidForResolution
+-- Testing validBidResolution
 ---------------------------
 
 -- A bid for the resolution reports nothing, and a bid whose resolution differs in any field is reported.
@@ -355,7 +355,7 @@ test_bidForResolution_anyFieldDiffers : Script ()
 test_bidForResolution_anyFieldDiffers = do
   owner <- allocateParty "owner"
   resolverCid <- submit owner (createCmd AllocationStandIn with owner)
-  bidForResolution resolution unfundedBid === []
+  validBidResolution resolution unfundedBid === []
   forA_
     [ resolution with id = "other"
     , resolution with mechanism = "cap-auctions/single-lot/vickrey"
@@ -363,10 +363,10 @@ test_bidForResolution_anyFieldDiffers = do
     , resolution with resolver = resolution.resolver with id = "other"
     , resolution with resolver = resolution.resolver with authorities = Set.fromList [authorityParty, bobParty]
     ] $ \other ->
-      bidForResolution resolution (unfundedBid with resolutionInfo = other) === ["the bid is for another resolution"]
+      validBidResolution resolution (unfundedBid with resolutionInfo = other) === ["the bid is for another resolution"]
 
 
--- Testing accountSignedBid
+-- Testing validBidSignatory
 ---------------------------
 
 -- A bid signed by the owner of its funding account reports nothing.
@@ -375,7 +375,7 @@ test_accountSignedBid_ownerSigned = do
   owner <- allocateParty "owner"
   usdCid <- submit owner (createCmd AllocationStandIn with owner)
   let usd = Funding with account = basicAccount aliceParty; allocation = coerceContractId usdCid
-  accountSignedBid (unfundedBid with fundings = Map.fromList [(paymentAdminParty, usd)]) === []
+  validBidSignatory (unfundedBid with fundings = Map.fromList [(paymentAdminParty, usd)]) === []
 
 -- A bid not signed by the owner of its funding account is reported.
 test_accountSignedBid_ownerDidNotSign : Script ()
@@ -383,7 +383,7 @@ test_accountSignedBid_ownerDidNotSign = do
   owner <- allocateParty "owner"
   usdCid <- submit owner (createCmd AllocationStandIn with owner)
   let usd = Funding with account = basicAccount aliceParty; allocation = coerceContractId usdCid
-  accountSignedBid (unfundedBid with signatories = [authorityParty, bobParty]; fundings = Map.fromList [(paymentAdminParty, usd)])
+  validBidSignatory (unfundedBid with signatories = [authorityParty, bobParty]; fundings = Map.fromList [(paymentAdminParty, usd)])
     === ["account " <> show usd.account <> " under admin " <> show paymentAdminParty <> " did not sign the bid"]
 
 -- For an account without an owner the provider must sign; with an owner only the owner counts; with neither the account is reported.
@@ -395,10 +395,10 @@ test_accountSignedBid_ownerThenProvider = do
       providerOnly = Account with owner = None; provider = Some bobParty; id = ""
       ownerAndProvider = Account with owner = Some aliceParty; provider = Some bobParty; id = ""
       neither = Account with owner = None; provider = None; id = ""
-  accountSignedBid (unfundedBid with signatories = [bobParty]; fundings = funding providerOnly) === []
-  accountSignedBid (unfundedBid with signatories = [bobParty]; fundings = funding ownerAndProvider)
+  validBidSignatory (unfundedBid with signatories = [bobParty]; fundings = funding providerOnly) === []
+  validBidSignatory (unfundedBid with signatories = [bobParty]; fundings = funding ownerAndProvider)
     === ["account " <> show ownerAndProvider <> " under admin " <> show paymentAdminParty <> " did not sign the bid"]
-  accountSignedBid (unfundedBid with signatories = [aliceParty]; fundings = funding neither)
+  validBidSignatory (unfundedBid with signatories = [aliceParty]; fundings = funding neither)
     === ["account " <> show neither <> " under admin " <> show paymentAdminParty <> " did not sign the bid"]
 
 -- Each funding is checked on its own: a signed USD account and another party's LOT account report only the LOT one.
@@ -408,11 +408,11 @@ test_accountSignedBid_eachFunding = do
   [usdCid, lotCid] <- replicateA 2 (submit owner (createCmd AllocationStandIn with owner))
   let usd = Funding with account = basicAccount aliceParty; allocation = coerceContractId usdCid
       lot = Funding with account = basicAccount carolParty; allocation = coerceContractId lotCid
-  accountSignedBid (unfundedBid with fundings = Map.fromList [(paymentAdminParty, usd), (lotAdminParty, lot)])
+  validBidSignatory (unfundedBid with fundings = Map.fromList [(paymentAdminParty, usd), (lotAdminParty, lot)])
     === ["account " <> show lot.account <> " under admin " <> show lotAdminParty <> " did not sign the bid"]
 
 
--- Testing noPrincipalAccountsInBid
+-- Testing validBidAccounts
 -----------------------------------
 
 -- A bid using the principal's account under the same admin is reported, and under another admin it is not.
@@ -422,9 +422,9 @@ test_noPrincipalAccountsInBid_sameAdminOnly = do
   [principalCid, bidCid] <- replicateA 2 (submit owner (createCmd AllocationStandIn with owner))
   let principalFundings = Map.fromList [(paymentAdminParty, Funding with account = basicAccount principalParty; allocation = coerceContractId principalCid)]
       funding = Funding with account = basicAccount principalParty; allocation = coerceContractId bidCid
-  noPrincipalAccountsInBid principalFundings (unfundedBid with fundings = Map.fromList [(paymentAdminParty, funding)])
+  validBidAccounts principalFundings (unfundedBid with fundings = Map.fromList [(paymentAdminParty, funding)])
     === ["account " <> show funding.account <> " is used under admin " <> show paymentAdminParty <> " by the principal"]
-  noPrincipalAccountsInBid principalFundings (unfundedBid with fundings = Map.fromList [(lotAdminParty, funding)])
+  validBidAccounts principalFundings (unfundedBid with fundings = Map.fromList [(lotAdminParty, funding)])
     === []
 
 
@@ -540,7 +540,7 @@ test_validSingleLotQuotes_sharedAdminReportedOnce = do
   validSingleLotQuotes sharedAdmin unfundedBid === ["no allocation under admin " <> show paymentAdminParty]
 
 
--- Testing quotesReserved
+-- Testing validQuoteReserve
 -------------------------
 
 -- In a forward auction the payment allocation must reserve price times amount of every quote at or above the reserve price.
@@ -557,8 +557,8 @@ test_quotesReserved_forward = do
           , (Quote with price = 4.0; amount = 10.0)
           ]
       reserving amount = Map.fromList [(paymentAdminParty, (usd, validAllocationView aliceParty paymentAdminParty [("USD", amount)]))]
-  quotesReserved singleLotTerms bid (reserving 48.0) === []
-  quotesReserved singleLotTerms bid (reserving 47.99)
+  validQuoteReserve singleLotTerms bid (reserving 48.0) === []
+  validQuoteReserve singleLotTerms bid (reserving 47.99)
     === ["allocation " <> show usd.allocation <> " reserves 47.99 of USD, less than the 48.0 the quotes can need"]
 
 -- In a reverse auction the lot allocation must reserve the amount of every ask at or below the reserve price.
@@ -575,8 +575,8 @@ test_quotesReserved_reverse = do
           ]
       reserving amount = Map.fromList [(lotAdminParty, (lot, validAllocationView aliceParty lotAdminParty [("LOT", amount)]))]
       reverseTerms = singleLotTerms with direction = Reverse
-  quotesReserved reverseTerms bid (reserving 6.0) === []
-  quotesReserved reverseTerms bid (reserving 5.99)
+  validQuoteReserve reverseTerms bid (reserving 6.0) === []
+  validQuoteReserve reverseTerms bid (reserving 5.99)
     === ["allocation " <> show lot.allocation <> " reserves 5.99 of LOT, less than the 6.0 the quotes can need"]
 
 -- An amount reserved under another instrument id does not count.
@@ -585,7 +585,7 @@ test_quotesReserved_otherInstrumentReserved = do
   owner <- allocateParty "owner"
   usdCid <- submit owner (createCmd AllocationStandIn with owner)
   let usd = Funding with account = basicAccount aliceParty; allocation = coerceContractId usdCid
-  quotesReserved singleLotTerms unfundedBid
+  validQuoteReserve singleLotTerms unfundedBid
     (Map.fromList [(paymentAdminParty, (usd, validAllocationView aliceParty paymentAdminParty [("EUR", 100.0)]))])
     === ["allocation " <> show usd.allocation <> " reserves 0.0 of USD, less than the 24.0 the quotes can need"]
 

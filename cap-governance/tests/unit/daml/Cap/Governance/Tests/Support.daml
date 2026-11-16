@@ -16,17 +16,17 @@ import Daml.Script hiding (AnyContractId)
 import Splice.Api.Token.MetadataV1 (AnyContractId)
 
 import Cap.Core.Types (AuthenticKey (..))
-import Cap.Governance.BallotV1 (Vote)
-import Cap.Governance.Utils.Ballots (IsBallot (..))
+import Cap.Governance.Types (OwnerId, Vote)
+import Cap.Governance.Utils.VoteRecords (IsVoteRecord (..))
 
 
 -- | A ballot carrying only votes. The tests that use it read nothing else, so
--- the other IsBallot methods are stubs.
+-- the other IsVoteRecord methods are stubs.
 data TestBallot v = TestBallot with
-    votes : Map Party (Vote v)
+    votes : Map OwnerId (Vote v)
   deriving (Eq, Show)
 
-instance IsBallot (TestBallot v) v where
+instance IsVoteRecord (TestBallot v) v where
   votesOf ballot = ballot.votes
   snapshotsOf _ = Map.empty
   actionOf _ = error "a TestBallot names no action"

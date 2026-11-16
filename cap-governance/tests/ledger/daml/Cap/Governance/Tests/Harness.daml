@@ -43,23 +43,6 @@ readTarget key cid = do
   pure (if target.value < 0 then None else Some (toAnyValue (stateOf target)))
 
 
--- | Voting rights for one holder.
-template Weight
-  with
-    owner : Party
-    tag : Text
-    holder : Party
-    amount : Decimal
-  where
-    signatory owner
-
-instance HasCheckedFetch Weight Text where
-  contractGroupId weight = weight.tag
-
-instance HasVotingRights Weight where
-  rightsOf weight = Map.singleton weight.holder weight.amount
-
-
 template Probe
   with
     owner : Party
@@ -87,17 +70,3 @@ template Probe
         targetCids : Map AuthenticKey AnyContractId
       controller owner
       do fst <$> fetchTargetMatchingSnapshot @Target unchanged key snapshots targetCids
-
-    nonconsuming choice Probe_FetchWeightsPerContract : Map Party Decimal
-      with
-        rightKeys : Set Text
-        rightCids : Map Text (ContractId Weight)
-      controller owner
-      do fetchWeightsPerContract rightKeys rightCids
-
-    nonconsuming choice Probe_FetchVotersPerContract : Set Party
-      with
-        rightKeys : Set Text
-        rightCids : Map Text (ContractId Weight)
-      controller owner
-      do fetchVotersPerContract rightKeys rightCids

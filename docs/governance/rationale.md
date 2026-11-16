@@ -12,16 +12,16 @@ app on Canton. It provides the parts every governance app needs. Each part is
 described below with the reason it is needed.
 
 
-### Fetching and grouping ballots for resolution
+### Fetching and grouping vote records for resolution
 
-The resolving party chooses which ballots to present, so the
-choice that runs the mechanism must refuse a ballot for another resolution and a
-ballot presented twice. `fetchGroup` fetches the ballots, refuses duplicates and
-checks that each ballot references the same `ResolutionInfo`. `requireResolvedBy`
+The resolving party chooses which vote records to present, so the
+choice that runs the mechanism must refuse a vote record for another resolution and a
+vote record presented twice. `fetchGroup` fetches the vote records, refuses duplicates and
+checks that each vote record references the same `ResolutionInfo`. `requireResolvedBy`
 checks that the `ResolutionInfo` names the resolver where the outcome is decided
 and the mechanism used.
 
-**Example:** Two different governance flows with the same ballots templates, the group check
+**Example:** Two different governance flows with the same vote records templates, the group check
 fails if contracts from one governance flow are used by a resolver on another governance flow.
 
 ### Checking the identity of the contracts a decision acts on
@@ -45,17 +45,17 @@ don't have.
 ### Admitting votes
 
 A vote counts only if its voter has the right to vote, has not voted already,
-and voted for something the mechanism counts. A resolver passes the ballots
-through `votesDecodable`, `votersEligible` and `distinctVotersAmongBallots`,
-and the weights through `nonNegativeWeights`, before `casts` counts them. They
+and voted for something the mechanism counts. A resolver passes the vote records
+through `validVoteEncoding`, `validVoteRecordVoters` and `distinctVotersAmongVoteRecords`,
+and the weights through `validWeights`, before `casts` counts them. They
 refuse:
 
-- a voter who appears on two ballots;
+- a voter who appears on two vote records;
 - a voter with no weight;
 - a negative weight;
 - a vote that the mechanism's decoder does not accept.
 
-**Example:** a ballot template carries votes of type `Approve | Reject | SetFee
+**Example:** a vote record template carries votes of type `Approve | Reject | SetFee
 Decimal`, and a yes/no mechanism counts only `Approve` and `Reject`. 
 
 ### Quorums and tallies
@@ -85,7 +85,7 @@ given as a numerator and a denominator so that a share like two thirds is exact.
 
 A target can change between the vote and the execution, and voters approved the
 change against the state they saw. A `Snapshot` records, per target, the state
-or contract id the decision was made against. An action declares its `targets`
+or contract id the decision was made against. An action declares its `snapshots`
 when it is created and can fix parts of their snapshots then. `snapshotStates`
 and `snapshotCids` fill the parts the action left open with the target's current
 state or contract id, and `mergeSnapshots` merges those snapshots into the
@@ -141,25 +141,25 @@ through the action, and it holds their state only as `Snapshot`s.
 ```mermaid
 flowchart LR
   subgraph GOV["Governance "]
-    Ballot["Ballot<br/>(vote + target snapshots)"]
+    VoteRecord["VoteRecord<br/>(vote + target snapshots)"]
     Resolver["Resolver<br/>(counts, decides outcome)"]
   end
 
   subgraph ACT["Action package"]
-    Action["Action<br/>view: authorizers, targets"]
+    Action["Action<br/>view: authorizers, snapshots"]
     Executable["Executable<br/>(execution window, entitled actors)"]
   end
 
   Targets["Targets<br/>any contract the action names"]
 
-  Ballot -- "① action_readStateImpl<br/>snapshotStates / snapshotCids" --> Action
+  VoteRecord -- "① action_readStateImpl<br/>snapshotStates / snapshotCids" --> Action
   Action -. "reads state" .-> Targets
   Resolver -- "② Action_AuthorizeExecution<br/>outcome + snapshots" --> Action
   Action -- "mergeSnapshots, creates" --> Executable
   Executable -- "③ Executable_Execute<br/>fetchTargetMatchingSnapshot + DriftPolicy" --> Targets
 ```
 
-1. When a ballot is cast or at resolution, the governance app reads the
+1. When a vote record is cast or at resolution, the governance app reads the
    targets through `action_readStateImpl`, using `snapshotStates` or
    `snapshotCids`. The result is a `Snapshot` per target.
 2. The resolver's choice that runs the mechanism exercises `Action_AuthorizeExecution` with the
@@ -170,64 +170,50 @@ flowchart LR
    the action's `DriftPolicy`, and the action then changes the targets.
 
 
-### Ballots
+### Vote records
 
-A `Ballot` interface would let a resolver count ballots of templates it does not
-know at compile time. That would allow:
-
-- ballots from a template written by another party, such as a wallet, to be
-  counted by several resolvers;
-- generic tools, such as indexers and UIs, to read ballots across apps.
-
-It would also have these costs:
-
-- The interface's package is frozen, so every ballot has to fit one view. A
-  shared ballot, a per-voter confirmation and a sealed vote have different
-  shapes, and fields outside the view are not reachable through the interface.
-- A choice taking `ContractId Ballot` accepts any template that implements
-  the interface. A vote is only as trustworthy as the template that created it,
-  because the template's signatories, `ensure` clause and cast choice decide who
-  can vote and for what. A resolver that accepts the interface has to decide
-  which templates it trusts.
-
-
-`IsBallot` in `Cap.Governance.Utils.Ballots` lets the library work with any
-ballot template without an interface. It gives the library a ballot's casts,
+`IsVoteRecord` in `Cap.Governance.Utils.VoteRecords` lets the library work with any
+vote record template. It gives the library a vote record's casts,
 its snapshots, the action it asks to authorize, and how to consume it. An app writes
-one instance per ballot template.
+one instance per vote record template.
 
 
 
-### Resolver
+### Vote topic
 
-A resolver interface would let a client or another contract trigger a
-resolution on a resolver whose template it does not know. The removed
-interfaces provided this through:
+A `VoteTopic` interface lets software that does not know an app's templates find
+an open decision, read what it decides, and cast a vote on it. Its callers are
+wallets and dApps (an SV voting from a CIP-103 wallet, as in the SV governance
+dApp CIP), indexers, and a decentralized party that is itself a voter in
+another governance flow, whose resolver casts into the other flow's vote topic.
 
-- a generic entry point, `Resolver_Resolve`;
-- a `procedures` map, looked up by name;
-- `Submittable`, which carried a `ResolutionInfo` (then named `Mechanism`) to
-  that entry point.
+The two governance flows in Canton both have this shape. The DSO's
+`VoteRequest` and the DRO's `GovernanceProposal` (the `.canton` naming CIP)
+each have a proposer, what is decided, a voting window, an optional effective
+time, and votes by identities the governance knows. They differ in where the
+vote is cast (on the resolver, `DsoRules_CastVote`, or on the proposal,
+`GovVote`), in whether the proposer is a name or a party, in whether a vote can
+be changed, and in what each reads live when a vote is cast. `VoteTopicView`
+holds what they share, and `VoteTopic_CastVote` leaves the rest to the
+implementation:
 
-That would allow, without depending on the called resolver's package:
+- It is nonconsuming and returns the contracts it creates, so a vote topic can
+  store the vote on itself (and recreate itself) or on a vote record per voter.
+- It takes a `caster` and an `ownerId`, so the implementation checks that the
+  caster may cast for that OwnerId.
+- Its `extraArgs` carry what the implementation needs, such as the voter's
+  vote record or the live voter registry, the way the Token Standard passes a
+  choice context.
 
-- one client to do resolutions from different apps;
-- one resolver to call a resolution on another resolver, for example a
-  decentralized party delegating a decision to a sub-group's resolver.
+The view carries no votes. A vote topic that stores its votes can also implement
+`VoteRecord`, and one whose votes are private exposes none. It carries no vote
+format either: the mechanism name documents it (see "Vote encoding" in
+[considerations.md](considerations.md)), and the resolver checks every vote it
+counts. It names at most one action: a change to several targets is one action,
+and a choice among options is one action that takes the winning option as its
+outcome.
 
-It would also have these costs:
-
-- A generic entry point takes the presented contracts and `extraArgs` in a
-  generic form. A client still has to know the resolver's format to build them,
-  so the entry point is generic only in its signature.
-- Mechanisms are found by a `Text` name instead of being typed choices, so a
-  wrong name or wrong arguments fail at run time.
-- The interface's package is frozen, so every resolver's resolution has to fit
-  one signature.
-
-Without an interface, each mechanism is a named choice on the resolver, with
-typed arguments. The cost is that a client or contract that does the resolution
-has to depend every resolvers' packages.
-
-We chose not to define a resolver interface because we think the common case is
-a resolution submitted by a client written for that resolver.
+The cost is that the view is frozen, so every vote topic has to fit it, and that
+a choice taking `ContractId VoteTopic` reaches any template that implements it.
+A caller trusts a vote topic only as far as it trusts the resolver its
+`resolution` names.

@@ -5,9 +5,13 @@ packages:
 - ./cap-core/utils
 - ./cap-core/tests/unit
 - ./cap-core/tests/ledger
+- ./cap-governance/types
 - ./cap-governance/interfaces/executable
 - ./cap-governance/interfaces/action
-- ./cap-governance/interfaces/ballot
+- ./cap-governance/interfaces/vote-record
+- ./cap-governance/interfaces/vote-topic
+- ./cap-governance/interfaces/voting-rights
+- ./cap-governance/interfaces/resolver
 - ./cap-governance/utils
 - ./cap-governance/tests/unit
 - ./cap-governance/tests/ledger

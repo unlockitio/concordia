@@ -53,10 +53,10 @@ targetStateMatchesDecodesAndAppliesThePolicy = do
   owner <- allocateParty "state-matches"
   let key = keyIn owner "fees"
       recorded state = Snapshot with state; cid = None
-  targetStateMatches (unchanged : DriftPolicy Int) key (recorded None) 6 === []
-  targetStateMatches (unchanged : DriftPolicy Int) key (recorded (Some (AV_Text "5"))) 5
+  validStateForSnapshot (unchanged : DriftPolicy Int) key (recorded None) 6 === []
+  validStateForSnapshot (unchanged : DriftPolicy Int) key (recorded (Some (AV_Text "5"))) 5
     === ["the snapshot state of " <> show key <> " does not decode"]
-  targetStateMatches (unchanged : DriftPolicy Int) key (recorded (Some (AV_Int 5))) 5 === []
-  targetStateMatches (unchanged : DriftPolicy Int) key (recorded (Some (AV_Int 5))) 6
+  validStateForSnapshot (unchanged : DriftPolicy Int) key (recorded (Some (AV_Int 5))) 5 === []
+  validStateForSnapshot (unchanged : DriftPolicy Int) key (recorded (Some (AV_Int 5))) 6
     === ["the target " <> show key <> " has drifted from its snapshot"]
-  targetStateMatches (allowAnyDrift : DriftPolicy Int) key (recorded (Some (AV_Int 5))) 6 === []
+  validStateForSnapshot (allowAnyDrift : DriftPolicy Int) key (recorded (Some (AV_Int 5))) 6 === []

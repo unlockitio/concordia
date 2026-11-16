@@ -3,51 +3,74 @@
 module Cap.Governance.Tests.VotingRights where
 
 import DA.Assert ((===))
+import DA.Map (Map)
 import qualified DA.Map as Map
+import DA.Set (Set)
 import qualified DA.Set as Set
 import Daml.Script
 
-import Cap.Governance.Tests.Harness
+import Splice.Util (HasCheckedFetch (..))
+
+import Cap.Governance.Types (OwnerId, VotingRight (..))
+import Cap.Governance.Utils.VotingRights
 
 
-data Env = Env with
+-- | Voting rights a test sets directly.
+template VotingRightsSource
+  with
     owner : Party
-    alice : Party
-    bob : Party
-    probe : ContractId Probe
+    tag : Text
+    rights : Map OwnerId VotingRight
+  where
+    signatory owner
 
-setup : Text -> Script Env
-setup ns = do
-  owner <- allocateParty (ns <> "-owner")
-  alice <- allocateParty (ns <> "-alice")
-  bob <- allocateParty (ns <> "-bob")
-  probe <- submit owner $ createCmd Probe with owner
-  pure Env with ..
+instance HasCheckedFetch VotingRightsSource Text where
+  contractGroupId source = source.tag
 
-weight : Env -> Text -> Party -> Decimal -> Script (ContractId Weight)
-weight env tag holder amount = submit env.owner $ createCmd Weight with
-  owner = env.owner; tag; holder; amount
+instance HasVotingRights VotingRightsSource where
+  rightsOf source = source.rights
+
+template VotingRightsProbe
+  with
+    owner : Party
+  where
+    signatory owner
+
+    nonconsuming choice VotingRightsProbe_FetchVotingRightsPerContract : Map OwnerId VotingRight
+      with
+        rightKeys : Set Text
+        rightCids : Map Text (ContractId VotingRightsSource)
+      controller owner
+      do fetchVotingRightsPerContract rightKeys rightCids
 
 
--- A holder with rights in several contracts gets the sum of its weights.
-fetchWeightsPerContractSumsAHolderAcrossContracts : Script ()
-fetchWeightsPerContractSumsAHolderAcrossContracts = do
-  env <- setup "weights-sum"
-  w1 <- weight env "w1" env.alice 2.0
-  w2 <- weight env "w2" env.alice 1.5
-  w3 <- weight env "w3" env.bob 1.0
-  weights <- submit env.owner $ exerciseCmd env.probe Probe_FetchWeightsPerContract with
-    rightKeys = Set.fromList ["w1", "w2", "w3"]
-    rightCids = Map.fromList [("w1", w1), ("w2", w2), ("w3", w3)]
-  weights === Map.fromList [(env.alice, 3.5), (env.bob, 1.0)]
+-- An owner named by several contracts gets the sum of their weights and the
+-- union of their casters; a contract that only names casters adds no weight.
+fetchVotingRightsPerContractSumsWeightsAndUnitesCasters : Script ()
+fetchVotingRightsPerContractSumsWeightsAndUnitesCasters = do
+  [owner, alice, bob] <- forA ["owner", "alice", "bob"] $ \n -> allocateParty ("rights-merge-" <> n)
+  probe <- submit owner $ createCmd VotingRightsProbe with owner
+  let source tag rights = submit owner $ createCmd VotingRightsSource with owner; tag; rights = Map.fromList rights
+  r1 <- source "r1" [("sv-1", VotingRight 2.0 (Set.fromList [alice])), ("sv-2", VotingRight 1.0 (Set.fromList [bob]))]
+  r2 <- source "r2" [("sv-1", VotingRight 1.5 Set.empty)]
+  r3 <- source "r3" [("sv-1", VotingRight 0.0 (Set.fromList [bob]))]
+  rights <- submit owner $ exerciseCmd probe VotingRightsProbe_FetchVotingRightsPerContract with
+    rightKeys = Set.fromList ["r1", "r2", "r3"]
+    rightCids = Map.fromList [("r1", r1), ("r2", r2), ("r3", r3)]
+  rights === Map.fromList
+    [ ("sv-1", VotingRight 3.5 (Set.fromList [alice, bob]))
+    , ("sv-2", VotingRight 1.0 (Set.fromList [bob]))
+    ]
 
--- A holder whose total weight is zero is not a voter.
-fetchVotersPerContractDropsHoldersWithoutWeight : Script ()
-fetchVotersPerContractDropsHoldersWithoutWeight = do
-  env <- setup "voters-zero"
-  w1 <- weight env "w1" env.alice 2.0
-  w2 <- weight env "w2" env.bob 0.0
-  voters <- submit env.owner $ exerciseCmd env.probe Probe_FetchVotersPerContract with
-    rightKeys = Set.fromList ["w1", "w2"]
-    rightCids = Map.fromList [("w1", w1), ("w2", w2)]
-  voters === Set.fromList [env.alice]
+-- An owner whose total weight is zero is not a voter, even with casters.
+votersOfDropsOwnersWithoutWeight : Script ()
+votersOfDropsOwnersWithoutWeight = do
+  [owner, alice] <- forA ["owner", "alice"] $ \n -> allocateParty ("rights-zero-" <> n)
+  probe <- submit owner $ createCmd VotingRightsProbe with owner
+  r1 <- submit owner $ createCmd VotingRightsSource with
+    owner; tag = "r1"
+    rights = Map.fromList [("sv-1", VotingRight 2.0 Set.empty), ("sv-2", VotingRight 0.0 (Set.fromList [alice]))]
+  rights <- submit owner $ exerciseCmd probe VotingRightsProbe_FetchVotingRightsPerContract with
+    rightKeys = Set.fromList ["r1"]
+    rightCids = Map.singleton "r1" r1
+  votersOf rights === Set.fromList ["sv-1"]

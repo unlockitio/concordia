@@ -8,15 +8,15 @@ module Cap.Auctions.Clock
     -- * Dutch clock
   , dutchClockPrice
   , validDutchClock
-  , dutchClockReachesReserveBy
+  , validDutchClockDeadline
 
     -- * English clock
   , englishClockPrice
   , validEnglishClock
 
     -- * Quotes
-  , quotesAtClockPrice
-  , quotesAppended
+  , validQuotesAtClockPrice
+  , validQuoteAppend
 
     -- * Metadata
   , clockMeta
@@ -90,8 +90,8 @@ validDutchClock direction reservePrice clock =
       Forward -> clock.startPrice >= reservePrice
       Reverse -> clock.startPrice <= reservePrice
 
-dutchClockReachesReserveBy : Direction -> Decimal -> PriceClock -> Time -> Time -> Unmet
-dutchClockReachesReserveBy direction reservePrice clock opensAt closesAt =
+validDutchClockDeadline : Direction -> Decimal -> PriceClock -> Time -> Time -> Unmet
+validDutchClockDeadline direction reservePrice clock opensAt closesAt =
   [ "the clock does not reach the reserve price before " <> show closesAt
   | dutchClockPrice direction reservePrice clock opensAt (closesAt `addRelTime` microseconds (-1)) /= reservePrice
   ]
@@ -132,15 +132,15 @@ validEnglishClock direction reservePrice clock =
 -- Quotes
 ---------
 
-quotesAtClockPrice : Decimal -> [Quote] -> Unmet
-quotesAtClockPrice price quotes =
+validQuotesAtClockPrice : Decimal -> [Quote] -> Unmet
+validQuotesAtClockPrice price quotes =
   [ "the quote price " <> show quote.price <> " is not the clock price " <> show price
   | quote <- quotes
   , quote.price /= price
   ]
 
-quotesAppended : [Quote] -> [Quote] -> Unmet
-quotesAppended oldQuotes newQuotes =
+validQuoteAppend : [Quote] -> [Quote] -> Unmet
+validQuoteAppend oldQuotes newQuotes =
   [ "the existing quotes are changed" | take (length oldQuotes) newQuotes /= oldQuotes ]
 
 

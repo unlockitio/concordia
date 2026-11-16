@@ -1,0 +1,188 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | The vote record as a contract: what a resolution reads from it, whether it
+-- is one to count and who stands behind it, and consuming it once counted.
+-- What the votes on it say is in Cap.Governance.Utils.Votes.
+module Cap.Governance.Utils.VoteRecords
+  ( IsVoteRecord (..)
+
+    -- * Checks
+  , validVoteRecordAction
+  , validVoteRecordSnapshots
+  , validVoteRecordVoters
+  , distinctVotersAmongVoteRecords
+  , validVoteRecordCasters
+  , validVoteRecordSignatories
+  , validConsumers
+
+    -- * Agreement
+  , expectUniformAction
+  , expectUniformSnapshots
+
+    -- * Ledger
+  , consumeVoteRecords
+  ) where
+
+import Prelude hiding (Action)
+
+import DA.Action (unless)
+import DA.Foldable (mapA_)
+import DA.Map (Map)
+import qualified DA.Map as Map
+import DA.Optional (fromOptional, fromSomeNote)
+import DA.Set (Set)
+import qualified DA.Set as Set
+
+import Splice.Api.Token.MetadataV1 (AnyValue)
+
+import Cap.Core.Types (AuthenticKey, Snapshot)
+import Cap.Governance.Types (OwnerId, Vote (..))
+import Cap.Core.Utils (AmongCheck, Check, uniformOptional)
+import Cap.Governance.ActionV1 (Action)
+import Cap.Governance.VoteRecordV1 (VoteRecord, VoteRecordView (..), VoteRecord_Consume (..))
+
+
+------------------  VOTE RECORDS  ------------------
+-- Used at resolution, over the vote records presented to it. A resolver
+-- fetches them with fetchGroup, keyed by its resolution, so that a vote record
+-- presented twice or of another resolution aborts; it then checks them with
+-- requireMetFrom and ignoreFailing (Cap.Core.Utils) and counts them. It counts
+-- vote records of templates it knows through their own IsVoteRecord
+-- instances, and vote records of templates it does not know through the
+-- VoteRecord interface, which is one more IsVoteRecord instance.
+
+-- | What a resolution reads from a vote record: the votes it carries, by
+-- owner; the snapshots it took; the action it asks to authorize, if any; and
+-- how the resolution consumes it once counted.
+class IsVoteRecord b v | b -> v where
+  votesOf : b -> Map OwnerId (Vote v)
+  snapshotsOf : b -> Map AuthenticKey Snapshot
+  actionOf : b -> Optional (ContractId Action)
+  consume : ContractId b -> Update ()
+
+
+------------------  INTERFACE  ------------------
+-- An interface vote record is read like any other IsVoteRecord, with its votes
+-- as AnyValue: a resolver decodes them by passing a standard decoder of
+-- Cap.Governance.Utils.Votes, such as decodeTextVote, as decodeVote. Any
+-- package can implement VoteRecord, and its view says whatever the
+-- implementing template declares, so a resolver counting through the
+-- interface must also check who stands behind each vote record, with
+-- validVoteRecordCasters or validVoteRecordSignatories, and validConsumers.
+--
+-- A vote record that names no consumers is standing: consuming it does
+-- nothing, so it can be counted again.
+
+instance IsVoteRecord VoteRecord AnyValue where
+  votesOf record = (view record).votes
+  snapshotsOf record = (view record).snapshots
+  actionOf record = (view record).action
+  consume cid = do
+    record <- fetch cid
+    unless (null (view record).consumers) $ exercise cid VoteRecord_Consume
+
+
+------------------  CHECKS  ------------------
+-- Each check returns the unmet conditions of one vote record. Pass the ones
+-- that are the error of the party resolving, such as a vote record for another
+-- action, to requireMetFrom, which aborts on any of them; and the ones that
+-- are the error of a voter, such as a voter without rights, to ignoreFailing,
+-- which ignores the vote records that fail them. A mechanism adds its own
+-- checks, for example on a vote record's expiry or voting window, as further
+-- Checks.
+
+-- | Validates that the vote record asks for the given action.
+validVoteRecordAction : IsVoteRecord b v => ContractId Action -> Check b
+validVoteRecordAction actionCid record =
+  ["the vote record asks for another action" | actionOf record /= Some actionCid]
+
+-- | Validates that the vote record carries exactly the given snapshots.
+validVoteRecordSnapshots : IsVoteRecord b v => Map AuthenticKey Snapshot -> Check b
+validVoteRecordSnapshots snapshots record =
+  ["the vote record carries other snapshots" | snapshotsOf record /= snapshots]
+
+-- | Validates that every owner on the vote record is a voter.
+validVoteRecordVoters : IsVoteRecord b v => Set OwnerId -> Check b
+validVoteRecordVoters voters record =
+  [ "the voter " <> show voter <> " has no right to vote"
+  | voter <- Map.keys (votesOf record)
+  , not (Set.member voter voters)
+  ]
+
+-- | Validates that no other vote record carries a vote of one of the vote
+-- record's voters. Every vote record of a voter who appears twice fails it, so
+-- which vote record is counted never depends on the order they are presented
+-- in.
+distinctVotersAmongVoteRecords : IsVoteRecord b v => AmongCheck b
+distinctVotersAmongVoteRecords records record =
+  [ "the voter " <> show voter <> " is on another vote record"
+  | voter <- Map.keys (votesOf record)
+  , fromOptional 0 (Map.lookup voter uses) > 1
+  ]
+  where
+    uses = Map.fromListWithR (+)
+      [(voter, 1) | other <- records, voter <- Map.keys (votesOf other)]
+
+-- | Validates that every vote on the vote record was signed by a caster of its
+-- owner.
+validVoteRecordCasters : (HasSignatory b, IsVoteRecord b v) => Map OwnerId (Set Party) -> Check b
+validVoteRecordCasters casters record =
+  [ "no caster of the voter " <> show voter <> " signed the vote record"
+  | voter <- Map.keys (votesOf record)
+  , let entitled = fromOptional Set.empty (Map.lookup voter casters)
+  , not (any (`Set.member` entitled) (signatory record))
+  ]
+
+-- | Validates that the parties are signatories of the vote record. Use it for
+-- vote records the resolver's own choices create, passing the resolver's
+-- authorities, so that only vote records it vouched for are counted.
+validVoteRecordSignatories : HasSignatory b => [Party] -> Check b
+validVoteRecordSignatories parties record =
+  [ "the vote record is not signed by " <> show party
+  | party <- parties
+  , party `notElem` signatory record
+  ]
+
+-- | Validates that the consumers a VoteRecord names are among the actors, so
+-- that consuming it after counting cannot fail. Pass the parties resolving.
+validConsumers : [Party] -> Check VoteRecord
+validConsumers actors record =
+  [ "the vote record names the consumer " <> show consumer <> ", who is not resolving"
+  | consumer <- (view record).consumers
+  , consumer `notElem` actors
+  ]
+
+
+------------------  AGREEMENT  ------------------
+-- For a mechanism that takes the action and the snapshots from the vote
+-- records themselves rather than from a vote topic. They fail when the vote
+-- records disagree, so they suit a strict resolution. A lenient resolution
+-- checks each vote record against an action and snapshots that do not come
+-- from the vote records it filters, with validVoteRecordAction and
+-- validVoteRecordSnapshots.
+
+-- | The action every vote record asks for. Fails when they differ, when there
+-- are none, or when they name no action.
+expectUniformAction : IsVoteRecord b v => [b] -> ContractId Action
+expectUniformAction =
+  fromSomeNote "the presented vote records name no action"
+    . fromSomeNote "the presented vote records ask for one action"
+    . uniformOptional . map actionOf
+
+-- | The snapshots every vote record carries. Fails when they differ or there
+-- are none.
+expectUniformSnapshots : IsVoteRecord b v => [b] -> Map AuthenticKey Snapshot
+expectUniformSnapshots =
+  fromSomeNote "the presented vote records carry the same snapshots" . uniformOptional . map snapshotsOf
+
+
+------------------  LEDGER  ------------------
+
+-- | Consumes every presented vote record, so it cannot be counted again; a
+-- standing one is left as it is. Vote records fetched with fetchGroup all
+-- belong to the resolution, so the ignored ones can be consumed too when they
+-- are of a template the resolver knows. Through the VoteRecord interface,
+-- consume only the kept vote records: an ignored one may name consumers who
+-- are not resolving.
+consumeVoteRecords : IsVoteRecord b v => [ContractId b] -> Update ()
+consumeVoteRecords = mapA_ consume

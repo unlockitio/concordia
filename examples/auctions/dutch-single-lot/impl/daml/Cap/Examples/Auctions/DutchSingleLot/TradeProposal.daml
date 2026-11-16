@@ -18,7 +18,7 @@ import Cap.Auctions.Terms (validAuctionSchedule, validAuctionTerms)
 import Cap.Auctions.SingleLot (pricingMechanismOf)
 
 import Cap.Examples.Auctions.DutchSingleLot.Auction (DutchAuction (..), accountSigner, supportedMechanisms)
-import Cap.Auctions.Clock (PriceClock, clockMeta, dutchClockReachesReserveBy, validDutchClock)
+import Cap.Auctions.Clock (PriceClock, clockMeta, validDutchClockDeadline, validDutchClock)
 
 
 template DutchTradeProposal
@@ -41,7 +41,7 @@ template DutchTradeProposal
         && case Map.values terms.lots of
              [lotTerms] ->
                null (validDutchClock terms.direction lotTerms.reservePrice clock)
-                 && null (dutchClockReachesReserveBy terms.direction lotTerms.reservePrice clock
+                 && null (validDutchClockDeadline terms.direction lotTerms.reservePrice clock
                            schedule.biddingOpensAt schedule.biddingClosesAt)
              _ -> False
 

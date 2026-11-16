@@ -8,6 +8,7 @@ import DA.Optional (isSome)
 import qualified DA.Set as Set
 import Daml.Script hiding (AnyContractId)
 
+import Cap.Governance.Utils.VotingRights (partyAsOwnerId)
 import Cap.Governance.Utils (Verdict (..))
 
 import Cap.Examples.BabyDso.Rights
@@ -28,7 +29,7 @@ aWeightChangeAfterOpeningDoesNotCount = do
 
   ballotCid <- castAs f f.sv3 opened (feeVote 0.09 4.0)
   Some ballot <- queryContractId f.sv3 ballotCid
-  Map.lookup f.sv3 ballot.openingWeights === Some 1.0
+  Map.lookup (partyAsOwnerId f.sv3) ballot.openingWeights === Some 1.0
 
   setTime f.terms.votingClosesAt
   result <- resolveVoteAs f f.sv1 ballotCid
@@ -96,7 +97,7 @@ aZeroWeightSvCanOpenAVote = do
 
   opened <- openVoteAs f f.sv3 (feeVote 0.20 9.0)
   Some ballot <- queryContractId f.sv3 opened
-  Map.lookup f.sv3 ballot.openingWeights === Some 0.0
+  Map.lookup (partyAsOwnerId f.sv3) ballot.openingWeights === Some 0.0
 
   withSv1 <- castAs f f.sv1 opened (feeVote 0.05 2.0)
   ballotCid <- castAs f f.sv2 withSv1 (feeVote 0.06 2.5)
@@ -122,7 +123,7 @@ aVotersWeightSourcesAddUp = do
   f <- setupAs "add-up"
   opened <- openVoteAs f f.sv1 (feeVote 0.05 2.0)
   Some ballot <- queryContractId f.sv1 opened
-  Map.lookup f.sv1 ballot.openingWeights === Some 5.0
+  Map.lookup (partyAsOwnerId f.sv1) ballot.openingWeights === Some 5.0
 
   ballotCid <- castAs f f.sv3 opened (feeVote 0.09 4.0)
   setTime f.terms.votingClosesAt

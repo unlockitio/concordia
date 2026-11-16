@@ -15,7 +15,7 @@ This document has four sections:
   Synchronizer and Canton Coin are governed today and what other governance
   flows may need.
 - [Section 2](#2-governance-flows-in-canton) defines
-  the terms used in the rest of the document (voter, resolver, ballot, action,
+  the terms used in the rest of the document (voter, resolver, vote record, action,
   target, execution) and describes governance flows in canton at a high level.
 - [Section 3](#3-cap-governance-architecture-overview) shows how the library's
   templates and interfaces map to canton governance flows.
@@ -57,10 +57,10 @@ Other examples of governance flows can have:
 ## 2. Governance flows in Canton
 In this section, we introduce the common base for any governance flow in canton. To do it, it will be useful to define some terminology.
 
-The voters submit "many things" to the resolver, it is useful to find a term for each. We will call *Ballot* to everything that is submitted, this includes for example, the action, the target(s) it applies to and the new value. We then define other two types of "input", the *vote* which is what the mechanism counts (e.g. option A, B or C, proposed fee). And the *parameters*, which is what the action applies to the targets (e.g. a new fee value) the parameters can come from the output of the mechanism (the *outcome*), (e.g. set fee to the median of all votes) or they could be already defined by the action (e.g reduce fee by 2%). An action whose parameters come from the outcome works only with mechanisms that produce an outcome of the shape it expects; an action that defines its own parameters works with any mechanism.
+The voters submit "many things" to the resolver, it is useful to find a term for each. We will call *Vote record* to everything that is submitted, this includes for example, the action, the target(s) it applies to and the new value. We then define other two types of "input", the *vote* which is what the mechanism counts (e.g. option A, B or C, proposed fee). And the *parameters*, which is what the action applies to the targets (e.g. a new fee value) the parameters can come from the output of the mechanism (the *outcome*), (e.g. set fee to the median of all votes) or they could be already defined by the action (e.g reduce fee by 2%). An action whose parameters come from the outcome works only with mechanisms that produce an outcome of the shape it expects; an action that defines its own parameters works with any mechanism.
 
 We write again what we already defined in the section above:
-- *Voter*: A party allowed to submit a ballot to a resolver (in the canton network governance, the SVs).
+- *Voter*: A party allowed to submit a vote record to a resolver (in the canton network governance, the SVs).
 - *Resolver*: A contract, where the voters' vote is collected, an outcome is decided and authority is collected.
 - *Resolution*: The final step on running mechanism. That is, submitting the transaction that will compute mechanism and produce an *Executable*. The executable might be consumed in the same transaction that is created. 
 - *Target*: A contract that will be changed by the governance flow, specifically by an action.
@@ -77,7 +77,7 @@ target layer contains the contracts where the change takes effect.
 
 | Layer | Contains |
 |---|---|
-| Decision layer | voters, voting rights, ballots, votes, the resolver, its mechanisms and the outcome |
+| Decision layer | voters, voting rights, vote records, votes, the resolver, its mechanisms and the outcome |
 | Action layer | the action, with its targets, its parameters and the parties that may authorize it; the conditions of execution (when and by whom); the execution |
 | Target layer | the targets and the choices that change them |
 
@@ -116,8 +116,8 @@ classDiagram
       «template, HasVotingRights»
       weights
     }
-    class Ballot {
-      «template, IsBallot»
+    class VoteRecord {
+      «template, IsVoteRecord»
       votes
       action : ContractId Action
     }
@@ -135,7 +135,7 @@ classDiagram
     class Action {
       «interface»
       authorizers : [[Party]]
-      targets : Map AuthenticKey Snapshot
+      snapshots : Map AuthenticKey Snapshot
       Action_AuthorizeExecution()
     }
     class MyAction {
@@ -162,8 +162,8 @@ classDiagram
   }
 
   Resolver ..> VotingRights : reads weights
-  Resolver ..> Ballot : counts
-  Ballot --> Action : references
+  Resolver ..> VoteRecord : counts
+  VoteRecord --> Action : references
   Resolver ..> Action : exercises Action_AuthorizeExecution
   OtherResolver ..> Action : exercises Action_AuthorizeExecution
   MyAction ..|> Action : implements
@@ -180,14 +180,14 @@ Essentially, we need to worry that we execute exactly the change that the voters
 For this we need at least these guarantees:
 
 ### 4.1. Admitting and counting votes
-At resolution a party chooses which ballots to present to the
+At resolution a party chooses which vote records to present to the
 resolver. The resolver must check that:
 
-- each ballot belongs to this resolver and refers to the same resolution;
-- each ballot is counted once;
+- each vote record belongs to this resolver and refers to the same resolution;
+- each vote record is counted once;
 - each voter has the right to vote, and counts with the weight that their voting rights give them;
-- each ballot is counted by the;
-- all the ballots refer to the for the same action(s).
+- each vote record is counted by the;
+- all the vote records refer to the for the same action(s).
 
 
 ### 4.2. Authenticity of targets and voting rights
@@ -197,7 +197,7 @@ signed itself. This applies to every contract that a governance flow reads or ac
 - A target, if the execution acts on the copy and the real target does not change.
 - A voting right, a self-signed voting-right contract gives its creator voting
   power they do not have.
-- A ballot, a vote can only be trusted by the parties that signed it.
+- A vote record, a vote can only be trusted by the parties that signed it.
 
 
 ### 4.3. State drift between the decision and the execution

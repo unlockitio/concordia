@@ -1,0 +1,46 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Governance.Tests.Casters where
+
+import DA.Assert ((===))
+import DA.Map (Map)
+import qualified DA.Map as Map
+import qualified DA.Set as Set
+import Daml.Script
+
+import Cap.Governance.Types (OwnerId, Vote (..))
+import Cap.Governance.Utils.VoteRecords
+
+
+-- | A vote record signed by the parties that cast it. Only its signatories and votes
+-- are read, so the other IsVoteRecord methods are stubs.
+template SignedVoteRecord
+  with
+    signers : [Party]
+    votes : Map OwnerId (Vote Text)
+  where
+    signatory signers
+
+instance IsVoteRecord SignedVoteRecord Text where
+  votesOf ballot = ballot.votes
+  snapshotsOf _ = Map.empty
+  actionOf _ = error "a SignedVoteRecord names no action"
+  consume _ = pure ()
+
+
+-- A vote record counts for an owner when any one of its casters signed it; being a
+-- caster of another owner, or of none, is not enough.
+validVoteRecordCastersNeedsACasterOfTheOwner : Script ()
+validVoteRecordCastersNeedsACasterOfTheOwner = do
+  [operator, second, other] <- forA ["operator", "second", "other"] $ \n ->
+    allocateParty ("casters-signed-" <> n)
+  let casters = Map.fromList
+        [ ("sv-1", Set.fromList [operator, second])
+        , ("sv-2", Set.fromList [other])
+        ]
+      ballot signers ownerId = SignedVoteRecord with signers; votes = Map.singleton ownerId (Voted "yes")
+  validVoteRecordCasters casters (ballot [second] "sv-1") === []
+  validVoteRecordCasters casters (ballot [other] "sv-1")
+    === ["no caster of the voter \"sv-1\" signed the vote record"]
+  validVoteRecordCasters casters (ballot [operator] "sv-3")
+    === ["no caster of the voter \"sv-3\" signed the vote record"]

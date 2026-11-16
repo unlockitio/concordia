@@ -1,0 +1,81 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | The resolver interface: lets a client or another contract cast a vote on,
+-- and resolve, a resolution of a resolver whose template it does not know.
+--
+-- A vote can be cast through a VoteTopic, which pins one decision and its
+-- action, or directly through Resolver_CastVote, which needs no topic: a
+-- confirmation that names its own action, or a standing vote with no action.
+-- An implementation chooses which it offers.
+--
+-- The implementation dispatches on resolution.mechanism, and checks that the
+-- resolution names this resolver. What a vote looks like is documented per
+-- mechanism name; extraArgs carries what the mechanism needs to read, which
+-- the app serves to its clients with the contracts to disclose.
+module Cap.Governance.ResolverV1 where
+
+import Prelude hiding (Action)
+
+import Splice.Api.Token.MetadataV1
+
+import Cap.Core.Types (ResolutionInfo)
+import Cap.Governance.ActionV1 (Action)
+import Cap.Governance.ExecutableV1 (Executable)
+import Cap.Governance.Types (OwnerId, Reason, ResolutionStatus, Vote)
+import Cap.Governance.VoteRecordV1 (VoteRecord)
+
+
+data ResolverView = ResolverView
+  with
+    keyId : Text           -- with the signatories, the AuthenticKey that ResolutionInfo.resolver names
+    mechanisms : [Text]    -- the mechanism names it resolves
+    meta : Metadata
+  deriving (Eq, Show)
+
+data Resolver_CastVoteResult = Resolver_CastVoteResult
+  with
+    created : [AnyContractId]  -- the vote record created or updated
+    meta : Metadata
+  deriving (Eq, Show)
+
+data Resolver_ResolveResult = Resolver_ResolveResult
+  with
+    status : ResolutionStatus             -- how the resolution ended
+    outcome : Optional AnyValue           -- the outcome, when one was reached
+    executions : [ContractId Executable]  -- what authorizing the action created
+    meta : Metadata
+  deriving (Eq, Show)
+
+
+interface Resolver where
+  viewtype ResolverView
+
+  resolver_castVoteImpl : ContractId Resolver -> Resolver_CastVote -> Update Resolver_CastVoteResult
+
+  resolver_resolveImpl : ContractId Resolver -> Resolver_Resolve -> Update Resolver_ResolveResult
+
+  -- | Casts a vote for the owner in the resolution. The caster is the party
+  -- submitting it: the implementation checks that it is a caster of the
+  -- owner. action names what the vote is for when no topic pins it.
+  nonconsuming choice Resolver_CastVote : Resolver_CastVoteResult
+    with
+      caster : Party
+      ownerId : OwnerId
+      resolution : ResolutionInfo
+      vote : Vote AnyValue
+      action : Optional (ContractId Action)
+      reason : Optional Reason
+      extraArgs : ExtraArgs
+    controller caster
+    do resolver_castVoteImpl this self (Resolver_CastVote with ..)
+
+  -- | Runs the mechanism of the resolution on the presented vote records and
+  -- authorizes the action when an outcome is reached.
+  nonconsuming choice Resolver_Resolve : Resolver_ResolveResult
+    with
+      actors : [Party]
+      resolution : ResolutionInfo
+      voteRecordCids : [ContractId VoteRecord]
+      extraArgs : ExtraArgs
+    controller actors
+    do resolver_resolveImpl this self (Resolver_Resolve with ..)

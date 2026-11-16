@@ -20,7 +20,7 @@ import Cap.Governance.ActionV1
 import Cap.Governance.ExecutableV1
 import Cap.Governance.Utils
   ( HasState (..), fetchTargetMatchingIdentity, fetchTargetMatchingSnapshot, mergeSnapshotsWithoutConflicts
-  , readIdentity, readState, presentedTargetsMatchSnapshots, unchanged )
+  , readIdentity, readState, validTargetsForSnapshots, unchanged )
 
 import Cap.Examples.BabyDso.Ans
 import Cap.Examples.BabyDso.Config
@@ -138,7 +138,7 @@ template FeeUpdate
       executable_cancelImpl _ = abort "this execution cannot be cancelled"
 
       executable_executeImpl targetCids _ = do
-        requireMet (presentedTargetsMatchSnapshots snapshots targetCids)
+        requireMet (validTargetsForSnapshots snapshots targetCids)
         (configCid, _) <- fetchTargetMatchingSnapshot @AmuletConfig unchanged
           (configTargetKey amuletAuthority) snapshots targetCids
         (ansCid, _) <- fetchTargetMatchingIdentity @AnsRules (ansTargetKey dso) snapshots targetCids

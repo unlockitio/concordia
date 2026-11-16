@@ -10,7 +10,15 @@ import qualified DA.Set as Set
 import DA.Time (addRelTime, days)
 import Daml.Script
 
-import Cap.Governance.Utils (Verdict (..))
+import qualified DA.TextMap as TextMap
+
+import Splice.Api.Token.MetadataV1 (AnyValue (..), ChoiceContext (..), ExtraArgs (..), emptyMetadata)
+
+import Cap.Governance.VoteTopicV1 (VoteTopicView (..), VoteTopic_CastVote (..), VoteTopic_CastVoteResult (..))
+import qualified Cap.Governance.VoteTopicV1 as VoteTopicV1
+import Cap.Governance.Types (Vote (..))
+import Cap.Governance.Utils.VotingRights (partyAsOwnerId)
+import Cap.Governance.Utils (Verdict (..), encodeTextVote)
 
 import Cap.Examples.MajorityVote.Ballot
 import Cap.Examples.MajorityVote.Config
@@ -214,3 +222,35 @@ theOperatorCannotSkipTheCount = do
 
   setting <- settingNow f
   setting === openingSetting
+
+
+-- A wallet that knows only the VoteTopic interface reads the topic and
+-- casts on the voter's private ballot, passed in the choice context. A voter
+-- cannot cast on another voter's ballot.
+voterCastsThroughTheVoteTopicInterface : Script ()
+voterCastsThroughTheVoteTopicInterface = do
+  round <- openRound "proposal-interface"
+  let f = round.fixture
+      proposalCid = toInterfaceContractId @VoteTopicV1.VoteTopic f.proposalCid
+
+  Some proposal <- queryInterfaceContractId f.alice proposalCid
+  proposal.resolution.mechanism === majorityMechanismName
+  proposal.proposer === partyAsOwnerId f.alice
+  proposal.subject === configSubject
+
+  setTime f.terms.entryClosesAt
+  let castOn voter ballotCid = exerciseCmd proposalCid VoteTopic_CastVote with
+        caster = voter
+        ownerId = partyAsOwnerId voter
+        vote = encodeTextVote (Voted yay)
+        reason = None
+        extraArgs = ExtraArgs with
+          context = ChoiceContext with
+            values = TextMap.fromList [(ballotContextKey, AV_ContractId (coerceContractId ballotCid))]
+          meta = emptyMetadata
+  submitMustFail f.bob (castOn f.bob round.aliceBallot)
+  result <- submit f.bob (castOn f.bob round.bobBallot)
+
+  [created] <- pure result.created
+  Some ballot <- queryContractId f.bob (coerceContractId created : ContractId PrivateBallot)
+  ballot.vote === Some yay

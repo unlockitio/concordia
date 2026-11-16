@@ -10,18 +10,17 @@ import Cap.Governance.Utils.Count
 
 
 data Voters = Voters with
-    alice : Party
-    bob : Party
-    carol : Party
-    dave : Party
+    alice : OwnerId
+    bob : OwnerId
+    carol : OwnerId
+    dave : OwnerId
 
 votersIn : Text -> Script Voters
-votersIn ns = do
-  alice <- allocateParty (ns <> "-alice")
-  bob <- allocateParty (ns <> "-bob")
-  carol <- allocateParty (ns <> "-carol")
-  dave <- allocateParty (ns <> "-dave")
-  pure Voters with ..
+votersIn ns = pure Voters with
+  alice = ns <> "-alice"
+  bob = ns <> "-bob"
+  carol = ns <> "-carol"
+  dave = ns <> "-dave"
 
 cast : Decimal -> Vote a -> Cast a
 cast weight vote = Cast with weight; vote

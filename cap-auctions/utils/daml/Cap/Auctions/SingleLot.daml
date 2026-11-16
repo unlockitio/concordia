@@ -7,7 +7,7 @@ module Cap.Auctions.SingleLot
   ( SingleLotAuctionTerms (..)
   , expectSingleLot
   , validSingleLotQuotes
-  , quotesReserved
+  , validQuoteReserve
   , validSingleLotBid
   , ignoreInvalidSingleLotBids
   , PricingRule
@@ -46,8 +46,8 @@ import Cap.Auctions.Types
 import Cap.Auctions.Clearing (Award (..), awardAmountPerQuote)
 import Cap.Auctions.Funding
   ( AllocationsCheck, buildBatchesByAccount, ignoreFailingAllocations
-  , accountSignedBid, bidForResolution, distinctAccountsAmongBids, emptyTransferLegAllocations
-  , noPrincipalAccountsInBid, validFundingTerms
+  , validBidSignatory, validBidResolution, distinctAccountsAmongBids, validEmptyTransferLegs
+  , validBidAccounts, validFundingTerms
   , SettleBatchContext, lastIterationFinalizer, settleBatches, unsettledAllocations
   )
 
@@ -112,8 +112,8 @@ validSingleLotQuotes terms bid =
 -- the quotes within the reserve price can need: the price times the amount of
 -- every such quote in a forward auction, and the amount of every such quote in
 -- a reverse auction. Quotes outside the reserve price are never awarded.
-quotesReserved : HasSingleLotQuotes t => SingleLotAuctionTerms -> AllocationsCheck t
-quotesReserved terms bid fundings =
+validQuoteReserve : HasSingleLotQuotes t => SingleLotAuctionTerms -> AllocationsCheck t
+validQuoteReserve terms bid fundings =
   case Map.lookup sentInstrument.admin fundings of
     None -> []
     Some (funding, v) ->
@@ -147,12 +147,12 @@ validSingleLotBid
   -> t -> Map Party (Funding, Alloc.AllocationView) -> Unmet
 validSingleLotBid resolutionInfo settlement terms schedule singleLotTerms bid fetchedFundings =
   concat
-    [ bidForResolution resolutionInfo bid
-    , accountSignedBid bid
+    [ validBidResolution resolutionInfo bid
+    , validBidSignatory bid
     , validSingleLotQuotes singleLotTerms bid
     , validFundingTerms settlement terms schedule bid fetchedFundings
-    , emptyTransferLegAllocations bid fetchedFundings
-    , quotesReserved singleLotTerms bid fetchedFundings
+    , validEmptyTransferLegs bid fetchedFundings
+    , validQuoteReserve singleLotTerms bid fetchedFundings
     ]
 
 -- | Ignores every bid that fails a check: the checks of validSingleLotBid
@@ -170,15 +170,15 @@ ignoreInvalidSingleLotBids
   -> ContractFilter t
 ignoreInvalidSingleLotBids settlement terms schedule singleLotTerms principalFundings = applyFilters
   [ ignoreFailing
-      [ accountSignedBid
-      , noPrincipalAccountsInBid principalFundings
+      [ validBidSignatory
+      , validBidAccounts principalFundings
       , validSingleLotQuotes singleLotTerms
       ]
       []
   , ignoreFailingAllocations
       [ validFundingTerms settlement terms schedule
-      , emptyTransferLegAllocations
-      , quotesReserved singleLotTerms
+      , validEmptyTransferLegs
+      , validQuoteReserve singleLotTerms
       ]
   , ignoreFailing [] [distinctAccountsAmongBids]
   ]

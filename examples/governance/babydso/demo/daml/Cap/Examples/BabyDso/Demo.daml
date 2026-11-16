@@ -7,9 +7,15 @@ import DA.List (sort)
 import qualified DA.Map as Map
 import Daml.Script hiding (AnyContractId)
 
+import Splice.Api.Token.MetadataV1 (ExtraArgs (..), emptyChoiceContext, emptyMetadata)
+
+import Cap.Governance.VoteTopicV1
+import Cap.Governance.Types (Vote (..))
+import Cap.Governance.Utils.VotingRights (partyAsOwnerId)
 import Cap.Governance.Utils (Verdict (..))
 
 import Cap.Examples.BabyDso.Config
+import Cap.Examples.BabyDso.Submission (SharedBallot, encodeParametersVote, weightedVoteMechanismName)
 
 import Cap.Examples.BabyDso.Demo.Fixture
 
@@ -20,7 +26,7 @@ svsSetBothFees = do
 
   opened <- openVoteAs f f.sv1 (feeVote 0.05 2.0)
   Some ballot <- queryContractId f.sv1 opened
-  ballot.openingWeights === Map.fromList [(f.sv1, 5.0), (f.sv2, 3.0), (f.sv3, 1.0)]
+  ballot.openingWeights === Map.fromList [(partyAsOwnerId f.sv1, 5.0), (partyAsOwnerId f.sv2, 3.0), (partyAsOwnerId f.sv3, 1.0)]
 
   withSv2 <- castAs f f.sv2 opened (feeVote 0.06 2.5)
   ballotCid <- castAs f f.sv3 withSv2 (feeVote 0.09 4.0)
@@ -64,3 +70,31 @@ svsConfirmBothFees = do
   feesNow f >>= (=== (0.04, 1.5))
   [(_, config)] <- query @AmuletConfig f.amuletAuthority
   config.epoch === openingEpoch + 1
+
+
+-- A wallet that knows only the VoteTopic interface reads what is decided and
+-- casts on it. An SV cannot cast for another SV's OwnerId.
+svCastsThroughTheVoteTopicInterface : Script ()
+svCastsThroughTheVoteTopicInterface = do
+  f <- setupAs "proposal-interface"
+  opened <- openVoteAs f f.sv1 (feeVote 0.05 2.0)
+  let proposalCid = toInterfaceContractId @VoteTopic opened
+
+  Some proposal <- queryInterfaceContractId f.sv2 proposalCid
+  proposal.resolution.mechanism === weightedVoteMechanismName
+  proposal.proposer === partyAsOwnerId f.sv1
+  proposal.subject === feeSubject
+  proposal.voteBefore === Some f.terms.votingClosesAt
+
+  let castFor ownerId = exerciseCmd proposalCid VoteTopic_CastVote with
+        caster = f.sv2
+        ownerId
+        vote = encodeParametersVote (Voted (feeVote 0.06 2.5))
+        reason = None
+        extraArgs = ExtraArgs with context = emptyChoiceContext; meta = emptyMetadata
+  submitMustFail (actAs f.sv2 <> readAs f.dso) (castFor (partyAsOwnerId f.sv3))
+  result <- submit (actAs f.sv2 <> readAs f.dso) (castFor (partyAsOwnerId f.sv2))
+
+  [created] <- pure result.created
+  Some cast <- queryContractId f.sv1 (coerceContractId created : ContractId SharedBallot)
+  Map.keys cast.votes === sort [f.sv1, f.sv2]

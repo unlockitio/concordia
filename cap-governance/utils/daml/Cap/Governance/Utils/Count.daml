@@ -3,6 +3,7 @@
 module Cap.Governance.Utils.Count
   ( -- * Casts
     Vote (..)
+  , OwnerId
   , Cast (..)
   , Casts
   , isPresent
@@ -39,7 +40,7 @@ import DA.Map (Map)
 import qualified DA.Map as Map
 import DA.Optional (mapOptional)
 import Cap.Core.Utils (uniformOptional)
-import Cap.Governance.BallotV1 (Vote (..))
+import Cap.Governance.Types (OwnerId, Vote (..))
 
 
 data Cast a = Cast
@@ -48,8 +49,8 @@ data Cast a = Cast
     vote : Vote a
   deriving (Eq, Show)
 
--- | One cast per eligible voter.
-type Casts a = Map Party (Cast a)
+-- | One cast per eligible OwnerId.
+type Casts a = Map OwnerId (Cast a)
 
 isPresent : Vote a -> Bool
 isPresent Absent = False

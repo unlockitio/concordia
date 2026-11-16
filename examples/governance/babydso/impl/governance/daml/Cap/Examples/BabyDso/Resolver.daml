@@ -16,16 +16,20 @@ import Splice.Api.Token.MetadataV1
 import Splice.Util (HasCheckedFetch (..), fetchChecked, require)
 
 import Cap.Core.Types (AuthenticKey (..), ExecutionAction (..), ExecutionCore (..), ResolutionInfo (..))
+import Cap.Governance.Types (VotingRight (..))
 import Cap.Core.Utils
   ( IsAnyValue (..), fetchGroup, requireClosed, requireMet, requireMetFrom, requireResolvedBy, signedKey )
 import Cap.Governance.ActionV1
-import Cap.Governance.BallotV1 (Ballot)
+import Cap.Governance.VoteRecordV1 (VoteRecord)
 import Cap.Governance.ExecutableV1 (Executable)
+import Cap.Governance.Types (Reason)
+import Cap.Governance.Utils.VotingRights
+  ( HasVotingRights (..), equalWeights, fetchVotingRightsPerContract, partyAsOwnerId, validWeights, weightsOf )
 import Cap.Governance.Utils
-  ( Cast (..), HasVotingRights (..), Tally, Verdict (..), Vote (..), atLeastShareOfTotal, atLeastVotes
-  , casts, consumeBallots, decide, distinctVotersAmongBallots, equalWeights, expectUniformAction
-  , expectUniformSnapshots, fetchWeightsPerContract, nonNegativeWeights, snapshotStates, unanimous
-  , votersEligible, votesDecodable, weightedMedian )
+  ( Cast (..), Tally, Verdict (..), Vote (..), atLeastShareOfTotal, atLeastVotes
+  , casts, consumeVoteRecords, decide, distinctVotersAmongVoteRecords, expectUniformAction
+  , expectUniformSnapshots, snapshotStates, unanimous
+  , validVoteRecordVoters, validVoteEncoding, weightedMedian )
 
 import Cap.Examples.BabyDso.Rights
 import Cap.Examples.BabyDso.Submission
@@ -54,6 +58,7 @@ template DsoResolver
     nonconsuming choice DsoResolver_OpenVote : ContractId SharedBallot
       with
         proposer : Party
+        subject : Reason
         resolution : ResolutionInfo
         actionCid : ContractId Action
         rightCids : Map RightKey (ContractId SvWeightSource)
@@ -65,13 +70,13 @@ template DsoResolver
       do
         requireResolvedBy (resolverKey this) (coerceContractId self) resolution
         require ("the resolution names the mechanism " <> weightedVoteMechanismName) (resolution.mechanism == weightedVoteMechanismName)
-        openingWeights <- fetchWeightsPerContract rightKeys rightCids
+        openingWeights <- weightsOf <$> fetchVotingRightsPerContract rightKeys rightCids
         require "the proposer is a voter: it holds weight at opening"
-          (proposer `Map.member` openingWeights)
+          (partyAsOwnerId proposer `Map.member` openingWeights)
         action <- fetch actionCid
         snapshots <- snapshotStates action targetCids
         create SharedBallot with
-          dso; svs; resolution; actionCid; votingClosesAt; expiresAt; openingWeights
+          dso; svs; resolution; proposer; subject; actionCid; votingClosesAt; expiresAt; openingWeights
           snapshots = snapshots
           votes = Map.singleton proposer vote
 
@@ -86,7 +91,7 @@ template DsoResolver
         requireResolvedBy (resolverKey this) (coerceContractId self) resolution
         require ("the resolution names the mechanism " <> weightedVoteMechanismName) (resolution.mechanism == weightedVoteMechanismName)
         ballot <- fetchChecked resolution ballotCid
-        consumeBallots [toInterfaceContractId @Ballot ballotCid]
+        consumeVoteRecords [toInterfaceContractId @VoteRecord ballotCid]
         resolveWeightedVote this ballot
 
     nonconsuming choice DsoResolver_Confirm : ContractId SvConfirmation
@@ -120,7 +125,7 @@ template DsoResolver
         require ("the resolution names the mechanism " <> confirmationMechanismName) (resolution.mechanism == confirmationMechanismName)
         presented <- fetchGroup resolution confirmationCids
         let (cids, confirmations) = unzip presented
-        consumeBallots (map (toInterfaceContractId @Ballot) cids)
+        consumeVoteRecords (map (toInterfaceContractId @VoteRecord) cids)
         resolveConfirmations this confirmations
 
 resolverKey : DsoResolver -> AuthenticKey
@@ -141,7 +146,8 @@ instance HasCheckedFetch SvWeightSource RightKey where
     sv = source.sv
 
 instance HasVotingRights SvWeightSource where
-  rightsOf source = Map.singleton source.sv source.weight
+  rightsOf source = Map.singleton (partyAsOwnerId source.sv)
+    (VotingRight with weight = source.weight; casters = Set.singleton source.sv)
 
 
 resolveWeightedVote
@@ -154,13 +160,13 @@ resolveWeightedVote resolver ballot = do
   let actionCid = ballot.actionCid
       snapshots = ballot.snapshots
   -- The window and the opening weights are read from the typed ballot; the
-  -- votes are counted through the Ballot interface.
+  -- votes are counted through the VoteRecord interface.
   let weights = ballot.openingWeights
-      ballots = [toInterface @Ballot ballot]
-  requireMet (nonNegativeWeights weights)
+      ballots = [toInterface @VoteRecord ballot]
+  requireMet (validWeights weights)
   requireMetFrom
-    [votesDecodable decodeParametersVote, votersEligible (Set.fromList (Map.keys weights))]
-    [distinctVotersAmongBallots]
+    [validVoteEncoding decodeParametersVote, validVoteRecordVoters (Set.fromList (Map.keys weights))]
+    [distinctVotersAmongVoteRecords]
     ballots
   let counted = casts decodeParametersVote weights ballots
       verdict = decide (atLeastShareOfTotal 2 3) weightedMedianByField counted
@@ -205,13 +211,14 @@ resolveConfirmations resolver confirmations = do
   now <- getTime
   require "no confirmation has expired" (all ((now <) . (.expiresAt)) confirmations)
   -- The expiry is read from the typed confirmations; the votes are counted
-  -- through the Ballot interface. A confirmation's vote is the outcome itself,
+  -- through the VoteRecord interface. A confirmation's vote is the outcome itself,
   -- so it is decoded with Some.
-  let ballots = map (toInterface @Ballot) confirmations
+  let ballots = map (toInterface @VoteRecord) confirmations
       actionCid = expectUniformAction ballots
       snapshots = expectUniformSnapshots ballots
-  requireMetFrom [votersEligible resolver.svs] [distinctVotersAmongBallots] ballots
-  let counted = casts Some (equalWeights resolver.svs) ballots
+  let voters = Set.fromList (map partyAsOwnerId (Set.toList resolver.svs))
+  requireMetFrom [validVoteRecordVoters voters] [distinctVotersAmongVoteRecords] ballots
+  let counted = casts Some (equalWeights voters) ballots
       verdict = decide (atLeastVotes (byzantineQuorum (Set.size resolver.svs))) unanimous counted
   outcome <- case verdict of
     Decided outcome -> pure outcome

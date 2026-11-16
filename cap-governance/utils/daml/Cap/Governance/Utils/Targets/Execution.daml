@@ -15,10 +15,10 @@ module Cap.Governance.Utils.Targets.Execution
   , bothOf
 
     -- * Checks
-  , presentedTargetsMatchSnapshots
-  , targetCidMatches
-  , targetStateMatches
-  , identityOnlySnapshot
+  , validTargetsForSnapshots
+  , validCidForSnapshot
+  , validStateForSnapshot
+  , validSnapshotWithoutState
 
     -- * Fetching targets
   , fetchTargetMatchingSnapshot
@@ -61,8 +61,8 @@ bothOf p q snapshot live = p snapshot live && q snapshot live
 -- | Validates that the presented targets are exactly the snapshotted ones:
 -- every snapshotted target presented, and nothing presented that has no
 -- snapshot.
-presentedTargetsMatchSnapshots : (Ord k, Show k) => Map k a -> Map k b -> Unmet
-presentedTargetsMatchSnapshots snapshots targetCids =
+validTargetsForSnapshots : (Ord k, Show k) => Map k a -> Map k b -> Unmet
+validTargetsForSnapshots snapshots targetCids =
   [ "the snapshotted target " <> show key <> " was not presented"
   | key <- Map.keys snapshots
   , not (Map.member key targetCids)
@@ -74,8 +74,8 @@ presentedTargetsMatchSnapshots snapshots targetCids =
 
 -- | Validates that the presented contract is the one the snapshot recorded,
 -- when it records one.
-targetCidMatches : AuthenticKey -> Snapshot -> AnyContractId -> Unmet
-targetCidMatches key snapshot cid =
+validCidForSnapshot : AuthenticKey -> Snapshot -> AnyContractId -> Unmet
+validCidForSnapshot key snapshot cid =
   [ "the contract presented for the target " <> show key
       <> " is not the one its snapshot recorded: presented " <> show cid
       <> ", recorded " <> show snapshot.cid
@@ -84,8 +84,8 @@ targetCidMatches key snapshot cid =
 
 -- | Validates that the live state satisfies the snapshotted state under the
 -- drift policy, when the snapshot records a state.
-targetStateMatches : IsAnyValue a => DriftPolicy a -> AuthenticKey -> Snapshot -> a -> Unmet
-targetStateMatches driftPolicy key snapshot live = case snapshot.state of
+validStateForSnapshot : IsAnyValue a => DriftPolicy a -> AuthenticKey -> Snapshot -> a -> Unmet
+validStateForSnapshot driftPolicy key snapshot live = case snapshot.state of
   None -> []
   Some raw -> case fromAnyValue raw of
     None -> ["the snapshot state of " <> show key <> " does not decode"]
@@ -95,8 +95,8 @@ targetStateMatches driftPolicy key snapshot live = case snapshot.state of
       ]
 
 -- | Validates that the snapshot records no state, only the target's identity.
-identityOnlySnapshot : AuthenticKey -> Snapshot -> Unmet
-identityOnlySnapshot key snapshot =
+validSnapshotWithoutState : AuthenticKey -> Snapshot -> Unmet
+validSnapshotWithoutState key snapshot =
   [ "the target " <> show key <> " is not snapshotted by identity alone"
   | not (isNone snapshot.state)
   ]
@@ -113,9 +113,9 @@ fetchTargetMatchingSnapshot
   -> Update (ContractId t, t)
 fetchTargetMatchingSnapshot driftPolicy key snapshots targetCids = do
   let (snapshot, cid) = expectPresentedSnapshot key snapshots targetCids
-  requireMet (targetCidMatches key snapshot cid)
+  requireMet (validCidForSnapshot key snapshot cid)
   (typed, contract) <- fetchCheckedAny @t key cid
-  requireMet (targetStateMatches driftPolicy key snapshot (stateOf contract))
+  requireMet (validStateForSnapshot driftPolicy key snapshot (stateOf contract))
   pure (typed, contract)
 
 -- | Checks one presented target snapshotted by identity alone: the
@@ -126,7 +126,7 @@ fetchTargetMatchingIdentity
   -> Update (ContractId t, t)
 fetchTargetMatchingIdentity key snapshots targetCids = do
   let (snapshot, cid) = expectPresentedSnapshot key snapshots targetCids
-  requireMet (targetCidMatches key snapshot cid <> identityOnlySnapshot key snapshot)
+  requireMet (validCidForSnapshot key snapshot cid <> validSnapshotWithoutState key snapshot)
   fetchCheckedAny @t key cid
 
 -- | The snapshot of a target and the contract presented for it. Fails if the

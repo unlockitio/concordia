@@ -78,28 +78,28 @@ test_validDutchClock_eachCondition = do
   validDutchClock Reverse 5.0 (clock 5.0 1.0) === []
 
 
--- Testing dutchClockReachesReserveBy
+-- Testing validDutchClockDeadline
 -------------------------------------
 
 -- A clock that is still above the reserve just before closing is reported.
 test_dutchClockReachesReserveBy_slowClock : Script ()
 test_dutchClockReachesReserveBy_slowClock = do
   let closesAt = at (hours 2)
-  dutchClockReachesReserveBy Forward 5.0 (clock 10.0 1.0) t0 closesAt
+  validDutchClockDeadline Forward 5.0 (clock 10.0 1.0) t0 closesAt
     === ["the clock does not reach the reserve price before " <> show closesAt]
 
 -- A clock that reaches the reserve only at closing, when no one can quote, is reported.
 test_dutchClockReachesReserveBy_reserveOnlyAtClose : Script ()
 test_dutchClockReachesReserveBy_reserveOnlyAtClose = do
   let closesAt = at (hours 2)
-  dutchClockReachesReserveBy Forward 5.0 (clock 7.0 1.0) t0 closesAt
+  validDutchClockDeadline Forward 5.0 (clock 7.0 1.0) t0 closesAt
     === ["the clock does not reach the reserve price before " <> show closesAt]
 
 -- A clock that reaches the reserve before closing passes in both directions.
 test_dutchClockReachesReserveBy_reserveBeforeClose : Script ()
 test_dutchClockReachesReserveBy_reserveBeforeClose = do
-  dutchClockReachesReserveBy Forward 5.0 (clock 7.0 1.0) t0 (at (microseconds 7200000001)) === []
-  dutchClockReachesReserveBy Reverse 5.0 (clock 3.0 1.0) t0 (at (microseconds 7200000001)) === []
+  validDutchClockDeadline Forward 5.0 (clock 7.0 1.0) t0 (at (microseconds 7200000001)) === []
+  validDutchClockDeadline Reverse 5.0 (clock 3.0 1.0) t0 (at (microseconds 7200000001)) === []
 
 
 -- Testing englishClockPrice
@@ -134,18 +134,18 @@ test_validEnglishClock_startShortOfReserve = do
   validEnglishClock Reverse 5.0 (clock 6.0 1.0) === ["the start price is short of the reserve price"]
 
 
--- Testing quotesAtClockPrice
+-- Testing validQuotesAtClockPrice
 -----------------------------
 
 -- Each quote that is not at the clock price is reported.
 test_quotesAtClockPrice_eachOffPriceQuote : Script ()
 test_quotesAtClockPrice_eachOffPriceQuote = do
-  quotesAtClockPrice 7.0
+  validQuotesAtClockPrice 7.0
     [ (Quote with price = 7.0; amount = 1.0)
     , (Quote with price = 7.0; amount = 2.0)
     ]
     === []
-  quotesAtClockPrice 7.0
+  validQuotesAtClockPrice 7.0
     [ (Quote with price = 6.0; amount = 1.0)
     , (Quote with price = 7.0; amount = 2.0)
     , (Quote with price = 8.0; amount = 1.0)
@@ -154,19 +154,19 @@ test_quotesAtClockPrice_eachOffPriceQuote = do
         , "the quote price 8.0 is not the clock price 7.0" ]
 
 
--- Testing quotesAppended
+-- Testing validQuoteAppend
 -------------------------
 
 -- Adding quotes after the existing ones is accepted.
 test_quotesAppended_appendOnly : Script ()
 test_quotesAppended_appendOnly = do
-  quotesAppended [(Quote with price = 9.0; amount = 1.0)]
+  validQuoteAppend [(Quote with price = 9.0; amount = 1.0)]
     [ (Quote with price = 9.0; amount = 1.0)
     , (Quote with price = 8.0; amount = 2.0)
     ]
     === []
-  quotesAppended [] [(Quote with price = 9.0; amount = 1.0)] === []
-  quotesAppended
+  validQuoteAppend [] [(Quote with price = 9.0; amount = 1.0)] === []
+  validQuoteAppend
     [(Quote with price = 9.0; amount = 1.0)]
     [(Quote with price = 9.0; amount = 1.0)]
     === []
@@ -178,14 +178,14 @@ test_quotesAppended_changedQuotes = do
         [ (Quote with price = 9.0; amount = 1.0)
         , (Quote with price = 8.0; amount = 2.0)
         ]
-  quotesAppended old
+  validQuoteAppend old
     [ (Quote with price = 9.0; amount = 1.0)
     , (Quote with price = 8.0; amount = 3.0)
     ]
     === ["the existing quotes are changed"]
-  quotesAppended old
+  validQuoteAppend old
     [ (Quote with price = 8.0; amount = 2.0)
     , (Quote with price = 9.0; amount = 1.0)
     ]
     === ["the existing quotes are changed"]
-  quotesAppended old [(Quote with price = 9.0; amount = 1.0)] === ["the existing quotes are changed"]
+  validQuoteAppend old [(Quote with price = 9.0; amount = 1.0)] === ["the existing quotes are changed"]

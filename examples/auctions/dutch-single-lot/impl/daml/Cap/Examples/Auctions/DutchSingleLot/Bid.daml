@@ -18,7 +18,7 @@ import Cap.Auctions.Bid
 import Cap.Auctions.SingleLotQuotesBid
 import Cap.Auctions.Funding (fetchFundingAllocations, settlementOf)
 import Cap.Auctions.SingleLot (expectSingleLot, validSingleLotBid)
-import Cap.Auctions.Clock (PriceClock, clockMeta, dutchClockPrice, quotesAppended, quotesAtClockPrice)
+import Cap.Auctions.Clock (PriceClock, clockMeta, dutchClockPrice, validQuoteAppend, validQuotesAtClockPrice)
 
 
 template DutchBidProposal
@@ -114,7 +114,7 @@ template DutchBid
         let price = dutchClockPrice singleLotTerms.direction singleLotTerms.lotTerms.reservePrice clock schedule.biddingOpensAt now
             newQuotes = drop (length quotes) arg.quotes
         require "the bid adds at least one claim" (not (null newQuotes))
-        requireMet (quotesAppended quotes arg.quotes <> quotesAtClockPrice price newQuotes)
+        requireMet (validQuoteAppend quotes arg.quotes <> validQuotesAtClockPrice price newQuotes)
         let newBid = this with quotes = arg.quotes
         fetchedFundings <- fetchFundingAllocations newBid.fundings
         requireMet (validSingleLotBid resolutionInfo (settlementOf resolutionInfo terms.allocationTerms.executors) terms schedule singleLotTerms newBid fetchedFundings)

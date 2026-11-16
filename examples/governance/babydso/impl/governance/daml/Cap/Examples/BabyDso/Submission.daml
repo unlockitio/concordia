@@ -16,20 +16,23 @@ import Splice.Api.Token.MetadataV1
 import Splice.Util (HasCheckedFetch (..), require)
 
 import Cap.Core.Types (AuthenticKey, Snapshot, ResolutionInfo (..))
+import Cap.Governance.Types (OwnerId, Reason, Vote (..))
 import Cap.Core.Utils (IsAnyValue (..))
 import Cap.Governance.ActionV1 (Action)
-import Cap.Governance.BallotV1 (Ballot, BallotView (..), Vote (..))
+import Cap.Governance.VoteRecordV1 (VoteRecord, VoteRecordView (..))
+import Cap.Governance.VoteTopicV1 (VoteTopic, VoteTopicView (..), VoteTopic_CastVote (..), VoteTopic_CastVoteResult (..))
+import Cap.Governance.Utils.VotingRights (partyAsOwnerId)
 
 
 confirmationMechanismName : Text
-confirmationMechanismName = "confirmation"
+confirmationMechanismName = "babydso.confirmation"
 
 weightedVoteMechanismName : Text
-weightedVoteMechanismName = "weighted-vote"
+weightedVoteMechanismName = "babydso.weighted-vote"
 
 
 ------------------  VOTE KINDS  ------------------
--- Both ballots are counted through the Ballot interface, so their votes are
+-- Both ballots are counted through the VoteRecord interface, so their votes are
 -- AnyValue in the view.
 --
 -- The weighted vote is a set of named numbers, such as the transfer fee and
@@ -58,15 +61,17 @@ template SharedBallot
     dso : Party
     svs : Set Party
     resolution : ResolutionInfo
+    proposer : Party
+    subject : Reason
     actionCid : ContractId Action
-    openingWeights : Map Party Decimal
+    openingWeights : Map OwnerId Decimal
     snapshots : Map AuthenticKey Snapshot
     votes : Map Party (TextMap Decimal)
     votingClosesAt : Time
     expiresAt : Time
   where
     signatory dso
-    observer Set.toList svs, Map.keys openingWeights
+    observer Set.toList svs
 
     ensure resolution.mechanism == weightedVoteMechanismName
       && sameParameters (Map.values votes)
@@ -80,7 +85,7 @@ template SharedBallot
         now <- getTime
         require "the voting window is open" (now < votingClosesAt)
         require "the voter has the right to vote: it holds weight at opening"
-          (voter `Map.member` openingWeights)
+          (partyAsOwnerId voter `Map.member` openingWeights)
         create this with votes = Map.insert voter vote votes
 
     choice SharedBallot_Expire : ()
@@ -89,12 +94,35 @@ template SharedBallot
         now <- getTime
         require "the shared ballot has expired" (now >= expiresAt)
 
-    interface instance Ballot for SharedBallot where
-      view = BallotView with
-        resolution; snapshots; actionCid
-        votes = fmap (encodeParametersVote . Voted) votes
+    interface instance VoteRecord for SharedBallot where
+      view = VoteRecordView with
+        resolution; snapshots; action = Some actionCid
+        votes = Map.fromList
+          [(partyAsOwnerId voter, encodeParametersVote (Voted vote)) | (voter, vote) <- Map.toList votes]
         consumers = [dso]
         meta = emptyMetadata
+
+    -- The proposal is the shared ballot itself: a cast recreates it with the
+    -- vote added. Each SV votes for its own OwnerId, and a weighted vote has
+    -- no abstention. Vote reasons are not kept.
+    interface instance VoteTopic for SharedBallot where
+      view = VoteTopicView with
+        resolution; subject
+        proposer = partyAsOwnerId proposer
+        action = Some actionCid
+        voteBefore = Some votingClosesAt
+        effectiveAt = None
+        meta = emptyMetadata
+      voteTopic_castVoteImpl self arg = do
+        require "the caster casts for its own OwnerId" (arg.ownerId == partyAsOwnerId arg.caster)
+        vote <- case decodeParametersVote arg.vote of
+          Some (Voted vote) -> pure vote
+          _ -> abort "a weighted vote is a map of named decimals, and cannot abstain"
+        cid <- exercise (fromInterfaceContractId @SharedBallot self) SharedBallot_Cast with
+          voter = arg.caster; vote
+        pure VoteTopic_CastVoteResult with
+          created = [coerceContractId cid]
+          meta = emptyMetadata
 
 instance HasCheckedFetch SharedBallot ResolutionInfo where
   contractGroupId ballot = ballot.resolution
@@ -121,10 +149,10 @@ template SvConfirmation
         now <- getTime
         require "the confirmation has expired" (now >= expiresAt)
 
-    interface instance Ballot for SvConfirmation where
-      view = BallotView with
-        resolution; snapshots; actionCid
-        votes = Map.singleton confirmer (Voted vote)
+    interface instance VoteRecord for SvConfirmation where
+      view = VoteRecordView with
+        resolution; snapshots; action = Some actionCid
+        votes = Map.singleton (partyAsOwnerId confirmer) (Voted vote)
         consumers = [dso]
         meta = emptyMetadata
 

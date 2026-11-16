@@ -13,7 +13,7 @@ module Cap.Governance.Utils.Targets.Snapshots
   , readIdentity
 
     -- * Taking snapshots
-  , presentedTargetsNamedByAction
+  , validTargetsForAction
   , snapshotStates
   , snapshotCids
   , snapshotStatesWith
@@ -69,8 +69,8 @@ readIdentity key cid = do
 -- target they present.
 
 -- | Validates that every presented target is one the action names.
-presentedTargetsNamedByAction : Map AuthenticKey Snapshot -> Map AuthenticKey AnyContractId -> Unmet
-presentedTargetsNamedByAction actionSnapshots targetCids =
+validTargetsForAction : Map AuthenticKey Snapshot -> Map AuthenticKey AnyContractId -> Unmet
+validTargetsForAction actionSnapshots targetCids =
   [ "the action names no presented target " <> show key
   | key <- Map.keys targetCids
   , not (Map.member key actionSnapshots)
@@ -84,7 +84,7 @@ snapshotStatesWith
   : TargetReader -> Map AuthenticKey Snapshot -> Map AuthenticKey AnyContractId
   -> Update (Map AuthenticKey Snapshot)
 snapshotStatesWith targetReader actionSnapshots targetCids = do
-  requireMet (presentedTargetsNamedByAction actionSnapshots targetCids)
+  requireMet (validTargetsForAction actionSnapshots targetCids)
   Map.fromList . catOptionals <$> forA (Map.keys (Map.filter open actionSnapshots)) (\key -> do
     let cid = fromSomeNote ("a target the action names was not presented: " <> show key)
           (Map.lookup key targetCids)
@@ -101,7 +101,7 @@ snapshotCidsWith
   : TargetReader -> Map AuthenticKey Snapshot -> Map AuthenticKey AnyContractId
   -> Update (Map AuthenticKey Snapshot)
 snapshotCidsWith targetReader actionSnapshots targetCids = do
-  requireMet (presentedTargetsNamedByAction actionSnapshots targetCids)
+  requireMet (validTargetsForAction actionSnapshots targetCids)
   Map.fromList <$> forA (Map.keys (Map.filter (isNone . (.cid)) actionSnapshots)) (\key -> do
     let cid = fromSomeNote ("a target the action names was not presented: " <> show key)
           (Map.lookup key targetCids)

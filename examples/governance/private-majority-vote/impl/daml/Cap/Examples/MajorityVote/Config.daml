@@ -17,7 +17,7 @@ import Cap.Core.Utils (IsAnyValue (..), requireMet, signedKey)
 import Cap.Governance.ActionV1
 import Cap.Governance.ExecutableV1
 import Cap.Governance.Utils
-  ( HasState (..), TargetReader, fetchTargetMatchingSnapshot, mergeSnapshotsWithoutConflicts, readState, presentedTargetsMatchSnapshots )
+  ( HasState (..), TargetReader, fetchTargetMatchingSnapshot, mergeSnapshotsWithoutConflicts, readState, validTargetsForSnapshots )
 
 
 configId : Text
@@ -76,7 +76,7 @@ template ConfigUpdate
       executable_cancelImpl _ = abort "this execution cannot be cancelled"
 
       executable_executeImpl targetCids _ = do
-        requireMet (presentedTargetsMatchSnapshots snapshots targetCids)
+        requireMet (validTargetsForSnapshots snapshots targetCids)
         (configCid, _) <- fetchTargetMatchingSnapshot @Config (==) (configTargetKey dso) snapshots targetCids
         updated <- exercise configCid Config_Set with newSetting
         pure Executable_ExecuteResult with

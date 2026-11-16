@@ -1,20 +1,28 @@
 -- SPDX-License-Identifier: Apache-2.0
 
+-- | Voting rights: a weight per owner, and the parties that may cast for each
+-- owner, read from contracts a resolver trusts under keys it stores. They tell
+-- the resolver who the voters are, how much each vote weighs, and who may cast
+-- it.
 module Cap.Governance.Utils.VotingRights
   ( HasVotingRights (..)
 
     -- * Checks
-  , rightsUnderKeys
-  , nonNegativeWeights
+  , validVotingRightKeys
+  , validWeights
 
     -- * Fetching
   , fetchVotingRights
-  , fetchWeightsPerContract
-  , fetchVotersPerContract
-  , fetchWeightsFromOneContract
-  , fetchVotersFromOneContract
+  , fetchVotingRightsPerContract
+  , fetchVotingRightsFromOneContract
 
-    -- * Weights
+    -- * Reading voting rights
+  , weightsOf
+  , castersOf
+  , votersOf
+
+    -- * Owners
+  , partyAsOwnerId
   , equalWeights
   ) where
 
@@ -25,25 +33,29 @@ import qualified DA.Set as Set
 
 import Splice.Util (HasCheckedFetch, fetchChecked)
 
-import Cap.Core.Utils (Unmet, requireMet)
+import Cap.Governance.Types (OwnerId, VotingRight (..))
+import Cap.Core.Utils.Checks (Unmet, requireMet)
 
 
 ------------------  VOTING RIGHTS  ------------------
--- Used by a resolver to read voting rights/weight from contracts whose templates it knows.
+-- Used by a resolver to read voting rights from contracts whose templates it
+-- knows.
 
--- | The voting rights a contract carries: each holder and its weight.
+-- | The voting rights a contract grants: each owner's weight and the parties
+-- that may cast for it.
 class HasVotingRights t where
-  rightsOf : t -> Map Party Decimal
+  rightsOf : t -> Map OwnerId VotingRight
 
 
 ------------------  CHECKS  ------------------
--- Each check returns its unmet conditions. Voting rights are never ignored:
--- the fetches below abort on any of them.
+-- Each check returns its unmet conditions. Voting rights are never ignored: the
+-- fetches below abort on any of them.
 
--- | Validates that the presented voting rights are exactly the ones under the
--- right keys: every key presented, and nothing presented under another key.
-rightsUnderKeys : (Ord k, Show k) => Set k -> Map k c -> Unmet
-rightsUnderKeys rightKeys rightCids =
+-- | Validates that the presented voting rights contracts are exactly the ones under
+-- the right keys: every key presented, and nothing presented under another
+-- key.
+validVotingRightKeys : (Ord k, Show k) => Set k -> Map k c -> Unmet
+validVotingRightKeys rightKeys rightCids =
   [ "the voting rights under " <> show key <> " were not presented"
   | key <- Set.toList rightKeys
   , not (Map.member key rightCids)
@@ -54,10 +66,10 @@ rightsUnderKeys rightKeys rightCids =
        ]
 
 -- | Validates that no weight is negative.
-nonNegativeWeights : Map Party Decimal -> Unmet
-nonNegativeWeights weights =
-  [ "the weight of " <> show holder <> " is negative"
-  | (holder, weight) <- Map.toList weights
+validWeights : Map OwnerId Decimal -> Unmet
+validWeights weights =
+  [ "the weight of " <> show owner <> " is negative"
+  | (owner, weight) <- Map.toList weights
   , weight < 0.0
   ]
 
@@ -65,53 +77,62 @@ nonNegativeWeights weights =
 ------------------  FETCHING  ------------------
 
 -- | Fetches the contracts in rightCids and checks them against rightKeys,
--- which the resolver stores. Returns the voting rights under each key: each
--- holder and its weight. It does not add up the weight of each holder! Because
--- a holder can have rights in several contracts.
+-- which the resolver stores. Returns the voting rights under each key,
+-- unmerged: an owner can have voting rights in several contracts.
 fetchVotingRights
   : (HasFetch t, HasCheckedFetch t k, HasVotingRights t, Ord k, Show k)
-  => Set k -> Map k (ContractId t) -> Update (Map k (Map Party Decimal))
+  => Set k -> Map k (ContractId t) -> Update (Map k (Map OwnerId VotingRight))
 fetchVotingRights rightKeys rightCids = do
-  requireMet (rightsUnderKeys rightKeys rightCids)
+  requireMet (validVotingRightKeys rightKeys rightCids)
   Map.fromList <$> forA (Map.toList rightCids) (\(rkey, cid) -> do
     contract <- fetchChecked rkey cid
     let rights = rightsOf contract
-    requireMet (nonNegativeWeights rights)
+    requireMet (validWeights (weightsOf rights))
     pure (rkey, rights))
 
-
--- Rights spread over several contracts, one contract per key.
-fetchWeightsPerContract
+-- | The voting rights spread over several contracts, merged: an owner named
+-- by several contracts gets the sum of their weights and the union of their
+-- casters.
+fetchVotingRightsPerContract
   : (HasFetch t, HasCheckedFetch t k, HasVotingRights t, Ord k, Show k)
-  => Set k -> Map k (ContractId t) -> Update (Map Party Decimal)
-fetchWeightsPerContract rightKeys rightCids = do
+  => Set k -> Map k (ContractId t) -> Update (Map OwnerId VotingRight)
+fetchVotingRightsPerContract rightKeys rightCids = do
   rights <- fetchVotingRights rightKeys rightCids
-  pure (Map.fromListWithR (+) (concatMap Map.toList (Map.values rights)))
+  pure (Map.fromListWithR merge (concatMap Map.toList (Map.values rights)))
+  where
+    merge a b = VotingRight with
+      weight = a.weight + b.weight
+      casters = Set.union a.casters b.casters
 
-fetchVotersPerContract
+-- | The voting rights of a single contract.
+fetchVotingRightsFromOneContract
   : (HasFetch t, HasCheckedFetch t k, HasVotingRights t, Ord k, Show k)
-  => Set k -> Map k (ContractId t) -> Update (Set Party)
-fetchVotersPerContract rightKeys rightCids = do
-  weights <- fetchWeightsPerContract rightKeys rightCids
-  pure (Set.fromList [voter | (voter, weight) <- Map.toList weights, weight > 0.0])
+  => k -> ContractId t -> Update (Map OwnerId VotingRight)
+fetchVotingRightsFromOneContract rightsKey rightsCid =
+  fetchVotingRightsPerContract (Set.singleton rightsKey) (Map.singleton rightsKey rightsCid)
 
 
--- All rights in the same contract
-fetchWeightsFromOneContract
-  : (HasFetch t, HasCheckedFetch t k, HasVotingRights t, Ord k, Show k)
-  => k -> ContractId t -> Update (Map Party Decimal)
-fetchWeightsFromOneContract rightsKey rightsCid =
-  fetchWeightsPerContract (Set.singleton rightsKey) (Map.singleton rightsKey rightsCid)
+------------------  READING VOTING RIGHTS  ------------------
 
-fetchVotersFromOneContract
-  : (HasFetch t, HasCheckedFetch t k, HasVotingRights t, Ord k, Show k)
-  => k -> ContractId t -> Update (Set Party)
-fetchVotersFromOneContract rightsKey rightsCid =
-  fetchVotersPerContract (Set.singleton rightsKey) (Map.singleton rightsKey rightsCid)
+-- | The weight of each owner.
+weightsOf : Map OwnerId VotingRight -> Map OwnerId Decimal
+weightsOf = fmap (.weight)
+
+-- | The parties that may cast for each owner.
+castersOf : Map OwnerId VotingRight -> Map OwnerId (Set Party)
+castersOf = fmap (.casters)
+
+-- | The voters: the owners whose weight is above zero.
+votersOf : Map OwnerId VotingRight -> Set OwnerId
+votersOf rights = Set.fromList [owner | (owner, r) <- Map.toList rights, r.weight > 0.0]
 
 
-------------------  WEIGHTS  ------------------
+------------------  OWNERS  ------------------
 
--- | Weight 1 for every voter in the set.
-equalWeights : Set Party -> Map Party Decimal
-equalWeights voters = Map.fromList [(voter, 1.0) | voter <- Set.toList voters]
+-- | The OwnerId of a party that holds a voting right itself.
+partyAsOwnerId : Party -> OwnerId
+partyAsOwnerId = partyToText
+
+-- | Weight 1 for every owner in the set.
+equalWeights : Set OwnerId -> Map OwnerId Decimal
+equalWeights owners = Map.fromList [(owner, 1.0) | owner <- Set.toList owners]

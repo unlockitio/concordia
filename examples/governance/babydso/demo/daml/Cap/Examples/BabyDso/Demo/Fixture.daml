@@ -19,6 +19,7 @@ import Splice.Api.Token.MetadataV1
 import Cap.Core.Types (AuthenticKey (..), ResolutionInfo (..))
 import Cap.Governance.ActionV1 (Action)
 import Cap.Governance.ExecutableV1
+import Cap.Governance.Types (Reason (..))
 
 import Cap.Examples.BabyDso.Action
 import Cap.Examples.BabyDso.Ans
@@ -153,12 +154,18 @@ sourceKeyOf : Fixture -> Text -> Party -> RightKey
 sourceKeyOf f name sv = RightKey with authKey = sourceKey f.dso name; sv
 
 
+feeSubject : Reason
+feeSubject = Reason with
+  url = "https://example.org/babydso/fees"
+  body = "Set the transfer fee and the ANS entry fee"
+
 openVoteCmd
   : Fixture -> Party -> TextMap Decimal -> Map RightKey (ContractId SvWeightSource)
   -> Commands (ContractId SharedBallot)
 openVoteCmd f proposer vote rightCids =
   exerciseCmd f.resolverCid DsoResolver_OpenVote with
     proposer; vote; rightCids
+    subject = feeSubject
     resolution = f.resolution
     actionCid = toInterfaceContractId @Action f.actionCid
     votingClosesAt = f.terms.votingClosesAt

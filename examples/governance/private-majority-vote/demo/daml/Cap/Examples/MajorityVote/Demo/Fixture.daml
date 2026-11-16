@@ -20,6 +20,7 @@ import Cap.Core.Types (AuthenticKey (..), Snapshot (..), ExecutionAction (..), E
 import Cap.Core.Utils (IsAnyValue (..))
 import Cap.Governance.ActionV1 (Action, Action_AuthorizeExecution (..))
 import Cap.Governance.ExecutableV1
+import Cap.Governance.Types (Reason (..))
 
 import Cap.Examples.MajorityVote.Ballot
 import Cap.Examples.MajorityVote.Config
@@ -27,6 +28,11 @@ import Cap.Examples.MajorityVote.Resolver
 
 resolverName : Text
 resolverName = "resolver-1"
+
+configSubject : Reason
+configSubject = Reason with
+  url = "https://example.org/majority-vote/config"
+  body = "Update the config by a private majority vote"
 
 proposalName : Text
 proposalName = "proposal-1"
@@ -92,6 +98,7 @@ setupAs ns = do
   proposalCid <- submit alice $ exerciseCmd resolverCid Resolver_Propose with
     proposer = alice
     proposalId = proposalName
+    subject = configSubject
     terms
 
   _ <- submit operator $ exerciseCmd proposalCid Proposal_Invite

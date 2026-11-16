@@ -1,0 +1,37 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | The voting rights interface: lets a resolver read voting rights from
+-- contracts whose templates it does not know. A resolver counts only the
+-- contracts it trusts, checked against the AuthenticKey it stores for each:
+-- the contract's signatories and the id in its view.
+module Cap.Governance.VotingRightsV1 where
+
+import DA.Map (Map)
+
+import Splice.Api.Token.MetadataV1
+
+import Cap.Governance.Types (OwnerId, VotingRight)
+
+
+-- | The voting rights a contract grants, by owner. One contract can be about
+-- one owner (a singleton map) or about many. An owner named by several
+-- contracts gets the sum of their weights and the union of their casters.
+data VotingRightsView = VotingRightsView
+  with
+    keyId : Text                       -- with the signatories, the AuthenticKey a resolver stores
+    rights : Map OwnerId VotingRight   -- the weight of each owner and the parties that may cast for it
+    validUntil : Optional Time         -- when the rights end, such as the end of a lock or a vesting period
+    meta : Metadata
+  deriving (Eq, Show)
+
+
+interface VotingRights where
+  viewtype VotingRightsView
+
+  -- | Lets a resolver that is not a stakeholder read the voting rights, from a
+  -- disclosed contract.
+  nonconsuming choice VotingRights_PublicFetch : VotingRightsView
+    with
+      actor : Party
+    controller actor
+    do pure (view this)
