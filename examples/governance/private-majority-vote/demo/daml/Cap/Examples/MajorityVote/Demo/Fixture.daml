@@ -22,7 +22,7 @@ import Cap.Governance.ActionV1 (Action, Action_AuthorizeExecution (..))
 import Cap.Governance.ExecutableV1
 import Cap.Governance.Types (Reason (..))
 
-import Cap.Examples.MajorityVote.Ballot
+import Cap.Examples.MajorityVote.VoteRecord
 import Cap.Examples.MajorityVote.Config
 import Cap.Examples.MajorityVote.Resolver
 
@@ -116,26 +116,26 @@ liveProposal f = do
     [cid] -> pure cid
     _ -> fail "no live proposal on this resolver"
 
-seat : Fixture -> Party -> Script (ContractId PrivateBallot)
+seat : Fixture -> Party -> Script (ContractId PrivateVoteRecord)
 seat f voter = do
   proposalCid <- liveProposal f
-  invitations <- query @BallotInvitation voter
+  invitations <- query @VoteRecordInvitation voter
   case [cid | (cid, iv) <- invitations, iv.voter == voter, iv.resolution == f.resolution] of
-    [cid] -> submit voter (exerciseCmd cid BallotInvitation_Accept with proposalCid)
+    [cid] -> submit voter (exerciseCmd cid VoteRecordInvitation_Accept with proposalCid)
     _ -> fail "that voter holds no invitation on this proposal"
 
-cast : Party -> ContractId PrivateBallot -> Text -> Script (ContractId PrivateBallot)
-cast voter ballotCid option =
-  submit voter $ exerciseCmd ballotCid PrivateBallot_Cast with option
+cast : Party -> ContractId PrivateVoteRecord -> Text -> Script (ContractId PrivateVoteRecord)
+cast voter recordCid option =
+  submit voter $ exerciseCmd recordCid PrivateVoteRecord_Cast with option
 
-resolveCmd : Fixture -> [ContractId PrivateBallot] -> Commands ResolveResult
-resolveCmd f ballotCids =
+resolveCmd : Fixture -> [ContractId PrivateVoteRecord] -> Commands ResolveResult
+resolveCmd f recordCids =
   exerciseCmd f.resolverCid Resolver_ResolveMajority with
     proposalCid = f.proposalCid
-    ballotCids
+    recordCids
 
-runResolve : Fixture -> [ContractId PrivateBallot] -> Script ResolveResult
-runResolve f ballotCids = submit f.operator (resolveCmd f ballotCids)
+runResolve : Fixture -> [ContractId PrivateVoteRecord] -> Script ResolveResult
+runResolve f recordCids = submit f.operator (resolveCmd f recordCids)
 
 submitMustFailContaining : Show a => Text -> Party -> Commands a -> Script ()
 submitMustFailContaining expected actor cmds = do

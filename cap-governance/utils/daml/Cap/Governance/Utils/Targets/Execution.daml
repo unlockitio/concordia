@@ -2,10 +2,8 @@
 
 {-# LANGUAGE AllowAmbiguousTypes #-}
 
--- | Targets at execution: whether the live target still matches what was
--- snapshotted for it. Used by an executable, in the action's package, to fetch
--- each target it acts on. Every check here aborts with requireMet: targets
--- are never ignored.
+-- | Checking at execution that each live target still matches its snapshot.
+-- Every check aborts: targets are never ignored.
 module Cap.Governance.Utils.Targets.Execution
   ( -- * Drift policies
     DriftPolicy
@@ -39,8 +37,8 @@ import Cap.Governance.Utils.Targets.Snapshots (HasState (..))
 
 ------------------  DRIFT POLICIES  ------------------
 
--- | Whether a target's live state still satisfies the state snapshotted for
--- it, as driftPolicy snapshot live.
+-- | Whether the live state still satisfies the snapshot, called as
+-- driftPolicy snapshot live.
 type DriftPolicy a = a -> a -> Bool
 
 unchanged : Eq a => DriftPolicy a

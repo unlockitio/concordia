@@ -20,7 +20,7 @@ import Cap.Governance.Types (Vote (..))
 import Cap.Governance.Utils.VotingRights (partyAsOwnerId)
 import Cap.Governance.Utils (Verdict (..), encodeTextVote)
 
-import Cap.Examples.MajorityVote.Ballot
+import Cap.Examples.MajorityVote.VoteRecord
 import Cap.Examples.MajorityVote.Config
 import Cap.Examples.MajorityVote.Resolver
 
@@ -29,7 +29,7 @@ import Cap.Examples.MajorityVote.Demo.Fixture
 class Visible t where
   isVisibleTo : Party -> ContractId t -> Script Bool
 
-instance Visible PrivateBallot where
+instance Visible PrivateVoteRecord where
   isVisibleTo p cid = isSome <$> queryContractId p cid
 
 instance Visible Resolver where
@@ -57,14 +57,14 @@ visibleTo : Party -> Script [Text]
 visibleTo p = do
   resolvers <- query @Resolver p
   proposals <- query @Proposal p
-  ballots <- query @PrivateBallot p
+  records <- query @PrivateVoteRecord p
   configs <- query @Config p
   actions <- query @SetConfigAction p
   updates <- query @ConfigUpdate p
   pure $ sort $ concat
     [ map (show . fst) resolvers
     , map (show . fst) proposals
-    , map (show . fst) ballots
+    , map (show . fst) records
     , map (show . fst) configs
     , map (show . fst) actions
     , map (show . fst) updates
@@ -83,35 +83,35 @@ publicToOperator f = [show f.actionCid, show f.resolverCid]
 
 data Round = Round with
     fixture : Fixture
-    aliceBallot : ContractId PrivateBallot
-    bobBallot : ContractId PrivateBallot
-    carolBallot : ContractId PrivateBallot
+    aliceRecord : ContractId PrivateVoteRecord
+    bobRecord : ContractId PrivateVoteRecord
+    carolRecord : ContractId PrivateVoteRecord
 
 openRound : Text -> Script Round
 openRound ns = do
   base <- setupAs ns
-  aliceBallot <- seat base base.alice
-  bobBallot <- seat base base.bob
-  carolBallot <- seat base base.carol
+  aliceRecord <- seat base base.alice
+  bobRecord <- seat base base.bob
+  carolRecord <- seat base base.carol
 
   proposalCid <- liveProposal base
   let fixture = base with proposalCid
   pure Round with ..
 
 data Cast = Cast with
-    alice : ContractId PrivateBallot
-    bob : ContractId PrivateBallot
-    carol : ContractId PrivateBallot
+    alice : ContractId PrivateVoteRecord
+    bob : ContractId PrivateVoteRecord
+    carol : ContractId PrivateVoteRecord
 
 castAll : Round -> Text -> Text -> Text -> Script Cast
 castAll round aliceOption bobOption carolOption = do
   let f = round.fixture
-  alice <- cast f.alice round.aliceBallot aliceOption
-  bob <- cast f.bob round.bobBallot bobOption
-  carol <- cast f.carol round.carolBallot carolOption
+  alice <- cast f.alice round.aliceRecord aliceOption
+  bob <- cast f.bob round.bobRecord bobOption
+  carol <- cast f.carol round.carolRecord carolOption
   pure Cast with ..
 
-allPresented : Cast -> [ContractId PrivateBallot]
+allPresented : Cast -> [ContractId PrivateVoteRecord]
 allPresented c = [c.alice, c.bob, c.carol]
 
 settingNow : Fixture -> Script Text
@@ -128,11 +128,11 @@ whoSeesWhat = do
       openToOperator = show f.proposalCid :: publicToOperator f
 
   f.dso `seesExactly` open
-  f.alice `seesExactly` (show round.aliceBallot :: open)
-  f.bob `seesExactly` (show round.bobBallot :: open)
-  f.carol `seesExactly` (show round.carolBallot :: open)
+  f.alice `seesExactly` (show round.aliceRecord :: open)
+  f.bob `seesExactly` (show round.bobRecord :: open)
+  f.carol `seesExactly` (show round.carolRecord :: open)
   f.operator `seesExactly`
-    (map show [round.aliceBallot, round.bobBallot, round.carolBallot] <> openToOperator)
+    (map show [round.aliceRecord, round.bobRecord, round.carolRecord] <> openToOperator)
 
   setTime f.terms.entryClosesAt
   votes <- castAll round yay yay nay
@@ -170,12 +170,12 @@ theCountCoversTheElectorate = do
   votes <- castAll round yay yay nay
 
   setTime f.terms.votingClosesAt
-  submitMustFailContaining "the presented ballots cover the roll" f.operator $
+  submitMustFailContaining "the presented vote records cover the roll" f.operator $
     resolveCmd f [votes.alice, votes.carol]
-  submitMustFailContaining "the presented ballots cover the roll" f.operator $
+  submitMustFailContaining "the presented vote records cover the roll" f.operator $
     resolveCmd f [votes.alice, votes.bob]
 
-  submitMustFail f.operator $ createCmd PrivateBallot with
+  submitMustFail f.operator $ createCmd PrivateVoteRecord with
     operator = f.operator
     voter = f.alice
     resolution = f.resolution
@@ -184,7 +184,7 @@ theCountCoversTheElectorate = do
     closesAt = f.terms.votingClosesAt
     expiresAt = f.terms.expiresAt
     vote = None
-  submitMustFail (actAs f.dso <> actAs f.operator) $ createCmd PrivateBallot with
+  submitMustFail (actAs f.dso <> actAs f.operator) $ createCmd PrivateVoteRecord with
     operator = f.operator
     voter = f.alice
     resolution = f.resolution
@@ -193,7 +193,7 @@ theCountCoversTheElectorate = do
     closesAt = f.terms.votingClosesAt
     expiresAt = f.terms.expiresAt
     vote = None
-  submitMustFail f.operator $ createCmd PrivateBallot with
+  submitMustFail f.operator $ createCmd PrivateVoteRecord with
     operator = f.operator
     voter = f.alice
     resolution = f.resolution
@@ -225,8 +225,8 @@ theOperatorCannotSkipTheCount = do
 
 
 -- A wallet that knows only the VoteTopic interface reads the topic and
--- casts on the voter's private ballot, passed in the choice context. A voter
--- cannot cast on another voter's ballot.
+-- casts on the voter's private vote record, passed in the choice context. A voter
+-- cannot cast on another voter's vote record.
 voterCastsThroughTheVoteTopicInterface : Script ()
 voterCastsThroughTheVoteTopicInterface = do
   round <- openRound "proposal-interface"
@@ -239,18 +239,18 @@ voterCastsThroughTheVoteTopicInterface = do
   proposal.subject === configSubject
 
   setTime f.terms.entryClosesAt
-  let castOn voter ballotCid = exerciseCmd proposalCid VoteTopic_CastVote with
+  let castOn voter recordCid = exerciseCmd proposalCid VoteTopic_CastVote with
         caster = voter
         ownerId = partyAsOwnerId voter
         vote = encodeTextVote (Voted yay)
         reason = None
         extraArgs = ExtraArgs with
           context = ChoiceContext with
-            values = TextMap.fromList [(ballotContextKey, AV_ContractId (coerceContractId ballotCid))]
+            values = TextMap.fromList [(voteRecordContextKey, AV_ContractId (coerceContractId recordCid))]
           meta = emptyMetadata
-  submitMustFail f.bob (castOn f.bob round.aliceBallot)
-  result <- submit f.bob (castOn f.bob round.bobBallot)
+  submitMustFail f.bob (castOn f.bob round.aliceRecord)
+  result <- submit f.bob (castOn f.bob round.bobRecord)
 
   [created] <- pure result.created
-  Some ballot <- queryContractId f.bob (coerceContractId created : ContractId PrivateBallot)
-  ballot.vote === Some yay
+  Some record <- queryContractId f.bob (coerceContractId created : ContractId PrivateVoteRecord)
+  record.vote === Some yay

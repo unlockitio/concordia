@@ -31,16 +31,6 @@ weightedVoteMechanismName : Text
 weightedVoteMechanismName = "babydso.weighted-vote"
 
 
-------------------  VOTE KINDS  ------------------
--- Both ballots are counted through the VoteRecord interface, so their votes are
--- AnyValue in the view.
---
--- The weighted vote is a set of named numbers, such as the transfer fee and
--- the entry fee, encoded as AV_Map of AV_Decimal. Cap.Governance.Utils.Votes
--- has no structured vote kind yet, so BabyDso defines the pair here.
---
--- The confirmation vote is the outcome itself, already an AnyValue: it is
--- exposed as is and decoded with Some.
 
 -- | Encodes named numbers as AV_Map of AV_Decimal.
 encodeParametersVote : Vote (TextMap Decimal) -> Vote AnyValue
@@ -56,7 +46,7 @@ sameParameters votes = case map (map fst . TextMap.toList) votes of
   first :: rest -> all (== first) rest
 
 
-template SharedBallot
+template SharedVoteRecord
   with
     dso : Party
     svs : Set Party
@@ -76,7 +66,7 @@ template SharedBallot
     ensure resolution.mechanism == weightedVoteMechanismName
       && sameParameters (Map.values votes)
 
-    choice SharedBallot_Cast : ContractId SharedBallot
+    choice SharedVoteRecord_Cast : ContractId SharedVoteRecord
       with
         voter : Party
         vote : TextMap Decimal
@@ -88,13 +78,13 @@ template SharedBallot
           (partyAsOwnerId voter `Map.member` openingWeights)
         create this with votes = Map.insert voter vote votes
 
-    choice SharedBallot_Expire : ()
+    choice SharedVoteRecord_Expire : ()
       controller dso
       do
         now <- getTime
-        require "the shared ballot has expired" (now >= expiresAt)
+        require "the shared vote record has expired" (now >= expiresAt)
 
-    interface instance VoteRecord for SharedBallot where
+    interface instance VoteRecord for SharedVoteRecord where
       view = VoteRecordView with
         resolution; snapshots; action = Some actionCid
         votes = Map.fromList
@@ -102,10 +92,10 @@ template SharedBallot
         consumers = [dso]
         meta = emptyMetadata
 
-    -- The proposal is the shared ballot itself: a cast recreates it with the
+    -- The proposal is the shared vote record itself: a cast recreates it with the
     -- vote added. Each SV votes for its own OwnerId, and a weighted vote has
     -- no abstention. Vote reasons are not kept.
-    interface instance VoteTopic for SharedBallot where
+    interface instance VoteTopic for SharedVoteRecord where
       view = VoteTopicView with
         resolution; subject
         proposer = partyAsOwnerId proposer
@@ -118,14 +108,14 @@ template SharedBallot
         vote <- case decodeParametersVote arg.vote of
           Some (Voted vote) -> pure vote
           _ -> abort "a weighted vote is a map of named decimals, and cannot abstain"
-        cid <- exercise (fromInterfaceContractId @SharedBallot self) SharedBallot_Cast with
+        cid <- exercise (fromInterfaceContractId @SharedVoteRecord self) SharedVoteRecord_Cast with
           voter = arg.caster; vote
         pure VoteTopic_CastVoteResult with
           created = [coerceContractId cid]
           meta = emptyMetadata
 
-instance HasCheckedFetch SharedBallot ResolutionInfo where
-  contractGroupId ballot = ballot.resolution
+instance HasCheckedFetch SharedVoteRecord ResolutionInfo where
+  contractGroupId record = record.resolution
 
 
 

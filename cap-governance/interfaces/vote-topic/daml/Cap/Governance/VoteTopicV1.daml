@@ -1,17 +1,8 @@
 -- SPDX-License-Identifier: Apache-2.0
 
--- | The vote topic interface: lets off-ledger find what is
--- being voted on, read it, and cast a vote on it, without knowing the
--- template. A topic can be standing (always open) or created for one
--- decision. Resolving it stays a typed choice on the app's resolver.
---
--- The view carries no votes: a cast creates or updates a VoteRecord. A topic
--- that stores its votes on itself can also implement VoteRecord; one whose
--- votes are private exposes none.
---
--- What a vote looks like is documented per mechanism name
--- (resolution.mechanism). The resolver checks every vote it counts
--- regardless.
+-- | Lets clients find, read and vote on a decision without knowing the
+-- template. A cast MUST create or update a VoteRecord; a topic that stores
+-- its own votes MAY implement VoteRecord itself.
 module Cap.Governance.VoteTopicV1 where
 
 import Prelude hiding (Action)
@@ -25,18 +16,18 @@ import Cap.Governance.ActionV1 (Action)
 
 data VoteTopicView = VoteTopicView
   with
-    resolution : ResolutionInfo           -- the resolver, the mechanism, and an id that survives recreating the topic
-    proposer : OwnerId                    -- who raised it
-    subject : Reason                      -- what it is about
-    action : Optional (ContractId Action) -- the action it decides; None when the action is one of the app's own types
-    voteBefore : Optional Time            -- votes are accepted before this time; None for a standing topic
-    effectiveAt : Optional Time           -- when an accepted action takes effect, if set
+    resolution : ResolutionInfo           -- its id MUST survive recreating the topic
+    proposer : OwnerId
+    subject : Reason
+    action : Optional (ContractId Action) -- None when the action is an app-specific type
+    voteBefore : Optional Time            -- casts MUST be rejected from this time; None for a standing topic
+    effectiveAt : Optional Time
     meta : Metadata
   deriving (Eq, Show)
 
 data VoteTopic_CastVoteResult = VoteTopic_CastVoteResult
   with
-    created : [AnyContractId]  -- the recreated topic, or the vote record that now carries the vote
+    created : [AnyContractId]  -- the recreated topic or the vote record
     meta : Metadata
   deriving (Eq, Show)
 
@@ -46,7 +37,7 @@ interface VoteTopic where
 
   voteTopic_castVoteImpl : ContractId VoteTopic -> VoteTopic_CastVote -> Update VoteTopic_CastVoteResult
 
-  -- | Casts a vote for the owner.
+  -- | Implementations MUST check that caster may cast for ownerId.
   nonconsuming choice VoteTopic_CastVote : VoteTopic_CastVoteResult
     with
       caster : Party

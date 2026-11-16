@@ -161,7 +161,7 @@ feeSubject = Reason with
 
 openVoteCmd
   : Fixture -> Party -> TextMap Decimal -> Map RightKey (ContractId SvWeightSource)
-  -> Commands (ContractId SharedBallot)
+  -> Commands (ContractId SharedVoteRecord)
 openVoteCmd f proposer vote rightCids =
   exerciseCmd f.resolverCid DsoResolver_OpenVote with
     proposer; vote; rightCids
@@ -172,23 +172,23 @@ openVoteCmd f proposer vote rightCids =
     expiresAt = f.terms.expiresAt
     targetCids = targetCidsOf f
 
-openVoteAs : Fixture -> Party -> TextMap Decimal -> Script (ContractId SharedBallot)
+openVoteAs : Fixture -> Party -> TextMap Decimal -> Script (ContractId SharedVoteRecord)
 openVoteAs f proposer vote =
   submit (actAs proposer <> readAs f.dso) (openVoteCmd f proposer vote f.rightCids)
 
-castCmd : Party -> ContractId SharedBallot -> TextMap Decimal -> Commands (ContractId SharedBallot)
-castCmd voter ballotCid vote = exerciseCmd ballotCid SharedBallot_Cast with voter; vote
+castCmd : Party -> ContractId SharedVoteRecord -> TextMap Decimal -> Commands (ContractId SharedVoteRecord)
+castCmd voter recordCid vote = exerciseCmd recordCid SharedVoteRecord_Cast with voter; vote
 
-castAs : Fixture -> Party -> ContractId SharedBallot -> TextMap Decimal -> Script (ContractId SharedBallot)
-castAs f voter ballotCid vote = submit (actAs voter <> readAs f.dso) (castCmd voter ballotCid vote)
+castAs : Fixture -> Party -> ContractId SharedVoteRecord -> TextMap Decimal -> Script (ContractId SharedVoteRecord)
+castAs f voter recordCid vote = submit (actAs voter <> readAs f.dso) (castCmd voter recordCid vote)
 
 resolveVoteAs
-  : Fixture -> Party -> ContractId SharedBallot -> Script (ResolveResult (TextMap Decimal))
-resolveVoteAs f sv ballotCid =
+  : Fixture -> Party -> ContractId SharedVoteRecord -> Script (ResolveResult (TextMap Decimal))
+resolveVoteAs f sv recordCid =
   submit (actAs sv <> readAs f.dso) $ exerciseCmd f.resolverCid DsoResolver_ResolveVote with
     sv
     resolution = f.resolution
-    ballotCid
+    recordCid
 
 confirmAs : Fixture -> Party -> AnyValue -> Script (ContractId SvConfirmation)
 confirmAs f confirmer confirmed =

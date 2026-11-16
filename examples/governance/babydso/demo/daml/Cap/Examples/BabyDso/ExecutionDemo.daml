@@ -18,9 +18,9 @@ approveFees : Fixture -> Script (ContractId Executable)
 approveFees f = do
   opened <- openVoteAs f f.sv1 (feeVote 0.05 2.0)
   withSv2 <- castAs f f.sv2 opened (feeVote 0.06 2.5)
-  ballotCid <- castAs f f.sv3 withSv2 (feeVote 0.09 4.0)
+  recordCid <- castAs f f.sv3 withSv2 (feeVote 0.09 4.0)
   setTime f.terms.votingClosesAt
-  result <- resolveVoteAs f f.sv1 ballotCid
+  result <- resolveVoteAs f f.sv1 recordCid
   [execution] <- pure result.executions
   Some pending <- queryInterfaceContractId f.sv2 execution
   setTime pending.executionCore.opensAt

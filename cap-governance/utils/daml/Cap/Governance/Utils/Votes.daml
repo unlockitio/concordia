@@ -1,13 +1,8 @@
 -- SPDX-License-Identifier: Apache-2.0
 
--- | What the votes on a ballot say, and turning them into casts. The standard
--- vote kinds are an option label (Text) and a number (Decimal); see "Vote
--- encoding" in docs/governance/considerations.md.
---
--- A mechanism counts one kind. Its decoder, passed as decodeVote, checks the
--- shape of a vote only; the values the mechanism accepts are checked apart,
--- with validOption or validWithinBounds through validVoteValues, so that each failure
--- has its own message.
+-- | Decoding the votes on a vote record and turning them into casts. The
+-- standard kinds are Text (an option label) and Decimal; see "Vote encoding"
+-- in docs/governance/considerations.md.
 module Cap.Governance.Utils.Votes
   ( -- * Encoding and decoding
     encodeTextVote
@@ -20,8 +15,7 @@ module Cap.Governance.Utils.Votes
   , validWithinBounds
 
     -- * VoteRecord checks
-  , validVoteEncoding
-  , validVoteValues
+  , validVotes
 
     -- * Casting
   , casts
@@ -29,7 +23,7 @@ module Cap.Governance.Utils.Votes
 
 import DA.Map (Map)
 import qualified DA.Map as Map
-import DA.Optional (fromOptional, isNone)
+import DA.Optional (fromOptional)
 import qualified DA.Traversable as Traversable
 
 import Splice.Api.Token.MetadataV1 (AnyValue)
@@ -41,7 +35,7 @@ import Cap.Governance.Utils.Count (Cast (..), Casts)
 
 
 ------------------  ENCODING AND DECODING VOTES ------------------
--- The standard kinds, for ballots counted through the VoteRecord interface. A
+-- The standard kinds, for vote records counted through the VoteRecord interface. A
 -- template SHOULD encode the votes of its view with the encoder, and a resolver
 -- SHOULD decode them with the decoder. A new vote kind gets its own pair here.
 
@@ -63,7 +57,7 @@ decodeDecimalVote = Traversable.mapA fromAnyValue
 
 
 ------------------  VALUE CHECKS  ------------------
--- Checks on a decoded vote. Use them through validVoteValues.
+-- Checks on a decoded vote. Use them through validVotes.
 
 -- | Validates that the label is one of the options. Labels compare exactly:
 -- case-sensitive and untrimmed.
@@ -85,54 +79,39 @@ validWithinBounds minimum maximum value =
        ]
 
 
-------------------  BALLOT CHECKS  ------------------
--- Checks on the votes a ballot carries, for requireMetFrom or ignoreFailing.
+------------------  VOTE RECORD CHECKS  ------------------
+-- Checks on the votes a vote record carries, for requireMetFrom or ignoreFailing.
 
--- | Validates that decodeVote decodes every vote on the ballot, that is, every
--- vote is of the kind the mechanism counts.
-validVoteEncoding : IsVoteRecord b v => (Vote v -> Optional (Vote a)) -> Check b
-validVoteEncoding decodeVote ballot =
-  [ "the vote of " <> show voter <> " does not decode as the kind this mechanism counts"
-  | (voter, vote) <- Map.toList (votesOf ballot)
-  , isNone (decodeVote vote)
-  ]
-
--- | Validates every decoded vote on the ballot with a value check, such as
--- validOption or validWithinBounds. Votes that do not decode are skipped: they are
--- validVoteEncoding's to report, so that each failure is reported once.
-validVoteValues : IsVoteRecord b v => (Vote v -> Optional (Vote a)) -> (a -> Unmet) -> Check b
-validVoteValues decodeVote check ballot =
-  [ "the vote of " <> show voter <> ": " <> errorMsg
-  | (voter, vote) <- Map.toList (votesOf ballot)
-  , Some (Voted decoded) <- [decodeVote vote]
-  , errorMsg <- check decoded
+-- | Validates that every vote on the record decodes as the kind the mechanism
+-- counts, and that every decoded vote passes the value check, such as
+-- validOption or validWithinBounds. Pass (const []) when the mechanism has no
+-- value check. Each vote fails at most once.
+validVotes : IsVoteRecord b v => (Vote v -> Optional (Vote a)) -> (a -> Unmet) -> Check b
+validVotes decodeVote check record =
+  [ "the vote of " <> show voter <> problem
+  | (voter, raw) <- Map.toList (votesOf record)
+  , problem <- case decodeVote raw of
+      None -> [" does not decode as the kind this mechanism counts"]
+      Some (Voted decoded) -> map (": " <>) (check decoded)
+      Some _ -> []
   ]
 
 
 ------------------  CAST  ------------------
 
--- | The cast of every voter in the weights map, each counting with its
--- weight. A voter with no counted vote is Absent: one with no ballot, and one
--- whose ballot was ignored.
---
--- The ballots passed MUST have been validated by validVoteEncoding,
--- validVoteRecordVoters and distinctVotersAmongVoteRecords. casts does not report a
--- ballot that fails them: a vote of another kind is dropped, a voter outside
--- the weights map is not counted, and of two votes of the same voter only one
--- is counted.
---
--- The weights MUST NOT be negative. Weights from fetchVotingRights are
--- already validated; any other weights SHOULD be validated with
--- validWeights.
+-- | The cast of every voter in weights; a voter with no counted vote is
+-- Absent. The records MUST have passed validVotes, validVoteRecordVoters
+-- and distinctVotersAmongVoteRecords, and the weights validVotingRights: casts
+-- drops failures silently.
 casts : IsVoteRecord b v => (Vote v -> Optional (Vote a)) -> Map OwnerId Decimal -> [b] -> Casts a
-casts decodeVote weights ballots = Map.fromList
+casts decodeVote weights records = Map.fromList
   [ (voter, Cast with weight; vote = fromOptional Absent (Map.lookup voter counted))
   | (voter, weight) <- Map.toList weights
   ]
   where
     counted = Map.fromList
       [ (voter, vote)
-      | ballot <- ballots
-      , (voter, raw) <- Map.toList (votesOf ballot)
+      | record <- records
+      , (voter, raw) <- Map.toList (votesOf record)
       , Some vote <- [decodeVote raw]
       ]

@@ -27,12 +27,12 @@ aWeightChangeAfterOpeningDoesNotCount = do
   Some sv3Source <- pure (Map.lookup (sourceKeyOf f "sv3-a" f.sv3) f.rightCids)
   _ <- submit f.dso $ exerciseCmd sv3Source SvWeightSource_SetWeight with newWeight = 10.0
 
-  ballotCid <- castAs f f.sv3 opened (feeVote 0.09 4.0)
-  Some ballot <- queryContractId f.sv3 ballotCid
-  Map.lookup (partyAsOwnerId f.sv3) ballot.openingWeights === Some 1.0
+  recordCid <- castAs f f.sv3 opened (feeVote 0.09 4.0)
+  Some record <- queryContractId f.sv3 recordCid
+  Map.lookup (partyAsOwnerId f.sv3) record.openingWeights === Some 1.0
 
   setTime f.terms.votingClosesAt
-  result <- resolveVoteAs f f.sv1 ballotCid
+  result <- resolveVoteAs f f.sv1 recordCid
   result.verdict === Lapsed
 
 aStaleWeightSourceIsRefusedAtOpening : Script ()
@@ -96,24 +96,24 @@ aZeroWeightSvCanOpenAVote = do
     , ("sv2-a", sv2, 3.0), ("sv3-a", sv3, 0.0) ]
 
   opened <- openVoteAs f f.sv3 (feeVote 0.20 9.0)
-  Some ballot <- queryContractId f.sv3 opened
-  Map.lookup (partyAsOwnerId f.sv3) ballot.openingWeights === Some 0.0
+  Some record <- queryContractId f.sv3 opened
+  Map.lookup (partyAsOwnerId f.sv3) record.openingWeights === Some 0.0
 
   withSv1 <- castAs f f.sv1 opened (feeVote 0.05 2.0)
-  ballotCid <- castAs f f.sv2 withSv1 (feeVote 0.06 2.5)
+  recordCid <- castAs f f.sv2 withSv1 (feeVote 0.06 2.5)
 
   setTime f.terms.votingClosesAt
-  result <- resolveVoteAs f f.sv1 ballotCid
+  result <- resolveVoteAs f f.sv1 recordCid
   result.verdict === Decided (feeParameters 0.05 2.0)
 
-anSvWithoutWeightSourceSeesTheBallotButCannotVote : Script ()
-anSvWithoutWeightSourceSeesTheBallotButCannotVote = do
+anSvWithoutWeightSourceSeesTheVoteRecordButCannotVote : Script ()
+anSvWithoutWeightSourceSeesTheVoteRecordButCannotVote = do
   f <- setupWith "no-source" $ \sv1 sv2 _ ->
     [ ("sv1-a", sv1, 3.0), ("sv1-b", sv1, 2.0), ("sv2-a", sv2, 3.0) ]
 
   opened <- openVoteAs f f.sv1 (feeVote 0.05 2.0)
   visible <- queryContractId f.sv3 opened
-  assertMsg "sv3 observes the shared ballot" (isSome visible)
+  assertMsg "sv3 observes the shared vote record" (isSome visible)
 
   submitMustFailContaining "the voter has the right to vote" f f.sv3 $
     castCmd f.sv3 opened (feeVote 0.09 4.0)
@@ -122,10 +122,10 @@ aVotersWeightSourcesAddUp : Script ()
 aVotersWeightSourcesAddUp = do
   f <- setupAs "add-up"
   opened <- openVoteAs f f.sv1 (feeVote 0.05 2.0)
-  Some ballot <- queryContractId f.sv1 opened
-  Map.lookup (partyAsOwnerId f.sv1) ballot.openingWeights === Some 5.0
+  Some record <- queryContractId f.sv1 opened
+  Map.lookup (partyAsOwnerId f.sv1) record.openingWeights === Some 5.0
 
-  ballotCid <- castAs f f.sv3 opened (feeVote 0.09 4.0)
+  recordCid <- castAs f f.sv3 opened (feeVote 0.09 4.0)
   setTime f.terms.votingClosesAt
-  result <- resolveVoteAs f f.sv1 ballotCid
+  result <- resolveVoteAs f f.sv1 recordCid
   result.verdict === Decided (feeParameters 0.05 2.0)

@@ -25,7 +25,7 @@ import Cap.Governance.Utils
   , distinctVotersAmongVoteRecords, expectUniformAction, validVoteRecordVoters
   , weightedVotes )
 
-import Cap.Examples.MajorityVote.Ballot
+import Cap.Examples.MajorityVote.VoteRecord
 
 data ProposalTerms = ProposalTerms
   with
@@ -39,9 +39,9 @@ majorityMechanismName : Text
 majorityMechanismName = "private-majority-vote.majority"
 
 -- | The ChoiceContext key under which a cast through the VoteTopic interface
--- passes the voter's PrivateBallot, as AV_ContractId.
-ballotContextKey : Text
-ballotContextKey = "private-majority-vote.ballot"
+-- passes the voter's PrivateVoteRecord, as AV_ContractId.
+voteRecordContextKey : Text
+voteRecordContextKey = "private-majority-vote.vote-record"
 
 data ResolveResult = ResolveResult
   with
@@ -64,7 +64,7 @@ template Proposal
     signatory dso
     observer operator :: Set.toList electorate
 
-    -- Votes are private: each sits on the voter's own PrivateBallot, which a
+    -- Votes are private: each sits on the voter's own PrivateVoteRecord, which a
     -- cast passes in the choice context. The proposal itself does not change.
     interface instance VoteTopicV1.VoteTopic for Proposal where
       view = VoteTopicV1.VoteTopicView with
@@ -75,29 +75,29 @@ template Proposal
         effectiveAt = None
         meta = emptyMetadata
       voteTopic_castVoteImpl _ arg = do
-        ballotCid <- case TextMap.lookup ballotContextKey arg.extraArgs.context.values of
-          Some (AV_ContractId cid) -> pure (coerceContractId cid : ContractId PrivateBallot)
-          _ -> abort ("the choice context carries no ballot under " <> ballotContextKey)
-        ballot <- fetch ballotCid
-        require "the ballot is for this proposal" (ballot.resolution == resolution)
-        require "the caster casts on its own ballot" (ballot.voter == arg.caster)
+        recordCid <- case TextMap.lookup voteRecordContextKey arg.extraArgs.context.values of
+          Some (AV_ContractId cid) -> pure (coerceContractId cid : ContractId PrivateVoteRecord)
+          _ -> abort ("the choice context carries no vote record under " <> voteRecordContextKey)
+        record <- fetch recordCid
+        require "the vote record is for this proposal" (record.resolution == resolution)
+        require "the caster casts on its own vote record" (record.voter == arg.caster)
         require "the caster casts for its own OwnerId" (arg.ownerId == partyAsOwnerId arg.caster)
         option <- case decodeTextVote arg.vote of
           Some (Voted option) -> pure option
           _ -> abort "a majority vote is the option yay or nay"
-        cid <- exercise ballotCid PrivateBallot_Cast with option
+        cid <- exercise recordCid PrivateVoteRecord_Cast with option
         pure VoteTopicV1.VoteTopic_CastVoteResult with
           created = [coerceContractId cid]
           meta = emptyMetadata
 
-    nonconsuming choice Proposal_Invite : [ContractId BallotInvitation]
+    nonconsuming choice Proposal_Invite : [ContractId VoteRecordInvitation]
       controller operator
       do
         now <- getTime
         require "invitations are issued before the entry window closes"
           (now < terms.entryClosesAt)
         forA (Set.toList electorate) $ \voter ->
-          create BallotInvitation with dso; operator; voter; resolution
+          create VoteRecordInvitation with dso; operator; voter; resolution
 
     choice Proposal_Join : ContractId Proposal
       with
@@ -113,7 +113,7 @@ template Proposal
         create this with roll = voter :: roll
 
 
-template BallotInvitation
+template VoteRecordInvitation
   with
     dso : Party
     operator : Party
@@ -123,7 +123,7 @@ template BallotInvitation
     signatory dso, operator
     observer voter
 
-    choice BallotInvitation_Accept : ContractId PrivateBallot
+    choice VoteRecordInvitation_Accept : ContractId PrivateVoteRecord
       with
         proposalCid : ContractId Proposal
       controller voter
@@ -132,7 +132,7 @@ template BallotInvitation
         require "the invitation and the proposal name one round"
           (proposal.resolution == resolution)
         _ <- exercise proposalCid Proposal_Join with voter
-        create PrivateBallot with
+        create PrivateVoteRecord with
           operator; voter; resolution
           actionCid = proposal.terms.actionCid
           opensAt = proposal.terms.entryClosesAt
@@ -174,9 +174,9 @@ template Resolver
     nonconsuming choice Resolver_ResolveMajority : ResolveResult
       with
         proposalCid : ContractId Proposal
-        ballotCids : [ContractId PrivateBallot]
+        recordCids : [ContractId PrivateVoteRecord]
       controller operator
-      do resolveMajority this self proposalCid ballotCids
+      do resolveMajority this self proposalCid recordCids
 
 
 resolverKey : Resolver -> AuthenticKey
@@ -190,9 +190,9 @@ majorityOf electorateSize casts =
   in Some (if for > 0.5 * electorateSize then yay else nay)
 
 resolveMajority
-  : Resolver -> ContractId Resolver -> ContractId Proposal -> [ContractId PrivateBallot]
+  : Resolver -> ContractId Resolver -> ContractId Proposal -> [ContractId PrivateVoteRecord]
   -> Update ResolveResult
-resolveMajority resolver self proposalCid ballotCids = do
+resolveMajority resolver self proposalCid recordCids = do
   now <- getTime
   proposal <- fetch proposalCid
   requireResolvedBy (resolverKey resolver) (coerceContractId self) proposal.resolution
@@ -201,20 +201,20 @@ resolveMajority resolver self proposalCid ballotCids = do
   require "the proposal is on this resolver's electorate" (proposal.electorate == resolver.electorate)
   let terms = proposal.terms
 
-  presented <- fetchGroup proposal.resolution ballotCids
-  let (cids, ballots) = unzip presented
-  forA_ ballots $ \b -> do
-    requireClosed "every presented ballot is closed for voting" now b.closesAt
-    require "every ballot votes in the proposal's window"
+  presented <- fetchGroup proposal.resolution recordCids
+  let (cids, records) = unzip presented
+  forA_ records $ \b -> do
+    requireClosed "every presented vote record is closed for voting" now b.closesAt
+    require "every vote record votes in the proposal's window"
       (b.opensAt == terms.entryClosesAt
         && b.closesAt == terms.votingClosesAt
         && b.expiresAt == terms.expiresAt)
-  require "the ballots vote on the proposal's action" (expectUniformAction ballots == terms.actionCid)
+  require "the vote records vote on the proposal's action" (expectUniformAction records == terms.actionCid)
 
   let voters = Set.fromList (map partyAsOwnerId (Set.toList resolver.electorate))
-  requireMetFrom [validVoteRecordVoters voters] [distinctVotersAmongVoteRecords] ballots
-  let counted = casts Some (equalWeights voters) ballots
-  require "the presented ballots cover the roll" (sort (map (.voter) ballots) == sort proposal.roll)
+  requireMetFrom [validVoteRecordVoters voters] [distinctVotersAmongVoteRecords] records
+  let counted = casts Some (equalWeights voters) records
+  require "the presented vote records cover the roll" (sort (map (.voter) records) == sort proposal.roll)
   consumeVoteRecords cids
 
   let verdict = decide (atLeastVotes 1) (majorityOf (intToDecimal (Set.size resolver.electorate))) counted

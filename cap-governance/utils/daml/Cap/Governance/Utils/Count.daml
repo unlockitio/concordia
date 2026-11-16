@@ -107,7 +107,6 @@ atLeastShareOfTotal numerator denominator casts =
   in denominator > 0 && total > 0.0
        && presentWeight casts * intToDecimal denominator >= intToDecimal numerator * total
 
--- several Quorums
 allOf : [Quorum a] -> Quorum a
 allOf quorums casts = all (\quorum -> quorum casts) quorums
 
@@ -117,7 +116,7 @@ anyOf quorums casts = any (\quorum -> quorum casts) quorums
 
 ------------------------------- Tallies -------------------------------
 -- A tally decides the outcome, or None when the votes decide nothing (e.g.
--- unanimity not reached). It uses only Voted casts.
+-- unanimity not reached). A tally MUST use only Voted casts.
 
 unanimous : Eq a => Tally a a
 unanimous casts = uniformOptional (map fst (weightedVotes casts))
@@ -163,7 +162,6 @@ crossingHalf half below ((value, w) :: rest)
   | otherwise = crossingHalf half (below + w) rest
 
 
--- several tallies
 firstOf : [Tally a r] -> Tally a r
 firstOf tallies casts = case mapOptional (\tally -> tally casts) tallies of
   result :: _ -> Some result

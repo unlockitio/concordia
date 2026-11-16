@@ -27,7 +27,7 @@ data VotingRight = VotingRight
   deriving (Eq, Show)
 
 
--- | Why: a link to the full text, and a short body.
+-- | A link to the full text, and a short body.
 data Reason = Reason
   with
     url : Text

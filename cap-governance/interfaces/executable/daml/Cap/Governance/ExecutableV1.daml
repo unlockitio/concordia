@@ -41,6 +41,8 @@ interface Executable where
 
   executable_cancelImpl : Executable_Cancel -> Update Executable_CancelResult
 
+  -- | Implementations MUST check every target they act on against its
+  -- snapshot (see fetchTargetMatchingSnapshot and fetchTargetMatchingIdentity).
   choice Executable_Execute : Executable_ExecuteResult
     with
       actors : [Party]

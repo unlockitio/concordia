@@ -1,10 +1,7 @@
 -- SPDX-License-Identifier: Apache-2.0
 
--- | The vote record interface: lets a resolver count vote records from
--- templates it does not know. A vote record is the proof that votes were cast:
--- it carries one vote or many, and may be standing (read many times and never
--- consumed). Votes are exposed as AnyValue; a resolver decodes them as the
--- kind its mechanism counts.
+-- | Proof that votes were cast, readable without knowing the template. A
+-- record with no consumers is standing: it MAY be counted many times.
 module Cap.Governance.VoteRecordV1 where
 
 import Prelude hiding (Action)
@@ -21,11 +18,11 @@ import Cap.Governance.ActionV1 (Action)
 
 data VoteRecordView = VoteRecordView
   with
-    resolution : ResolutionInfo             -- the resolution the vote record is counted in
-    votes : Map OwnerId (Vote AnyValue)     -- the votes it carries, by owner (a singleton for a record per voter)
-    snapshots : Map AuthenticKey Snapshot   -- the snapshots it took
-    action : Optional (ContractId Action)   -- the action it asks to authorize; None when the action is one of the app's own types, or there is none
-    consumers : [Party]                     -- the parties that consume it once counted; empty for a standing record, which is not consumed
+    resolution : ResolutionInfo
+    votes : Map OwnerId (Vote AnyValue)
+    snapshots : Map AuthenticKey Snapshot
+    action : Optional (ContractId Action)   -- None when the action is an app-specific type, or there is none
+    consumers : [Party]                     -- empty for a standing record
     meta : Metadata
   deriving (Eq, Show)
 
@@ -33,16 +30,13 @@ data VoteRecordView = VoteRecordView
 interface VoteRecord where
   viewtype VoteRecordView
 
-  -- | Consumes the vote record once counted, so it cannot be counted again.
   choice VoteRecord_Consume : ()
     controller (view this).consumers
     do pure ()
 
 
--- | Shows a vote record by its view, for the messages of checked fetches.
 instance Show VoteRecord where
   show record = "VoteRecord " <> show (view record)
 
--- | A vote record belongs to the resolution its view names.
 instance HasCheckedFetch VoteRecord ResolutionInfo where
   contractGroupId record = (view record).resolution

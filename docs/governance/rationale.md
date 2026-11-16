@@ -46,8 +46,8 @@ don't have.
 
 A vote counts only if its voter has the right to vote, has not voted already,
 and voted for something the mechanism counts. A resolver passes the vote records
-through `validVoteEncoding`, `validVoteRecordVoters` and `distinctVotersAmongVoteRecords`,
-and the weights through `validWeights`, before `casts` counts them. They
+through `validVotes`, `validVoteRecordVoters` and `distinctVotersAmongVoteRecords`,
+and the voting rights through `validVotingRights`, before `casts` counts them. They
 refuse:
 
 - a voter who appears on two vote records;

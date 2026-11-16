@@ -15,7 +15,7 @@ import Cap.Governance.Utils.VotingRights (partyAsOwnerId)
 import Cap.Governance.Utils (Verdict (..))
 
 import Cap.Examples.BabyDso.Config
-import Cap.Examples.BabyDso.Submission (SharedBallot, encodeParametersVote, weightedVoteMechanismName)
+import Cap.Examples.BabyDso.Submission (SharedVoteRecord, encodeParametersVote, weightedVoteMechanismName)
 
 import Cap.Examples.BabyDso.Demo.Fixture
 
@@ -25,19 +25,19 @@ svsSetBothFees = do
   f <- setupAs "happy"
 
   opened <- openVoteAs f f.sv1 (feeVote 0.05 2.0)
-  Some ballot <- queryContractId f.sv1 opened
-  ballot.openingWeights === Map.fromList [(partyAsOwnerId f.sv1, 5.0), (partyAsOwnerId f.sv2, 3.0), (partyAsOwnerId f.sv3, 1.0)]
+  Some record <- queryContractId f.sv1 opened
+  record.openingWeights === Map.fromList [(partyAsOwnerId f.sv1, 5.0), (partyAsOwnerId f.sv2, 3.0), (partyAsOwnerId f.sv3, 1.0)]
 
   withSv2 <- castAs f f.sv2 opened (feeVote 0.06 2.5)
-  ballotCid <- castAs f f.sv3 withSv2 (feeVote 0.09 4.0)
-  Some cast <- queryContractId f.sv1 ballotCid
+  recordCid <- castAs f f.sv3 withSv2 (feeVote 0.09 4.0)
+  Some cast <- queryContractId f.sv1 recordCid
   Map.keys cast.votes === sort [f.sv1, f.sv2, f.sv3]
 
   setTime f.terms.votingClosesAt
-  result <- resolveVoteAs f f.sv1 ballotCid
+  result <- resolveVoteAs f f.sv1 recordCid
   result.verdict === Decided (feeParameters 0.05 2.0)
   [execution] <- pure result.executions
-  queryContractId f.sv1 ballotCid >>= (=== None)
+  queryContractId f.sv1 recordCid >>= (=== None)
 
   Some pending <- queryInterfaceContractId f.sv2 execution
   setTime pending.executionCore.opensAt
@@ -96,5 +96,5 @@ svCastsThroughTheVoteTopicInterface = do
   result <- submit (actAs f.sv2 <> readAs f.dso) (castFor (partyAsOwnerId f.sv2))
 
   [created] <- pure result.created
-  Some cast <- queryContractId f.sv1 (coerceContractId created : ContractId SharedBallot)
+  Some cast <- queryContractId f.sv1 (coerceContractId created : ContractId SharedVoteRecord)
   Map.keys cast.votes === sort [f.sv1, f.sv2]

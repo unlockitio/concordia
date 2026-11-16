@@ -1,6 +1,6 @@
 -- SPDX-License-Identifier: Apache-2.0
 
-module Cap.Examples.MajorityVote.Ballot where
+module Cap.Examples.MajorityVote.VoteRecord where
 
 import Prelude hiding (Action)
 
@@ -21,7 +21,7 @@ yay = "yay"
 nay : Text
 nay = "nay"
 
-template PrivateBallot
+template PrivateVoteRecord
   with
     operator : Party
     voter : Party
@@ -36,40 +36,40 @@ template PrivateBallot
 
     ensure optional True (`elem` [yay, nay]) vote
 
-    choice PrivateBallot_Cast : ContractId PrivateBallot
+    choice PrivateVoteRecord_Cast : ContractId PrivateVoteRecord
       with
         option : Text
       controller voter
       do
         now <- getTime
         requireOpen "the voting window is open" now opensAt (Some closesAt)
-        require "this ballot carries no vote yet" (isNone vote)
+        require "this vote record carries no vote yet" (isNone vote)
         create this with vote = Some option
 
-    choice PrivateBallot_Withdraw : ContractId PrivateBallot
+    choice PrivateVoteRecord_Withdraw : ContractId PrivateVoteRecord
       controller voter
       do
         now <- getTime
         requireOpen "the voting window is open" now opensAt (Some closesAt)
-        require "this ballot carries a vote to withdraw" (isSome vote)
+        require "this vote record carries a vote to withdraw" (isSome vote)
         create this with vote = None
 
-    choice PrivateBallot_Expire : ()
+    choice PrivateVoteRecord_Expire : ()
       controller operator
       do
         now <- getTime
-        requireExpired "the ballot has expired" now (Some expiresAt)
+        requireExpired "the vote record has expired" now (Some expiresAt)
 
-    choice PrivateBallot_Consume : ()
+    choice PrivateVoteRecord_Consume : ()
       controller operator
       do pure ()
 
 
-instance HasCheckedFetch PrivateBallot ResolutionInfo where
-  contractGroupId ballot = ballot.resolution
+instance HasCheckedFetch PrivateVoteRecord ResolutionInfo where
+  contractGroupId record = record.resolution
 
-instance IsVoteRecord PrivateBallot Text where
-  votesOf ballot = Map.fromList [(partyAsOwnerId ballot.voter, optional Absent Voted ballot.vote)]
+instance IsVoteRecord PrivateVoteRecord Text where
+  votesOf record = Map.fromList [(partyAsOwnerId record.voter, optional Absent Voted record.vote)]
   snapshotsOf _ = Map.empty
-  actionOf ballot = Some ballot.actionCid
-  consume cid = exercise cid PrivateBallot_Consume
+  actionOf record = Some record.actionCid
+  consume cid = exercise cid PrivateVoteRecord_Consume

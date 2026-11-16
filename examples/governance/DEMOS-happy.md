@@ -18,7 +18,7 @@ transfer fee lives on `AmuletConfig`, signed by `amuletAuthority`, and the entry
 fee lives on `AnsRules`, signed by `dso`. `SetFeesAction` names both contracts as targets,
 so an execution updates both fees or neither.
 
-The SVs vote on one `SharedBallot` with weights read from `SvWeightSource`
+The SVs vote on one `SharedVoteRecord` with weights read from `SvWeightSource`
 contracts. `DsoResolver_OpenVote` reads the weights and takes a snapshot of
 both targets when the vote opens. `DsoResolver_ResolveVote` requires two thirds
 of the opening weight and takes the weighted median of each fee field. The
@@ -43,14 +43,14 @@ sequenceDiagram
     participant SV2
     participant SV3
     participant R as DsoResolver
-    participant B as SharedBallot
+    participant B as SharedVoteRecord
     participant X as FeeUpdate
     participant T as AmuletConfig + AnsRules
 
     SV1->>R: DsoResolver_OpenVote — (0.05, 2.0)
     R->>B: create — weights, target snapshots
-    SV2->>B: SharedBallot_Cast — (0.06, 2.5)
-    SV3->>B: SharedBallot_Cast — (0.09, 4.0)
+    SV2->>B: SharedVoteRecord_Cast — (0.06, 2.5)
+    SV3->>B: SharedVoteRecord_Cast — (0.09, 4.0)
     SV1->>R: DsoResolver_ResolveVote
     Note over R: two thirds reached, weighted median (0.05, 2.0)
     R->>X: Action_AuthorizeExecution creates FeeUpdate
@@ -73,7 +73,7 @@ sequenceDiagram
     end
     box Contracts
         participant R as DsoResolver
-        participant B as SharedBallot
+        participant B as SharedVoteRecord
         participant ACT as SetFeesAction
         participant X as FeeUpdate
         participant CFG as AmuletConfig
@@ -94,21 +94,21 @@ sequenceDiagram
     R->>ACT: fetch, then snapshotStatesWith action_readStateImpl
     ACT->>CFG: readState — snapshot of transferFee and epoch
     ACT->>ANS: readIdentity — snapshot of the contract id
-    R->>B: create SharedBallot — weights, snapshots, votes {SV1}
+    R->>B: create SharedVoteRecord — weights, snapshots, votes {SV1}
 
     Note over AA,ANS: Cast, before votingClosesAt
-    SV2->>B: SharedBallot_Cast — (0.06, 2.5)
+    SV2->>B: SharedVoteRecord_Cast — (0.06, 2.5)
     B->>B: archive and recreate with SV2's vote
-    SV3->>B: SharedBallot_Cast — (0.09, 4.0)
+    SV3->>B: SharedVoteRecord_Cast — (0.09, 4.0)
     B->>B: archive and recreate with SV3's vote
 
     Note over AA,ANS: Resolve, after votingClosesAt
-    SV1->>R: DsoResolver_ResolveVote — resolution, [ballotCid]
-    R->>B: fetchGroup, requireClosed, requireMetFrom (votesDecodable, votersEligible, distinctVotersAmongBallots), casts
-    R->>B: consumeBallots — Ballot_Consume
+    SV1->>R: DsoResolver_ResolveVote — resolution, [recordCid]
+    R->>B: fetchGroup, requireClosed, requireMetFrom (validVotes, validVoteRecordVoters, distinctVotersAmongVoteRecords), casts
+    R->>B: consumeVoteRecords — VoteRecord_Consume
     R->>R: decide (atLeastShareOfTotal 2 3) weightedMedianByField — 9.0 cast of 6.0 needed
     Note over R: Decided (transferFee 0.05, entryFee 2.0)
-    R->>ACT: Action_AuthorizeExecution — actors [dso], outcome, snapshots from the ballot
+    R->>ACT: Action_AuthorizeExecution — actors [dso], outcome, snapshots from the vote record
     ACT->>X: create FeeUpdate — opensAt now + 2h, executors = each SV alone
     R-->>SV1: ResolveResult — verdict, [FeeUpdate]
 
@@ -132,10 +132,10 @@ runs the round and is trusted to see every vote.
 
 A member of the electorate opens a `Proposal` through `Resolver_Propose`.
 The operator invites each voter, and each voter accepts the invitation, which
-adds the voter to the proposal's `roll` and creates a `PrivateBallot` signed by
-the operator and the voter. No other party observes a `PrivateBallot`.
+adds the voter to the proposal's `roll` and creates a `PrivateVoteRecord` signed by
+the operator and the voter. No other party observes a `PrivateVoteRecord`.
 
-After the voting window closes, the operator presents every ballot on the roll
+After the voting window closes, the operator presents every vote record on the roll
 to `Resolver_ResolveMajority`. A `yay` wins when its weight is more than half
 of the electorate. On a `yay` the resolver calls `Action_AuthorizeExecution` on
 `SetConfigAction`, which creates a `ConfigUpdate` that any single voter can
@@ -150,17 +150,17 @@ sequenceDiagram
     participant OP as operator
     participant V as Voters
     participant R as Resolver
-    participant BL as PrivateBallot
+    participant BL as PrivateVoteRecord
     participant X as ConfigUpdate
     participant CFG as Config
 
     V->>R: Resolver_Propose (Alice) — creates Proposal
-    OP->>V: Proposal_Invite — one BallotInvitation each
-    V->>BL: BallotInvitation_Accept — join the roll, create PrivateBallot
-    V->>BL: PrivateBallot_Cast — yay, yay, nay
+    OP->>V: Proposal_Invite — one VoteRecordInvitation each
+    V->>BL: VoteRecordInvitation_Accept — join the roll, create PrivateVoteRecord
+    V->>BL: PrivateVoteRecord_Cast — yay, yay, nay
     Note over OP,BL: votes are visible to the operator, not to dso or other voters
     OP->>R: Resolver_ResolveMajority
-    Note over R: ballots cover the roll, 2 of 3 yay
+    Note over R: vote records cover the roll, 2 of 3 yay
     R->>X: Action_AuthorizeExecution creates ConfigUpdate
     V->>X: Executable_Execute (Alice)
     X->>CFG: setting is still "sync-a", set "sync-b"
@@ -168,7 +168,7 @@ sequenceDiagram
 
 ### Long version
 
-The long version adds the setup, the per-voter invitation and roll entry, the ballot checks at resolution, and the state check at execution.
+The long version adds the setup, the per-voter invitation and roll entry, the vote record checks at resolution, and the state check at execution.
 
 ```mermaid
 sequenceDiagram
@@ -182,8 +182,8 @@ sequenceDiagram
     box Contracts
         participant R as Resolver
         participant P as Proposal
-        participant I as BallotInvitation
-        participant BL as PrivateBallot
+        participant I as VoteRecordInvitation
+        participant BL as PrivateVoteRecord
         participant ACT as SetConfigAction
         participant X as ConfigUpdate
         participant CFG as Config
@@ -198,27 +198,27 @@ sequenceDiagram
     A->>R: Resolver_Propose — proposalId, terms
     R->>P: create Proposal — mechanism "majority", roll []
     OP->>P: Proposal_Invite
-    P->>I: create BallotInvitation × 3 — signed by dso and operator
+    P->>I: create VoteRecordInvitation × 3 — signed by dso and operator
 
     Note over DSO,CFG: Join the roll, before entryClosesAt
-    A->>I: BallotInvitation_Accept — proposalCid
+    A->>I: VoteRecordInvitation_Accept — proposalCid
     I->>P: Proposal_Join — controller Alice and dso
     P->>P: archive and recreate with Alice on the roll
-    I->>BL: create PrivateBallot — signed by operator and Alice, vote None
+    I->>BL: create PrivateVoteRecord — signed by operator and Alice, vote None
     Note over Bo,C: Bob and Carol accept the same way
 
     Note over DSO,CFG: Cast, between entryClosesAt and votingClosesAt
-    A->>BL: PrivateBallot_Cast — yay
-    Bo->>BL: PrivateBallot_Cast — yay
-    C->>BL: PrivateBallot_Cast — nay
-    Note over OP,BL: each ballot is visible to its voter and the operator only
+    A->>BL: PrivateVoteRecord_Cast — yay
+    Bo->>BL: PrivateVoteRecord_Cast — yay
+    C->>BL: PrivateVoteRecord_Cast — nay
+    Note over OP,BL: each vote record is visible to its voter and the operator only
 
     Note over DSO,CFG: Resolve, after votingClosesAt
-    OP->>R: Resolver_ResolveMajority — proposalCid, three ballots
+    OP->>R: Resolver_ResolveMajority — proposalCid, three vote records
     R->>P: fetch, requireResolvedBy
-    R->>BL: fetchGroup, requireClosed, check the ballot windows and actionCid
-    R->>R: requireMetFrom (votersEligible, distinctVotersAmongBallots), casts — the ballots cover the roll
-    R->>BL: consumeBallots — PrivateBallot_Consume
+    R->>BL: fetchGroup, requireClosed, check the vote record windows and actionCid
+    R->>R: requireMetFrom (validVoteRecordVoters, distinctVotersAmongVoteRecords), casts — the vote records cover the roll
+    R->>BL: consumeVoteRecords — PrivateVoteRecord_Consume
     R->>R: decide majorityOf — 2 yay of 3
     Note over R: Decided yay
     R->>ACT: Action_AuthorizeExecution — actors [dso], outcome yay

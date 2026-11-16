@@ -16,7 +16,7 @@ import Cap.Governance.ExecutableV1 (Executable)
 data ActionView = ActionView
   with
     authorizers : [[Party]]
-    snapshots : Map AuthenticKey Snapshot -- the targets it acts on, with the parts it fixes; a resolution fills the parts left open
+    snapshots : Map AuthenticKey Snapshot -- parts left open are filled by the resolution
     meta : Metadata
   deriving (Eq, Show)
 
@@ -34,6 +34,8 @@ interface Action where
 
   action_readStateImpl : TargetReader
 
+  -- | Implementations MUST NOT let the resolution's snapshots override parts
+  -- the action fixed (see mergeSnapshotsWithoutConflicts).
   nonconsuming choice Action_AuthorizeExecution : Action_AuthorizeExecutionResult
     with
       actors : [Party]
