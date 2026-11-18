@@ -6,6 +6,7 @@ COMPOSE="$HERE/compose/compose.yaml"
 STATE="$HERE/compose/state"
 LEDGER_PORT=${LEDGER_PORT:-41000}
 export LEDGER_PORT
+. "$HERE/../build-root.sh"
 PAUSE=${PAUSE:-5}
 case "$PAUSE" in
   '' | *[!0-9]*) echo 'PAUSE must be a non-negative integer number of seconds.' >&2; exit 2 ;;
@@ -46,12 +47,13 @@ run_step() {
 }
 case "${1:-help}" in
   up)
-    : "${BABYCDF_BUILD_ROOT:?Set an approved external temporary directory}"
-    case "$BABYCDF_BUILD_ROOT" in /*) ;; *) echo 'BABYCDF_BUILD_ROOT must be absolute' >&2; exit 2;; esac
-    [ -d "$BABYCDF_BUILD_ROOT" ] || { echo 'BABYCDF_BUILD_ROOT must exist' >&2; exit 2; }
-    BUILD=$(CDPATH= cd -- "$BABYCDF_BUILD_ROOT" && pwd -P)
+    # Shared contract with prepare-dependencies.sh: unset defaults to the
+    # gitignored .build; an explicit value must be absolute and already exist,
+    # and an invalid one creates nothing.
+    babycdf_build_root "$HERE/.." || exit 2
+    BUILD="$BABYCDF_BUILD_ROOT"
     REPO=$(CDPATH= cd -- "$HERE/../../../.." && pwd -P)
-    case "$BUILD/" in "$REPO/"*) echo 'BABYCDF_BUILD_ROOT must be outside Concordia' >&2; exit 2;; esac
+    printf '[INIT] build root: %s\n' "$BUILD"
     sh "$HERE/compose/prepare-cips.sh"
     if [ -n "$(compose ps -q credential-canton)" ]; then
       echo 'Already running: down first before a second up (dedicated user creation is not idempotent).' >&2
@@ -74,8 +76,22 @@ case "${1:-help}" in
     chmod 644 "$BLOB_NEXT"
     mv "$BLOB_NEXT" "$STATE/proposal-blob.txt"
     sh "$HERE/../prepare-dependencies.sh"
-    (cd "$BUILD" && DAML_PACKAGE="$HERE/../impl" dpm build --enable-multi-package=no)
-    (cd "$BUILD" && DAML_PACKAGE="$HERE" dpm build --enable-multi-package=no)
+    # dpm resolves the nearest ancestor multi-package.yaml. When the build root
+    # is inside Concordia that is the repository root, which does not list these
+    # packages. Each build gets its own isolated, script-owned manifest
+    # directory, so a caller-owned $BUILD/multi-package.yaml is never touched and
+    # a concurrent dependency preparation cannot alter this one. The root
+    # manifest and `dpm build --all` are unaffected.
+    IMPL_DIR=$(CDPATH= cd -- "$HERE/../impl" && pwd -P)
+    DEMO_DIR=$(CDPATH= cd -- "$HERE" && pwd -P)
+    STEP_MANIFEST=$(babycdf_manifest_dir "$BUILD" "$IMPL_DIR" "$DEMO_DIR")
+    # Run from the isolated manifest directory. dpm resolves an ancestor
+    # multi-package.yaml from the CWD too, so building from $BUILD would pick up
+    # a caller-owned manifest sitting there.
+    (cd "$STEP_MANIFEST" && DAML_PACKAGE="$IMPL_DIR" \
+      dpm build --enable-multi-package=yes --multi-package-path "$STEP_MANIFEST")
+    (cd "$STEP_MANIFEST" && DAML_PACKAGE="$DEMO_DIR" \
+      dpm build --enable-multi-package=yes --multi-package-path "$STEP_MANIFEST")
     if ! compose up -d --build --wait --wait-timeout 180 credential-canton; then
       echo 'Readiness failed: inspect compose logs credential-canton, docker stats --no-stream and docker ps -a; run down before retry.' >&2
       exit 1

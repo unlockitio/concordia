@@ -29,7 +29,6 @@ Terminal 2, the journey:
 
 ```sh
 export LEDGER_PORT=41010 AGENT_INTERVAL=5
-export BABYCDF_BUILD_ROOT=<approved-external-temp>
 sh examples/governance/babycdf/demo/run-demo.sh up
 sh examples/governance/babycdf/demo/run-demo.sh all    # or: step 2 .. step 6
 sh examples/governance/babycdf/demo/run-demo.sh down
@@ -41,7 +40,28 @@ have run or been attempted. `help` lists every command.
 
 Prerequisites: Docker Compose >= 2.24, the existing dpm 1.0.22 / SDK 3.5.11,
 Python 3, the pinned CIPS object and the sibling `canton-dev-fund` proposal blob.
-`BABYCDF_BUILD_ROOT` must be absolute, existing and outside Concordia. Canton is
+Build artifacts go to `examples/governance/babycdf/.build/` by default, which is
+gitignored and created automatically — **no `export` is needed**. Set
+`BABYCDF_BUILD_ROOT` to an absolute, existing directory to override it, for
+example to keep scratch off a slow volume. The run prints the build root it uses
+as `[INIT] build root: …`.
+
+Why the build root needs care at all: `dpm` resolves the nearest ancestor
+`multi-package.yaml` from both the package path and the working directory, and
+inside Concordia that is the repository root, which does not list the BabyCDF
+packages or the CIPS credentials export. Each build therefore gets its own
+`mktemp -d` directory inside the build root, holding a generated
+`multi-package.yaml` that names exactly the packages being built, and runs from
+that directory with `--multi-package-path` pointing at it. Two consequences
+worth knowing: a `multi-package.yaml` you leave in the build root is never read
+or overwritten, and two preparations running at once cannot disturb each
+other's manifest. The root manifest is never modified and `dpm build --all` is
+unaffected.
+
+A note on the flag: `dpm 1.0.22 --help` labels `--multi-package-path` as `FILE`,
+but this build appends `/multi-package.yaml` to the value, so it must be given
+the **directory**. Passing the file itself fails with
+`.../multi-package.yaml/multi-package.yaml does not exist`. Canton is
 given 4 GiB with a 2 GiB heap, tested on one arm64 Docker Desktop host with
 8 CPUs and about 8 GiB. The Ledger API is published on loopback only, with no
 default token and no GitHub writes.

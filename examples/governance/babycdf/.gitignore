@@ -1,0 +1,3 @@
+# Default build root for the demo (BABYCDF_BUILD_ROOT). Generated, never committed:
+# it holds the CIPS export, a generated multi-package.yaml and build scratch.
+.build/
