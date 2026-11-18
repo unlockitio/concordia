@@ -86,7 +86,7 @@ validWithinBounds minimum maximum value =
 -- counts, and that every decoded vote passes the value check, such as
 -- validOption or validWithinBounds. Pass (const []) when the mechanism has no
 -- value check. Each vote fails at most once.
-validVotes : IsVoteRecord b v => (Vote v -> Optional (Vote a)) -> (a -> Unmet) -> Check b
+validVotes : IsVoteRecord r v act => (Vote v -> Optional (Vote a)) -> (a -> Unmet) -> Check r
 validVotes decodeVote check record =
   [ "the vote of " <> show voter <> problem
   | (voter, raw) <- Map.toList (votesOf record)
@@ -103,7 +103,7 @@ validVotes decodeVote check record =
 -- Absent. The records MUST have passed validVotes, validVoteRecordVoters
 -- and distinctVotersAmongVoteRecords, and the weights validVotingRights: casts
 -- drops failures silently.
-casts : IsVoteRecord b v => (Vote v -> Optional (Vote a)) -> Map OwnerId Decimal -> [b] -> Casts a
+casts : IsVoteRecord r v act => (Vote v -> Optional (Vote a)) -> Map OwnerId Decimal -> [r] -> Casts a
 casts decodeVote weights records = Map.fromList
   [ (voter, Cast with weight; vote = fromOptional Absent (Map.lookup voter counted))
   | (voter, weight) <- Map.toList weights

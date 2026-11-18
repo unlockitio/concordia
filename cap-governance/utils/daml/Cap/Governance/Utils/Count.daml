@@ -72,15 +72,15 @@ presentWeight casts = sum [c.weight | c <- Map.values casts, isPresent c.vote]
 type Quorum a = Casts a -> Bool
 
 -- | The outcome of the casts, or None when they decide nothing.
-type Tally a r = Casts a -> Optional r
+type Tally a o = Casts a -> Optional o
 
-data Verdict r
-  = Decided r
+data Verdict o
+  = Decided o
   | Undecided
   | Lapsed
   deriving (Eq, Show)
 
-decide : Quorum a -> Tally a r -> Casts a -> Verdict r
+decide : Quorum a -> Tally a o -> Casts a -> Verdict o
 decide quorum tally casts
   | not (quorum casts) = Lapsed
   | otherwise = optional Undecided Decided (tally casts)
@@ -162,7 +162,7 @@ crossingHalf half below ((value, w) :: rest)
   | otherwise = crossingHalf half (below + w) rest
 
 
-firstOf : [Tally a r] -> Tally a r
+firstOf : [Tally a o] -> Tally a o
 firstOf tallies casts = case mapOptional (\tally -> tally casts) tallies of
   result :: _ -> Some result
   [] -> None

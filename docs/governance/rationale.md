@@ -31,7 +31,7 @@ each target by an `AuthenticKey`, which is the set of signatories plus an id. A
 contract id by itself cannot prove who signed the contract. Any party can create
 a contract of the same template with the same fields. `fetchCheckedAny` fetches
 the presented contract and compares the key it computes from its own
-signatories with the key the action names. `fetchVotingRights` does the same check
+signatories with the key the action names. `fetchVotingRightsPerKey` does the same check
 for the contracts that carry voting rights.
 
 **Example:** an action changes a parameter on a contract A signed by the operator.

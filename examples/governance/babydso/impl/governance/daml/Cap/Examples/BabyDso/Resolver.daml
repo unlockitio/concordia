@@ -10,6 +10,7 @@ import DA.Set (Set)
 import qualified DA.Set as Set
 import DA.TextMap (TextMap)
 import qualified DA.TextMap as TextMap
+import DA.Optional (fromSomeNote)
 import DA.Time (RelTime, addRelTime)
 
 import Splice.Api.Token.MetadataV1
@@ -24,7 +25,7 @@ import Cap.Governance.VoteRecordV1 (VoteRecord)
 import Cap.Governance.ExecutableV1 (Executable)
 import Cap.Governance.Types (Reason)
 import Cap.Governance.Utils.VotingRights
-  ( HasVotingRights (..), equalWeights, fetchVotingRightsPerContract, partyAsOwnerId )
+  ( HasVotingRights (..), equalWeights, fetchVotingRightsSummingWeights, partyAsOwnerId )
 import Cap.Governance.Utils
   ( Cast (..), Tally, Verdict (..), Vote (..), atLeastShareOfTotal, atLeastVotes
   , casts, consumeVoteRecords, decide, distinctVotersAmongVoteRecords, expectUniformAction
@@ -70,7 +71,7 @@ template DsoResolver
       do
         requireResolvedBy (resolverKey this) (coerceContractId self) resolution
         require ("the resolution names the mechanism " <> weightedVoteMechanismName) (resolution.mechanism == weightedVoteMechanismName)
-        openingWeights <- fmap (.weight) <$> fetchVotingRightsPerContract rightKeys rightCids
+        openingWeights <- fmap (.weight) <$> fetchVotingRightsSummingWeights rightKeys rightCids
         require "the proposer is a voter: it holds weight at opening"
           (partyAsOwnerId proposer `Map.member` openingWeights)
         action <- fetch actionCid
@@ -210,7 +211,7 @@ resolveConfirmations resolver confirmations = do
   now <- getTime
   require "no confirmation has expired" (all ((now <) . (.expiresAt)) confirmations)
   let records = map (toInterface @VoteRecord) confirmations
-      actionCid = expectUniformAction records
+      actionCid = fromSomeNote "the presented vote records name no action" (expectUniformAction records)
       snapshots = expectUniformSnapshots records
   let voters = Set.fromList (map partyAsOwnerId (Set.toList resolver.svs))
   requireMetFrom [validVoteRecordVoters voters] [distinctVotersAmongVoteRecords] records

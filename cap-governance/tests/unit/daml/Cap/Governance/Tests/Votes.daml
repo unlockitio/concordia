@@ -33,32 +33,32 @@ standardDecodersAreExactAndKeepAbstentions = do
 validVotesReportsEachFailureOnce : Script ()
 validVotesReportsEachFailureOnce = do
   let (yes, maybe, wrongKind, abstains) = ("yes", "maybe", "kind", "abstains")
-      ballot = TestBallot $ Map.fromList
+      record = TestVoteRecord $ Map.fromList
         [ (yes, Voted (AV_Text "yes"))
         , (maybe, Voted (AV_Text "maybe"))
         , (wrongKind, Voted (AV_Int 1))
         , (abstains, Abstained)
         ]
-  validVotes decodeTextVote (validOption ["yes", "no"]) ballot
+  validVotes decodeTextVote (validOption ["yes", "no"]) record
     === [ "the vote of " <> show wrongKind <> " does not decode as the kind this mechanism counts"
         , "the vote of " <> show maybe <> ": the option \"maybe\" is not among [\"yes\",\"no\"]"
         ]
 
--- The voters come from the weights map: a voter without a ballot, or whose
+-- The voters come from the weights map: a voter without a record, or whose
 -- vote does not decode, is Absent; one outside the map is not counted.
 castsCountsTheVotersOfTheWeightsMap : Script ()
 castsCountsTheVotersOfTheWeightsMap = do
-  let (yes, abstains, wrongKind, noBallot, outside) = ("yes", "abstains", "kind", "no-ballot", "outside")
-      ballots =
-        [ TestBallot $ Map.fromList [(yes, Voted (AV_Text "yes")), (abstains, Abstained)]
-        , TestBallot $ Map.fromList [(wrongKind, Voted (AV_Int 1)), (outside, Voted (AV_Text "no"))]
+  let (yes, abstains, wrongKind, noRecord, outside) = ("yes", "abstains", "kind", "no-record", "outside")
+      records =
+        [ TestVoteRecord $ Map.fromList [(yes, Voted (AV_Text "yes")), (abstains, Abstained)]
+        , TestVoteRecord $ Map.fromList [(wrongKind, Voted (AV_Int 1)), (outside, Voted (AV_Text "no"))]
         ]
-      weights = Map.fromList [(yes, 2.0), (abstains, 1.0), (wrongKind, 1.5), (noBallot, 3.0)]
-  casts decodeTextVote weights ballots === Map.fromList
+      weights = Map.fromList [(yes, 2.0), (abstains, 1.0), (wrongKind, 1.5), (noRecord, 3.0)]
+  casts decodeTextVote weights records === Map.fromList
     [ (yes, Cast with weight = 2.0; vote = Voted "yes")
     , (abstains, Cast with weight = 1.0; vote = Abstained)
     , (wrongKind, Cast with weight = 1.5; vote = Absent)
-    , (noBallot, Cast with weight = 3.0; vote = Absent)
+    , (noRecord, Cast with weight = 3.0; vote = Absent)
     ]
 
 -- Both bounds are inclusive, and None leaves a side open.

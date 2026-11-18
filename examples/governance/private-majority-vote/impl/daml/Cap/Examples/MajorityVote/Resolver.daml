@@ -203,12 +203,12 @@ resolveMajority resolver self proposalCid recordCids = do
 
   presented <- fetchGroup proposal.resolution recordCids
   let (cids, records) = unzip presented
-  forA_ records $ \b -> do
-    requireClosed "every presented vote record is closed for voting" now b.closesAt
+  forA_ records $ \record -> do
+    requireClosed "every presented vote record is closed for voting" now record.closesAt
     require "every vote record votes in the proposal's window"
-      (b.opensAt == terms.entryClosesAt
-        && b.closesAt == terms.votingClosesAt
-        && b.expiresAt == terms.expiresAt)
+      (record.opensAt == terms.entryClosesAt
+        && record.closesAt == terms.votingClosesAt
+        && record.expiresAt == terms.expiresAt)
   require "the vote records vote on the proposal's action" (expectUniformAction records == terms.actionCid)
 
   let voters = Set.fromList (map partyAsOwnerId (Set.toList resolver.electorate))

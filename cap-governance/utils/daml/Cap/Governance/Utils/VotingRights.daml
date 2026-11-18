@@ -8,9 +8,9 @@ module Cap.Governance.Utils.VotingRights
   , validVotingRights
 
     -- * Fetching
-  , fetchVotingRights
-  , fetchVotingRightsPerContract
-  , fetchVotingRightsFromOneContract
+  , fetchVotingRightsPerKey
+  , fetchVotingRightsSummingWeights
+  , fetchVotingRightsOfContract
 
     -- * Owners
   , partyAsOwnerId
@@ -19,6 +19,7 @@ module Cap.Governance.Utils.VotingRights
 
 import DA.Map (Map)
 import qualified DA.Map as Map
+import DA.Optional (fromSome)
 import DA.Set (Set)
 import qualified DA.Set as Set
 
@@ -60,24 +61,24 @@ validVotingRights rightKeys rights =
 ------------------  FETCHING  ------------------
 
 -- | Fetches and checks the contracts against rightKeys. Returns the rights
--- per key, unmerged.
-fetchVotingRights
+-- per key, unsummed.
+fetchVotingRightsPerKey
   : (HasFetch t, HasCheckedFetch t k, HasVotingRights t, Ord k, Show k)
   => Set k -> Map k (ContractId t) -> Update (Map k (Map OwnerId VotingRight))
-fetchVotingRights rightKeys rightCids = do
-  rights <- Map.fromList <$> forA (Map.toList rightCids) (\(rkey, cid) -> do
-    contract <- fetchChecked rkey cid
-    pure (rkey, rightsOf contract))
+fetchVotingRightsPerKey rightKeys rightCids = do
+  rights <- Map.fromList <$> forA (Map.toList rightCids) (\(rightKey, rightCid) -> do
+    contract <- fetchChecked rightKey rightCid
+    pure (rightKey, rightsOf contract))
   requireMet (validVotingRights rightKeys rights)
   pure rights
 
--- | Merged: an owner named by several contracts gets the sum of their
--- weights and the union of their casters.
-fetchVotingRightsPerContract
+-- | The voting rights summed over the contracts: an owner named by several
+-- contracts gets the sum of their weights and the union of their casters.
+fetchVotingRightsSummingWeights
   : (HasFetch t, HasCheckedFetch t k, HasVotingRights t, Ord k, Show k)
   => Set k -> Map k (ContractId t) -> Update (Map OwnerId VotingRight)
-fetchVotingRightsPerContract rightKeys rightCids = do
-  rights <- fetchVotingRights rightKeys rightCids
+fetchVotingRightsSummingWeights rightKeys rightCids = do
+  rights <- fetchVotingRightsPerKey rightKeys rightCids
   pure (Map.fromListWithR merge (concatMap Map.toList (Map.values rights)))
   where
     merge a b = VotingRight with
@@ -85,11 +86,12 @@ fetchVotingRightsPerContract rightKeys rightCids = do
       casters = Set.union a.casters b.casters
 
 -- | The voting rights of a single contract.
-fetchVotingRightsFromOneContract
+fetchVotingRightsOfContract
   : (HasFetch t, HasCheckedFetch t k, HasVotingRights t, Ord k, Show k)
   => k -> ContractId t -> Update (Map OwnerId VotingRight)
-fetchVotingRightsFromOneContract rightsKey rightsCid =
-  fetchVotingRightsPerContract (Set.singleton rightsKey) (Map.singleton rightsKey rightsCid)
+fetchVotingRightsOfContract rightKey rightCid = do
+  rights <- fetchVotingRightsPerKey (Set.singleton rightKey) (Map.singleton rightKey rightCid)
+  pure (fromSome (Map.lookup rightKey rights))
 
 
 ------------------  OWNERS  ------------------

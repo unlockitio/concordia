@@ -1,6 +1,6 @@
 -- SPDX-License-Identifier: Apache-2.0
 
-module Cap.Governance.Tests.Ballots where
+module Cap.Governance.Tests.VoteRecords where
 
 import DA.Assert ((===))
 import qualified DA.Map as Map
@@ -12,15 +12,15 @@ import Cap.Governance.Utils.VoteRecords
 import Cap.Governance.Tests.Support
 
 
--- Every ballot of a voter who appears twice fails, whatever the order, and on
--- ballots with several voters only the shared voter is reported.
-distinctVotersFailsEveryBallotOfARepeatedVoter : Script ()
-distinctVotersFailsEveryBallotOfARepeatedVoter = do
+-- Every vote record of a voter who appears twice fails, whatever the order, and
+-- on records with several voters only the shared voter is reported.
+distinctVotersFailsEveryVoteRecordOfARepeatedVoter : Script ()
+distinctVotersFailsEveryVoteRecordOfARepeatedVoter = do
   let (twice, once, alone) = ("twice", "once", "alone")
-      votesOf' parties = TestBallot $ Map.fromList [(p, Voted "yes") | p <- parties]
-      first = votesOf' [twice]
-      second = votesOf' [twice, once]
-      third = votesOf' [alone]
+      recordOf parties = TestVoteRecord $ Map.fromList [(p, Voted "yes") | p <- parties]
+      first = recordOf [twice]
+      second = recordOf [twice, once]
+      third = recordOf [alone]
       repeated = ["the voter " <> show twice <> " is on another vote record"]
   map (distinctVotersAmongVoteRecords [first, second, third]) [first, second, third]
     === [repeated, repeated, []]

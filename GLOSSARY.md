@@ -93,14 +93,13 @@ through `IsBallot`. `IsBallot` in `Cap.Governance.Utils.Ballots` ·
 
 **Voting right** — a contract the app registers that gives one or more holders
 the right to vote, each with a weight. A contract can carry one right or
-several. `HasVotingRights` and `fetchVotingRights` in
+several. `HasVotingRights` and `fetchVotingRightsSummingWeights` in
 `Cap.Governance.Utils.VotingRights`.
 
 **Weight** — how much a voter's vote counts: the sum of the weights of the
-voting rights the voter holds. `fetchWeightsPerContract` reads them from one
-contract per key, and `fetchWeightsFromOneContract` from a single contract.
-`fetchVotersPerContract` and `fetchVotersFromOneContract` return the holders
-with a positive weight, for one vote per voter. In
+voting rights the voter holds. `fetchVotingRightsSummingWeights` sums them over one
+contract per key, `fetchVotingRightsOfContract` reads a single contract, and
+`fetchVotingRightsPerKey` returns them per key, unsummed. In
 `Cap.Governance.Utils.VotingRights`.
 
 ## Counting

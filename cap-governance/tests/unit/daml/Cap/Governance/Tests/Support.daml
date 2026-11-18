@@ -2,7 +2,7 @@
 
 -- | Shared fixtures for the unit tests.
 module Cap.Governance.Tests.Support
-  ( TestBallot (..)
+  ( TestVoteRecord (..)
   , Dummy (..)
   , dummyCids
   , keyIn
@@ -20,16 +20,16 @@ import Cap.Governance.Types (OwnerId, Vote)
 import Cap.Governance.Utils.VoteRecords (IsVoteRecord (..))
 
 
--- | A ballot carrying only votes. The tests that use it read nothing else, so
+-- | A vote record carrying only votes. The tests that use it read nothing else, so
 -- the other IsVoteRecord methods are stubs.
-data TestBallot v = TestBallot with
+data TestVoteRecord v = TestVoteRecord with
     votes : Map OwnerId (Vote v)
   deriving (Eq, Show)
 
-instance IsVoteRecord (TestBallot v) v where
-  votesOf ballot = ballot.votes
+instance IsVoteRecord (TestVoteRecord v) v () where
+  votesOf record = record.votes
   snapshotsOf _ = Map.empty
-  actionOf _ = error "a TestBallot names no action"
+  actionOf _ = ()
   consume _ = pure ()
 
 

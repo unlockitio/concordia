@@ -34,7 +34,7 @@ these.
   action, and a resolver can then authorize changes to the contract without
   depending on its package.
 - **Eligibility.** A voter's right to vote is a contract the app registers, read
-  through `HasVotingRights` and `fetchVotingRights`. Institutions bring their own identity
+  through `HasVotingRights` and `fetchVotingRightsSummingWeights`. Institutions bring their own identity
   or KYC system and mint these contracts only to eligible parties.
 - **A drift policy per action.** Whether an approved outcome executes over a
   target that changed since its snapshot is decided by the `DriftPolicy` the

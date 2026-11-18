@@ -36,25 +36,25 @@ template VotingRightsProbe
   where
     signatory owner
 
-    nonconsuming choice VotingRightsProbe_FetchVotingRightsPerContract : Map OwnerId VotingRight
+    nonconsuming choice VotingRightsProbe_FetchVotingRightsSummingWeights : Map OwnerId VotingRight
       with
         rightKeys : Set Text
         rightCids : Map Text (ContractId VotingRightsSource)
       controller owner
-      do fetchVotingRightsPerContract rightKeys rightCids
+      do fetchVotingRightsSummingWeights rightKeys rightCids
 
 
 -- An owner named by several contracts gets the sum of their weights and the
 -- union of their casters; a contract that only names casters adds no weight.
-fetchVotingRightsPerContractSumsWeightsAndUnitesCasters : Script ()
-fetchVotingRightsPerContractSumsWeightsAndUnitesCasters = do
+fetchVotingRightsSummingWeightsUnitesCasters : Script ()
+fetchVotingRightsSummingWeightsUnitesCasters = do
   [owner, alice, bob] <- forA ["owner", "alice", "bob"] $ \n -> allocateParty ("rights-merge-" <> n)
   probe <- submit owner $ createCmd VotingRightsProbe with owner
   let source tag rights = submit owner $ createCmd VotingRightsSource with owner; tag; rights = Map.fromList rights
   r1 <- source "r1" [("sv-1", VotingRight 2.0 (Set.fromList [alice])), ("sv-2", VotingRight 1.0 (Set.fromList [bob]))]
   r2 <- source "r2" [("sv-1", VotingRight 1.5 Set.empty)]
   r3 <- source "r3" [("sv-1", VotingRight 0.0 (Set.fromList [bob]))]
-  rights <- submit owner $ exerciseCmd probe VotingRightsProbe_FetchVotingRightsPerContract with
+  rights <- submit owner $ exerciseCmd probe VotingRightsProbe_FetchVotingRightsSummingWeights with
     rightKeys = Set.fromList ["r1", "r2", "r3"]
     rightCids = Map.fromList [("r1", r1), ("r2", r2), ("r3", r3)]
   rights === Map.fromList

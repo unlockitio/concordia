@@ -68,8 +68,8 @@ template PrivateVoteRecord
 instance HasCheckedFetch PrivateVoteRecord ResolutionInfo where
   contractGroupId record = record.resolution
 
-instance IsVoteRecord PrivateVoteRecord Text where
+instance IsVoteRecord PrivateVoteRecord Text (ContractId Action) where
   votesOf record = Map.fromList [(partyAsOwnerId record.voter, optional Absent Voted record.vote)]
   snapshotsOf _ = Map.empty
-  actionOf record = Some record.actionCid
+  actionOf record = record.actionCid
   consume cid = exercise cid PrivateVoteRecord_Consume
