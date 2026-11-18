@@ -1,0 +1,5 @@
+**/.daml
+**/target
+demo/compose/.cips
+demo/compose/state
+**/__pycache__

@@ -1,0 +1,1149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BabyCDF — Voted rules, agentic review (v4)</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --bg-soft: #161b22;
+    --panel: #1b2230;
+    --ink: #e8eef7;
+    --ink-dim: #a6b3c6;
+    --line: #2a3344;
+    --gh: #8b94ff;
+    --gh-bg: rgba(139, 148, 255, 0.12);
+    --agent: #39d3c0;
+    --agent-bg: rgba(57, 211, 192, 0.12);
+    --member: #f2b53c;
+    --member-bg: rgba(242, 181, 60, 0.12);
+    --ledger: #c678f0;
+    --ledger-bg: rgba(198, 120, 240, 0.12);
+    --ok: #3fdd8a;
+    --warn: #f2b53c;
+    --stop: #ff6b6b;
+    --radius: 12px;
+    --font: "Inter", "Helvetica Neue", Arial, sans-serif;
+    --mono: "SFMono-Regular", "JetBrains Mono", Menlo, Consolas, monospace;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--font);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ---------- chrome ---------- */
+
+  #topbar {
+    position: fixed;
+    top: 0; left: 0; right: 0;
+    height: 44px;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 0 18px;
+    background: rgba(13, 17, 23, 0.92);
+    border-bottom: 1px solid var(--line);
+    z-index: 40;
+    font-size: 13px;
+    color: var(--ink-dim);
+  }
+
+  #topbar .brand { color: var(--ink); font-weight: 600; letter-spacing: 0.2px; }
+  #topbar .spacer { flex: 1; }
+  #topbar .hint { font-family: var(--mono); font-size: 11.5px; }
+  #topbar .hint b { color: var(--ink); font-weight: 600; }
+
+  #bar-track {
+    position: fixed;
+    top: 44px; left: 0; right: 0;
+    height: 3px;
+    background: var(--bg-soft);
+    z-index: 40;
+  }
+
+  #bar {
+    height: 3px;
+    width: 0%;
+    background: linear-gradient(90deg, var(--agent), var(--ledger));
+    transition: width 180ms ease;
+  }
+
+  #dots {
+    position: fixed;
+    bottom: 14px; left: 0; right: 0;
+    display: flex;
+    justify-content: center;
+    gap: 8px;
+    z-index: 40;
+  }
+
+  #dots button {
+    width: 9px; height: 9px;
+    padding: 0;
+    border-radius: 50%;
+    border: 1px solid var(--line);
+    background: var(--bg-soft);
+    cursor: pointer;
+  }
+
+  #dots button[aria-current="true"] {
+    background: var(--agent);
+    border-color: var(--agent);
+    transform: scale(1.25);
+  }
+
+  /* ---------- slides ---------- */
+
+  .deck { padding: 64px 0 56px; }
+
+  .slide {
+    display: none;
+    width: min(1180px, 94vw);
+    margin: 0 auto;
+    padding: 10px 4px 24px;
+  }
+
+  .slide.is-active { display: block; }
+
+  .slide header { margin-bottom: 18px; }
+
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 11.5px;
+    letter-spacing: 1.4px;
+    text-transform: uppercase;
+    color: var(--ink-dim);
+  }
+
+  .slide h1 {
+    font-size: 44px;
+    line-height: 1.1;
+    margin: 10px 0 6px;
+  }
+
+  .slide h2 {
+    font-size: 30px;
+    line-height: 1.18;
+    margin: 6px 0 4px;
+  }
+
+  .slide .sub { color: var(--ink-dim); font-size: 15px; margin: 4px 0 0; }
+
+  /* ---------- building blocks ---------- */
+
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 14px 16px;
+  }
+
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  .stack { display: grid; gap: 12px; }
+
+  ul.tight { margin: 6px 0 0; padding-left: 18px; }
+  ul.tight li { margin: 5px 0; font-size: 14.5px; line-height: 1.45; }
+  ul.tight li b { color: #fff; }
+
+  .kicker {
+    font-family: var(--mono);
+    font-size: 11.5px;
+    letter-spacing: 1.1px;
+    text-transform: uppercase;
+    color: var(--ink-dim);
+    margin-bottom: 8px;
+  }
+
+  .mono { font-family: var(--mono); }
+
+  .pill {
+    display: inline-block;
+    font-family: var(--mono);
+    font-size: 11.5px;
+    padding: 3px 9px;
+    border-radius: 999px;
+    border: 1px solid var(--line);
+    color: var(--ink-dim);
+  }
+
+  .pill.proto { color: var(--warn); border-color: rgba(242, 181, 60, 0.5); background: var(--member-bg); }
+  .pill.ok { color: var(--ok); border-color: rgba(63, 221, 138, 0.5); background: rgba(63, 221, 138, 0.1); }
+  .pill.stop { color: var(--stop); border-color: rgba(255, 107, 107, 0.5); background: rgba(255, 107, 107, 0.1); }
+  .pill.plan { color: var(--gh); border-color: rgba(139, 148, 255, 0.5); background: var(--gh-bg); }
+
+  .flowline {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: stretch;
+    gap: 8px;
+  }
+
+  .flowline .node {
+    flex: 1 1 0;
+    min-width: 130px;
+    border-radius: 10px;
+    padding: 12px 11px;
+    border: 1px solid var(--line);
+    background: var(--bg-soft);
+    font-size: 13.5px;
+    line-height: 1.35;
+  }
+
+  .flowline .arrow {
+    align-self: center;
+    color: var(--ink-dim);
+    font-size: 18px;
+  }
+
+  .node .nlabel {
+    display: block;
+    font-family: var(--mono);
+    font-size: 10.5px;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    margin-bottom: 5px;
+  }
+
+  .n-gh { border-color: rgba(139, 148, 255, 0.55); background: var(--gh-bg); }
+  .n-gh .nlabel { color: var(--gh); }
+  .n-agent { border-color: rgba(57, 211, 192, 0.55); background: var(--agent-bg); }
+  .n-agent .nlabel { color: var(--agent); }
+  .n-member { border-color: rgba(242, 181, 60, 0.55); background: var(--member-bg); }
+  .n-member .nlabel { color: var(--member); }
+  .n-ledger { border-color: rgba(198, 120, 240, 0.55); background: var(--ledger-bg); }
+  .n-ledger .nlabel { color: var(--ledger); }
+
+  /* ---------- swimlanes ---------- */
+
+  .swim {
+    display: grid;
+    grid-template-columns: 132px repeat(6, 1fr);
+    gap: 8px;
+    align-items: stretch;
+  }
+
+  .lane-name {
+    display: flex;
+    align-items: center;
+    font-size: 12.5px;
+    font-weight: 600;
+    padding: 8px 10px;
+    border-radius: 10px;
+    border: 1px solid var(--line);
+    line-height: 1.25;
+  }
+
+  .lane-gh { color: var(--gh); background: var(--gh-bg); border-color: rgba(139, 148, 255, 0.45); }
+  .lane-agent { color: var(--agent); background: var(--agent-bg); border-color: rgba(57, 211, 192, 0.45); }
+  .lane-member { color: var(--member); background: var(--member-bg); border-color: rgba(242, 181, 60, 0.45); }
+  .lane-ledger { color: var(--ledger); background: var(--ledger-bg); border-color: rgba(198, 120, 240, 0.45); }
+
+  .cell {
+    border-radius: 10px;
+    border: 1px solid var(--line);
+    background: var(--bg-soft);
+    padding: 9px 10px;
+    font-size: 12.5px;
+    line-height: 1.33;
+  }
+
+  .cell .step-no {
+    display: inline-block;
+    font-family: var(--mono);
+    font-size: 10px;
+    border-radius: 999px;
+    border: 1px solid var(--line);
+    padding: 0 6px;
+    margin-bottom: 5px;
+    color: var(--ink-dim);
+  }
+
+  .cell.c-gh { border-color: rgba(139, 148, 255, 0.5); background: var(--gh-bg); }
+  .cell.c-agent { border-color: rgba(57, 211, 192, 0.5); background: var(--agent-bg); }
+  .cell.c-member { border-color: rgba(242, 181, 60, 0.5); background: var(--member-bg); }
+  .cell.c-ledger { border-color: rgba(198, 120, 240, 0.5); background: var(--ledger-bg); }
+  .cell.c-stop { border-color: rgba(255, 107, 107, 0.6); background: rgba(255, 107, 107, 0.1); }
+  .cell.c-ok { border-color: rgba(63, 221, 138, 0.6); background: rgba(63, 221, 138, 0.09); }
+
+  .cell small { display: block; color: var(--ink-dim); font-size: 11px; margin-top: 4px; }
+
+  .legend {
+    display: flex;
+    gap: 14px;
+    flex-wrap: wrap;
+    font-size: 12px;
+    color: var(--ink-dim);
+    margin-top: 10px;
+  }
+
+  .legend span::before {
+    content: "";
+    display: inline-block;
+    width: 9px; height: 9px;
+    border-radius: 3px;
+    margin-right: 6px;
+  }
+
+  .legend .l-gh::before { background: var(--gh); }
+  .legend .l-agent::before { background: var(--agent); }
+  .legend .l-member::before { background: var(--member); }
+  .legend .l-ledger::before { background: var(--ledger); }
+
+  /* ---------- misc components ---------- */
+
+  .seq { display: grid; gap: 8px; }
+
+  .seq .row {
+    display: grid;
+    grid-template-columns: 34px 1fr;
+    gap: 10px;
+    align-items: center;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 9px 11px;
+    background: var(--bg-soft);
+    font-size: 13.5px;
+  }
+
+  .seq .row .num {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--agent);
+    text-align: center;
+  }
+
+  .verdict {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    font-family: var(--mono);
+    font-size: 12px;
+    padding: 5px 10px;
+    border-radius: 8px;
+    border: 1px solid var(--line);
+    background: var(--bg-soft);
+  }
+
+  .verdict.v-ok { border-color: rgba(63, 221, 138, 0.55); color: var(--ok); }
+  .verdict.v-warn { border-color: rgba(242, 181, 60, 0.55); color: var(--warn); }
+  .verdict.v-stop { border-color: rgba(255, 107, 107, 0.55); color: var(--stop); }
+
+  table.cmp { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  table.cmp td { padding: 7px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  table.cmp td.mark { width: 26px; text-align: center; font-family: var(--mono); }
+
+  .caption { font-size: 12.5px; color: var(--ink-dim); margin-top: 10px; }
+
+  .title-slide { padding-top: 40px; }
+  .title-slide .lead { font-size: 19px; line-height: 1.5; max-width: 820px; color: var(--ink); margin: 14px 0 0; }
+  .title-slide .meta { margin-top: 22px; display: flex; gap: 8px; flex-wrap: wrap; }
+
+  .core-claim {
+    font-size: 16.5px;
+    line-height: 1.5;
+    border-left: 3px solid var(--agent);
+    padding: 4px 0 4px 14px;
+    color: var(--ink);
+  }
+
+  /* ---------- speaker notes ---------- */
+
+  .notes {
+    display: none;
+    margin-top: 16px;
+    border: 1px dashed var(--line);
+    border-left: 3px solid var(--member);
+    border-radius: 10px;
+    background: rgba(242, 181, 60, 0.06);
+    padding: 12px 14px;
+    font-size: 13.5px;
+    line-height: 1.5;
+    color: var(--ink-dim);
+  }
+
+  .notes h4 {
+    margin: 0 0 6px;
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 1.2px;
+    text-transform: uppercase;
+    color: var(--member);
+  }
+
+  body.notes-on .notes { display: block; }
+
+  /* ---------- print: one slide per A4 landscape page ---------- */
+
+  @page { size: A4 landscape; margin: 10mm; }
+
+  @media print {
+    :root {
+      --bg: #ffffff;
+      --bg-soft: #f6f7fb;
+      --panel: #ffffff;
+      --ink: #10141b;
+      --ink-dim: #4a5567;
+      --line: #c6cddb;
+    }
+
+    html, body { background: #fff; color: #10141b; }
+    #topbar, #bar-track, #dots { display: none !important; }
+    .deck { padding: 0; }
+
+    .slide {
+      display: block !important;
+      width: 100%;
+      max-width: none;
+      padding: 0;
+      page-break-after: always;
+      break-after: page;
+      page-break-inside: avoid;
+      break-inside: avoid;
+    }
+
+    .slide:last-of-type { page-break-after: auto; break-after: auto; }
+    .slide h1 { font-size: 30px; }
+    .slide h2 { font-size: 21px; }
+    ul.tight li, .cell, .seq .row, .flowline .node { font-size: 11px; }
+    .notes { display: block !important; background: #fbf7ee; color: #3b424f; font-size: 10.5px; }
+    .panel, .cell, .node, .seq .row { box-shadow: none; }
+  }
+</style>
+</head>
+<body>
+
+<div id="topbar">
+  <span class="brand">BabyCDF — Voted rules, agentic review</span>
+  <span class="pill proto">prototype</span>
+  <span class="spacer"></span>
+  <span class="hint"><b>←/→</b> navigate &nbsp; <b>N</b> notes &nbsp; <b>P</b> print &nbsp; <b>1–9</b> jump</span>
+  <span class="hint" id="counter">1 / 12</span>
+</div>
+
+<div id="bar-track"><div id="bar"></div></div>
+
+<main class="deck" id="deck">
+
+  <!-- 1 -->
+  <section class="slide title-slide" aria-label="Title">
+    <header>
+      <div class="eyebrow">Canton Dev Fund · governance prototype on Concordia</div>
+      <h1>BabyCDF<br>Voted rules, agentic review</h1>
+    </header>
+    <p class="lead">
+      Community-voted rules drive agentic review of grant proposals and milestones.
+      The ledger holds voted proof of which rules are in force, and agents evaluate only against them.
+      Humans decide. The ledger enforces.
+      <br><small>Today the clause text lives on the ledger in <span class="mono">EffectiveRule</span> and a vote activates a predefined clause set. Rule content in GitHub, bound by a repo/commit <b>attestation</b>, is <span class="pill plan">planned architecture</span>.</small>
+    </p>
+    <div class="meta">
+      <span class="pill proto">sandbox prototype — no production deployment or Foundation authority</span>
+      <span class="pill">built on Concordia: the Daml Canton Allocation Primitives</span>
+      <span class="pill">no production authority · no real payment</span>
+    </div>
+    <aside class="notes">
+      <h4>Speaker notes</h4>
+      BabyCDF is a working governance prototype, not a product launch. One sentence to open with:
+      the rules the community votes on are the only rules an agent is allowed to review against.
+      Say plainly up front: this is a sandbox prototype with no production deployment or Foundation
+      authority, and no money moves. Add the one nuance that keeps the rest of the deck honest —
+      today the clauses live on the ledger and a vote activates a predefined clause set; the GitHub
+      attestation model you will see on the next slides is planned architecture, not running code.
+      That honesty is what makes the rest of the deck credible.
+    </aside>
+  </section>
+
+  <!-- 2 -->
+  <section class="slide" aria-label="Problem">
+    <header>
+      <div class="eyebrow">Problem</div>
+      <h2>Reviewing proposals and milestones by hand does not scale — and does not audit</h2>
+    </header>
+    <div class="grid-2">
+      <div class="panel">
+        <div class="kicker">What goes wrong today</div>
+        <ul class="tight">
+          <li><b>Manual review.</b> Proposals and milestones are read case by case, under time pressure.</li>
+          <li><b>Implicit rules.</b> Criteria live in people's heads, threads and changing documents.</li>
+          <li><b>Inconsistent application.</b> Two reviewers, two readings of the same criterion.</li>
+          <li><b>Mutable evidence.</b> A PR or issue can change after it was reviewed.</li>
+          <li><b>Hard to audit.</b> "Why was this approved?" has no reconstructable answer.</li>
+        </ul>
+      </div>
+      <div class="panel">
+        <div class="kicker">And automation is the wrong fix — as usually built</div>
+        <ul class="tight">
+          <li><b>Untrusted.</b> An LLM that reads "the rules" from a moving document proves nothing.</li>
+          <li><b>Or too powerful.</b> An agent that can approve or pay is an unaccountable authority.</li>
+          <li><b>No binding between rule and verdict.</b> A verdict that cannot name the exact rule version it applied is an opinion.</li>
+        </ul>
+        <div class="caption">
+          The gap is not intelligence. It is <b>provable inputs</b>: which rules were in force, and which evidence was judged.
+        </div>
+      </div>
+    </div>
+    <aside class="notes">
+      <h4>Speaker notes</h4>
+      Frame the problem as an evidence problem, not a labour problem. Reviewers are not the weak link;
+      the weak link is that nobody can prove afterwards which rule text was applied to which exact artefact.
+      Then name the trap: the usual answer is "add an AI reviewer", which either nobody trusts or which
+      quietly becomes the decision-maker. BabyCDF refuses both.
+    </aside>
+  </section>
+
+  <!-- 3 -->
+  <section class="slide" aria-label="Core idea">
+    <header>
+      <div class="eyebrow">Core idea <span class="pill plan">planned storage model</span></div>
+      <h2>Rules in GitHub · voted proof on the ledger · agents bound to the rules in force</h2>
+      <div class="caption">Today the clause text lives on the ledger in <span class="mono">EffectiveRule</span>, vote-governed. The GitHub attestation is the planned evolution of the same contract.</div>
+    </header>
+    <div class="flowline">
+      <div class="node n-gh"><span class="nlabel">GitHub</span>Golden-copy rules repository<br><small class="mono">versioned rule files &amp; clauses</small></div>
+      <div class="arrow">→</div>
+      <div class="node n-agent"><span class="nlabel">Change <span class="pill plan">planned</span></span>A PR or commit triggers the rule-change process<br><small class="mono">agent pins commit + blob hashes</small></div>
+      <div class="arrow">→</div>
+      <div class="node n-member"><span class="nlabel">Vote</span>Credentialed members vote, with quorum</div>
+      <div class="arrow">→</div>
+      <div class="node n-ledger"><span class="nlabel">Attest <span class="pill plan">planned</span></span>Ledger records repo, commit, hashes, version<br><small class="mono">today: ledger holds the clause set; a vote activates it</small></div>
+      <div class="arrow">→</div>
+      <div class="node n-agent"><span class="nlabel">Review</span>Agent evaluates only against the rules in force<br><small>today: the active ledger clause set</small></div>
+      <div class="arrow">→</div>
+      <div class="node n-member"><span class="nlabel">Decide</span>Humans vote the outcome</div>
+      <div class="arrow">→</div>
+      <div class="node n-ledger"><span class="nlabel">Enforce</span>Ledger records the approval</div>
+    </div>
+    <div class="panel" style="margin-top:16px">
+      <p class="core-claim">
+        <b>"Golden copy"</b> means the single canonical source of the rules: one repository whose versioned,
+        human-readable rule files are the authoritative text, with every other copy treated as derived.
+        The ledger does not need to hold that text — it holds the voted proof of <i>which version is in force</i>.
+      </p>
+    </div>
+    <div class="legend">
+      <span class="l-gh">GitHub (rule content)</span>
+      <span class="l-agent">Agents (advisory, fail closed)</span>
+      <span class="l-member">Members (decide)</span>
+      <span class="l-ledger">Ledger (voted proof &amp; enforcement)</span>
+    </div>
+    <aside class="notes">
+      <h4>Speaker notes</h4>
+      This is the slide to land. Define "golden copy" once, here, and never imply a particular product repository —
+      it is a role, not a brand. The key inversion: most designs try to put the rules on-chain. We put the
+      <i>proof of which rules are in force</i> on the ledger and leave the readable text where humans can review it
+      in a PR. The lane colours used here are reused on every later diagram.
+    </aside>
+  </section>
+
+  <!-- 4 -->
+  <section class="slide" aria-label="Rule governance swimlane">
+    <header>
+      <div class="eyebrow">Rule governance <span class="pill plan">planned architecture</span></div>
+      <h2>A change to the golden copy starts the rule-change process</h2>
+      <div class="caption">Planned flow. <b>Today</b>: the clause text lives on the ledger in <span class="mono">EffectiveRule</span>, a vote activates a predefined clause set, and there is <b>no repository or commit attestation</b> — steps 1, 2, 5 and 6 below are the planned form.</div>
+    </header>
+    <div class="swim">
+      <div class="lane-name lane-gh">GitHub<br>golden copy</div>
+      <div class="cell c-gh"><span class="step-no">1</span>Rule PR opened<br><small>clause edited in a versioned rule file</small></div>
+      <div class="cell"></div>
+      <div class="cell"></div>
+      <div class="cell"></div>
+      <div class="cell"></div>
+      <div class="cell c-gh"><span class="step-no">6</span>HEAD may move on<br><small>later commits are not in force</small></div>
+
+      <div class="lane-name lane-agent">Agents</div>
+      <div class="cell"></div>
+      <div class="cell c-agent"><span class="step-no">2</span><span class="pill plan">planned</span> Detect &amp; pin the change<br><small class="mono">commit SHA + rule-file blob hashes</small><br><small>today: no automatic detection</small></div>
+      <div class="cell c-agent"><span class="step-no">3</span>Prepare the agenda<br><small>diff summary, base version</small></div>
+      <div class="cell"></div>
+      <div class="cell"></div>
+      <div class="cell"></div>
+
+      <div class="lane-name lane-member">Members</div>
+      <div class="cell"></div>
+      <div class="cell"></div>
+      <div class="cell"></div>
+      <div class="cell c-member"><span class="step-no">4</span>Credentialed vote, quorum applied</div>
+      <div class="cell"></div>
+      <div class="cell"></div>
+
+      <div class="lane-name lane-ledger">Ledger</div>
+      <div class="cell"></div>
+      <div class="cell"></div>
+      <div class="cell"></div>
+      <div class="cell c-stop"><span class="step-no">4b</span>Stale change rejected<br><small>base version is outdated</small></div>
+      <div class="cell c-ledger"><span class="step-no">5</span><span class="pill plan">planned</span> Voted attestation recorded<br><small class="mono">repo · commit · blob hashes · version</small><br><small>today: the vote activates a predefined clause set on the ledger</small></div>
+      <div class="cell c-ledger"><span class="step-no">5b</span>Active rule pointer updated<br><small>v<i>n</i> becomes the rules in force</small></div>
+    </div>
+    <div class="legend">
+      <span class="l-gh">rule content</span>
+      <span class="l-agent">pin &amp; agenda</span>
+      <span class="l-member">vote</span>
+      <span class="l-ledger">attestation &amp; pointer <span class="pill plan">planned</span></span>
+    </div>
+    <aside class="notes">
+      <h4>Speaker notes</h4>
+      Open by saying this lane diagram is the planned architecture, so nobody leaves thinking it runs today.
+      What runs today is the ledger half: the clause text sits on the ledger in EffectiveRule, a credentialed
+      vote activates a predefined clause set, and the stale check at step 4b is real. There is no repository
+      watcher, no commit detection and no repo/commit attestation yet.
+      With that said, two things deserve emphasis. First, the planned pin is mechanical: a commit SHA plus
+      the blob hashes of the rule files — no interpretation, no judgement.
+      Second, the stale check at step 4b: if a proposed change was written against an outdated base version,
+      it is rejected rather than silently merged into force. Step 6 sets up slide 5: the repository HEAD
+      can move freely, and moving it changes nothing until a vote says so.
+    </aside>
+  </section>
+
+  <!-- 5 -->
+  <section class="slide" aria-label="Proof of rules in force">
+    <header>
+      <div class="eyebrow">Proof of rules in force <span class="pill plan">planned</span></div>
+      <h2>Before reviewing anything, the agent proves which rules it may use</h2>
+      <div class="caption">Planned mechanics. <b>Today</b>: the agent reads the active <span class="mono">EffectiveRule</span> from the ledger and checks the package ID and version; there is no repo/commit attestation to hash-verify against.</div>
+    </header>
+    <div class="grid-2">
+      <div class="panel">
+        <div class="kicker">The Reviewer's check sequence — every single review</div>
+        <div class="seq">
+          <div class="row"><span class="num">1</span><span>Read the <b>active attestation</b> on the ledger</span></div>
+          <div class="row"><span class="num">2</span><span>Fetch the rules from GitHub <b>at exactly that commit</b></span></div>
+          <div class="row"><span class="num">3</span><span><b>Verify the blob hashes</b> against the attestation</span></div>
+          <div class="row"><span class="num">4</span><span>Only then <b>evaluate the clauses</b></span></div>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="kicker">Outcomes</div>
+        <div class="stack">
+          <div class="cell c-ok">
+            <div class="verdict v-ok">✓ verified</div>
+            <small>Hashes match the attestation. Review proceeds, citing the rule version and short SHA.</small>
+          </div>
+          <div class="cell">
+            <div class="verdict v-warn">⚠ unratified rule change at HEAD</div>
+            <small>Newer rule commits exist in the repository but carry no vote. They are <b>ignored</b>; the agent keeps using the ratified version and flags the divergence.</small>
+          </div>
+          <div class="cell c-stop">
+            <div class="verdict v-stop">⛔ BLOCKED — fail closed</div>
+            <small>Hash mismatch, or no attestation at all. The agent does not guess and does not fall back to HEAD. It refuses to review.</small>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="caption">
+      Every verdict is traceable: <span class="mono">rules v2 @ 3f9a1c2 ✓ verified</span> — the rule version and the short commit SHA travel with the opinion. <b>The commit SHA and clause results shown here are illustrative examples.</b>
+    </div>
+    <aside class="notes">
+      <h4>Speaker notes</h4>
+      This is the trust slide. The agent has no authority to decide which rules apply; it can only read
+      what was voted. Spell out fail-closed: a hash mismatch or a missing attestation produces BLOCKED,
+      never a best-effort review. And explain why "unratified HEAD is ignored, not used" matters —
+      it means merging a rule change to the repository is not a governance action. Only a vote is.
+      Flagging it keeps the divergence visible instead of hidden.
+    </aside>
+  </section>
+
+  <!-- 6 -->
+  <section class="slide" aria-label="Proposal review swimlane">
+    <header>
+      <div class="eyebrow">Flow 1 · grant proposal</div>
+      <h2>Proposal review: pinned evidence, ledger-resident rules, human vote</h2>
+    </header>
+    <div class="swim">
+      <div class="lane-name lane-gh">GitHub</div>
+      <div class="cell c-gh"><span class="step-no">1</span>Grant proposal PR opened<br><small class="mono">demo: PR #184</small></div>
+      <div class="cell"></div>
+      <div class="cell"></div>
+      <div class="cell"></div>
+      <div class="cell"><span class="step-no">5</span><span class="pill plan">planned</span> Advisory report posted as a PR comment<br><small>today: printed to the terminal only</small></div>
+      <div class="cell"></div>
+
+      <div class="lane-name lane-agent">Agents</div>
+      <div class="cell"></div>
+      <div class="cell c-agent"><span class="step-no">2</span>Advisory pins the evidence<br><small class="mono">Git blob SHA-1 ≠ PR head commit</small></div>
+      <div class="cell c-agent"><span class="step-no">3</span>Read clauses from the active <span class="mono">EffectiveRule</span><br><small class="mono">today: ledger-resident clause set</small><br><small><span class="pill plan">planned</span> attestation @ <span class="mono">3f9a1c2</span> (illustrative)</small></div>
+      <div class="cell c-agent"><span class="step-no">4</span>Clause-by-clause literal phrase match<br><small>pass · fail (names the missing text) · insufficient evidence</small></div>
+      <div class="cell"></div>
+      <div class="cell"></div>
+
+      <div class="lane-name lane-member">Members</div>
+      <div class="cell"></div>
+      <div class="cell"></div>
+      <div class="cell"></div>
+      <div class="cell"></div>
+      <div class="cell"></div>
+      <div class="cell c-member"><span class="step-no">7</span>Vote with credentials<br><small>Absent · Abstained · Voted</small></div>
+
+      <div class="lane-name lane-ledger">Ledger</div>
+      <div class="cell"></div>
+      <div class="cell"></div>
+      <div class="cell"></div>
+      <div class="cell"></div>
+      <div class="cell c-ledger"><span class="step-no">6</span>Proposal becomes an agenda</div>
+      <div class="cell c-ledger"><span class="step-no">8–9</span>Quorum &amp; tally → <b>ApprovedGrantProposal</b><br><small>≥3 present and a majority; 5 permanent + 2 alternates; advisers excluded</small></div>
+    </div>
+    <div style="margin-top:12px; display:flex; gap:8px; flex-wrap:wrap">
+      <span class="verdict v-ok">clause 1 · pass · rules v2</span>
+      <span class="verdict v-stop">clause 4 · fail · required text absent</span>
+      <span class="verdict v-warn">clause 7 · insufficient evidence</span>
+      <span class="verdict" style="opacity:.75">illustrative example values</span>
+    </div>
+    <aside class="notes">
+      <h4>Speaker notes</h4>
+      Two details to call out. The evidence pin is a Git blob SHA-1 of the content reviewed — deliberately
+      distinct from the PR head commit, so later pushes cannot silently change what was judged.
+      And the clause evaluation is three-valued on purpose: "fail" must name the text it could not find,
+      and "insufficient evidence" is a first-class answer rather than a reluctant pass.
+      Be precise about two things. The clauses come from the ledger today, not from a GitHub attestation —
+      that is the planned evolution, and step 3 is labelled accordingly. And the agent's output goes to
+      the terminal and the log only: nothing is posted to GitHub, so step 5 is marked planned.
+      The agenda, the quorum, the tally and the approval are the ledger's.
+    </aside>
+  </section>
+
+  <!-- 7 -->
+  <section class="slide" aria-label="Milestone review swimlane">
+    <header>
+      <div class="eyebrow">Flow 2 · milestone</div>
+      <h2>Milestone review: the advisory result does not gate the vote</h2>
+    </header>
+    <div class="swim">
+      <div class="lane-name lane-gh">GitHub</div>
+      <div class="cell c-gh"><span class="step-no">1</span>Milestone issue opened<br><small class="mono">demo: issue #540</small></div>
+      <div class="cell"></div>
+      <div class="cell"></div>
+      <div class="cell"></div>
+      <div class="cell"></div>
+      <div class="cell"></div>
+
+      <div class="lane-name lane-agent">Agents</div>
+      <div class="cell"></div>
+      <div class="cell c-agent"><span class="step-no">2</span>Seek immutable evidence<br><small>unavailable in the proposal-only seed</small></div>
+      <div class="cell c-agent"><span class="step-no">3</span>Read clauses from the active <span class="mono">EffectiveRule</span><br><small class="mono">today: ledger-resident clause set</small></div>
+      <div class="cell c-agent"><span class="step-no">4</span>Evaluate the milestone subject</div>
+      <div class="cell c-stop"><span class="step-no">5</span><b>Recommendation: BLOCKED</b><br><small>no reviewed evidence for this subject — advisory only</small></div>
+      <div class="cell"></div>
+
+      <div class="lane-name lane-member">Members</div>
+      <div class="cell"></div>
+      <div class="cell"></div>
+      <div class="cell"></div>
+      <div class="cell"></div>
+      <div class="cell"></div>
+      <div class="cell c-member"><span class="step-no">6</span>Scripted vote proceeds regardless<br><small>the advisory result does not gate it</small></div>
+
+      <div class="lane-name lane-ledger">Ledger</div>
+      <div class="cell"></div>
+      <div class="cell"></div>
+      <div class="cell"></div>
+      <div class="cell"></div>
+      <div class="cell c-ledger"><span class="step-no">6b</span><b>ApprovedMilestone</b> recorded<br><small>curated illustrative milestone; the hard-coded agenda pin gates this</small></div>
+      <div class="cell c-ledger"><span class="step-no">7</span>Real sandbox <b>DevelopmentFundCoupon</b> allocated via Splice<br><small><b>sandbox only</b> — not a payment, not a mint</small></div>
+    </div>
+    <div class="caption">
+      Step 7 really runs Splice’s allocation choice on a sandbox network: the Splice allocation choice runs with its manager and amount checks — it allocates a coupon, which is neither a payment nor a mint. The separate Java <span class="mono">CouponAllocation</span> planner remains a deliberately blocked preview.
+    </div>
+    <aside class="notes">
+      <h4>Speaker notes</h4>
+      Be precise about step 5, because it is easy to overclaim. The agent recommends BLOCKED for the
+      milestone agenda: its offline evidence seed covers the pinned proposal only, so the milestone subject
+      was never reviewable. That recommendation is advisory and it does <b>not</b> stop anything —
+      the scripted vote proceeds and approves the curated illustrative milestone. What gates that approval
+      is the hard-coded agenda pin in the contract, not the agent.
+      On step 7, be equally precise: this is a real allocation of a DevelopmentFundCoupon through Splice
+      on a sandbox network, with the manager and amount checks intact. Say the words
+      "sandbox only, not a payment and not a mint" out loud. The blocked preview is the separate
+      Java CouponAllocation planner, not this step.
+    </aside>
+  </section>
+
+  <!-- 8 -->
+  <section class="slide" aria-label="Rule-change loop">
+    <header>
+      <div class="eyebrow">Rule-change loop</div>
+      <h2>Rules evolve by vote — and only by vote</h2>
+    </header>
+    <div class="flowline">
+      <div class="node n-ledger"><span class="nlabel">In force</span>rules <b>v1</b><br><small class="mono">ledger-resident clause set</small><br><small><span class="pill plan">planned</span> attested @ commit A (illustrative)</small></div>
+      <div class="arrow">→</div>
+      <div class="node n-gh"><span class="nlabel">Change</span>PR edits a clause in the golden copy</div>
+      <div class="arrow">→</div>
+      <div class="node n-member"><span class="nlabel">Vote</span>Credentialed members, quorum applied</div>
+      <div class="arrow">→</div>
+      <div class="node n-ledger"><span class="nlabel">Attested <span class="pill plan">planned</span></span>rules <b>v2 @ commit B</b><br><small class="mono">repo · commit · hashes · version</small></div>
+      <div class="arrow">→</div>
+      <div class="node n-agent"><span class="nlabel">Next review</span>uses <b>v2</b> — and cites it<br><small class="mono">rules v2 ✓</small><br><small><span class="mono">@ 3f9a1c2</span> illustrative</small></div>
+    </div>
+    <div class="grid-2" style="margin-top:16px">
+      <div class="panel">
+        <div class="kicker">Merged but unvoted <span class="pill plan">planned</span></div>
+        <div class="cell">
+          <div class="verdict v-warn">⚠ unratified rule change</div>
+          <small>
+            <b>Planned.</b> A clause merged to HEAD without a vote would be <b>ignored</b>: the agent would keep
+            reviewing against the ratified version and raise the flag so the gap is visible to members, not buried.
+            Today there is no repository watcher, so this flag does not run.
+          </small>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="kicker">Written against an old base</div>
+        <div class="cell c-stop">
+          <div class="verdict v-stop">⛔ stale rule change rejected</div>
+          <small>
+            If the proposed change's base version is outdated, the ledger rejects it. Rule history stays linear:
+            v1 → v2 → v3, each step carrying its own vote.
+          </small>
+        </div>
+      </div>
+    </div>
+    <aside class="notes">
+      <h4>Speaker notes</h4>
+      The one-liner: in this design, merge permission is not governance permission.
+      Anyone with write access to the repository can change the text; only a vote can change the rules.
+      That split is what lets you keep rules readable and reviewable in GitHub without making the
+      repository's access control the de facto constitution.
+    </aside>
+  </section>
+
+  <!-- 9 -->
+  <section class="slide" aria-label="Trust boundaries">
+    <header>
+      <div class="eyebrow">Trust boundaries</div>
+      <h2>Each party does exactly one job</h2>
+    </header>
+    <div class="grid-3">
+      <div class="panel" style="border-color: rgba(139,148,255,0.5); background: var(--gh-bg)">
+        <div class="kicker" style="color: var(--gh)">GitHub</div>
+        <b>Holds the rule content.</b>
+        <ul class="tight">
+          <li><span class="pill plan">planned</span> Versioned, human-readable rule files and clauses</li>
+          <li>Reviewed the way code is reviewed</li>
+          <li>Write access ≠ governance authority</li>
+          <li><b>Today:</b> GitHub holds the <i>proposal</i> evidence, pinned by blob SHA; the rules live on the ledger</li>
+        </ul>
+      </div>
+      <div class="panel" style="border-color: rgba(198,120,240,0.5); background: var(--ledger-bg)">
+        <div class="kicker" style="color: var(--ledger)">Ledger</div>
+        <b>Holds the voted proof — and enforces.</b>
+        <ul class="tight">
+          <li><b>Today:</b> the clause set itself, versioned in <span class="mono">EffectiveRule</span>; a vote activates a predefined set</li>
+          <li>Active rule pointer; stale changes rejected</li>
+          <li>Agendas, quorum, tally, approvals</li>
+          <li><span class="pill plan">planned</span> Attestation: repo, commit, blob hashes, version</li>
+        </ul>
+      </div>
+      <div class="panel" style="border-color: rgba(57,211,192,0.5); background: var(--agent-bg)">
+        <div class="kicker" style="color: var(--agent)">Agents</div>
+        <b>Advise only.</b>
+        <ul class="tight">
+          <li>No voting rights, no approval power (<span class="mono">readAs</span> only)</li>
+          <li><b>Today:</b> evaluate only against the active ledger clause set</li>
+          <li>Fail closed with no authenticated ledger</li>
+          <li><span class="pill plan">planned</span> Hash-verify against the attestation; fail closed on mismatch</li>
+        </ul>
+      </div>
+    </div>
+    <div class="panel" style="margin-top:14px; border-color: rgba(242,181,60,0.5); background: var(--member-bg)">
+      <div class="kicker" style="color: var(--member)">Members</div>
+      <b>Humans decide.</b> Credentialed members vote; agents produce evidence-bound opinions that make the vote better informed,
+      never a substitute for it. <span class="mono">Agents advise → humans decide → the ledger enforces.</span>
+    </div>
+    <aside class="notes">
+      <h4>Speaker notes</h4>
+      Use this slide to answer the governance objection before it is raised: "are you letting an AI decide
+      who gets funded?" No — the agent cannot vote, cannot approve, cannot pay, and refuses to act when its
+      inputs are unproven. It holds readAs only, so it is incapable of casting a vote, not merely restrained.
+      Its entire power is to read the active ledger clause set and write an opinion with citations.
+      Mind the today-versus-planned split in the ledger and agent columns: today the ledger holds the clause
+      set itself and the agent evaluates against that; the repo/commit attestation and the hash-verification
+      refusal are planned. Keep the four-part refrain tight: GitHub holds content, the ledger holds proof,
+      agents advise, humans decide.
+    </aside>
+  </section>
+
+  <!-- 10 -->
+  <section class="slide" aria-label="Demo script">
+    <header>
+      <div class="eyebrow">Demo script</div>
+      <h2>What we show, including what we deliberately refuse</h2>
+    </header>
+    <div class="grid-3">
+      <div class="panel">
+        <div class="kicker" style="color: var(--ok)">Happy paths</div>
+        <ul class="tight">
+          <li><b>Ledger-resident clause sets</b>: v1 fails on a missing required phrase; a vote activates the predefined v2, which passes</li>
+          <li><b>Deterministic literal phrase matching</b> against the pinned PR #184 text — no semantic or LLM evaluation</li>
+          <li>Recommendations <b>printed to the terminal and log only</b>; nothing is posted or published</li>
+          <li><b>Read-only agents</b>: <span class="mono">readAs</span> only, no <span class="mono">actAs</span>, so they cannot vote or submit</li>
+          <li>Agenda, credentialed vote, quorum and tally → <b>ApprovedGrantProposal</b></li>
+          <li>Milestone vote → real sandbox <b>DevelopmentFundCoupon</b> allocation (not a payment, not a mint)</li>
+        </ul>
+      </div>
+      <div class="panel">
+        <div class="kicker" style="color: var(--stop)">Blocked paths — working today</div>
+        <ul class="tight">
+          <li><b>Not reviewable</b> — the milestone subject has no reviewed evidence (advisory only)</li>
+          <li><b>Invalid credential</b> on a vote attempt</li>
+          <li><b>No quorum</b> — fewer than 3 present</li>
+          <li><b>Stale rule change</b> — outdated base version</li>
+          <li><b>Double vote</b> from the same member</li>
+        </ul>
+      </div>
+      <div class="panel">
+        <div class="kicker" style="color: var(--gh)">Blocked paths — planned design</div>
+        <ul class="tight">
+          <li><b>Unratified rule change</b> present in the repository: ignored and flagged</li>
+          <li><b>Rule hash mismatch</b> against the attestation: review refuses to run (BLOCKED)</li>
+        </ul>
+        <div class="caption">Shown as design, not as a demo claim.</div>
+      </div>
+    </div>
+    <aside class="notes">
+      <h4>Speaker notes</h4>
+      Demo the refusals, not just the approvals. The blocked paths in the middle column run today
+      and are the most persuasive part of the session. Be scrupulous about the third column:
+      the unratified-change flag and the hash-mismatch block are planned design, not running code.
+      If asked, say exactly that — the credibility of the whole deck rests on not blurring this line.
+      The strongest moment in the happy-path column is the first bullet: the same pinned proposal text
+      fails under rule v1 and passes under v2, because the voted rule changed and nothing else did.
+      Be equally clear that the agent only prints to the terminal — there is no posting anywhere —
+      and that the matching is literal phrase matching, not comprehension.
+    </aside>
+  </section>
+
+  <!-- 11 -->
+  <section class="slide" aria-label="Built today vs planned">
+    <header>
+      <div class="eyebrow">Honest status</div>
+      <h2>Built today vs planned design</h2>
+    </header>
+    <div class="grid-2">
+      <div class="panel" style="border-color: rgba(63,221,138,0.45)">
+        <div class="kicker" style="color: var(--ok)">Today in the prototype</div>
+        <table class="cmp">
+          <tr><td class="mark" style="color: var(--ok)">✓</td><td>Rule clauses stored on the ledger in <span class="mono">EffectiveRule</span>: versioned, vote-governed, with a stale-version check</td></tr>
+          <tr><td class="mark" style="color: var(--ok)">✓</td><td>Reviewer reads the active <span class="mono">EffectiveRule</span>, checks package ID and version, and <b>fails closed with no authenticated ledger</b></td></tr>
+          <tr><td class="mark" style="color: var(--ok)">✓</td><td>Advisory agent pins GitHub evidence by <b>blob SHA</b></td></tr>
+          <tr><td class="mark" style="color: var(--ok)">✓</td><td>Deterministic Java services: Advisory, Reviewer, SandboxBallots; CouponAllocation is a deliberately blocked preview</td></tr>
+          <tr><td class="mark" style="color: var(--ok)">✓</td><td>Governance contracts migrated to the latest Concordia interfaces: VoteTopic, VoteRecord, VotingRights, Resolver</td></tr>
+          <tr><td class="mark" style="color: var(--ok)">✓</td><td>Local validation passes: <b>6 Daml scripts, 53 Java tests, 45 regressions</b>; migration passed independent code review</td></tr>
+          <tr><td class="mark" style="color: var(--warn)">!</td><td><b>Sandbox prototype; no production deployment or Foundation authority.</b> No real payment.</td></tr>
+          <tr><td class="mark" style="color: var(--warn)">!</td><td>Demo votes are cast by <b>scripted synthetic parties</b>; the design intends independent human members</td></tr>
+          <tr><td class="mark" style="color: var(--warn)">!</td><td>Reviewer <b>literally matches ledger-supplied phrases</b> against the pinned proposal; no semantic or LLM evaluation</td></tr>
+        </table>
+      </div>
+      <div class="panel" style="border-color: rgba(139,148,255,0.45)">
+        <div class="kicker" style="color: var(--gh)">Planned design <span class="pill plan">planned</span></div>
+        <table class="cmp">
+          <tr><td class="mark" style="color: var(--gh)">→</td><td><span class="mono">EffectiveRule</span> holds an <b>attestation</b> (repo, commit, blob hashes, version) instead of — or alongside — the clause text</td></tr>
+          <tr><td class="mark" style="color: var(--gh)">→</td><td>A rule-change agent watches the golden-copy repository</td></tr>
+          <tr><td class="mark" style="color: var(--gh)">→</td><td>Reviewer fetches and hash-verifies the rules at the attested commit</td></tr>
+          <tr><td class="mark" style="color: var(--gh)">→</td><td>An unratified-change flag</td></tr>
+          <tr><td class="mark" style="color: var(--gh)">→</td><td>LLM-assisted clause evaluation — kept advisory, pinned to the evidence and the rule version</td></tr>
+          <tr><td class="mark" style="color: var(--gh)">→</td><td>Immutable milestone evidence</td></tr>
+          <tr><td class="mark" style="color: var(--gh)">→</td><td>An authenticated ledger adapter</td></tr>
+        </table>
+      </div>
+    </div>
+    <aside class="notes">
+      <h4>Speaker notes</h4>
+      Read the left column as shipped behaviour and the right column as design intent, in those words.
+      Note the important nuance: today the clause text itself sits on the ledger in <span class="mono">EffectiveRule</span>,
+      vote-governed with a stale-version check. The GitHub-attestation model on the earlier slides is the
+      planned evolution of that same contract — the governance shape is already real, the storage location changes.
+      The validation numbers are local runs on 18 Nov 2026, not CI on a deployed system: 6 Daml scripts,
+      53 Java tests and 45 governance regressions. If someone asks about status, the exact words are
+      "sandbox prototype; no production deployment or Foundation authority".
+      Say plainly that the votes in the demo are cast by scripted synthetic parties — the design intends
+      independent human members, and conflating the two would be the easiest way to lose the room.
+    </aside>
+  </section>
+
+  <!-- 12 -->
+  <section class="slide" aria-label="Limitations, next steps and ask">
+    <header>
+      <div class="eyebrow">Limitations · next steps · ask</div>
+      <h2>What this prototype does not do — and what we want next</h2>
+    </header>
+    <div class="grid-3">
+      <div class="panel">
+        <div class="kicker" style="color: var(--stop)">Limitations</div>
+        <ul class="tight">
+          <li><b>Credential uniqueness</b> and <b>attendance reconciliation</b> are handled externally, not by the contracts</li>
+          <li>The <b>milestone evidence is illustrative</b>: the agent recommends BLOCKED, but that is advisory and the scripted vote still approves the curated milestone</li>
+          <li>The <b>provenance of the local Splice DAR is incomplete</b></li>
+          <li><b>No production authority and no payment</b>: the coupon allocation is real but sandbox-only — neither a payment nor a mint; the separate Java <span class="mono">CouponAllocation</span> planner stays a blocked preview</li>
+          <li><b>Votes are cast by scripted synthetic parties</b>, not independent human members</li>
+        </ul>
+      </div>
+      <div class="panel">
+        <div class="kicker" style="color: var(--gh)">Next steps</div>
+        <ul class="tight">
+          <li>Move <span class="mono">EffectiveRule</span> to a GitHub attestation (repo, commit, hashes, version)</li>
+          <li>Ship the rule-change watcher and hash verification before every review</li>
+          <li>Add the unratified-change flag and immutable milestone evidence</li>
+          <li>Add an authenticated ledger adapter</li>
+          <li>Introduce LLM-assisted clause evaluation, advisory and pinned</li>
+        </ul>
+      </div>
+      <div class="panel" style="border-color: rgba(242,181,60,0.5); background: var(--member-bg)">
+        <div class="kicker" style="color: var(--member)">The ask</div>
+        <ul class="tight">
+          <li>Review the governance model: rules in GitHub, voted proof on the ledger</li>
+          <li>Confirm the rule-change and quorum parameters as a community</li>
+          <li>Agree a sanctioned golden-copy rules repository and its review process</li>
+          <li>Clear DAR provenance and an authenticated environment for the next milestone</li>
+        </ul>
+      </div>
+    </div>
+    <div class="caption">
+      <span class="mono">Agents advise → humans decide → the ledger enforces.</span>
+      Every verdict cites its rule version and commit, or it is not a verdict.
+    </div>
+    <aside class="notes">
+      <h4>Speaker notes</h4>
+      Close with the limitations stated as deliberate boundaries rather than as excuses: external credential
+      uniqueness, illustrative milestone evidence, incomplete DAR provenance, no authority and no payment.
+      Then the ask is about decisions only a community can make — which repository is the golden copy,
+      what the quorum parameters are, and what an authenticated environment would look like.
+      Repeat the refrain and stop there.
+    </aside>
+  </section>
+
+</main>
+
+<nav id="dots" aria-label="Slide navigation"></nav>
+
+<script>
+(function () {
+  'use strict';
+
+  var slides = Array.prototype.slice.call(document.querySelectorAll('.slide'));
+  var dotsHost = document.getElementById('dots');
+  var bar = document.getElementById('bar');
+  var counter = document.getElementById('counter');
+  var total = slides.length;
+  var current = 0;
+
+  function clamp(i) {
+    if (i < 0) { return 0; }
+    if (i > total - 1) { return total - 1; }
+    return i;
+  }
+
+  function render() {
+    for (var i = 0; i < total; i++) {
+      var active = (i === current);
+      slides[i].classList.toggle('is-active', active);
+      var dot = dotsHost.children[i];
+      if (dot) {
+        dot.setAttribute('aria-current', active ? 'true' : 'false');
+      }
+    }
+    bar.style.width = (total < 2 ? 100 : (current / (total - 1)) * 100) + '%';
+    counter.textContent = (current + 1) + ' / ' + total;
+    window.scrollTo(0, 0);
+  }
+
+  function go(i, pushHash) {
+    current = clamp(i);
+    if (pushHash !== false) {
+      try {
+        history.replaceState(null, '', '#' + (current + 1));
+      } catch (err) {
+        window.location.hash = '#' + (current + 1);
+      }
+    }
+    render();
+  }
+
+  function buildDots() {
+    for (var i = 0; i < total; i++) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.setAttribute('aria-label', 'Go to slide ' + (i + 1));
+      b.dataset.index = String(i);
+      b.addEventListener('click', function (ev) {
+        go(parseInt(ev.currentTarget.dataset.index, 10), true);
+      });
+      dotsHost.appendChild(b);
+    }
+  }
+
+  function fromHash() {
+    var raw = (window.location.hash || '').replace('#', '');
+    var n = parseInt(raw, 10);
+    if (!isNaN(n) && n >= 1 && n <= total) {
+      current = n - 1;
+    }
+  }
+
+  function toggleNotes() {
+    document.body.classList.toggle('notes-on');
+  }
+
+  document.addEventListener('keydown', function (ev) {
+    if (ev.metaKey || ev.ctrlKey || ev.altKey) { return; }
+    var key = ev.key;
+
+    if (key === 'ArrowRight' || key === 'PageDown' || key === ' ') {
+      ev.preventDefault();
+      go(current + 1, true);
+      return;
+    }
+    if (key === 'ArrowLeft' || key === 'PageUp') {
+      ev.preventDefault();
+      go(current - 1, true);
+      return;
+    }
+    if (key === 'Home') {
+      ev.preventDefault();
+      go(0, true);
+      return;
+    }
+    if (key === 'End') {
+      ev.preventDefault();
+      go(total - 1, true);
+      return;
+    }
+    if (key === 'n' || key === 'N') {
+      ev.preventDefault();
+      toggleNotes();
+      return;
+    }
+    if (key === 'p' || key === 'P') {
+      ev.preventDefault();
+      window.print();
+      return;
+    }
+    if (/^[0-9]$/.test(key)) {
+      ev.preventDefault();
+      var idx = (key === '0') ? 9 : (parseInt(key, 10) - 1);
+      if (idx <= total - 1) {
+        go(idx, true);
+      }
+    }
+  });
+
+  window.addEventListener('hashchange', function () {
+    fromHash();
+    render();
+  });
+
+  buildDots();
+  fromHash();
+  render();
+})();
+</script>
+</body>
+</html>

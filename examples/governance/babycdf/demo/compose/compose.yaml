@@ -1,0 +1,56 @@
+# SPDX-License-Identifier: Apache-2.0
+name: babycdf-live
+services:
+  credential-canton:
+    extends:
+      file: .cips/8e36c20e5106014efb8348f749d9535afbc48921/cn-credentials-standard/demo/compose.yaml
+      service: credential-canton
+    build:
+      context: .cips/8e36c20e5106014efb8348f749d9535afbc48921/cn-credentials-standard
+      dockerfile: Dockerfile.canton
+    # Unauthenticated demo API: never inherit all-interface host bindings.
+    # HTTP remains container-internal for the inherited healthcheck.
+    ports: !override
+      - "127.0.0.1:${LEDGER_PORT:-41000}:6865"
+    # One-host resource workaround; see DESIGN-NOTES.md for evidence/limits.
+    mem_limit: ${CREDENTIAL_CANTON_MEM_LIMIT:-4g}
+    environment:
+      JAVA_TOOL_OPTIONS: "-Xms512m -Xmx2g"
+  advisory:
+    profiles: [agents]
+    build:
+      context: ../..
+      dockerfile: java/Dockerfile
+    command: [advisory]
+    network_mode: "service:credential-canton"
+    volumes:
+      - ./state:/state:ro
+    environment:
+      AGENT_INTERVAL: ${AGENT_INTERVAL:-10}
+      JAVA_TOOL_OPTIONS: "-Xmx256m"
+    mem_limit: 512m
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp]
+    restart: "no"
+  reviewer:
+    profiles: [agents]
+    build:
+      context: ../..
+      dockerfile: java/Dockerfile
+    command: [reviewer]
+    network_mode: "service:credential-canton"
+    volumes:
+      - ./state:/state:ro
+    environment:
+      AGENT_INTERVAL: ${AGENT_INTERVAL:-10}
+      JAVA_TOOL_OPTIONS: "-Xmx256m"
+    mem_limit: 512m
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp]
+    restart: "no"
+networks:
+  credential-network:

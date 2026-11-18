@@ -1,0 +1,95 @@
+-- SPDX-License-Identifier: Apache-2.0
+module Cap.Examples.BabyCdf.CouponDemo where
+
+import DA.Assert ((===))
+import qualified DA.Set as Set
+import DA.Time (addRelTime, minutes, hours)
+import Daml.Script
+import Splice.AmuletRules
+import Splice.ExternalPartyAmuletRules (ExternalPartyAmuletRules (..))
+import Splice.Issuance (OpenMiningRoundSummary (..))
+import Splice.Round (OpenMiningRound)
+import Splice.Types (Round (..))
+import Splice.Schedule (Schedule (..))
+import Splice.Testing.Registries.AmuletRegistry.Parameters (defaultAmuletConfig)
+import Cap.Examples.BabyCdf.RuleVote (AgendaGovernor (..), milestoneSubject)
+import Cap.Examples.BabyCdf.RuleVoteDemo (capRuleAndSeparateApprovalsWithMilestone)
+
+bootstrapAdvisoryGovernor : Script (Party, ContractId AgendaGovernor)
+bootstrapAdvisoryGovernor = do
+  opener <- allocateParty "demo-opener"
+  a <- allocateParty "member-a"
+  b <- allocateParty "member-b"
+  c <- allocateParty "member-c"
+  d <- allocateParty "member-d"
+  e <- allocateParty "member-e"
+  f <- allocateParty "alternate-f"
+  g <- allocateParty "alternate-g"
+  governor <- submit opener $ createCmd AgendaGovernor with
+    opener; consortiumId = "demo-cdf"; permanent = Set.fromList [a,b,c,d,e]; alternates = Set.fromList [f,g]
+  pure (a, governor)
+
+-- All parties and issuance below are sandbox-local. The source coupon is minted
+-- through Splice's DSO-controlled round transition, not created by this demo.
+managerAllocatesIssuedCoupon : Script ()
+managerAllocatesIssuedCoupon = do
+  dso <- allocateParty "babycdf-coupon-demo-dso"
+  manager <- allocateParty "babycdf-coupon-demo-manager"
+  wrongManager <- allocateParty "babycdf-coupon-demo-wrong-manager"
+  beneficiary <- allocateParty "babycdf-coupon-demo-beneficiary"
+  milestoneCid <- capRuleAndSeparateApprovalsWithMilestone
+  let issuanceCurve = defaultAmuletConfig.issuanceCurve
+      issuance = issuanceCurve.initialValue with optDevelopmentFundPercentage = Some 0.05
+      config = defaultAmuletConfig with
+        optDevelopmentFundManager = Some manager
+        issuanceCurve = issuanceCurve with initialValue = issuance
+      configSchedule = Schedule with initialValue = config; futureValues = []
+  rules <- submit dso $ createCmd AmuletRules with
+    dso; configSchedule; isDevNet = True; contractStateSchemaVersion = None
+  _ <- submit dso $ createCmd ExternalPartyAmuletRules with dso
+  _ <- submit dso $ exerciseCmd rules AmuletRules_Bootstrap_Rounds with
+    amuletPrice = 0.5; round0Duration = minutes 10; initialRound = None
+  rounds <- query @OpenMiningRound dso
+  let [oldest] = [cid | (cid, round) <- rounds, round.round == Round 0]
+      [middle] = [cid | (cid, round) <- rounds, round.round == Round 1]
+      [latest] = [cid | (cid, round) <- rounds, round.round == Round 2]
+  now <- getTime
+  setTime (addRelTime now (minutes 10))
+  advanced <- submit dso $ exerciseCmd rules AmuletRules_AdvanceOpenMiningRounds with
+    amuletPrice = 0.5
+    roundToArchiveCid = oldest
+    middleRoundCid = middle
+    latestRoundCid = latest
+  issued <- submit dso $ exerciseCmd rules AmuletRules_MiningRound_StartIssuing with
+    miningRoundCid = advanced.summarizingRoundCid
+    summary = OpenMiningRoundSummary with
+      totalValidatorRewardCoupons = 0.0
+      totalFeaturedAppRewardCoupons = 0.0
+      totalUnfeaturedAppRewardCoupons = 0.0
+      totalSvRewardWeight = 0
+      optTotalValidatorFaucetCoupons = Some 0
+  let Some source = issued.unclaimedDevelopmentFundCouponCid
+      amount = 1.0
+      expiresAt = addRelTime now (hours 2)
+      reason = "sandbox ApprovedMilestone " <> show milestoneCid <> " " <> milestoneSubject.url
+      allocate fundManager requestedAmount = exerciseCmd rules AmuletRules_AllocateDevelopmentFundCoupon with
+        unclaimedDevelopmentFundCouponCids = [source]
+        beneficiary
+        amount = requestedAmount
+        expiresAt
+        reason
+        fundManager
+  Some unclaimed <- queryContractId dso source
+  assert (unclaimed.amount >= amount)
+  submitMustFail (actAs wrongManager <> readAs dso) $ allocate wrongManager amount
+  submitMustFail (actAs manager <> readAs dso) $ allocate wrongManager amount
+  submitMustFail (actAs manager <> readAs dso) $ allocate manager (unclaimed.amount + 1.0)
+  result <- submit (actAs manager <> readAs dso) $ allocate manager amount
+  Some coupon <- queryContractId beneficiary result.developmentFundCouponCid
+  coupon.beneficiary === beneficiary
+  coupon.amount === amount
+  coupon.fundManager === manager
+  coupon.reason === reason
+  let Some leftoverCid = result.optUnclaimedDevelopmentFundCouponCid
+  Some leftover <- queryContractId dso leftoverCid
+  leftover.amount === unclaimed.amount - amount
