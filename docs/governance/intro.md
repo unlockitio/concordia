@@ -113,7 +113,7 @@ classDiagram
 
   namespace DecisionLayer {
     class VotingRights {
-      «template, HasVotingRights»
+      «template, HasWeights»
       weights
     }
     class VoteRecord {

@@ -5,25 +5,24 @@ module Cap.Examples.MajorityVote.Resolver where
 import Prelude hiding (Action)
 
 import DA.Foldable (forA_)
-import DA.List (sort)
+import DA.List (sort, unique)
 import qualified DA.Map as Map
 import DA.Set (Set)
 import qualified DA.Set as Set
 import qualified DA.TextMap as TextMap
 
 import Splice.Api.Token.MetadataV1
-import Splice.Util (require)
+import Splice.Util (HasCheckedFetch (..), fetchChecked, require)
 
-import Cap.Core.Types (AuthenticKey (..), ExecutionAction (..), ExecutionCore (..), ResolutionInfo (..))
-import Cap.Core.Utils (IsAnyValue (..), fetchGroup, requireClosed, requireMetFrom, requireResolvedBy)
+import Cap.Core.Types (AuthenticKey (..), ExecutionAction (..), ExecutionCore (..), Identity (..), ResolutionInfo (..))
+import Cap.Core.Utils (IsAnyValue (..), requireClosed, requireResolvedBy)
 import Cap.Governance.ActionV1
 import qualified Cap.Governance.VoteTopicV1 as VoteTopicV1
 import Cap.Governance.Types (Reason, Vote (..))
-import Cap.Governance.Utils.VotingRights (equalWeights, partyAsOwnerId)
+import Cap.Governance.Utils.Weights (HasWeights (..))
 import Cap.Governance.Utils
   ( Tally, Verdict (..), atLeastVotes, casts, consumeVoteRecords, decide, decodeTextVote
-  , distinctVotersAmongVoteRecords, expectUniformAction, validVoteRecordVoters
-  , weightedVotes )
+  , expectUniformAction, weightedVotes )
 
 import Cap.Examples.MajorityVote.VoteRecord
 
@@ -69,7 +68,7 @@ template Proposal
     interface instance VoteTopicV1.VoteTopic for Proposal where
       view = VoteTopicV1.VoteTopicView with
         resolution; subject
-        proposer = partyAsOwnerId proposer
+        proposer = PartyIdentity proposer
         action = Some terms.actionCid
         voteBefore = Some terms.votingClosesAt
         effectiveAt = None
@@ -81,7 +80,7 @@ template Proposal
         record <- fetch recordCid
         require "the vote record is for this proposal" (record.resolution == resolution)
         require "the caster casts on its own vote record" (record.voter == arg.caster)
-        require "the caster casts for its own OwnerId" (arg.ownerId == partyAsOwnerId arg.caster)
+        require "the caster casts for its own identity" (arg.identity == PartyIdentity arg.caster)
         option <- case decodeTextVote arg.vote of
           Some (Voted option) -> pure option
           _ -> abort "a majority vote is the option yay or nay"
@@ -165,7 +164,7 @@ template Resolver
         create Proposal with
           dso; operator; electorate; terms; proposer; subject
           resolution = ResolutionInfo with
-            resolver = resolverKey this
+            resolver = contractGroupId this
             resolverCid = None
             mechanism = majorityMechanismName
             id = proposalId
@@ -179,10 +178,14 @@ template Resolver
       do resolveMajority this self proposalCid recordCids
 
 
-resolverKey : Resolver -> AuthenticKey
-resolverKey resolver = AuthenticKey with
-  authorities = Set.fromList [resolver.dso]
-  id = resolver.resolverId
+instance HasWeights Resolver where
+  weightsOf resolver = Map.fromList [(PartyIdentity voter, 1.0) | voter <- Set.toList resolver.electorate]
+
+-- | The key resolutions name this resolver by.
+instance HasCheckedFetch Resolver AuthenticKey where
+  contractGroupId resolver = AuthenticKey with
+    authorities = Set.fromList [resolver.dso]
+    id = resolver.resolverId
 
 majorityOf : Decimal -> Tally Text Text
 majorityOf electorateSize casts =
@@ -195,14 +198,17 @@ resolveMajority
 resolveMajority resolver self proposalCid recordCids = do
   now <- getTime
   proposal <- fetch proposalCid
-  requireResolvedBy (resolverKey resolver) (coerceContractId self) proposal.resolution
+  requireResolvedBy resolver self proposal.resolution
   require ("the resolution names the mechanism " <> majorityMechanismName)
     (proposal.resolution.mechanism == majorityMechanismName)
   require "the proposal is on this resolver's electorate" (proposal.electorate == resolver.electorate)
   let terms = proposal.terms
 
-  presented <- fetchGroup proposal.resolution recordCids
-  let (cids, records) = unzip presented
+  -- The records are signed by the operator and the voter, not by the dso the
+  -- resolver's key names, so the dso does not see the votes. They are fetched
+  -- as this package's own template, not through fetchVoteRecords.
+  require "the presented vote records are distinct" (unique recordCids)
+  records <- forA recordCids (fetchChecked proposal.resolution)
   forA_ records $ \record -> do
     requireClosed "every presented vote record is closed for voting" now record.closesAt
     require "every vote record votes in the proposal's window"
@@ -211,11 +217,11 @@ resolveMajority resolver self proposalCid recordCids = do
         && record.expiresAt == terms.expiresAt)
   require "the vote records vote on the proposal's action" (expectUniformAction records == terms.actionCid)
 
-  let voters = Set.fromList (map partyAsOwnerId (Set.toList resolver.electorate))
-  requireMetFrom [validVoteRecordVoters voters] [distinctVotersAmongVoteRecords] records
-  let counted = casts Some (equalWeights voters) records
+  -- The roll holds each entitled voter once, so covering it exactly admits
+  -- only voters with a right, each on one record.
   require "the presented vote records cover the roll" (sort (map (.voter) records) == sort proposal.roll)
-  consumeVoteRecords cids
+  let counted = casts Some (weightsOf resolver) records
+  consumeVoteRecords recordCids
 
   let verdict = decide (atLeastVotes 1) (majorityOf (intToDecimal (Set.size resolver.electorate))) counted
   created <- case verdict of

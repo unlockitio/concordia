@@ -31,7 +31,7 @@ each target by an `AuthenticKey`, which is the set of signatories plus an id. A
 contract id by itself cannot prove who signed the contract. Any party can create
 a contract of the same template with the same fields. `fetchCheckedAny` fetches
 the presented contract and compares the key it computes from its own
-signatories with the key the action names. `fetchVotingRightsPerKey` does the same check
+signatories with the key the action names. `fetchWeightsPerKey` does the same check
 for the contracts that carry voting rights.
 
 **Example:** an action changes a parameter on a contract A signed by the operator.
@@ -46,8 +46,8 @@ don't have.
 
 A vote counts only if its voter has the right to vote, has not voted already,
 and voted for something the mechanism counts. A resolver passes the vote records
-through `validVotes`, `validVoteRecordVoters` and `distinctVotersAmongVoteRecords`,
-and the voting rights through `validVotingRights`, before `casts` counts them. They
+through `validVotes`, `fetchVoteRecords` and `validateDistinctIdentitiesAmong`,
+and the voting rights through `validWeights`, before `casts` counts them. They
 refuse:
 
 - a voter who appears on two vote records;
@@ -199,8 +199,8 @@ implementation:
 
 - It is nonconsuming and returns the contracts it creates, so a vote topic can
   store the vote on itself (and recreate itself) or on a vote record per voter.
-- It takes a `caster` and an `ownerId`, so the implementation checks that the
-  caster may cast for that OwnerId.
+- It takes a `caster` and an `identity`, so the implementation checks that the
+  caster may cast for that identity.
 - Its `extraArgs` carry what the implementation needs, such as the voter's
   vote record or the live voter registry, the way the Token Standard passes a
   choice context.

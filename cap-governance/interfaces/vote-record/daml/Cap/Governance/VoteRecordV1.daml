@@ -6,20 +6,25 @@ module Cap.Governance.VoteRecordV1 where
 
 import Prelude hiding (Action)
 
+import DA.Action (unless)
 import DA.Map (Map)
+import qualified DA.Map as Map
+import qualified DA.Set as Set
 
 import Splice.Api.Token.MetadataV1
 import Splice.Util (HasCheckedFetch (..))
 
-import Cap.Core.Types (AuthenticKey, ResolutionInfo, Snapshot)
-import Cap.Governance.Types (OwnerId, Vote)
+import Cap.Core.Types (AuthenticKey, Identity, ResolutionInfo, Snapshot)
+import Cap.Core.Utils (HasIdentities (..))
+import Cap.Governance.Types (Vote)
 import Cap.Governance.ActionV1 (Action)
+import Cap.Governance.Utils.VoteRecords (IsVoteRecord (..))
 
 
 data VoteRecordView = VoteRecordView
   with
     resolution : ResolutionInfo
-    votes : Map OwnerId (Vote AnyValue)
+    votes : Map Identity (Vote AnyValue)
     snapshots : Map AuthenticKey Snapshot
     action : Optional (ContractId Action)   -- None when the action is an app-specific type, or there is none
     consumers : [Party]                     -- empty for a standing record
@@ -40,3 +45,22 @@ instance Show VoteRecord where
 
 instance HasCheckedFetch VoteRecord ResolutionInfo where
   contractGroupId record = (view record).resolution
+
+
+------------------  COUNTING  ------------------
+-- Any package can implement VoteRecord, so a resolver counting through it
+-- MUST fetch the records with fetchVoteRecords. Consuming a record needs the
+-- authority of its consumers, so the ledger rejects the resolution when they
+-- are not among the resolving parties. A record with no consumers is not
+-- consumed.
+
+instance HasIdentities VoteRecord where
+  identitiesOf record = Set.fromList (Map.keys (view record).votes)
+
+instance IsVoteRecord VoteRecord AnyValue (Optional (ContractId Action)) where
+  votesOf record = (view record).votes
+  snapshotsOf record = (view record).snapshots
+  actionOf record = (view record).action
+  consume cid = do
+    record <- fetch cid
+    unless (null (view record).consumers) $ exercise cid VoteRecord_Consume

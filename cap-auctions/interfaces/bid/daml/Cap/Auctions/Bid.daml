@@ -3,13 +3,15 @@
 module Cap.Auctions.Bid where
 
 import DA.Map (Map)
+import qualified DA.Map as Map
 import DA.Set (Set)
+import qualified DA.Set as Set
 
 import Splice.Api.Token.MetadataV1
 import Splice.Api.Token.AllocationV2 (Allocation)
 import Splice.Util (HasCheckedFetch (..), require)
-import Cap.Core.Types (ResolutionInfo)
-import Cap.Core.Utils (entitled, requireBefore, requireExpired, requireOpen)
+import Cap.Core.Types (Identity (..), ResolutionInfo)
+import Cap.Core.Utils (HasIdentities (..), entitled, requireBefore, requireExpired, requireOpen)
 
 import Cap.Auctions.Types (AuctionSchedule, AuctionTerms, Funding)
 
@@ -186,3 +188,12 @@ instance Show Bid where
 -- on a bid of another resolution.
 instance HasCheckedFetch Bid ResolutionInfo where
   contractGroupId bid = (view bid).resolutionInfo
+
+-- | The identities of a bid are the parties that hold its accounts: each
+-- account's owner, or its provider when it has no owner.
+instance HasIdentities Bid where
+  identitiesOf bid = Set.fromList
+    [ PartyIdentity holder
+    | funding <- Map.values (view bid).fundings
+    , Some holder <- [optional funding.account.provider Some funding.account.owner]
+    ]

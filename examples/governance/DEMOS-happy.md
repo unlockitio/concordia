@@ -90,7 +90,7 @@ sequenceDiagram
     Note over AA,ANS: Open the vote
     SV1->>R: DsoResolver_OpenVote — vote (0.05, 2.0), rightCids, targetCids
     R->>R: requireResolvedBy — mechanism "weighted-vote"
-    R->>R: fetchVotingRightsSummingWeights — SV1 5.0, SV2 3.0, SV3 1.0
+    R->>R: fetchSummedWeights — SV1 5.0, SV2 3.0, SV3 1.0
     R->>ACT: fetch, then snapshotStatesWith action_readStateImpl
     ACT->>CFG: readState — snapshot of transferFee and epoch
     ACT->>ANS: readIdentity — snapshot of the contract id
@@ -104,7 +104,7 @@ sequenceDiagram
 
     Note over AA,ANS: Resolve, after votingClosesAt
     SV1->>R: DsoResolver_ResolveVote — resolution, [recordCid]
-    R->>B: fetchGroup, requireClosed, requireMetFrom (validVotes, validVoteRecordVoters, distinctVotersAmongVoteRecords), casts
+    R->>B: fetchGroup, requireClosed, requireMetFrom (validVotes, validateDistinctIdentitiesAmong), casts
     R->>B: consumeVoteRecords — VoteRecord_Consume
     R->>R: decide (atLeastShareOfTotal 2 3) weightedMedianByField — 9.0 cast of 6.0 needed
     Note over R: Decided (transferFee 0.05, entryFee 2.0)
@@ -217,7 +217,7 @@ sequenceDiagram
     OP->>R: Resolver_ResolveMajority — proposalCid, three vote records
     R->>P: fetch, requireResolvedBy
     R->>BL: fetchGroup, requireClosed, check the vote record windows and actionCid
-    R->>R: requireMetFrom (validVoteRecordVoters, distinctVotersAmongVoteRecords), casts — the vote records cover the roll
+    R->>R: casts — the vote records cover the roll
     R->>BL: consumeVoteRecords — PrivateVoteRecord_Consume
     R->>R: decide majorityOf — 2 yay of 3
     Note over R: Decided yay

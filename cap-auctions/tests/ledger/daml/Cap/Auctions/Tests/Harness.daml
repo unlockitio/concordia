@@ -4,12 +4,13 @@ module Cap.Auctions.Tests.Harness where
 
 import DA.Map (Map)
 import DA.Optional (fromSomeNote)
+import qualified DA.Set as Set
 
 import Splice.Api.Token.MetadataV1 (ExtraArgs, emptyMetadata)
 import qualified Splice.Api.Token.AllocationV2 as Alloc
 import Splice.Util (HasCheckedFetch (..))
 
-import Cap.Core.Types (ResolutionInfo)
+import Cap.Core.Types (AuthenticKey (..), ResolutionInfo)
 import Cap.Core.Utils (Contracts, Ignored, fetchGroup)
 import Cap.Auctions.Types (AuctionSchedule, AuctionTerms (..), Funding, HasSingleLotQuotes (..), Quote)
 import Cap.Auctions.Bid
@@ -79,6 +80,10 @@ instance HasSingleLotQuotes TestBid where
 -- Probe
 --------
 
+-- | A probe resolves as the resolver its owners are the authorities of.
+instance HasCheckedFetch Probe AuthenticKey where
+  contractGroupId probe = AuthenticKey with authorities = Set.fromList probe.owners; id = "resolver"
+
 -- Runs single library functions in a choice, so that tests can call them on ledger contracts.
 template Probe
   with
@@ -119,7 +124,7 @@ template Probe
         bidCids : [ContractId TestBid]
       controller owners
       do
-        presented <- fetchGroup resolutionInfo bidCids
+        presented <- fetchGroup this self [] [] resolutionInfo bidCids
         ignoreConflictingBids principalFundings presented
 
     nonconsuming choice Probe_FetchAndIgnoreInvalidSingleLotBids : (Contracts TestBid, Ignored TestBid)
@@ -133,7 +138,7 @@ template Probe
       controller owners
       do
         singleLotTerms <- expectSingleLot terms
-        presented <- fetchGroup resolutionInfo bidCids
+        presented <- fetchGroup this self [] [] resolutionInfo bidCids
         ignoreInvalidSingleLotBids settlement terms schedule singleLotTerms principalFundings presented
 
     nonconsuming choice Probe_FetchAndIgnoreInvalidSingleLotQuotesBids : ([ContractId SingleLotQuotesBid], Ignored SingleLotQuotesBid)
@@ -147,7 +152,7 @@ template Probe
       controller owners
       do
         singleLotTerms <- expectSingleLot terms
-        presented <- fetchGroup resolutionInfo bidCids
+        presented <- fetchGroup this self [] [] resolutionInfo bidCids
         (kept, ignored) <- ignoreInvalidSingleLotBids settlement terms schedule singleLotTerms principalFundings presented
         pure (map fst kept, ignored)
 

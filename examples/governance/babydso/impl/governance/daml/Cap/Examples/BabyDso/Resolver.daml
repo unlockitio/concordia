@@ -16,21 +16,20 @@ import DA.Time (RelTime, addRelTime)
 import Splice.Api.Token.MetadataV1
 import Splice.Util (HasCheckedFetch (..), fetchChecked, require)
 
-import Cap.Core.Types (AuthenticKey (..), ExecutionAction (..), ExecutionCore (..), ResolutionInfo (..))
-import Cap.Governance.Types (VotingRight (..))
+import Cap.Core.Types (AuthenticKey (..), ExecutionAction (..), ExecutionCore (..), Identity (..), ResolutionInfo (..))
 import Cap.Core.Utils
-  ( IsAnyValue (..), fetchGroup, requireClosed, requireMetFrom, requireResolvedBy, signedKey )
+  ( HasActingParties (..), IsAnyValue (..), validateDistinctIdentitiesAmong, requireClosed, requireMetFrom
+  , requireResolvedBy, validateContractSignedByActingParties, signatoriesKey )
 import Cap.Governance.ActionV1
 import Cap.Governance.VoteRecordV1 (VoteRecord)
 import Cap.Governance.ExecutableV1 (Executable)
 import Cap.Governance.Types (Reason)
-import Cap.Governance.Utils.VotingRights
-  ( HasVotingRights (..), equalWeights, fetchVotingRightsSummingWeights, partyAsOwnerId )
+import Cap.Governance.Utils.Weights (HasWeights (..), fetchSummedWeights)
 import Cap.Governance.Utils
   ( Cast (..), Tally, Verdict (..), Vote (..), atLeastShareOfTotal, atLeastVotes
-  , casts, consumeVoteRecords, decide, distinctVotersAmongVoteRecords, expectUniformAction
+  , casts, consumeVoteRecords, decide, expectUniformAction, fetchVoteRecords
   , expectUniformSnapshots, snapshotStates, unanimous
-  , validVoteRecordVoters, validVotes, weightedMedian )
+  , validVotes, weightedMedian )
 
 import Cap.Examples.BabyDso.Rights
 import Cap.Examples.BabyDso.Submission
@@ -69,11 +68,11 @@ template DsoResolver
         expiresAt : Time
       controller proposer
       do
-        requireResolvedBy (resolverKey this) (coerceContractId self) resolution
+        requireResolvedBy this self resolution
         require ("the resolution names the mechanism " <> weightedVoteMechanismName) (resolution.mechanism == weightedVoteMechanismName)
-        openingWeights <- fmap (.weight) <$> fetchVotingRightsSummingWeights rightKeys rightCids
+        openingWeights <- fetchSummedWeights rightKeys rightCids
         require "the proposer is a voter: it holds weight at opening"
-          (partyAsOwnerId proposer `Map.member` openingWeights)
+          (PartyIdentity proposer `Map.member` openingWeights)
         action <- fetch actionCid
         snapshots <- snapshotStates action targetCids
         create SharedVoteRecord with
@@ -89,7 +88,7 @@ template DsoResolver
       controller sv
       do
         require "the resolving party is an sv" (sv `Set.member` svs)
-        requireResolvedBy (resolverKey this) (coerceContractId self) resolution
+        requireResolvedBy this self resolution
         require ("the resolution names the mechanism " <> weightedVoteMechanismName) (resolution.mechanism == weightedVoteMechanismName)
         record <- fetchChecked resolution recordCid
         consumeVoteRecords [toInterfaceContractId @VoteRecord recordCid]
@@ -106,7 +105,7 @@ template DsoResolver
       controller confirmer
       do
         require "the confirmer is an sv" (confirmer `Set.member` svs)
-        requireResolvedBy (resolverKey this) (coerceContractId self) resolution
+        requireResolvedBy this self resolution
         require ("the resolution names the mechanism " <> confirmationMechanismName) (resolution.mechanism == confirmationMechanismName)
         action <- fetch actionCid
         snapshots <- snapshotStates action targetCids
@@ -122,17 +121,29 @@ template DsoResolver
       controller sv
       do
         require "the resolving party is an sv" (sv `Set.member` svs)
-        requireResolvedBy (resolverKey this) (coerceContractId self) resolution
         require ("the resolution names the mechanism " <> confirmationMechanismName) (resolution.mechanism == confirmationMechanismName)
-        presented <- fetchGroup resolution confirmationCids
-        let (cids, confirmations) = unzip presented
-        consumeVoteRecords (map (toInterfaceContractId @VoteRecord) cids)
+        presented <- fetchVoteRecords this self [validateContractSignedByActingParties this] resolution
+          (map (toInterfaceContractId @VoteRecord) confirmationCids)
+        let (cids, records) = unzip presented
+            confirmations = map
+              (fromSomeNote "a presented confirmation is not an SvConfirmation" . fromInterface @SvConfirmation)
+              records
+        consumeVoteRecords cids
         resolveConfirmations this confirmations
 
-resolverKey : DsoResolver -> AuthenticKey
-resolverKey resolver = AuthenticKey with
-  authorities = Set.fromList [resolver.dso]
-  id = resolver.resolverId
+-- | Every sv has one vote, cast by itself.
+instance HasWeights DsoResolver where
+  weightsOf resolver = Map.fromList [(PartyIdentity sv, 1.0) | sv <- Set.toList resolver.svs]
+
+-- | Each sv acts for itself, a PartyIdentity, so no identity needs a mapping.
+instance HasActingParties DsoResolver where
+  actingPartiesOf _ = Map.empty
+
+-- | The key resolutions name this resolver by.
+instance HasCheckedFetch DsoResolver AuthenticKey where
+  contractGroupId resolver = AuthenticKey with
+    authorities = Set.fromList [resolver.dso]
+    id = resolver.resolverId
 
 
 data RightKey = RightKey
@@ -143,12 +154,11 @@ data RightKey = RightKey
 
 instance HasCheckedFetch SvWeightSource RightKey where
   contractGroupId source = RightKey with
-    authKey = signedKey source.name source
+    authKey = signatoriesKey source.name source
     sv = source.sv
 
-instance HasVotingRights SvWeightSource where
-  rightsOf source = Map.singleton (partyAsOwnerId source.sv)
-    (VotingRight with weight = source.weight; casters = Set.singleton source.sv)
+instance HasWeights SvWeightSource where
+  weightsOf source = Map.singleton (PartyIdentity source.sv) source.weight
 
 
 resolveWeightedVote
@@ -160,13 +170,11 @@ resolveWeightedVote resolver record = do
 
   let actionCid = record.actionCid
       snapshots = record.snapshots
-  -- The window and the opening weights are read from the typed vote record; the
-  -- votes are counted through the VoteRecord interface.
   let weights = record.openingWeights
       records = [toInterface @VoteRecord record]
   requireMetFrom
-    [validVotes decodeParametersVote (const []), validVoteRecordVoters (Set.fromList (Map.keys weights))]
-    [distinctVotersAmongVoteRecords]
+    [validVotes decodeParametersVote (const [])]
+    [validateDistinctIdentitiesAmong]
     records
   let counted = casts decodeParametersVote weights records
       verdict = decide (atLeastShareOfTotal 2 3) weightedMedianByField counted
@@ -213,9 +221,7 @@ resolveConfirmations resolver confirmations = do
   let records = map (toInterface @VoteRecord) confirmations
       actionCid = fromSomeNote "the presented vote records name no action" (expectUniformAction records)
       snapshots = expectUniformSnapshots records
-  let voters = Set.fromList (map partyAsOwnerId (Set.toList resolver.svs))
-  requireMetFrom [validVoteRecordVoters voters] [distinctVotersAmongVoteRecords] records
-  let counted = casts Some (equalWeights voters) records
+  let counted = casts Some (weightsOf resolver) records
       verdict = decide (atLeastVotes (byzantineQuorum (Set.size resolver.svs))) unanimous counted
   outcome <- case verdict of
     Decided outcome -> pure outcome

@@ -19,11 +19,11 @@ import Cap.Core.Tests.Support
 template Grouped
   with
     owner : Party
-    group : Text
+    group : ResolutionInfo
   where
     signatory owner
 
-instance HasCheckedFetch Grouped Text where
+instance HasCheckedFetch Grouped ResolutionInfo where
   contractGroupId grouped = grouped.group
 
 template SignedTarget
@@ -35,7 +35,7 @@ template SignedTarget
     observer readers
 
 instance HasCheckedFetch SignedTarget AuthenticKey where
-  contractGroupId = signedKey "signed"
+  contractGroupId = signatoriesKey "signed"
 
 template Probe
   with
@@ -45,10 +45,10 @@ template Probe
 
     nonconsuming choice Probe_FetchGroup : [ContractId Grouped]
       with
-        group : Text
+        group : ResolutionInfo
         cids : [ContractId Grouped]
       controller owner
-      do map fst <$> fetchGroup group cids
+      do map fst <$> fetchGroup this self [] [] group cids
 
     nonconsuming choice Probe_FetchCheckedAny : ContractId SignedTarget
       with
@@ -59,10 +59,9 @@ template Probe
 
     nonconsuming choice Probe_RequireResolvedBy : ()
       with
-        key : AuthenticKey
         resolution : ResolutionInfo
       controller owner
-      do requireResolvedBy key (coerceContractId self) resolution
+      do requireResolvedBy this self resolution
 
     nonconsuming choice Probe_RequireOpen : ()
       with
@@ -85,11 +84,15 @@ template Probe
 t0 : Time
 t0 = time (date 2026 Jan 1) 0 0 0
 
+-- | A probe resolves as the resolver its owner names.
+instance HasCheckedFetch Probe AuthenticKey where
+  contractGroupId probe = resolverKey probe.owner
+
 resolverKey : Party -> AuthenticKey
 resolverKey party = AuthenticKey with authorities = Set.fromList [party]; id = "resolver"
 
-signedKeyOf : Party -> Text -> AuthenticKey
-signedKeyOf party id = AuthenticKey with authorities = Set.fromList [party]; id
+signatoriesKeyOf : Party -> Text -> AuthenticKey
+signatoriesKeyOf party id = AuthenticKey with authorities = Set.fromList [party]; id
 
 resolutionOf : Party -> Optional AnyContractId -> Text -> ResolutionInfo
 resolutionOf party resolverCid mechanism = ResolutionInfo with
@@ -97,6 +100,10 @@ resolutionOf party resolverCid mechanism = ResolutionInfo with
   resolverCid
   mechanism
   id = "proposal"
+
+-- | A resolution the owner's probe resolves, told apart by its mechanism.
+groupOf : Party -> Text -> ResolutionInfo
+groupOf party = resolutionOf party None
 
 setupProbe : Text -> Script (Party, ContractId Probe)
 setupProbe ns = do
@@ -108,38 +115,38 @@ setupProbe ns = do
 fetchGroupReturnsTheGroup : Script ()
 fetchGroupReturnsTheGroup = do
   (owner, probe) <- setupProbe "group-ok"
-  a <- submit owner $ createCmd Grouped with owner; group = "g"
-  b <- submit owner $ createCmd Grouped with owner; group = "g"
-  result <- submit owner $ exerciseCmd probe Probe_FetchGroup with group = "g"; cids = [a, b]
+  a <- submit owner $ createCmd Grouped with owner; group = groupOf owner "g"
+  b <- submit owner $ createCmd Grouped with owner; group = groupOf owner "g"
+  result <- submit owner $ exerciseCmd probe Probe_FetchGroup with group = groupOf owner "g"; cids = [a, b]
   result === [a, b]
 
 fetchGroupReturnsNothingForAnEmptyList : Script ()
 fetchGroupReturnsNothingForAnEmptyList = do
   (owner, probe) <- setupProbe "group-empty"
-  result <- submit owner $ exerciseCmd probe Probe_FetchGroup with group = "g"; cids = []
+  result <- submit owner $ exerciseCmd probe Probe_FetchGroup with group = groupOf owner "g"; cids = []
   result === []
 
 fetchGroupRefusesADuplicate : Script ()
 fetchGroupRefusesADuplicate = do
   (owner, probe) <- setupProbe "group-duplicate"
-  a <- submit owner $ createCmd Grouped with owner; group = "g"
+  a <- submit owner $ createCmd Grouped with owner; group = groupOf owner "g"
   submitMustFailContaining "the presented contracts are distinct" owner $
-    exerciseCmd probe Probe_FetchGroup with group = "g"; cids = [a, a]
+    exerciseCmd probe Probe_FetchGroup with group = groupOf owner "g"; cids = [a, a]
 
 fetchGroupRefusesAnotherGroup : Script ()
 fetchGroupRefusesAnotherGroup = do
   (owner, probe) <- setupProbe "group-other"
-  a <- submit owner $ createCmd Grouped with owner; group = "g"
-  b <- submit owner $ createCmd Grouped with owner; group = "h"
+  a <- submit owner $ createCmd Grouped with owner; group = groupOf owner "g"
+  b <- submit owner $ createCmd Grouped with owner; group = groupOf owner "h"
   submitMustFailContaining "Contract group identifier mismatch" owner $
-    exerciseCmd probe Probe_FetchGroup with group = "g"; cids = [a, b]
+    exerciseCmd probe Probe_FetchGroup with group = groupOf owner "g"; cids = [a, b]
 
 fetchCheckedAnyAcceptsTheKeyTheContractCarries : Script ()
 fetchCheckedAnyAcceptsTheKeyTheContractCarries = do
   (owner, probe) <- setupProbe "checked-ok"
   signed <- submit owner $ createCmd SignedTarget with signer = owner; readers = []
   result <- submit owner $ exerciseCmd probe Probe_FetchCheckedAny with
-    key = signedKeyOf owner "signed"; cid = coerceContractId signed
+    key = signatoriesKeyOf owner "signed"; cid = coerceContractId signed
   result === signed
 
 fetchCheckedAnyRefusesAnotherId : Script ()
@@ -148,7 +155,7 @@ fetchCheckedAnyRefusesAnotherId = do
   signed <- submit owner $ createCmd SignedTarget with signer = owner; readers = []
   submitMustFailContaining "Contract group identifier mismatch" owner $
     exerciseCmd probe Probe_FetchCheckedAny with
-      key = signedKeyOf owner "other"; cid = coerceContractId signed
+      key = signatoriesKeyOf owner "other"; cid = coerceContractId signed
 
 fetchCheckedAnyRefusesAnotherSigner : Script ()
 fetchCheckedAnyRefusesAnotherSigner = do
@@ -157,19 +164,18 @@ fetchCheckedAnyRefusesAnotherSigner = do
   signed <- submit other $ createCmd SignedTarget with signer = other; readers = [owner]
   submitMustFailContaining "Contract group identifier mismatch" owner $
     exerciseCmd probe Probe_FetchCheckedAny with
-      key = signedKeyOf owner "signed"; cid = coerceContractId signed
+      key = signatoriesKeyOf owner "signed"; cid = coerceContractId signed
 
 requireResolvedByAcceptsAnUnboundResolution : Script ()
 requireResolvedByAcceptsAnUnboundResolution = do
   (owner, probe) <- setupProbe "resolution-unbound"
   submit owner $ exerciseCmd probe Probe_RequireResolvedBy with
-    key = resolverKey owner; resolution = resolutionOf owner None "vote"
+    resolution = resolutionOf owner None "vote"
 
 requireResolvedByAcceptsAResolutionBoundToThisContract : Script ()
 requireResolvedByAcceptsAResolutionBoundToThisContract = do
   (owner, probe) <- setupProbe "resolution-bound"
   submit owner $ exerciseCmd probe Probe_RequireResolvedBy with
-    key = resolverKey owner
     resolution = resolutionOf owner (Some (coerceContractId probe)) "vote"
 
 requireResolvedByRefusesAnotherResolver : Script ()
@@ -178,7 +184,7 @@ requireResolvedByRefusesAnotherResolver = do
   other <- allocateParty "resolution-resolver-other"
   submitMustFailContaining "the resolution names the resolver" owner $
     exerciseCmd probe Probe_RequireResolvedBy with
-      key = resolverKey owner; resolution = resolutionOf other None "vote"
+      resolution = resolutionOf other None "vote"
 
 requireResolvedByRefusesAnotherRulesContract : Script ()
 requireResolvedByRefusesAnotherRulesContract = do
@@ -186,7 +192,6 @@ requireResolvedByRefusesAnotherRulesContract = do
   otherProbe <- submit owner $ createCmd Probe with owner
   submitMustFailContaining "the resolution is bound to no other resolver contract" owner $
     exerciseCmd probe Probe_RequireResolvedBy with
-      key = resolverKey owner
       resolution = resolutionOf owner (Some (coerceContractId otherProbe)) "vote"
 
 requireOpenChecksTheWindow : Script ()

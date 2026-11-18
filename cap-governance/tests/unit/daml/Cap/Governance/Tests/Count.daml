@@ -10,17 +10,17 @@ import Cap.Governance.Utils.Count
 
 
 data Voters = Voters with
-    alice : OwnerId
-    bob : OwnerId
-    carol : OwnerId
-    dave : OwnerId
+    alice : Identity
+    bob : Identity
+    carol : Identity
+    dave : Identity
 
 votersIn : Text -> Script Voters
 votersIn ns = pure Voters with
-  alice = ns <> "-alice"
-  bob = ns <> "-bob"
-  carol = ns <> "-carol"
-  dave = ns <> "-dave"
+  alice = ExternalIdentity (ns <> "-alice")
+  bob = ExternalIdentity (ns <> "-bob")
+  carol = ExternalIdentity (ns <> "-carol")
+  dave = ExternalIdentity (ns <> "-dave")
 
 cast : Decimal -> Vote a -> Cast a
 cast weight vote = Cast with weight; vote

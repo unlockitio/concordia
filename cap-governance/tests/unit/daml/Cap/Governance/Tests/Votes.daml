@@ -9,6 +9,7 @@ import Daml.Script
 
 import Splice.Api.Token.MetadataV1 (AnyValue (..))
 
+import Cap.Core.Types (Identity (..))
 import Cap.Governance.Types (Vote (..))
 import Cap.Governance.Utils.Count (Cast (..))
 import Cap.Governance.Utils.Votes
@@ -32,7 +33,8 @@ standardDecodersAreExactAndKeepAbstentions = do
 -- that decodes fails only the value check; an abstention passes.
 validVotesReportsEachFailureOnce : Script ()
 validVotesReportsEachFailureOnce = do
-  let (yes, maybe, wrongKind, abstains) = ("yes", "maybe", "kind", "abstains")
+  let (yes, maybe, wrongKind, abstains) =
+        (ExternalIdentity "yes", ExternalIdentity "maybe", ExternalIdentity "kind", ExternalIdentity "abstains")
       record = TestVoteRecord $ Map.fromList
         [ (yes, Voted (AV_Text "yes"))
         , (maybe, Voted (AV_Text "maybe"))
@@ -48,7 +50,9 @@ validVotesReportsEachFailureOnce = do
 -- vote does not decode, is Absent; one outside the map is not counted.
 castsCountsTheVotersOfTheWeightsMap : Script ()
 castsCountsTheVotersOfTheWeightsMap = do
-  let (yes, abstains, wrongKind, noRecord, outside) = ("yes", "abstains", "kind", "no-record", "outside")
+  let (yes, abstains, wrongKind, noRecord, outside) =
+        ( ExternalIdentity "yes", ExternalIdentity "abstains", ExternalIdentity "kind"
+        , ExternalIdentity "no-record", ExternalIdentity "outside" )
       records =
         [ TestVoteRecord $ Map.fromList [(yes, Voted (AV_Text "yes")), (abstains, Abstained)]
         , TestVoteRecord $ Map.fromList [(wrongKind, Voted (AV_Int 1)), (outside, Voted (AV_Text "no"))]

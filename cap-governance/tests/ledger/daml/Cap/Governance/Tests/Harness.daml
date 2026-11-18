@@ -13,7 +13,7 @@ import Splice.Api.Token.MetadataV1
 import Splice.Util (HasCheckedFetch (..))
 
 import Cap.Core.Types (AuthenticKey (..), Snapshot (..))
-import Cap.Core.Utils (IsAnyValue (..), fetchCheckedAny, signedKey)
+import Cap.Core.Utils (IsAnyValue (..), fetchCheckedAny, signatoriesKey)
 import Cap.Governance.Utils
 
 
@@ -30,7 +30,7 @@ template Target
     signatory owner
 
 instance HasCheckedFetch Target AuthenticKey where
-  contractGroupId target = signedKey target.tag target
+  contractGroupId target = signatoriesKey target.tag target
 
 instance HasState Target Int where
   stateOf target = target.value

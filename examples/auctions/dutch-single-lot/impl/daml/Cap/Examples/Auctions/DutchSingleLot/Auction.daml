@@ -13,10 +13,10 @@ import qualified DA.Set as Set
 import Splice.Api.Token.MetadataV1
 import qualified Splice.Api.Token.AllocationV2 as Alloc
 import Splice.Api.Token.HoldingV2 (Account (..))
-import Splice.Util (require)
+import Splice.Util (HasCheckedFetch (..), require)
 
 import Cap.Core.Types (AuthenticKey (..), ResolutionInfo)
-import Cap.Core.Utils (Ignored, fetchGroup, requireResolvedBy)
+import Cap.Core.Utils (Ignored, fetchGroup)
 import Cap.Auctions.Types (AuctionSchedule (..), AuctionTerms, Funding (..), HasSingleLotQuotes (..))
 import Cap.Auctions.Bid (Bid, Bid_Close (..))
 import Cap.Auctions.Funding (SettleBatchContext, cancelAllocations, ignoreConflictingBids, settlementOf)
@@ -72,9 +72,8 @@ template DutchAuction
         extraArgs : ExtraArgs
       controller Set.toList authorities
       do
-        requireResolvedBy (AuthenticKey with authorities; id = resolverId) (coerceContractId self) resolutionInfo
         singleLotTerms <- expectSingleLot terms
-        presented <- fetchGroup resolutionInfo bidCids
+        presented <- fetchGroup this self [] [] resolutionInfo bidCids
         (keptBids, ignoredBids) <- ignoreConflictingBids principalFundings presented
         now <- getTime
         let claimed = sum [quote.amount | (_, bid) <- keptBids, quote <- singleLotQuotes bid]
@@ -93,3 +92,11 @@ template DutchAuction
           settled = result.settled
           cancelled
           ignoredBids
+
+
+-- | The key resolutions name this auction by: its authorities, without the
+-- principal's signers, and its resolver id.
+instance HasCheckedFetch DutchAuction AuthenticKey where
+  contractGroupId auction = AuthenticKey with
+    authorities = auction.authorities
+    id = auction.resolverId

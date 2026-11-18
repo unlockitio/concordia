@@ -5,14 +5,14 @@ module Cap.Examples.MajorityVote.VoteRecord where
 import Prelude hiding (Action)
 
 import qualified DA.Map as Map
+import qualified DA.Set as Set
 import DA.Optional (isNone, isSome)
 
 import Splice.Util (HasCheckedFetch (..), require)
 
-import Cap.Core.Types (ResolutionInfo)
-import Cap.Core.Utils (requireExpired, requireOpen)
+import Cap.Core.Types (Identity (..), ResolutionInfo)
+import Cap.Core.Utils (HasIdentities (..), requireExpired, requireOpen)
 import Cap.Governance.ActionV1 (Action)
-import Cap.Governance.Utils.VotingRights (partyAsOwnerId)
 import Cap.Governance.Utils (IsVoteRecord (..), Vote (..))
 
 yay : Text
@@ -68,8 +68,11 @@ template PrivateVoteRecord
 instance HasCheckedFetch PrivateVoteRecord ResolutionInfo where
   contractGroupId record = record.resolution
 
+instance HasIdentities PrivateVoteRecord where
+  identitiesOf record = Set.singleton (PartyIdentity record.voter)
+
 instance IsVoteRecord PrivateVoteRecord Text (ContractId Action) where
-  votesOf record = Map.fromList [(partyAsOwnerId record.voter, optional Absent Voted record.vote)]
+  votesOf record = Map.fromList [(PartyIdentity record.voter, optional Absent Voted record.vote)]
   snapshotsOf _ = Map.empty
   actionOf record = record.actionCid
   consume cid = exercise cid PrivateVoteRecord_Consume

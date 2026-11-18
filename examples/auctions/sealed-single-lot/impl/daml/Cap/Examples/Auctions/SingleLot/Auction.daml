@@ -14,8 +14,10 @@ import Splice.Api.Token.MetadataV1
 import qualified Splice.Api.Token.AllocationV2 as Alloc
 import Splice.Api.Token.HoldingV2 (Account (..))
 
+import Splice.Util (HasCheckedFetch (..))
+
 import Cap.Core.Types (AuthenticKey (..), ResolutionInfo)
-import Cap.Core.Utils (Ignored, fetchGroup, requireClosed, requireResolvedBy)
+import Cap.Core.Utils (Ignored, fetchGroup, requireClosed)
 import Cap.Auctions.Types (AuctionSchedule (..), AuctionTerms, Funding (..))
 import Cap.Auctions.Bid (Bid, Bid_Close (..))
 import Cap.Auctions.Funding (SettleBatchContext, cancelAllocations, ignoreConflictingBids, settlementOf)
@@ -68,11 +70,10 @@ template SingleLotAuction
         extraArgs : ExtraArgs
       controller Set.toList authorities
       do
-        requireResolvedBy (AuthenticKey with authorities; id = resolverId) (coerceContractId self) resolutionInfo
         now <- getTime
         requireClosed "the bidding window is closed" now schedule.biddingClosesAt
         singleLotTerms <- expectSingleLot terms
-        presented <- fetchGroup resolutionInfo bidCids
+        presented <- fetchGroup this self [] [] resolutionInfo bidCids
         (keptBids, ignoredBids) <- ignoreConflictingBids principalFundings presented
         let settlement = settlementOf resolutionInfo terms.allocationTerms.executors
         result <- clearAndSettleSingleLotFromEmptyLegsAllocations
@@ -87,3 +88,11 @@ template SingleLotAuction
           settled = result.settled
           cancelled
           ignoredBids
+
+
+-- | The key resolutions name this auction by: its authorities, without the
+-- principal's signers, and its resolver id.
+instance HasCheckedFetch SingleLotAuction AuthenticKey where
+  contractGroupId auction = AuthenticKey with
+    authorities = auction.authorities
+    id = auction.resolverId

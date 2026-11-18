@@ -9,7 +9,7 @@ Each entry points at where the term is defined.
 **Authentic key** — names a contract by the set of parties that sign it and an
 id. A checked fetch compares the key a contract computes from its own
 signatories with the key the caller expects. `AuthenticKey` in `Cap.Core.Types`;
-`signedKey` and `fetchCheckedAny` in `Cap.Core.Utils`.
+`signatoriesKey` and `fetchCheckedAny` in `Cap.Core.Utils`.
 
 **Mechanism** — the rule a resolver runs to turn ballots or bids into an
 outcome: a voting rule in cap-governance, an auction format in cap-auctions.
@@ -40,8 +40,8 @@ settlement, and when. `ExecutionCore` in `Cap.Core.Types`.
 
 ## cap-governance
 
-**Decentralized party** — the parties that sign a resolver and govern through
-it. `ResolutionInfo.resolver.authorities`.
+**Decentralized party** — the parties that govern a resolver and sign for it;
+the resolver may have other signatories. `ResolutionInfo.resolver.authorities`.
 
 **Resolver in a governance flow** — a template the app writes, signed by the
 decentralized party. It collects the ballots, and each mechanism is a choice on
@@ -93,14 +93,14 @@ through `IsBallot`. `IsBallot` in `Cap.Governance.Utils.Ballots` ·
 
 **Voting right** — a contract the app registers that gives one or more holders
 the right to vote, each with a weight. A contract can carry one right or
-several. `HasVotingRights` and `fetchVotingRightsSummingWeights` in
-`Cap.Governance.Utils.VotingRights`.
+several. `HasWeights` and `fetchSummedWeights` in
+`Cap.Governance.Utils.Weights`.
 
 **Weight** — how much a voter's vote counts: the sum of the weights of the
-voting rights the voter holds. `fetchVotingRightsSummingWeights` sums them over one
-contract per key, `fetchVotingRightsOfContract` reads a single contract, and
-`fetchVotingRightsPerKey` returns them per key, unsummed. In
-`Cap.Governance.Utils.VotingRights`.
+voting rights the voter holds. `fetchSummedWeights` sums them over one
+contract per key, `fetchWeightsOfContract` reads a single contract, and
+`fetchWeightsPerKey` returns them per key, unsummed. In
+`Cap.Governance.Utils.Weights`.
 
 ## Counting
 

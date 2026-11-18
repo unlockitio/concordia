@@ -6,7 +6,7 @@ module Cap.Governance.Utils
   , module Cap.Governance.Utils.VoteRecords
   , module Cap.Governance.Utils.Count
   , module Cap.Governance.Utils.Votes
-  , module Cap.Governance.Utils.VotingRights
+  , module Cap.Governance.Utils.Weights
   ) where
 
 import Cap.Governance.Utils.VoteRecords
@@ -14,4 +14,4 @@ import Cap.Governance.Utils.Count
 import Cap.Governance.Utils.Targets.Execution
 import Cap.Governance.Utils.Targets.Snapshots
 import Cap.Governance.Utils.Votes
-import Cap.Governance.Utils.VotingRights
+import Cap.Governance.Utils.Weights

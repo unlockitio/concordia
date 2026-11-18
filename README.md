@@ -18,15 +18,15 @@ Auctions and governance are the two worked instances.
 
 ## Milestone 3 — Governance Module Expansion
 
-M3 adds weighted voting to `cap-governance`: helpers for weighing ballots and
-counting them, helpers for checking targets at execution, and a weighted voting
-flow built on them.
+M3 adds weighted voting to `cap-governance`: helpers for weighing vote records
+and counting them, helpers for checking targets at execution, and a weighted
+voting flow built on them.
 
 | M3 deliverable | Where to look |
 | --- | --- |
-| Weighted-vote implementation | [`examples/governance/babydso/impl`](examples/governance/babydso/impl) — weights read by [`VotingRights.daml`](cap-governance/utils/daml/Cap/Governance/Utils/VotingRights.daml) and attached to votes by [`Votes.daml`](cap-governance/utils/daml/Cap/Governance/Utils/Votes.daml) · [sequence diagrams](examples/governance/DEMOS-happy.md#babydso) |
+| Weighted-vote implementation | [`examples/governance/babydso/impl`](examples/governance/babydso/impl) — weights read by [`Weights.daml`](cap-governance/utils/daml/Cap/Governance/Utils/Weights.daml) and attached to votes by [`Votes.daml`](cap-governance/utils/daml/Cap/Governance/Utils/Votes.daml) · [sequence diagrams](examples/governance/DEMOS-happy.md#babydso) |
 | Quorum, threshold, and approval logic for supported governance formats | [`Count.daml`](cap-governance/utils/daml/Cap/Governance/Utils/Count.daml) — quorums (`atLeastPresent`, `atLeastVotes`, `atLeastVotedWeight`, `atLeastShareOfTotal`), thresholds and tallies (`shareOfVotes`, `plurality`, `unanimous`, `weightedMedian`) combined by `decide` |
-| Downstream execution hooks for approved proposals | [`ActionV1`](cap-governance/interfaces/action/daml/Cap/Governance/ActionV1.daml) and [`ExecutableV1`](cap-governance/interfaces/executable/daml/Cap/Governance/ExecutableV1.daml) · [`Targets.daml`](cap-governance/utils/daml/Cap/Governance/Utils/Targets.daml) · drift checks in the BabyDso flow: [`BabyDso/ExecutionDemo.daml`](examples/governance/babydso/demo/daml/Cap/Examples/BabyDso/ExecutionDemo.daml) |
+| Downstream execution hooks for approved proposals | [`ActionV1`](cap-governance/interfaces/action/daml/Cap/Governance/ActionV1.daml) and [`ExecutableV1`](cap-governance/interfaces/executable/daml/Cap/Governance/ExecutableV1.daml) · [`Targets`](cap-governance/utils/daml/Cap/Governance/Utils/Targets) · drift checks in the BabyDso flow: [`BabyDso/ExecutionDemo.daml`](examples/governance/babydso/demo/daml/Cap/Examples/BabyDso/ExecutionDemo.daml) |
 | Daml Script and sandbox integration tests for supported governance formats | [`babydso/demo`](examples/governance/babydso/demo) and [`private-majority-vote/demo`](examples/governance/private-majority-vote/demo) — [how to run](#running-the-demos) · [`scripts/sandbox-test.sh`](scripts/sandbox-test.sh) — [how to run](#on-a-canton-sandbox) · library tests in [`cap-governance/tests`](cap-governance/tests) |
 
 M3 tracks as [issue #540](https://github.com/canton-foundation/canton-dev-fund/issues/540).
@@ -69,18 +69,20 @@ CAP defines an interface only where code works with a contract whose template it
 does not know at compile time. Everything else is stored types and helpers.
 
 - **`cap-core`** — stored types (`AuthenticKey`, `ResolutionInfo`, `ExecutionCore`, `Snapshot`)
-  and `cap-core-utils` (checked fetches, resolution checks, admission, windows,
+  and `cap-core-utils` (checked fetches, resolution checks, admission, time,
   value conversion). It defines no interfaces.
-- **`cap-governance`** — the `Action` and `Executable` interfaces, and
+- **`cap-governance`** — `cap-governance-types` (`Vote`, `Reason`, `ResolutionStatus`); the `Action`, `Executable`,
+  `VoteRecord`, `VoteTopic`, `VotingRights` and `Resolver` interfaces; and
   `cap-governance-utils` with the modules `Targets` (taking snapshots of
   targets, and checking them at execution under a `DriftPolicy` the action
-  supplies), `Ballots`, `VotingRights` and `Count` (quorums and tallies).
+  supplies), `VoteRecords`, `Votes`, `VotingRights` and `Count` (quorums and
+  tallies).
 - **`cap-auctions`** — the `Bid`, `SingleLotQuotesBid`, `TradeProposal` and
   `Settlement` interfaces, the shared types, and `cap-auctions-utils` with the
   modules `Funding`, `Clearing` and `SingleLot`. Settlement composes with the
   Token Standard V2 rather than restating it.
 
-A format author writes its own templates (resolver contract, ballots, bids) and uses
+A format author writes its own templates (resolver contract, vote records, bids) and uses
 the helpers it needs. CAP sits above Canton's asset and settlement layer.
 
 ## Repository layout
@@ -89,11 +91,12 @@ the helpers it needs. CAP sits above Canton's asset and settlement layer.
 concordia/
 ├── cap-core/                          # Tier 1: domain-agnostic
 │   ├── types/                         #   AuthenticKey, ResolutionInfo, ExecutionCore, Snapshot, TargetReader
-│   ├── utils/                         #   checked fetches, resolutions, admission, windows, values
+│   ├── utils/                         #   checked fetches, resolutions, admission, time, values
 │   └── tests/{unit,ledger}
 ├── cap-governance/                    # Tier 2: governance
-│   ├── interfaces/{action,executable}
-│   ├── utils/                         #   Targets, Ballots, VotingRights, Count
+│   ├── types/                         #   Vote, Reason, ResolutionStatus
+│   ├── interfaces/{action,executable,vote-record,vote-topic,voting-rights,resolver}
+│   ├── utils/                         #   Targets, VoteRecords, Votes, Weights, Count
 │   └── tests/{unit,ledger}
 ├── cap-auctions/                      # Tier 2: auctions (Token Standard V2)
 │   ├── types/                         #   AuctionTerms, LotTerms, Quote, Funding
@@ -101,11 +104,12 @@ concordia/
 │   └── utils/                         #   Funding, Clearing, SingleLot
 ├── docs/governance/
 │   ├── intro.md                       # governance flows in Canton and the cap-governance architecture
-│   └── rationale.md                   # cap-governance design decisions
+│   ├── rationale.md                   # cap-governance design decisions
+│   └── considerations.md              # open topics: outcomes, vote encoding, where votes are cast
 ├── examples/governance/
 │   ├── babydso/                       # Splice DSO governance with weighted votes
 │   │                                  #   impl/{ans,config,rights,governance,action}, demo
-│   └── private-majority-vote/         # M2: private ballots, {impl,demo}
+│   └── private-majority-vote/         # M2: private vote records, {impl,demo}
 ├── examples/auctions/
 │   ├── sealed-single-lot/             # sealed-bid single-lot auction on cap-auctions, {impl}
 │   │                                  #   demo/DEMOS.md: M2 sealed-bid-first-price demos

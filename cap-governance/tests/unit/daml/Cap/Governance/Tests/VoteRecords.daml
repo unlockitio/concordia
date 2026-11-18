@@ -6,8 +6,9 @@ import DA.Assert ((===))
 import qualified DA.Map as Map
 import Daml.Script
 
+import Cap.Core.Types (Identity (..))
+import Cap.Core.Utils (validateDistinctIdentitiesAmong)
 import Cap.Governance.Types (Vote (..))
-import Cap.Governance.Utils.VoteRecords
 
 import Cap.Governance.Tests.Support
 
@@ -16,13 +17,13 @@ import Cap.Governance.Tests.Support
 -- on records with several voters only the shared voter is reported.
 distinctVotersFailsEveryVoteRecordOfARepeatedVoter : Script ()
 distinctVotersFailsEveryVoteRecordOfARepeatedVoter = do
-  let (twice, once, alone) = ("twice", "once", "alone")
+  let (twice, once, alone) = (ExternalIdentity "twice", ExternalIdentity "once", ExternalIdentity "alone")
       recordOf parties = TestVoteRecord $ Map.fromList [(p, Voted "yes") | p <- parties]
       first = recordOf [twice]
       second = recordOf [twice, once]
       third = recordOf [alone]
-      repeated = ["the voter " <> show twice <> " is on another vote record"]
-  map (distinctVotersAmongVoteRecords [first, second, third]) [first, second, third]
+      repeated = ["the identity " <> show twice <> " is on another contract"]
+  map (validateDistinctIdentitiesAmong [first, second, third]) [first, second, third]
     === [repeated, repeated, []]
-  map (distinctVotersAmongVoteRecords [third, second, first]) [first, second, third]
+  map (validateDistinctIdentitiesAmong [third, second, first]) [first, second, third]
     === [repeated, repeated, []]

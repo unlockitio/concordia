@@ -5,9 +5,8 @@
 module Cap.Core.Utils
   ( module Cap.Core.Utils.Fetch
   , module Cap.Core.Utils.Checks
-  , module Cap.Core.Utils.Filters
   , module Cap.Core.Utils.Admission
-  , module Cap.Core.Utils.Windows
+  , module Cap.Core.Utils.Time
   , module Cap.Core.Utils.AnyValue
   , module Cap.Core.Utils.Optional
   ) where
@@ -16,6 +15,5 @@ import Cap.Core.Utils.Admission
 import Cap.Core.Utils.AnyValue
 import Cap.Core.Utils.Checks
 import Cap.Core.Utils.Fetch
-import Cap.Core.Utils.Filters
 import Cap.Core.Utils.Optional
-import Cap.Core.Utils.Windows
+import Cap.Core.Utils.Time

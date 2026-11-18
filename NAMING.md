@@ -57,6 +57,11 @@ Naming conventions for the Daml packages in this repository.
 
 - Name a check, a function returning `Unmet`, for the condition that holds
   when it passes.
+- Prefix a check `valid<Thing>` when it checks the thing itself
+  (`validVotes`, `validConsumers`), and `validate<Thing><Condition>` when
+  `valid` would read as describing the thing
+  (`validateContractSignedByActingParties`, not
+  `validContractSignedByActingParties`).
 - Name a type of check `<Thing>Check`, for what it checks.
 - Name a function that aborts when a single condition fails
   `require<Condition>`.

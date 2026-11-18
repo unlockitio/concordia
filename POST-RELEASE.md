@@ -14,7 +14,7 @@ The library splits every behaviour across three surfaces:
   extension implements the interface methods and inherits these checks; it
   cannot weaken them.
 - **Templates the app writes** — the resolver, its mechanisms, the ballots, etc.
-- **The opt-in toolkit** — type classes (`IsBallot`, `HasVotingRights`, `HasState`)
+- **The opt-in toolkit** — type classes (`IsBallot`, `HasWeights`, `HasState`)
   and helpers for fetching, taking snapshots, weighing and counting. An app uses the
   helpers it needs and writes its own code where one does not fit.
 
@@ -30,11 +30,11 @@ these.
 
 - **A new governable target.** The owner of a contract writes an action that
   names it by an `AuthenticKey`, and a `HasCheckedFetch` instance that computes
-  that key from the contract, usually with `signedKey`. The owner signs the
+  that key from the contract, usually with `signatoriesKey`. The owner signs the
   action, and a resolver can then authorize changes to the contract without
   depending on its package.
 - **Eligibility.** A voter's right to vote is a contract the app registers, read
-  through `HasVotingRights` and `fetchVotingRightsSummingWeights`. Institutions bring their own identity
+  through `HasWeights` and `fetchSummedWeights`. Institutions bring their own identity
   or KYC system and mint these contracts only to eligible parties.
 - **A drift policy per action.** Whether an approved outcome executes over a
   target that changed since its snapshot is decided by the `DriftPolicy` the

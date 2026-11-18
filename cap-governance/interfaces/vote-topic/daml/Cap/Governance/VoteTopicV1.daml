@@ -9,15 +9,15 @@ import Prelude hiding (Action)
 
 import Splice.Api.Token.MetadataV1
 
-import Cap.Core.Types (ResolutionInfo)
-import Cap.Governance.Types (OwnerId, Reason, Vote)
+import Cap.Core.Types (Identity, ResolutionInfo)
+import Cap.Governance.Types (Reason, Vote)
 import Cap.Governance.ActionV1 (Action)
 
 
 data VoteTopicView = VoteTopicView
   with
     resolution : ResolutionInfo           -- its id MUST survive recreating the topic
-    proposer : OwnerId
+    proposer : Identity
     subject : Reason
     action : Optional (ContractId Action) -- None when the action is an app-specific type
     voteBefore : Optional Time            -- casts MUST be rejected from this time; None for a standing topic
@@ -37,11 +37,11 @@ interface VoteTopic where
 
   voteTopic_castVoteImpl : ContractId VoteTopic -> VoteTopic_CastVote -> Update VoteTopic_CastVoteResult
 
-  -- | Implementations MUST check that caster may cast for ownerId.
+  -- | Implementations MUST check that caster may act for identity.
   nonconsuming choice VoteTopic_CastVote : VoteTopic_CastVoteResult
     with
       caster : Party
-      ownerId : OwnerId
+      identity : Identity
       vote : Vote AnyValue
       reason : Optional Reason
       extraArgs : ExtraArgs

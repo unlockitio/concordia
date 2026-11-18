@@ -1,20 +1,34 @@
 -- SPDX-License-Identifier: Apache-2.0
 
--- | Who may act: actor groups, entitlements, and whether a resolver may
--- resolve a resolution.
+-- | Who may act: actor groups, entitlements, whether a resolver may resolve a
+-- resolution and signed what it counts, and the parties that may act for an
+-- identity.
 module Cap.Core.Utils.Admission
   ( admitActors
   , entitled
+
+    -- * Resolvers
   , requireResolvedBy
+  , validateContractSignedByResolverAuthorities
+
+    -- * Acting parties
+  , HasActingParties (..)
+  , HasIdentities (..)
+  , actingPartiesFor
+  , validateContractSignedByActingParties
+  , validateDistinctIdentitiesAmong
   ) where
 
 import DA.Map (Map)
 import qualified DA.Map as Map
+import DA.Optional (fromOptional)
+import DA.Set (Set)
+import qualified DA.Set as Set
 
-import Splice.Api.Token.MetadataV1 (AnyContractId)
-import Splice.Util (require)
+import Splice.Util (HasCheckedFetch (..), require)
 
-import Cap.Core.Types (AuthenticKey, ResolutionInfo (..))
+import Cap.Core.Types (AuthenticKey, Identity (..), ResolutionInfo (..))
+import Cap.Core.Utils.Checks (AmongCheck, Check)
 
 
 -- | Admits the actors when they include every party of some non-empty group.
@@ -32,11 +46,69 @@ entitled availableActions action actors =
 
 
 -- | Checks that a resolution names this resolver and is bound to no other
--- resolver contract. The resolver passes its own key and its own contract id.
--- It does not check the mechanism; the resolver checks that where it picks the
--- rule the mechanism names.
-requireResolvedBy : AuthenticKey -> AnyContractId -> ResolutionInfo -> Update ()
-requireResolvedBy rKey self resolution = do
-  require ("the resolution names the resolver " <> show rKey) (resolution.resolver == rKey)
+-- resolver contract. The resolver passes itself and its own contract id; its
+-- key is the one its HasCheckedFetch instance names it by. It does not check
+-- the mechanism; the resolver checks that where it picks the rule the
+-- mechanism names.
+requireResolvedBy
+  : HasCheckedFetch t AuthenticKey => t -> ContractId t -> ResolutionInfo -> Update ()
+requireResolvedBy resolver self resolution = do
+  let authenticKey : AuthenticKey = contractGroupId resolver
+  require ("the resolution names the resolver " <> show authenticKey) (resolution.resolver == authenticKey)
   require "the resolution is bound to no other resolver contract"
-    (optional True (== self) resolution.resolverCid)
+    (optional True (== coerceContractId self) resolution.resolverCid)
+
+-- | Validates that the authorities of the contract's resolver are among its
+-- signatories; other signatories are allowed. Pass it to fetchGroup, which
+-- first checks that the resolution names the resolver fetching.
+validateContractSignedByResolverAuthorities : (HasSignatory t, HasCheckedFetch t ResolutionInfo) => Check t
+validateContractSignedByResolverAuthorities contract =
+  [ "the contract is not signed by its resolver's authority " <> show party
+  | party <- Set.toList resolution.resolver.authorities
+  , party `notElem` signatory contract
+  ]
+  where
+    resolution : ResolutionInfo = contractGroupId contract
+
+
+------------------  ACTING PARTIES  ------------------
+
+-- | Maps identities to the parties that may act for them.
+class HasActingParties t where
+  actingPartiesOf : t -> Map Identity (Set Party)
+
+-- | The identities a contract acts for: the voters on a vote record, the
+-- owners of a bid's accounts.
+class HasIdentities t where
+  identitiesOf : t -> Set Identity
+
+-- | The parties that may act for the identity: a party identity by the party
+-- itself, an external identity by the parties the mapping names.
+actingPartiesFor : HasActingParties p => p -> Identity -> Set Party
+actingPartiesFor _ (PartyIdentity party) = Set.singleton party
+actingPartiesFor p identity = fromOptional Set.empty (Map.lookup identity (actingPartiesOf p))
+
+
+------------------  CHECK IDENTITIES  ------------------
+
+-- | Validates that a party acting for each of the contract's identities signed it.
+validateContractSignedByActingParties : (HasActingParties p, HasIdentities t, HasSignatory t) => p -> Check t
+validateContractSignedByActingParties p contract =
+  [ "no party acting for the identity " <> show identity <> " signed the contract"
+  | identity <- Set.toList (identitiesOf contract)
+  , let acting = actingPartiesFor p identity
+  , not (any (`Set.member` acting) (signatory contract))
+  ]
+
+-- | Validates that no other contract carries one of its identities. Every
+-- contract of an identity on several contracts fails, so the result does not
+-- depend on presentation order.
+validateDistinctIdentitiesAmong : HasIdentities t => AmongCheck t
+validateDistinctIdentitiesAmong contracts contract =
+  [ "the identity " <> show identity <> " is on another contract"
+  | identity <- Set.toList (identitiesOf contract)
+  , fromOptional 0 (Map.lookup identity uses) > 1
+  ]
+  where
+    uses = Map.fromListWithR (+)
+      [(identity, 1) | other <- contracts, identity <- Set.toList (identitiesOf other)]

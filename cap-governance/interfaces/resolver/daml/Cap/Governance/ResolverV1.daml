@@ -9,10 +9,10 @@ import Prelude hiding (Action)
 
 import Splice.Api.Token.MetadataV1
 
-import Cap.Core.Types (ResolutionInfo)
+import Cap.Core.Types (Identity, ResolutionInfo)
 import Cap.Governance.ActionV1 (Action)
 import Cap.Governance.ExecutableV1 (Executable)
-import Cap.Governance.Types (OwnerId, Reason, ResolutionStatus, Vote)
+import Cap.Governance.Types (Reason, ResolutionStatus, Vote)
 import Cap.Governance.VoteRecordV1 (VoteRecord)
 
 
@@ -45,12 +45,12 @@ interface Resolver where
 
   resolver_resolveImpl : ContractId Resolver -> Resolver_Resolve -> Update Resolver_ResolveResult
 
-  -- | Implementations MUST check that caster may cast for ownerId. action
+  -- | Implementations MUST check that caster may act for identity. action
   -- names what the vote is for when no VoteTopic pins it.
   nonconsuming choice Resolver_CastVote : Resolver_CastVoteResult
     with
       caster : Party
-      ownerId : OwnerId
+      identity : Identity
       resolution : ResolutionInfo
       vote : Vote AnyValue
       action : Optional (ContractId Action)

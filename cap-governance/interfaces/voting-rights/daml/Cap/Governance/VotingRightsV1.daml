@@ -6,18 +6,22 @@
 module Cap.Governance.VotingRightsV1 where
 
 import DA.Map (Map)
+import DA.Set (Set)
 
 import Splice.Api.Token.MetadataV1
 
-import Cap.Governance.Types (OwnerId, VotingRight)
+import Cap.Core.Types (Identity)
+import Cap.Core.Utils (HasActingParties (..))
+import Cap.Governance.Utils.Weights (HasWeights (..))
 
 
--- | An owner MAY be named by several contracts; implementations MUST then sum
--- their weights and take the union of their casters.
+-- | An identity MAY be named by several contracts; implementations MUST then
+-- sum their weights and take the union of their acting parties.
 data VotingRightsView = VotingRightsView
   with
     keyId : Text
-    rights : Map OwnerId VotingRight  -- weights MUST NOT be negative
+    weights : Map Identity Decimal             -- MUST NOT be negative
+    actingParties : Map Identity (Set Party)
     validUntil : Optional Time        -- implementations MAY archive the contract from this time
     meta : Metadata
   deriving (Eq, Show)
@@ -31,3 +35,10 @@ interface VotingRights where
       actor : Party
     controller actor
     do pure (view this)
+
+
+instance HasWeights VotingRights where
+  weightsOf rights = (view rights).weights
+
+instance HasActingParties VotingRights where
+  actingPartiesOf rights = (view rights).actingParties

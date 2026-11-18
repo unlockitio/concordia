@@ -1,30 +1,16 @@
 -- SPDX-License-Identifier: Apache-2.0
 
--- | The types the governance interfaces share: who a vote counts for, the
--- right to vote, and the vote itself.
+-- | The types the governance interfaces share: the vote itself, the reason
+-- for a proposal, and how a resolution ended. Who a vote counts for is an
+-- Identity, from Cap.Core.Types.
 module Cap.Governance.Types
-  ( OwnerId
-  , VotingRight (..)
-  , Vote (..)
+  ( Vote (..)
   , Reason (..)
   , ResolutionStatus (..)
   ) where
 
 import DA.Foldable (Foldable (..))
-import DA.Set (Set)
 import DA.Traversable (Traversable (..))
-
-
--- | The identity that holds a voting right and that a vote counts for 
-type OwnerId = Text
-
--- | An owner's voting right in one contract: how much its votes weigh, and the
--- parties that may cast for it. 
-data VotingRight = VotingRight
-  with
-    weight : Decimal
-    casters : Set Party
-  deriving (Eq, Show)
 
 
 -- | A link to the full text, and a short body.

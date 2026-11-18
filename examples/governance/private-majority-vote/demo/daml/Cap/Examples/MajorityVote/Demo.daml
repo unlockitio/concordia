@@ -17,7 +17,7 @@ import Splice.Api.Token.MetadataV1 (AnyValue (..), ChoiceContext (..), ExtraArgs
 import Cap.Governance.VoteTopicV1 (VoteTopicView (..), VoteTopic_CastVote (..), VoteTopic_CastVoteResult (..))
 import qualified Cap.Governance.VoteTopicV1 as VoteTopicV1
 import Cap.Governance.Types (Vote (..))
-import Cap.Governance.Utils.VotingRights (partyAsOwnerId)
+import Cap.Core.Types (Identity (..))
 import Cap.Governance.Utils (Verdict (..), encodeTextVote)
 
 import Cap.Examples.MajorityVote.VoteRecord
@@ -235,13 +235,13 @@ voterCastsThroughTheVoteTopicInterface = do
 
   Some proposal <- queryInterfaceContractId f.alice proposalCid
   proposal.resolution.mechanism === majorityMechanismName
-  proposal.proposer === partyAsOwnerId f.alice
+  proposal.proposer === PartyIdentity f.alice
   proposal.subject === configSubject
 
   setTime f.terms.entryClosesAt
   let castOn voter recordCid = exerciseCmd proposalCid VoteTopic_CastVote with
         caster = voter
-        ownerId = partyAsOwnerId voter
+        identity = PartyIdentity voter
         vote = encodeTextVote (Voted yay)
         reason = None
         extraArgs = ExtraArgs with

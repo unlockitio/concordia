@@ -1,0 +1,61 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Governance.Tests.Weights where
+
+import DA.Assert ((===))
+import DA.Map (Map)
+import qualified DA.Map as Map
+import DA.Set (Set)
+import qualified DA.Set as Set
+import Daml.Script
+
+import Splice.Util (HasCheckedFetch (..))
+
+import Cap.Core.Types (Identity (..))
+import Cap.Governance.Utils.Weights
+
+
+-- | Weights a test sets directly.
+template WeightsSource
+  with
+    owner : Party
+    tag : Text
+    weights : Map Identity Decimal
+  where
+    signatory owner
+
+instance HasCheckedFetch WeightsSource Text where
+  contractGroupId source = source.tag
+
+instance HasWeights WeightsSource where
+  weightsOf source = source.weights
+
+template WeightsProbe
+  with
+    owner : Party
+  where
+    signatory owner
+
+    nonconsuming choice WeightsProbe_FetchSummedWeights : Map Identity Decimal
+      with
+        rightKeys : Set Text
+        rightCids : Map Text (ContractId WeightsSource)
+      controller owner
+      do fetchSummedWeights rightKeys rightCids
+
+
+-- An identity named by several contracts gets the sum of their weights; a
+-- contract that names it with no weight adds nothing.
+fetchSummedWeightsSumsTheWeights : Script ()
+fetchSummedWeightsSumsTheWeights = do
+  owner <- allocateParty "weights-sum-owner"
+  probe <- submit owner $ createCmd WeightsProbe with owner
+  let source tag weights = submit owner $ createCmd WeightsSource with owner; tag; weights = Map.fromList weights
+      (sv1, sv2) = (ExternalIdentity "sv-1", ExternalIdentity "sv-2")
+  r1 <- source "r1" [(sv1, 2.0), (sv2, 1.0)]
+  r2 <- source "r2" [(sv1, 1.5)]
+  r3 <- source "r3" [(sv1, 0.0)]
+  weights <- submit owner $ exerciseCmd probe WeightsProbe_FetchSummedWeights with
+    rightKeys = Set.fromList ["r1", "r2", "r3"]
+    rightCids = Map.fromList [("r1", r1), ("r2", r2), ("r3", r3)]
+  weights === Map.fromList [(sv1, 3.5), (sv2, 1.0)]

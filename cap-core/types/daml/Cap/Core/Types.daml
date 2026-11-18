@@ -2,6 +2,7 @@
 
 module Cap.Core.Types
   ( AuthenticKey (..)
+  , Identity (..)
   , ResolutionInfo (..)
   , ExecutionAction (..)
   , ExecutionCore (..)
@@ -14,6 +15,14 @@ import DA.Set (Set)
 
 import Splice.Api.Token.MetadataV1
 
+
+-- | Who votes, bids or holds a weight: a party acting for itself, or an
+-- identity off the ledger, such as an institution or a member, that parties
+-- act for.
+data Identity
+  = PartyIdentity Party
+  | ExternalIdentity Text
+  deriving (Eq, Ord, Show)
 
 data AuthenticKey = AuthenticKey
   with

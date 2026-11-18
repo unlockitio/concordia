@@ -15,18 +15,27 @@ import Daml.Script hiding (AnyContractId)
 
 import Splice.Api.Token.MetadataV1 (AnyContractId)
 
-import Cap.Core.Types (AuthenticKey (..))
-import Cap.Governance.Types (OwnerId, Vote)
+import Splice.Util (HasCheckedFetch (..))
+
+import Cap.Core.Types (AuthenticKey (..), Identity, ResolutionInfo)
+import Cap.Core.Utils (HasIdentities (..))
+import Cap.Governance.Types (Vote)
 import Cap.Governance.Utils.VoteRecords (IsVoteRecord (..))
 
 
 -- | A vote record carrying only votes. The tests that use it read nothing else, so
 -- the other IsVoteRecord methods are stubs.
 data TestVoteRecord v = TestVoteRecord with
-    votes : Map OwnerId (Vote v)
+    votes : Map Identity (Vote v)
   deriving (Eq, Show)
 
-instance IsVoteRecord (TestVoteRecord v) v () where
+instance Show v => HasCheckedFetch (TestVoteRecord v) ResolutionInfo where
+  contractGroupId _ = error "a TestVoteRecord belongs to no resolution"
+
+instance HasIdentities (TestVoteRecord v) where
+  identitiesOf record = Set.fromList (Map.keys record.votes)
+
+instance Show v => IsVoteRecord (TestVoteRecord v) v () where
   votesOf record = record.votes
   snapshotsOf _ = Map.empty
   actionOf _ = ()

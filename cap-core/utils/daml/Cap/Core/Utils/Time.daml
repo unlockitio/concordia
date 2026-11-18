@@ -1,7 +1,7 @@
 -- SPDX-License-Identifier: Apache-2.0
 
--- | Time windows: whether a window is open, closed or not yet open.
-module Cap.Core.Utils.Windows
+-- | Time: whether a window is open, closed or not yet open, and deadlines.
+module Cap.Core.Utils.Time
   ( isOpen
   , requireOpen
   , requireClosed

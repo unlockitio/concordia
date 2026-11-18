@@ -8,11 +8,11 @@ packages:
 - ./cap-governance/types
 - ./cap-governance/interfaces/executable
 - ./cap-governance/interfaces/action
-- ./cap-governance/interfaces/vote-record
 - ./cap-governance/interfaces/vote-topic
+- ./cap-governance/utils
+- ./cap-governance/interfaces/vote-record
 - ./cap-governance/interfaces/voting-rights
 - ./cap-governance/interfaces/resolver
-- ./cap-governance/utils
 - ./cap-governance/tests/unit
 - ./cap-governance/tests/ledger
 - ./cap-auctions/interfaces/bid

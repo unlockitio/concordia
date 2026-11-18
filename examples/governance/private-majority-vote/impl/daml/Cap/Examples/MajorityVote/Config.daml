@@ -13,7 +13,7 @@ import Splice.Api.Token.MetadataV1
 import Splice.Util (HasCheckedFetch (..))
 
 import Cap.Core.Types (AuthenticKey (..), Snapshot (..), ExecutionCore)
-import Cap.Core.Utils (IsAnyValue (..), requireMet, signedKey)
+import Cap.Core.Utils (IsAnyValue (..), requireMet, signatoriesKey)
 import Cap.Governance.ActionV1
 import Cap.Governance.ExecutableV1
 import Cap.Governance.Utils
@@ -45,7 +45,7 @@ template Config
       do create this with setting = newSetting
 
 instance HasCheckedFetch Config AuthenticKey where
-  contractGroupId = signedKey configId
+  contractGroupId = signatoriesKey configId
 
 instance HasState Config Text where
   stateOf config = config.setting
