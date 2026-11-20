@@ -1,0 +1,5 @@
+# Isolated dependency exports, manifests and build scratch.
+.build/
+.build-root-test-*/
+demo/compose/.cips/
+demo/.state/

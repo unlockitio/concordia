@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: Apache-2.0
+name: babydro-live
+services:
+  canton:
+    extends:
+      file: .cips/8e36c20e5106014efb8348f749d9535afbc48921/cn-credentials-standard/demo/compose.yaml
+      service: credential-canton
+    networks: !override
+      - canton
+    build:
+      context: .cips/8e36c20e5106014efb8348f749d9535afbc48921/cn-credentials-standard
+      dockerfile: Dockerfile.canton
+    ports: !override
+      - "127.0.0.1:${BABYDRO_LEDGER_PORT:-41100}:6865"
+    healthcheck:
+      # Give startup the same grace budget as the runner's readiness wait.
+      start_period: ${BABYDRO_READY_TIMEOUT:-180}s
+    mem_limit: ${BABYDRO_CANTON_MEM_LIMIT:-2g}
+    environment:
+      JAVA_TOOL_OPTIONS: "${BABYDRO_JAVA_OPTS:--Xms256m -Xmx1g}"
+networks:
+  canton:

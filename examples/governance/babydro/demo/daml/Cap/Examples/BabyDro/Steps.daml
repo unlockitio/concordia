@@ -1,0 +1,117 @@
+-- SPDX-License-Identifier: Apache-2.0
+module Cap.Examples.BabyDro.Steps where
+
+import Daml.Script
+import DA.Assert ((===))
+import qualified DA.Map as Map
+import Cap.Examples.BabyDro.Demo
+import Cap.Examples.BabyDro.Registry
+import Cap.Examples.BabyDro.Dispute
+import Cap.Examples.BabyDro.Rights
+
+data Story = Story with
+    dro : Party
+    a : Party
+    b : Party
+    c : Party
+    newcomer : Party
+    consortiumCid : ContractId Consortium
+  deriving (Eq, Show)
+
+step1 : Script Story
+step1 = script do
+  debug "STEP 1 | Genesis: allocate DRO and three founding registrars; each founder accepts."
+  dro <- allocateParty "story-dro"
+  a <- allocateParty "story-registry-a"
+  b <- allocateParty "story-registry-b"
+  c <- allocateParty "story-registry-c"
+  newcomer <- allocateParty "story-new-registrar"
+  cid <- consortium dro "live-story" a b c
+  Some live <- queryContractId a cid
+  Map.size live.admitted === 3
+  debug "READBACK registry-a | Consortium has three members. DRO administers; it is not a voter."
+  debug "DRO invited each founder to mint a private, direct voting right; each founder accepted."
+  debug (dro, a, b)
+  debug (c, newcomer, cid)
+  pure (Story dro a b c newcomer cid)
+
+step2 : Story -> Script Story
+step2 s = script do
+  debug "STEP 2 | Voting credentials: read the actual direct rights from each holder's ledger view."
+  ra <- rightOf s.dro s.a "live-story"
+  rb <- rightOf s.dro s.b "live-story"
+  rc <- rightOf s.dro s.c "live-story"
+  debug (ra, rb, rc)
+  debug "These are DRO-issued entitlement credentials, not external identity verification or production certificates."
+  debug "registry-a cannot read registry-b's direct credential:"
+  rights <- query @DirectVotingRight s.a
+  length [() | (_, r) <- rights, r.member == s.b] === 0
+  debug "READBACK registry-a | registry-b credential count = 0"
+  pure s
+
+step3 : Story -> Script Story
+step3 s = script do
+  debug "STEP 3 | registry-a proposes admitting a new registrar; registry-b supplies second support."
+  debug "An approved MembershipMotion creates AdmissionInvitation; target accepts; consent is finalized."
+  cid <- admit s.a s.b s.consortiumCid s.newcomer
+  Some live <- queryContractId s.newcomer cid
+  Map.member s.newcomer live.admitted === True
+  Map.size live.admitted === 4
+  right <- rightOf s.dro s.newcomer "live-story"
+  debug "READBACK new registrar | member admitted; fresh stint-bound voting right exists."
+  debug (cid, right)
+  pure s with consortiumCid = cid
+
+step4 : Story -> Script Story
+step4 s = script do
+  debug "STEP 4 | Each registrar issues a CIPS DemoName credential for shared; these are demo claims."
+  now <- getTime
+  first <- register s.a s.a "shared" now
+  second <- register s.b s.b "shared" now
+  debug (first, second)
+  (opened, disputed) <- open s.a s.consortiumCid s.b "story-dispute" first second
+  debug "registry-a opens NameDispute. DRO invites voters; ballots are private to voter + DRO."
+  one <- voteDispute s.dro s.a disputed KeepFirst
+  two <- voteDispute s.dro s.c one KeepFirst
+  final <- voteDispute s.dro s.b two KeepSecond
+  own <- query @Ballot s.a
+  operator <- query @Ballot s.dro
+  outsider <- query @Ballot s.newcomer
+  length [() | (_, ballot) <- own, ballot.caseId == "story-dispute"] === 1
+  length [() | (_, ballot) <- operator, ballot.caseId == "story-dispute"] === 3
+  length [() | (_, ballot) <- outsider, ballot.caseId == "story-dispute"] === 0
+  debug "READBACK during voting | registry-a sees its own ballot (1); DRO sees all (3); new member sees none (0)."
+  debug "VOTES | registry-a: KeepFirst; registry-c: KeepFirst; registry-b: KeepSecond."
+  Some disclosure <- queryDisclosure s.b second
+  ruling <- resolve s.dro opened final KeepFirst [disclosure]
+  Some result <- queryContractId s.newcomer ruling
+  result.decision === KeepFirst
+  active s.a first >>= (=== True)
+  active s.b second >>= (=== False)
+  current <- query @Consortium s.dro
+  let [cid] = [cid | (cid, value) <- current, value.consortiumId == "live-story"]
+  debug "READBACK new registrar | Ruling = KeepFirst. Two supporting votes satisfy quorum."
+  debug "READBACK issuers | winning credential active; losing credential archived via ArchiveClaim action."
+  debug ruling
+  pure s with consortiumCid = cid
+
+step5 : Story -> Script Story
+step5 s = script do
+  debug "STEP 5 | Post-resolution readback: public Ruling visible; ballots already consumed."
+  ballots <- query @Ballot s.newcomer
+  length ballots === 0
+  rulings <- query @Ruling s.newcomer
+  length [() | (_, r) <- rulings, r.caseId == "story-dispute"] === 1
+  debug "READBACK new registrar | Ballot count = 0; story-dispute Ruling count = 1."
+  debug "This is a post-resolution readback; regression ballotContentPrivacy tests the full ballot lifecycle."
+  pure s
+
+step6 : Story -> Script Story
+step6 s = script do
+  debug "STEP 6 | registry-a proposes CurrentMembership policy; registry-b supports; registry-a enacts."
+  cid <- changePolicy s.a s.b s.consortiumCid CurrentMembership
+  Some live <- queryContractId s.newcomer cid
+  live.policy === CurrentMembership
+  debug "READBACK new registrar | policy = CurrentMembership. Story complete; test remains a separate regression suite."
+  debug cid
+  pure s with consortiumCid = cid
