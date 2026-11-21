@@ -2,6 +2,14 @@
 # SPDX-License-Identifier: Apache-2.0
 """Offline auth wiring guards. No Docker daemon, credentials, or external requests."""
 import pathlib
+import os
+
+def clean_env():
+    env = os.environ.copy()
+    for key in ('INTAKE_GITHUB_TOKEN_FILE', 'LLM_API_KEY_FILE', 'BABYCDF_LLM_ENABLED', 'INTAKE_DISCOVERY_MODE'):
+        env.pop(key, None)
+    return env
+
 import subprocess
 import tempfile
 import unittest
@@ -22,9 +30,7 @@ class AuthWiring(unittest.TestCase):
             pinned.mkdir(parents=True)
             (pinned / 'compose.yaml').touch()
             script = 'set -eu\nHERE="$1"\nCOMPOSE="$HERE/compose/compose.yaml"\ndocker() { printf "<%s>\\n" "$@"; }\n' + function + '\ncompose config\n'
-            import os
-            env = dict(os.environ)
-            env.pop('INTAKE_GITHUB_TOKEN_FILE', None)
+            env = clean_env()
             result = subprocess.run(['sh', '-c', script, 'stub', tmp], env=env, text=True, capture_output=True)
             self.assertEqual(0, result.returncode, result.stderr)
             self.assertNotIn('intake-auth.yaml', result.stdout)
@@ -39,7 +45,6 @@ class AuthWiring(unittest.TestCase):
             self.assertNotIn('<compose>', result.stdout)
 
     def test_up_preflight_precedes_every_side_effect(self):
-        import os
         text = (HERE / 'run-demo.sh').read_text()
         start = text.index('  up)\n') + len('  up)\n')
         stop = text.index('    # Shared contract', start)
@@ -56,9 +61,7 @@ class AuthWiring(unittest.TestCase):
             script = ('set -eu\nrm() { echo forbidden-rm; exit 99; }\n'
                       'docker() { echo forbidden-docker; exit 99; }\n'
                       'up_stage() { echo forbidden-stage; exit 99; }\n' + guard + '\nprintf passed')
-            env = dict(os.environ)
-            for key in ('INTAKE_GITHUB_TOKEN_FILE', 'INTAKE_DISCOVERY_MODE'):
-                env.pop(key, None)
+            env = clean_env()
             cases = [None, 'relative', str(root / 'missing'), str(root), str(link)]
             if not os.access(unreadable, os.R_OK):
                 cases.append(str(unreadable))

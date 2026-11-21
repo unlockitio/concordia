@@ -11,7 +11,7 @@ import subprocess
 
 compose = Path(__file__).resolve().parent / "compose" / "compose.yaml"
 environment = os.environ.copy()
-for key in ("INTAKE_DISCOVERY_MODE", "INTAKE_SOURCE_INTERVAL_MILLIS"):
+for key in ("INTAKE_DISCOVERY_MODE", "INTAKE_SOURCE_INTERVAL_MILLIS", "INTAKE_GITHUB_TOKEN_FILE", "LLM_API_KEY_FILE", "BABYCDF_LLM_ENABLED"):
     environment.pop(key, None)
 def config(env, auth=False, llm=False):
     command = ["docker", "compose", "--profile", "agents", "-f", str(compose)]

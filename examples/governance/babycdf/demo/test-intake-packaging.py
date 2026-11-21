@@ -8,6 +8,13 @@ import subprocess
 import tempfile
 import unittest
 
+def clean_env(**overrides):
+    env = os.environ.copy()
+    for key in ('INTAKE_GITHUB_TOKEN_FILE', 'LLM_API_KEY_FILE', 'BABYCDF_LLM_ENABLED'):
+        env.pop(key, None)
+    env.update(overrides)
+    return env
+
 HERE = Path(__file__).resolve().parent
 spec = importlib.util.spec_from_file_location('publish', HERE / 'publish-readback.py')
 publish = importlib.util.module_from_spec(spec)
@@ -26,7 +33,7 @@ class IntakePackaging(unittest.TestCase):
             (root/'journal').mkdir()
             (root/'java').write_text('#!/bin/sh\nprintf "%s\\n" "$@"\n')
             (root/'java').chmod(0o755)
-            env=dict(os.environ,PATH=str(root)+os.pathsep+os.environ['PATH'],READBACK_FILE=str(root/'readback-intake'),INTAKE_PACKAGE_FILE=str(root/'intake-demo-package'),INTAKE_JOURNAL=str(root/'journal'))
+            env=clean_env(PATH=str(root)+os.pathsep+os.environ['PATH'],READBACK_FILE=str(root/'readback-intake'),INTAKE_PACKAGE_FILE=str(root/'intake-demo-package'),INTAKE_JOURNAL=str(root/'journal'))
             result=subprocess.run(['sh',str(HERE/'compose/agents/entrypoint.sh'),'intake'],env=env,text=True,capture_output=True)
             self.assertEqual(0,result.returncode,result.stderr)
             args=result.stdout.splitlines()
@@ -57,7 +64,7 @@ class IntakePackaging(unittest.TestCase):
                 elif case=='unwritable-journal':
                     journal.chmod(0o500)
                     self.assertFalse(os.access(journal,os.W_OK),'test requires non-root permission probe')
-                env=dict(os.environ,PATH=str(root)+os.pathsep+os.environ['PATH'],READBACK_FILE=str(readback),INTAKE_PACKAGE_FILE=str(meta),INTAKE_JOURNAL=str(journal))
+                env=clean_env(PATH=str(root)+os.pathsep+os.environ['PATH'],READBACK_FILE=str(readback),INTAKE_PACKAGE_FILE=str(meta),INTAKE_JOURNAL=str(journal))
                 result=subprocess.run(['sh',str(HERE/'compose/agents/entrypoint.sh'),'intake'],env=env,text=True,capture_output=True)
                 self.assertEqual(2,result.returncode,result.stderr); self.assertEqual('',result.stdout)
                 if case=='unwritable-journal': journal.chmod(0o700)
@@ -86,7 +93,7 @@ class IntakePackaging(unittest.TestCase):
             pinned.mkdir(parents=True); (pinned/'compose.yaml').write_text('')
             (root/'docker').write_text('#!/bin/sh\nprintf "%s\\n" "$@"\n'); (root/'docker').chmod(0o755)
             harness.write_text('set -eu\n'+function('compose')+'\nHERE="$1"\nCOMPOSE=synthetic\ncompose down --volumes\n')
-            env=dict(os.environ,PATH=str(root)+os.pathsep+os.environ['PATH'],COMPOSE_PROJECT_NAME='DO_NOT_TOUCH')
+            env=clean_env(PATH=str(root)+os.pathsep+os.environ['PATH'],COMPOSE_PROJECT_NAME='DO_NOT_TOUCH')
             result=subprocess.run(['sh',str(harness),str(root)],env=env,text=True,capture_output=True)
             self.assertEqual(0,result.returncode,result.stderr)
             self.assertEqual(['compose','-p','babycdf-live','--profile','agents','-f','synthetic','down','--volumes'],result.stdout.splitlines())
@@ -106,7 +113,7 @@ class IntakePackaging(unittest.TestCase):
             (root/'meta').write_text('b'*64+'\n')
             (root/'readback').write_text('41000 opener '+'a'*64+' gov babycdf-agent-intake\n')
             (root/'java').write_text('#!/bin/sh\nprintf "%s" "$INTAKE_DISCOVERY_MODE"\n'); (root/'java').chmod(0o755)
-            env=dict(os.environ,PATH=str(root)+os.pathsep+os.environ['PATH'],INTAKE_DISCOVERY_MODE='live',READBACK_FILE=str(root/'readback'),INTAKE_PACKAGE_FILE=str(root/'meta'),INTAKE_JOURNAL=str(root/'journal'))
+            env=clean_env(PATH=str(root)+os.pathsep+os.environ['PATH'],INTAKE_DISCOVERY_MODE='live',READBACK_FILE=str(root/'readback'),INTAKE_PACKAGE_FILE=str(root/'meta'),INTAKE_JOURNAL=str(root/'journal'))
             result=subprocess.run(['sh',str(HERE/'compose/agents/entrypoint.sh'),'intake'],env=env,text=True,capture_output=True)
             self.assertEqual(0,result.returncode,result.stderr); self.assertEqual('live',result.stdout)
     def test_lifecycle_order_and_hardening_source(self):
