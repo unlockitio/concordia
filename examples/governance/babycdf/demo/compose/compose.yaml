@@ -1,10 +1,13 @@
 # SPDX-License-Identifier: Apache-2.0
 name: babycdf-live
 services:
-  credential-canton:
+  canton:
     extends:
       file: .cips/8e36c20e5106014efb8348f749d9535afbc48921/cn-credentials-standard/demo/compose.yaml
       service: credential-canton
+    # Replace the inherited upstream network; retain Compose project isolation.
+    networks: !override
+      - canton
     build:
       context: .cips/8e36c20e5106014efb8348f749d9535afbc48921/cn-credentials-standard
       dockerfile: Dockerfile.canton
@@ -22,11 +25,40 @@ services:
       context: ../..
       dockerfile: java/Dockerfile
     command: [advisory]
-    network_mode: "service:credential-canton"
+    network_mode: "service:canton"
     volumes:
       - ./state:/state:ro
     environment:
       AGENT_INTERVAL: ${AGENT_INTERVAL:-10}
+      # Presentation logs by default; set to 1 for the full JSON and detail.
+      DEMO_AGENT_VERBOSE: ${DEMO_AGENT_VERBOSE:-}
+      BABYCDF_LLM_ENABLED: ${BABYCDF_LLM_ENABLED:-0}
+      LLM_BASE_URL: ${LLM_BASE_URL:-}
+      LLM_MODEL: ${LLM_MODEL:-}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      JAVA_TOOL_OPTIONS: "-Xmx256m"
+    mem_limit: 512m
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp]
+    restart: "no"
+  intake:
+    profiles: [agents]
+    build:
+      context: ../..
+      dockerfile: java/Dockerfile
+    command: [intake]
+    network_mode: "service:canton"
+    volumes:
+      - ./state:/state:ro
+      - intake-journal:/journal
+    environment:
+      # Real catalogue ingestion by default; fixture is explicit offline test data only.
+      INTAKE_DISCOVERY_MODE: ${INTAKE_DISCOVERY_MODE:-live}
+      INTAKE_SOURCE_INTERVAL_MILLIS: ${INTAKE_SOURCE_INTERVAL_MILLIS:-30000}
+      INTAKE_POLL_ATTEMPTS: ${INTAKE_POLL_ATTEMPTS:-86400}
+      INTAKE_POLL_MILLIS: ${INTAKE_POLL_MILLIS:-1000}
       JAVA_TOOL_OPTIONS: "-Xmx256m"
     mem_limit: 512m
     read_only: true
@@ -40,11 +72,17 @@ services:
       context: ../..
       dockerfile: java/Dockerfile
     command: [reviewer]
-    network_mode: "service:credential-canton"
+    network_mode: "service:canton"
     volumes:
       - ./state:/state:ro
     environment:
       AGENT_INTERVAL: ${AGENT_INTERVAL:-10}
+      # Presentation logs by default; set to 1 for the full JSON and detail.
+      DEMO_AGENT_VERBOSE: ${DEMO_AGENT_VERBOSE:-}
+      BABYCDF_LLM_ENABLED: ${BABYCDF_LLM_ENABLED:-0}
+      LLM_BASE_URL: ${LLM_BASE_URL:-}
+      LLM_MODEL: ${LLM_MODEL:-}
+      LLM_API_KEY: ${LLM_API_KEY:-}
       JAVA_TOOL_OPTIONS: "-Xmx256m"
     mem_limit: 512m
     read_only: true
@@ -52,5 +90,7 @@ services:
     security_opt: [no-new-privileges:true]
     tmpfs: [/tmp]
     restart: "no"
+volumes:
+  intake-journal:
 networks:
-  credential-network:
+  canton:

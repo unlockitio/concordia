@@ -1,0 +1,93 @@
+module Cap.Examples.BabyCdf.IntakeTest where
+
+import Daml.Script
+import DA.Time
+import DA.Assert
+import qualified DA.Set as Set
+import Cap.Examples.BabyCdf.RuleVote
+import Cap.Examples.BabyCdf.Intake
+import qualified Cap.Examples.BabyCdf.Live as Live
+
+requestBoundary : Script ()
+requestBoundary = script do
+  opener <- allocateParty "IntakeOpener"
+  other <- allocateParty "IntakeOther"
+  let request = IntakeRequest opener "run-1" "run-1:proposal-184" "proposal-184" 60 0
+  cid <- submit opener do createCmd request
+  visible <- query @IntakeRequest opener
+  assert (length visible == 1)
+  hidden <- query @IntakeRequest other
+  assert (null hidden)
+  submitMustFail other do createCmd request
+  submitMustFail opener do createCmd request with roundId = "wrong"
+  submitMustFail opener do createCmd request with roundId = "run-1:illustrative-milestone"
+  submitMustFail opener do createCmd request with sourceKey = "milestone-540"; roundId = "run-1:grant"
+  legacy <- submit opener do createCmd request with roundId = "run-1:grant"
+  submit opener do archiveCmd legacy
+  submitMustFail opener do createCmd request with sourceKey = "arbitrary"; roundId = "run-1:arbitrary"
+  submitMustFail opener do createCmd request with runId = ""; roundId = ":proposal-184"
+  milestone <- submit opener do createCmd request with sourceKey = "milestone-540"; roundId = "run-1:milestone-540"; windowSeconds = 86400
+  submit opener do archiveCmd milestone
+  submitMustFail opener do createCmd request with windowSeconds = 0
+  submitMustFail opener do createCmd request with windowSeconds = 86401
+  submitMustFail opener do createCmd request with baseVersion = -1
+  submit opener do archiveCmd cid
+
+bridgeUsesLedgerTime : Script ()
+bridgeUsesLedgerTime = script do
+  opener <- allocateParty "bridge-opener"
+  other <- allocateParty "bridge-other"
+  members <- mapA allocateParty ["a", "b", "c", "d", "e", "f", "g"]
+  let permanent = Set.fromList (take 5 members)
+      alternates = Set.fromList (drop 5 members)
+  governorCid <- submit opener $ createCmd AgendaGovernor with
+    opener; consortiumId = "bridge"; permanent; alternates
+  wrongGovernor <- submit other $ createCmd AgendaGovernor with
+    opener = other; consortiumId = "wrong"; permanent; alternates
+  request <- submit opener $ createCmd IntakeRequest with
+    opener; runId = "bridge"; roundId = "bridge:grant"
+    sourceKey = "proposal-184"; windowSeconds = 60; baseVersion = 0
+  submitMultiMustFail [other] [opener] do exerciseCmd request OpenAgenda with governorCid
+  submitMultiMustFail [opener] [other] do exerciseCmd request OpenAgenda with governorCid = wrongGovernor
+  now <- getTime
+  proposalCid <- submit opener do exerciseCmd request OpenAgenda with governorCid
+  Some proposal <- queryContractId opener proposalCid
+  proposal.closesAt === addRelTime now (seconds 60)
+  proposal.roundId === "bridge:grant"
+  proposal.proposer === opener
+  actions <- query @AgendaAction opener
+  let valid ps as = Live.validateIntake opener "bridge:grant" (Grant proposalSubject) now ps as
+  assert (valid [proposal] actions)
+  assert (Live.intakeTimedOut 0 [])
+  assert (not (Live.intakeTimedOut 1 []))
+  assert (not (Live.intakeTimedOut 0 [proposal]))
+  assert (not (valid [proposal with proposer = other] actions))
+  assert (not (valid [proposal with opener = other] actions))
+  assert (not (valid [proposal,proposal] actions))
+  assert (not (valid [] actions))
+  assert (not (valid [proposal with roundId = "wrong"] actions))
+  assert (not (valid [proposal] []))
+  assert (not (valid [proposal] (actions <> actions)))
+  assert (not (valid [proposal] [(c,a with agenda = Milestone illustrativeMilestone) | (c,a) <- actions]))
+  assert (not (valid [proposal] [(c,a with baseVersion = 1) | (c,a) <- actions]))
+  assert (not (valid [proposal with closesAt = now] actions))
+  assert (not (valid [proposal with closesAt = addRelTime now (seconds 9)] actions))
+  assert (valid [proposal with closesAt = addRelTime now (seconds 10)] actions)
+  assert (not (valid [proposal] [(c,a with opener = other) | (c,a) <- actions]))
+  built <- submit opener $ createCmd (Live.intakeRequest opener "builder" "milestone-540" "builder:illustrative-milestone" 60)
+  Some builtRequest <- queryContractId opener built
+  builtRequest.baseVersion === 0
+  builtRequest.sourceKey === "milestone-540"
+  submit opener $ archiveCmd built
+  (observedCid,observedClose) <- Live.awaitIntake opener "bridge:grant" (Grant proposalSubject) 0
+  observedCid === proposalCid
+  observedClose === proposal.closesAt
+  None <- queryContractId opener request
+  submitMustFail opener do exerciseCmd request OpenAgenda with governorCid
+  milestone <- submit opener $ createCmd IntakeRequest with
+    opener; runId = "bridge"; roundId = "bridge:illustrative-milestone"
+    sourceKey = "milestone-540"; windowSeconds = 86400; baseVersion = 0
+  milestoneProposal <- submit opener do exerciseCmd milestone OpenAgenda with governorCid
+  Some observed <- queryContractId opener milestoneProposal
+  observed.closesAt === addRelTime now (seconds 86400)
+  pure ()

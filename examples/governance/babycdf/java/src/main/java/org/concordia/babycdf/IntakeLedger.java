@@ -1,0 +1,243 @@
+// SPDX-License-Identifier: Apache-2.0
+package org.concordia.babycdf;
+
+import com.daml.ledger.api.v2.*;
+import io.grpc.ManagedChannel;
+import io.grpc.netty.shaded.io.grpc.netty.NettyChannelBuilder;
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.TimeUnit;
+
+/** Loopback demo adapter, explicitly actAs opener; never the read-only reviewer gateway. */
+public final class IntakeLedger implements Intake.Transport, AutoCloseable {
+    private final String party, impl, demo, governor, user;
+    private final ManagedChannel channel;
+    private final java.nio.file.Path journal;
+    @FunctionalInterface interface Rpc { void submit(CommandServiceOuterClass.SubmitAndWaitRequest request); }
+    @FunctionalInterface interface Inventory { List<EventOuterClass.CreatedEvent> active(String pkg,String module,String entity) throws IOException; }
+    private Rpc rpc;
+    private Inventory inventory;
+    private boolean retryRejected;
+    private static final String RULE = "Cap.Examples.BabyCdf.RuleVote";
+    private static final String TRIGGER = "Cap.Examples.BabyCdf.Intake";
+    public IntakeLedger(int port, String party, String impl, String demo, String governor, String user, java.nio.file.Path journal) {
+        if (port < 1 || port > 65535 || party == null || party.isBlank() || party.contains(" ")
+                || !impl.matches("[0-9a-f]{64}") || !demo.matches("[0-9a-f]{64}")
+                || governor == null || governor.isBlank() || user == null || user.isBlank())
+            throw new IllegalArgumentException("BLOCKED: explicit loopback opener configuration required");
+        this.party=party; this.impl=impl; this.demo=demo; this.governor=governor; this.user=user;
+        this.journal=validateJournal(journal);
+        channel=NettyChannelBuilder.forAddress("127.0.0.1",port).usePlaintext().build();
+        rpc=request -> CommandServiceGrpc.newBlockingStub(channel).withDeadlineAfter(15,TimeUnit.SECONDS).submitAndWait(request);
+        inventory=this::readActive;
+    }
+    IntakeLedger(String party,String impl,String demo,String governor,String user,java.nio.file.Path journal,
+                 Rpc rpc,Inventory inventory,boolean retryRejected) {
+        this.party=party; this.impl=impl; this.demo=demo; this.governor=governor; this.user=user;
+        this.journal=validateJournal(journal); this.channel=null;
+        this.rpc=rpc; this.inventory=inventory; this.retryRejected=retryRejected;
+    }
+    public void allowOneRejectedRetry() { retryRejected=true; }
+    private List<EventOuterClass.CreatedEvent> active(String pkg,String module,String entity) throws IOException {
+        return inventory.active(pkg,module,entity);
+    }
+    static java.nio.file.Path validateJournal(java.nio.file.Path path) {
+        if(path == null) throw new IllegalArgumentException("BLOCKED: journal required");
+        path=path.toAbsolutePath().normalize();
+        for(var p=path; p!=null; p=p.getParent())
+            if(java.nio.file.Files.isSymbolicLink(p)) throw new IllegalArgumentException("BLOCKED: symlink journal path");
+        if(!java.nio.file.Files.isDirectory(path,java.nio.file.LinkOption.NOFOLLOW_LINKS)
+                || !java.nio.file.Files.isWritable(path)) throw new IllegalArgumentException("BLOCKED: existing writable journal directory required");
+        return path;
+    }
+    static void recordIntent(java.nio.file.Path journal,String command,byte[] payload) throws IOException {
+        if(!command.matches("babycdf-intake-[0-9a-f]{64}")) throw new IOException("BLOCKED: invalid intent command");
+        persist(journal,command+".intent",payload);
+    }
+    /** Source adapter uses the same exclusive durability primitive, not intake retry policy. */
+    static void recordSourceMarker(java.nio.file.Path journal,String name,byte[] payload) throws IOException {
+        if(!name.matches("babycdf-source-[0-9a-f]{64}[.](intent|receipt)"))
+            throw new IOException("BLOCKED: invalid source journal marker");
+        persist(journal,name,payload);
+    }
+    private static void persist(java.nio.file.Path journal,String name,byte[] payload) throws IOException {
+        try { journal=validateJournal(journal); }
+        catch(IllegalArgumentException e) { throw new IOException(e.getMessage(),e); }
+        var permissions=java.nio.file.attribute.PosixFilePermissions.asFileAttribute(
+                java.nio.file.attribute.PosixFilePermissions.fromString("rw-------"));
+        try(var output=java.nio.channels.FileChannel.open(journal.resolve(name),
+                java.util.Set.of(java.nio.file.StandardOpenOption.CREATE_NEW,java.nio.file.StandardOpenOption.WRITE,
+                        java.nio.file.LinkOption.NOFOLLOW_LINKS),permissions)) {
+            var buffer=java.nio.ByteBuffer.wrap(payload);
+            while(buffer.hasRemaining()) output.write(buffer);
+            output.force(true);
+        }
+        try(var directory=java.nio.channels.FileChannel.open(journal,java.nio.file.StandardOpenOption.READ)) {
+            directory.force(true);
+        }
+    }
+    static ValueOuterClass.Identifier id(String pkg, String module, String entity) {
+        return ValueOuterClass.Identifier.newBuilder().setPackageId(pkg).setModuleName(module).setEntityName(entity).build();
+    }
+    static void verifyActiveEvent(EventOuterClass.CreatedEvent event,ValueOuterClass.Identifier expected,String party) throws IOException {
+        if(!expected.equals(event.getTemplateId()) || !event.hasCreateArguments()
+                || !event.getWitnessPartiesList().contains(party)) throw new IOException("BLOCKED: unexpected ACS event");
+    }
+    static final String DEMO_PACKAGE_NAME = "#cap-example-babycdf-demo";
+    static final String IMPL_PACKAGE_NAME = "#cap-example-babycdf";
+    static ValueOuterClass.Identifier filterId(String module,String entity) {
+        String name;
+        if(TRIGGER.equals(module)) name=DEMO_PACKAGE_NAME;
+        else if(RULE.equals(module)) name=IMPL_PACKAGE_NAME;
+        else throw new IllegalArgumentException("unknown Intake ledger module: "+module);
+        return id(name,module,entity);
+    }
+    static StateServiceOuterClass.GetActiveContractsRequest activeContractsRequest(String party,String pkg,String module,String entity,long offset) {
+        // Filters resolve package names; event verification pins the deployed package ID separately.
+        var filterIdentifier=filterId(module,entity);
+        var filter=TransactionFilterOuterClass.Filters.newBuilder().addCumulative(
+                TransactionFilterOuterClass.CumulativeFilter.newBuilder().setTemplateFilter(
+                        TransactionFilterOuterClass.TemplateFilter.newBuilder().setTemplateId(filterIdentifier))).build();
+        var format=TransactionFilterOuterClass.EventFormat.newBuilder().putFiltersByParty(party,filter).setVerbose(true);
+        return StateServiceOuterClass.GetActiveContractsRequest.newBuilder().setActiveAtOffset(offset).setEventFormat(format).build();
+    }
+    private List<EventOuterClass.CreatedEvent> readActive(String pkg,String module,String entity) throws IOException {
+        var identifier=id(pkg,module,entity);
+        try {
+            var state=StateServiceGrpc.newBlockingStub(channel).withDeadlineAfter(15,TimeUnit.SECONDS);
+            long offset=state.getLedgerEnd(StateServiceOuterClass.GetLedgerEndRequest.getDefaultInstance()).getOffset();
+            var stream=state.getActiveContracts(activeContractsRequest(party,pkg,module,entity,offset));
+            List<EventOuterClass.CreatedEvent> found=new ArrayList<>();
+            while(stream.hasNext()) {
+                var response=stream.next();
+                if(response.hasIncompleteAssigned() || response.hasIncompleteUnassigned()) throw new IOException("BLOCKED: incomplete ACS");
+                if(!response.hasActiveContract()) continue;
+                var event=response.getActiveContract().getCreatedEvent();
+                verifyActiveEvent(event,identifier,party);
+                found.add(event);
+            }
+            return found;
+        } catch(io.grpc.StatusRuntimeException e) { throw new IOException("BLOCKED: ACS failed",e); }
+    }
+    static ValueOuterClass.Value field(ValueOuterClass.Record r,String label) throws IOException {
+        var fields=r.getFieldsList().stream().filter(f->f.getLabel().equals(label)).toList();
+        if(fields.size()!=1 || !fields.getFirst().hasValue()) throw new IOException("BLOCKED: malformed field "+label);
+        return fields.getFirst().getValue();
+    }
+    static String text(ValueOuterClass.Record r,String label) throws IOException {
+        var v=field(r,label); if(!v.hasText()) throw new IOException("BLOCKED: expected text"); return v.getText();
+    }
+    static long number(ValueOuterClass.Record r,String label) throws IOException {
+        var v=field(r,label); if(!v.hasInt64()) throw new IOException("BLOCKED: expected int64"); return v.getInt64();
+    }
+    public List<Intake.Request> requests() throws IOException {
+        List<Intake.Request> result=new ArrayList<>();
+        for(var event:active(demo,TRIGGER,"IntakeRequest")) {
+            var r=event.getCreateArguments(); var opener=field(r,"opener");
+            if(!opener.hasParty() || !party.equals(opener.getParty()) || !event.getSignatoriesList().equals(List.of(party)))
+                throw new IOException("BLOCKED: request not signed by configured opener");
+            result.add(new Intake.Request(event.getContractId(),party,text(r,"runId"),text(r,"roundId"),
+                    text(r,"sourceKey"),number(r,"windowSeconds"),number(r,"baseVersion")));
+        }
+        return result;
+    }
+    public boolean proof(Intake.Request request, IntakePlan plan) throws IOException {
+        return proof(request,plan,active(impl,RULE,"AgendaProposal"),active(impl,RULE,"AgendaAction"));
+    }
+    static boolean proof(Intake.Request request,IntakePlan plan,List<EventOuterClass.CreatedEvent> proposals,
+                         List<EventOuterClass.CreatedEvent> actions) throws IOException {
+        String party=request.opener();
+        int count=0;
+        for(var proposal:proposals) {
+            var p=proposal.getCreateArguments();
+            if(!request.roundId().equals(text(p,"roundId"))) continue;
+            if(!proposal.getSignatoriesList().contains(party)) throw new IOException("BLOCKED: proposal signatory mismatch");
+            count++;
+            var proposer=field(p,"proposer"); var opener=field(p,"opener"); var ref=field(p,"actionCid");
+            if(!proposer.hasParty() || !party.equals(proposer.getParty()) || !opener.hasParty() || !party.equals(opener.getParty())
+                    || !ref.hasContractId()) throw new IOException("BLOCKED: round identity mismatch");
+            var linked=actions.stream().filter(a->a.getContractId().equals(ref.getContractId())).toList();
+            if(linked.size()!=1) throw new IOException("BLOCKED: missing linked action");
+            if(!linked.getFirst().getSignatoriesList().contains(party)) throw new IOException("BLOCKED: action signatory mismatch");
+            var action=linked.getFirst().getCreateArguments(); var agenda=field(action,"agenda");
+            if(number(action,"baseVersion")!=request.baseVersion() || !agenda.hasVariant()
+                    || !agenda.getVariant().getConstructor().equals(plan.source().agendaConstructor().name())
+                    || !agenda.getVariant().getValue().hasRecord())
+                throw new IOException("BLOCKED: round agenda mismatch");
+            var subject=agenda.getVariant().getValue().getRecord();
+            if(!text(subject,"kind").equals(plan.source().kind()) || !text(subject,"url").equals(plan.source().url())
+                    || !text(subject,"contentVersion").equals(plan.source().contentVersion()))
+                throw new IOException("BLOCKED: round subject mismatch");
+        }
+        if(count>1) throw new IOException("BLOCKED: duplicate round");
+        return count==1;
+    }
+        static ValueOuterClass.Value txt(String t) { return ValueOuterClass.Value.newBuilder().setText(t).build(); }
+    static ValueOuterClass.RecordField f(String name,ValueOuterClass.Value value) {
+        return ValueOuterClass.RecordField.newBuilder().setLabel(name).setValue(value).build();
+    }
+    static ValueOuterClass.Value agenda(IntakeSource source) {
+        var subject=ValueOuterClass.Record.newBuilder().addFields(f("kind",txt(source.kind())))
+                .addFields(f("url",txt(source.url()))).addFields(f("contentVersion",txt(source.contentVersion())));
+        return ValueOuterClass.Value.newBuilder().setVariant(ValueOuterClass.Variant.newBuilder()
+                .setConstructor(source.agendaConstructor().name()).setValue(ValueOuterClass.Value.newBuilder().setRecord(subject))).build();
+    }
+    static CommandServiceOuterClass.SubmitAndWaitRequest request(Intake.Request r,IntakePlan plan,
+                                                                String demo,String governor,String user) {
+        var args=ValueOuterClass.Record.newBuilder().addFields(f("governorCid",
+                ValueOuterClass.Value.newBuilder().setContractId(governor).build()));
+        var exercise=CommandsOuterClass.ExerciseCommand.newBuilder().setTemplateId(id(demo,TRIGGER,"IntakeRequest"))
+                .setContractId(r.cid()).setChoice("OpenAgenda").setChoiceArgument(ValueOuterClass.Value.newBuilder().setRecord(args));
+        return CommandServiceOuterClass.SubmitAndWaitRequest.newBuilder().setCommands(CommandsOuterClass.Commands.newBuilder()
+                .setUserId(user).setCommandId(plan.commandId()).addActAs(r.opener())
+                .setDeduplicationDuration(com.google.protobuf.Duration.newBuilder().setSeconds(86400))
+                .addCommands(CommandsOuterClass.Command.newBuilder().setExercise(exercise))).build();
+    }
+    public void submit(Intake.Request r,IntakePlan plan) throws IOException {
+        // Verify governor's opener, not the member-only SandboxBallots authorization path.
+        var governors=active(impl,RULE,"AgendaGovernor").stream().filter(g->g.getContractId().equals(governor)).toList();
+        if(!party.equals(r.opener()) || !plan.roundId().equals(r.roundId()) || !plan.source().sourceKey().equals(r.sourceKey()))
+            throw new Intake.PreTransmission("BLOCKED: plan/request identity mismatch",null);
+        if(governors.size()!=1 || !party.equals(field(governors.getFirst().getCreateArguments(),"opener").getParty()))
+            throw new Intake.PreTransmission("BLOCKED: governor opener mismatch",null);
+        // Durable create-new intent marker prevents restart-based blind resubmission.
+        // Never delete automatically: an absent active proposal is not nonexecution proof.
+        var command=request(r,plan,demo,governor,user);
+        byte[] intent=command.toByteArray();
+        String attempt=plan.commandId();
+        try {
+            if(retryRejected) {
+                retryRejected=false;
+                if(proof(r,plan)) throw new IOException("BLOCKED: round already exists; reconcile instead of retry");
+                if(!java.util.Arrays.equals(readMarker(journal.resolve(attempt+".intent")),intent))
+                    throw new IOException("BLOCKED: retry payload changed");
+                String outcome=new String(readMarker(journal.resolve(attempt+".rejected")),java.nio.charset.StandardCharsets.US_ASCII);
+                if(!definite(outcome)) throw new IOException("BLOCKED: no definite rejection evidence");
+                attempt=attempt+"-retry";
+                persist(journal,attempt+".intent",intent);
+            } else recordIntent(journal,attempt,intent);
+        } catch(IOException e) { throw new Intake.PreTransmission("BLOCKED: intent exists or persistence/retry validation failed; no RPC submitted",e); }
+        try { rpc.submit(command); }
+        catch(io.grpc.StatusRuntimeException e) {
+            String code=e.getStatus().getCode().name();
+            if(definite(code)) {
+                persist(journal,attempt+".rejected",code.getBytes(java.nio.charset.StandardCharsets.US_ASCII));
+                throw new Intake.Rejected("REJECTED: "+code+"; recorded, explicit --retry-rejected permits at most one retry",e);
+            }
+            throw new IOException("BLOCKED: uncertain submit "+code+"; proof only, retry prohibited",e);
+        }
+    }
+    static boolean definite(String code) {
+        return java.util.Set.of("PERMISSION_DENIED","UNAUTHENTICATED","INVALID_ARGUMENT","NOT_FOUND").contains(code);
+    }
+    static byte[] readMarker(java.nio.file.Path path) throws IOException {
+        try(var input=java.nio.channels.FileChannel.open(path,java.nio.file.StandardOpenOption.READ,java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+            if(input.size()>1_000_000) throw new IOException("BLOCKED: oversized marker");
+            var bytes=java.nio.ByteBuffer.allocate((int)input.size());
+            while(bytes.hasRemaining()) if(input.read(bytes)<0) throw new IOException("BLOCKED: truncated marker");
+            return bytes.array();
+        }
+    }
+    public void close() { if(channel!=null) channel.shutdownNow(); }
+}

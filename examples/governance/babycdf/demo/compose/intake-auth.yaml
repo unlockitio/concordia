@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: Apache-2.0
+# Selected by run-demo.sh only when the operator explicitly supplies the host path.
+services:
+  intake:
+    environment:
+      INTAKE_GITHUB_TOKEN_FILE: /run/secrets/intake_github_token
+    secrets:
+      - source: intake_github_token
+        target: /run/secrets/intake_github_token
+secrets:
+  intake_github_token:
+    file: ${INTAKE_GITHUB_TOKEN_FILE:?Set an absolute host credential file path}

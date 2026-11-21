@@ -76,4 +76,103 @@ for loc in '' C en_US.UTF-8 pt_PT.UTF-8 de_DE.UTF-8 en_US.ISO8859-1 C.UTF-8; do
   CASE_LOCALE=
   printf -- '--- locale %s: package/port validation is ASCII-exact ---\n' "$tag"
 done
+
+# Presentation flags. The entrypoint must hand the agents --demo by default and
+# add --verbose only when DEMO_AGENT_VERBOSE asks for it, without weakening any
+# validation and without ever enabling publication. The agent command line is
+# captured with a stub `java` on PATH, so no JVM and no ledger are involved.
+STUB=$DIR/stub
+mkdir -p "$STUB"
+cat > "$STUB/java" <<'STUBEOF'
+#!/bin/sh
+printf '%s\n' "$*" > "$ARGS_FILE"
+STUBEOF
+chmod +x "$STUB/java"
+READBACK=$DIR/flags-readback
+printf '%s\n' "41010 party $PKG governor user" > "$READBACK"
+
+flags_case() {
+  name=$1; agent=$2; expect_verbose=$3
+  ARGS_FILE="$DIR/$name.args"
+  export ARGS_FILE
+  code=0
+  if [ "$name" = verbose-on" " ] || [ "$expect_verbose" = yes ]; then
+    READBACK_FILE="$READBACK" PATH="$STUB:$PATH" DEMO_AGENT_VERBOSE=1 \
+      sh "$HERE/entrypoint.sh" "$agent" >/dev/null 2>&1 || code=$?
+  else
+    READBACK_FILE="$READBACK" PATH="$STUB:$PATH" \
+      sh "$HERE/entrypoint.sh" "$agent" >/dev/null 2>&1 || code=$?
+  fi
+  unset ARGS_FILE
+  [ "$code" -eq 0 ] || { echo "FAIL: $name exit=$code"; exit 1; }
+  args=$(cat "$DIR/$name.args")
+  case "$args" in
+    *--demo*) ;;
+    *) echo "FAIL: $name is missing --demo: $args"; exit 1 ;;
+  esac
+  if [ "$expect_verbose" = yes ]; then
+    case "$args" in
+      *--verbose*) ;;
+      *) echo "FAIL: $name should carry --verbose: $args"; exit 1 ;;
+    esac
+  else
+    case "$args" in
+      *--verbose*) echo "FAIL: $name must not carry --verbose by default: $args"; exit 1 ;;
+    esac
+  fi
+  # The safety-relevant arguments must survive the presentation change.
+  case "$agent" in
+    reviewer)
+      case "$args" in
+        *"--local-sandbox 6865 party $PKG"*) ;;
+        *) echo "FAIL: $name lost its read-only sandbox arguments: $args"; exit 1 ;;
+      esac ;;
+    advisory)
+      case "$args" in
+        *--local-sandbox*) echo "FAIL: advisory must never be given a submission adapter: $args"; exit 1 ;;
+      esac
+      case "$args" in
+        *"--read-only-sandbox 6865 party $PKG"*) ;;
+        *) echo "FAIL: advisory lost its read-only party filter: $args"; exit 1 ;;
+      esac ;;
+  esac
+  case "$args" in
+    *"--offline-pr184-file /state/proposal-blob.txt"*) ;;
+    *) echo "FAIL: $name lost its pinned offline evidence: $args"; exit 1 ;;
+  esac
+  printf '%s flags ok: %s\n' "$name" "$args"
+}
+
+flags_case reviewer-default reviewer no
+flags_case advisory-default advisory no
+flags_case reviewer-verbose reviewer yes
+flags_case advisory-verbose advisory yes
+
+# DEMO_AGENT_VERBOSE=0 means "no", like unset: the demo default stays quiet.
+ARGS_FILE="$DIR/verbose-zero.args"
+export ARGS_FILE
+READBACK_FILE="$READBACK" PATH="$STUB:$PATH" DEMO_AGENT_VERBOSE=0 \
+  sh "$HERE/entrypoint.sh" reviewer >/dev/null 2>&1 || { echo 'FAIL: verbose-zero'; exit 1; }
+unset ARGS_FILE
+case "$(cat "$DIR/verbose-zero.args")" in
+  *--verbose*) echo 'FAIL: DEMO_AGENT_VERBOSE=0 must not enable --verbose'; exit 1 ;;
+esac
+printf 'verbose-zero flags ok\n'
+
+# Publication must still be refused, whatever the presentation settings are.
+code=0
+READBACK_FILE="$READBACK" PATH="$STUB:$PATH" ADVISORY_SUBMIT=1 \
+  sh "$HERE/entrypoint.sh" advisory > "$DIR/submit.log" 2>&1 || code=$?
+[ "$code" -eq 2 ] || { echo "FAIL: ADVISORY_SUBMIT=1 exit=$code expected 2"; exit 1; }
+grep -q 'BLOCKED:' "$DIR/submit.log" || { echo 'FAIL: missing publication blocker'; exit 1; }
+printf 'advisory-submit still blocked exit=%s\n' "$code"
+
+# An invalid readback must still fail closed before any agent is started.
+code=0
+printf '%s\n' '41010 party bad governor user' > "$DIR/flags-bad"
+READBACK_FILE="$DIR/flags-bad" PATH="$STUB:$PATH" \
+  sh "$HERE/entrypoint.sh" reviewer > "$DIR/flags-bad.log" 2>&1 || code=$?
+[ "$code" -eq 2 ] || { echo "FAIL: invalid readback with agent start exit=$code"; exit 1; }
+printf 'invalid readback still blocks agent start exit=%s\n' "$code"
+
 printf 'All entrypoint cases passed; evidence retained at %s\n' "$DIR"

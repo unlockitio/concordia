@@ -1,0 +1,9 @@
+{
+  "schema": "babycdf.rule/1",
+  "version": 2,
+  "clauses": [
+    {"id":"compose-with-asset-layer","kind":"CONTRADICTION_OR_SUPPORT","text":"The proposal must compose with existing Canton asset and settlement infrastructure rather than replace it.","expectedAnchor":"Architectural Notes / composition","expected":"compose with existing Canton asset and settlement infrastructure rather than replace it","conflictAnchor":"Contradiction / replacement","conflict":"CAP replaces existing Canton asset and settlement infrastructure","requiredPhrases":["compose with existing Canton asset and settlement infrastructure rather than replace it"],"forbiddenPhrases":["CAP replaces existing Canton asset and settlement infrastructure"],"indicators":[]},
+    {"id":"auditable-state","kind":"CONTRADICTION_OR_SUPPORT","text":"The proposal must provide auditable contract state and deterministic resolution logic.","expectedAnchor":"Architectural properties / auditability","expected":"auditable contract state and deterministic resolution logic","conflictAnchor":"Contradiction / opaque state","conflict":"contract state is opaque","requiredPhrases":["auditable contract state and deterministic resolution logic"],"forbiddenPhrases":["contract state is opaque"],"indicators":[]},
+    {"id":"acceptance-criteria","kind":"PRESENCE_REQUIRED","text":"The proposal must state explicit acceptance criteria.","expectedAnchor":"Acceptance Criteria","expected":"## Acceptance Criteria","conflictAnchor":"Acceptance criteria absent","conflict":"no acceptance criteria","requiredPhrases":[],"forbiddenPhrases":[],"indicators":["## Acceptance Criteria"]}
+  ]
+}

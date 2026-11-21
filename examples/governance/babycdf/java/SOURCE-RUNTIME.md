@@ -1,0 +1,104 @@
+# Source runtime slice (candidate; not live accepted)
+
+`Intake.main` now selects source discovery with `INTAKE_DISCOVERY_MODE`:
+
+- unset or `live`: token-authenticated GitHub source pages (explicit
+  `INTAKE_GITHUB_TOKEN_FILE` required) committed through `JavaSourceIngestion`
+  and `SourceCatalogueLedger`, using the existing demo package argument and opener.
+- `fixture`: explicit offline advisory inventory only; no production SourceItems.
+
+The existing CLI `--offline-fixture grant-file ...` concerns the curated grant
+verification bytes, **not** source discovery mode. It remains for compatibility.
+Offline invocations must also set `INTAKE_DISCOVERY_MODE=fixture`. SourceItems are
+unverified candidate evidence, never additional voting topics or agenda authority.
+No LLM calls or actAs rights were added.
+
+Each source tick performs at most one GitHub request and one atomic engine batch.
+Agenda polling uses a separate source worker so proof reads cannot block agenda
+polls. GitHub header/body deadlines are each five seconds. The ordinary runtime
+source interval is at least thirty seconds, including ordinary failures; HTTP
+403/429 can delay or suspend attempts as described below. This is not a strict
+aggregate 30-second bound on ledger proof reads (existing bounded 15-second RPCs
+remain).
+
+## Explicit credential configuration
+
+See [operator token provisioning and Compose commands](../demo/GITHUB-TOKEN.md).
+Both the live source worker and optional live inventory use `IntakeGitHub` with
+an explicit file-backed Bearer token. Live startup fails closed before ledger or
+journal construction if configuration is missing or invalid. Fixture mode needs
+no secret. No ambient GitHub/LLM credential or anonymous fallback is used.
+HTTP 401 suspends source requests without checkpoint mutation until deliberate
+credential replacement and Intake-only restart. Tokens are never diagnostic data.
+
+## HTTP 403/429 delay and process-local suspension
+
+Non-200 responses fail the source cycle without advancing its checkpoint. Error
+bodies are not read or logged. Both live transports retain only
+`X-RateLimit-Remaining`, `X-RateLimit-Reset`, `Retry-After`, and
+`X-GitHub-Request-Id`; diagnostics emit only single-valued, bounded, sanitized
+values. Returned reset values are evidence from that response, not proof that an
+unrelated historical HTTP 403 was caused by rate exhaustion. No historical cause
+is established by this change.
+
+For HTTP 403 or 429, a valid `Retry-After` supplies integer seconds or an HTTP
+date. If `X-RateLimit-Remaining` is exactly `0`, a valid epoch-seconds
+`X-RateLimit-Reset` is required. When both supply deadlines, the later is used.
+The scheduler delays from receipt/failure using its monotonic clock, for at least
+60 seconds and at least the configured source interval. Supported delays up to
+24 hours permit autonomous resumption on a later tick after the deadline; there
+is no sleeping worker or immediate retry loop. Zero or past deadlines still get
+the 60-second minimum.
+
+Missing/unsupported retry evidence, invalid present `Retry-After`, an invalid or
+missing reset when remaining is `0`, or a computed delay over 24 hours suspends
+automatic source requests for that scheduler instance. Unknown HTTP 403 is not
+unconditionally retried. Suspension is **process-local**, not a durable ledger
+flag, and has no automatic expiry. Ordinary non-403/429 failures retain the
+configured interval. The original failure propagates; delayed/suspended ticks
+return `SKIPPED`, never synthetic completion or successful recovery, and do not
+clear the remembered error.
+
+For a suspended process, the operator must establish from available safe evidence
+that the provider restriction/cause has cleared before authorizing a controlled
+restart. Restart recreates the scheduler and loses its local delay/suspension;
+it must not be used to bypass an active or unknown restriction, nor placed in an
+automatic restart loop. Preserve the existing checkpoint and all journal files:
+do not reset cursors, remove markers, or replay ledger commands to recover from
+an HTTP failure. Known supported deadlines normally resume without a restart.
+This documentation does not authorize a restart or a diagnostic public request.
+
+Only repeated FULL sweeps are implemented: pulls then issues, state=all, 50 rows,
+updated ascending. High water is not used as a cursor. The ledger's FullSweep
+phase stays unchanged when the endpoint changes. Tokens bind a fixed repository,
+endpoint, page, row index and split-page digest; they never accept arbitrary URLs.
+Each observation is measured using the certified protobuf codec before selecting
+subbatches, with a 700KB observation budget and the adapter's exact 999992-byte
+request check retained. Tokens advance only with atomic ledger confirmation.
+Changed split pages durably rewind to the page start before processing shifted
+indices; fingerprint reconciliation suppresses repeated unchanged observations.
+GitHub page-number scans are not snapshots: concurrent mutations can move rows;
+periodic full sweeps provide eventual reconciliation, not snapshot completeness.
+
+Compose and Java both default to `live`; `INTAKE_DISCOVERY_MODE=fixture` is an
+explicit offline-only synthetic inventory override and starts no source worker.
+`INTAKE_SOURCE_INTERVAL_MILLIS` defaults to 30000 and accepts 30000..3600000.
+The curated `--offline-fixture` grant bytes do not select discovery mode.
+
+The source adapter gets its own `/journal/sources` child journal, created as the
+existing unprivileged container UID with mode 0700. Existing journal symlink
+checks apply; parent/child owners must match and existing permissions must be
+0700. Invalid directories fail closed without repair. Confirmed mutation logs
+come only from the engine's transaction proof, never inventory counts.
+
+## Explicit unresolved live-acceptance limits
+
+This slice does **not** solve the adapter's whole-ACS lookup (20MB/10000 responses)
+or journal exhaustion at 10000 intents. No automatic rotation/deletion occurs.
+There is no server-side business-key filter in GetActiveContracts. A reconciled
+key-to-CID index and validated rotation design require a separate change before
+unbounded live acceptance. Body size affects the catalogue limit: do not claim
+600 maximum-size source bodies fit. Compose now defaults to live ingestion;
+ledger-derived stage counts, runner narration and full deck alignment remain
+separate acceptance work. Existing log-tail client counts are not ledger counts.
+Do not run the live mode as an acceptance demonstration until those are reviewed.

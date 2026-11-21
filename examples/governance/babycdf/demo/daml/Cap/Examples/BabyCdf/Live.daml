@@ -2,7 +2,11 @@
 -- Parameterized live entry points are deliberately excluded from dpm test discovery.
 module Cap.Examples.BabyCdf.Live where
 
+import Cap.Examples.BabyCdf.Intake
+import qualified Cap.Examples.BabyCdf.SourceCatalogue
+
 import DA.Foldable (forA_)
+import qualified DA.Text
 import DA.Text (isInfixOf)
 import qualified DA.Text as Text
 import qualified DA.List
@@ -10,9 +14,11 @@ import Daml.Script
 import Cap.Examples.BabyCdf.CouponDemo (bootstrapAdvisoryGovernor)
 import Cap.Examples.BabyCdf.RuleVote
 import Cap.Examples.BabyCdf.Rights
+import Cap.Examples.BabyCdf.LiveVote (coreQuorum)
 import qualified DA.Set as Set
 import DA.Time (RelTime, addRelTime, hours, seconds)
 import Splice.AmuletRules
+import Splice.Amulet (DevelopmentFundCoupon, UnclaimedDevelopmentFundCoupon)
 import Splice.ExternalPartyAmuletRules (ExternalPartyAmuletRules (..))
 import Splice.Issuance (OpenMiningRoundSummary (..))
 import Splice.Round (OpenMiningRound)
@@ -21,12 +27,19 @@ import Splice.Schedule (Schedule (..))
 import Splice.Testing.Registries.AmuletRegistry.Parameters (defaultAmuletConfig)
 import qualified DA.Map as Map
 import Cap.Governance.ExecutableV1
+import qualified Cap.Governance.ActionV1 as ActionV1
+import Cap.Governance.ResolverV1 (Resolver)
+import Cap.Governance.VoteRecordV1 (VoteRecord)
+import Cap.Governance.VoteTopicV1 (VoteTopic)
+import Cap.Governance.VotingRightsV1 (VotingRights)
 import qualified Cap.Governance.Utils.Count as Count
 import Splice.Api.Token.MetadataV1
 
 data BootstrapInput = BootstrapInput with
   userName : Text
   windowSeconds : Int
+  initialRuleRef : RuleRef
+  proposedRuleRef : RuleRef
     deriving (Eq, Show)
 
 data LiveState = LiveState with
@@ -35,9 +48,15 @@ data LiveState = LiveState with
   governor : ContractId AgendaGovernor
   userName : Text
   verifiedRights : [UserRight]
+  intakeUserName : Text
+  intakeVerifiedRights : [UserRight]
   registry : ContractId RuleRegistry
   rule : ContractId EffectiveRule
   credentials : [(Party, RightRef)]
+  -- The committee's permanent members, read from the AgendaGovernor itself.
+  -- Carried as state so every later step selects voters from the real
+  -- membership rather than from ballot order, which includes alternates.
+  core : [Party]
   windowSeconds : Int
   step : Int
     deriving (Eq, Show)
@@ -52,7 +71,9 @@ template DemoAnchor
     registry : ContractId RuleRegistry
     rule : ContractId EffectiveRule
     credentials : [(Party, RightRef)]
+    core : [Party]
     windowSeconds : Int
+    proposedRuleRef : RuleRef
     step : Int
   where
     signatory opener
@@ -60,9 +81,42 @@ template DemoAnchor
 
 bootstrap : BootstrapInput -> Script LiveState
 bootstrap input = do
+  stepHeading 1 "SETUP AND CREDENTIALS"
+  -- INITIAL STATE for step 1 is a special case, and is reported honestly as
+  -- one. No demo party exists yet, so there is no witness to scope a
+  -- contract query to: querying "all known parties" for contracts would be a
+  -- visibility claim this script cannot make. What CAN be observed before any
+  -- allocation is the participant's party and user lists, so only those are
+  -- reported, and the demo scope is stated as not yet allocated. A later
+  -- INITIAL STATE, from step 2 onward, is a real scoped contract query.
+  phase 1 "INITIAL STATE"
+  startingParties <- listKnownParties
+  startingUsers <- listAllUsers
+  evidenceLine 1 ("Participant before setup: parties known " <> show (length startingParties)
+    <> ", ledger users " <> show (length startingUsers)
+    <> " [participant-level counts, not a contract query]")
+  evidenceLine 1 "No demo scope allocated yet: no committee, no credentials, no rule book."
+  evidenceLine 1 ("This is a fresh-run statement only. If a previous run's parties are still "
+    <> "present on this participant they are included in the counts above; "
+    <> "contract-level INITIAL STATE begins at step 2.")
+  phase 1 "SANDBOX NOTICE"
+  business 1 "All parties, committees and rules here are invented for this sandbox."
+  business 1 "No Canton Foundation authority. Nothing decided here binds anyone."
+  phase 1 "COMMITTEE"
+  business 1 "Electorate: 7 members - 5 permanent (core) + 2 alternates."
+  business 1 "Alternates vote in their own name; they are not stand-ins."
+  business 1 ("Quorum (attendance): at least " <> show quorumSize <> " of 7 must take part.")
+  business 1 "Majority (of votes cast): one option needs at least half."
+  business 1 ("Steps 2-4 run the realistic case: " <> show quorumSize
+    <> " core YES, " <> show absentSize <> " ABSENT. Quorum met exactly.")
   debug "[STEP 1] allocating synthetic parties and governor; sandbox only"
   (member, governor) <- bootstrapAdvisoryGovernor
   Some contract <- queryContractId member governor
+  -- The core membership is read from the governor contract, never assumed from
+  -- ballot order: AgendaBallot order follows party IDs, in which an alternate
+  -- can precede a permanent member.
+  let core = coreQuorum (Set.size contract.permanent) (Set.toList contract.permanent)
+  assert (length core == 5)
   forA_ (Set.toList (Set.union contract.permanent contract.alternates)) $ \party ->
     action 1 ("allocate party " <> who party) "allocated"
   action 1 ("allocate party " <> who contract.opener) "allocated (demo opener)"
@@ -74,6 +128,9 @@ bootstrap input = do
     cdf = contract.opener; members = Set.toList members
   action 1 (who contract.opener <> " creates VotingRightFactory (7 members)")
     ("VotingRightFactory " <> cid factory)
+  phase 1 "CREDENTIALS"
+  business 1 "Each member receives one personal voting credential, valid 12 hours."
+  business 1 "Two holding routes shown: 1 direct, 6 via registry. Same weight: 1 vote each."
   now <- getTime
   credentials <- forA (Set.toList members) $ \voter -> do
     invitation <- submit contract.opener $ createCmd VotingRightInvitation with
@@ -83,48 +140,89 @@ bootstrap input = do
       <> who voter <> " (expires in 12h)") ("VotingRightInvitation " <> cid invitation)
     if voter == member then do
       accepted <- submit voter $ exerciseCmd invitation AcceptDirect
+      business 1 (name voter <> ": credential accepted (direct).")
       action 1 (who voter <> " exercises VotingRightInvitation.AcceptDirect on " <> cid invitation)
         ("DirectVotingRight " <> cid accepted)
       pure (voter, DirectRight accepted)
     else do
       accepted <- submit voter $ exerciseCmd invitation AcceptRegistered with factory = toInterfaceContractId factory
+      business 1 (name voter <> ": credential accepted (registry).")
       action 1 (who voter <> " exercises VotingRightInvitation.AcceptRegistered on " <> cid invitation
         <> " (via factory " <> cid factory <> ")") ("RegisteredVotingRight " <> cid accepted)
       pure (voter, RegisteredRight accepted)
   debug "[STEP 1] direct and registered unit voting credentials issued to seven members"
+  business 1 "All 7 credentialed, 1 vote each."
+  business 1 "Credentials are re-checked when a result is counted, not only when issued."
   initialRegistry <- submit contract.opener $ createCmd RuleRegistry with
     opener = contract.opener; members; version = 0
   action 1 (who contract.opener <> " creates RuleRegistry (version 0)")
     ("RuleRegistry " <> cid initialRegistry)
   (registry, rule) <- submit contract.opener $ exerciseCmd initialRegistry ActivateRule with
-    draft = RuleDraft "architecture-review" 1 "initial sandbox rule"
+    draft = RuleDraft "architecture-review" 1 "initial sandbox rule" input.initialRuleRef
   action 1 (who contract.opener <> " exercises RuleRegistry.ActivateRule on " <> cid initialRegistry
     <> " (architecture-review v1)")
     ("RuleRegistry " <> cid registry <> "; EffectiveRule " <> cid rule)
   debug "[STEP 1] EffectiveRule v1 is a sandbox seed created by the opener, not a voted or Foundation rule"
+  phase 1 "RULE BOOK"
+  business 1 "architecture-review v1 is now in force."
+  business 1 "Caveat: v1 is an UNVOTED seed placed by the organiser, not a Foundation rule."
+  business 1 "The first rule actually voted on is v2, in step 2."
   userId <- validateUserId input.userName
-  -- Read-only by construction. The demo agents only read the ACS, so granting
-  -- actAs would claim a capability they neither need nor are allowed to have:
-  -- without it the agent is incapable of casting a vote or submitting anything.
-  let required = [CanReadAs member, CanReadAs contract.opener]
-  createUser (User userId (Some member)) required
-  action 1 ("create ledger user " <> input.userName <> " with 2 read-only rights (readAs "
-    <> who member <> " and readAs opener; no actAs)") "user created"
+  -- Every template queried by the readers is signed by the opener.
+  -- These are provisioned user rights, not an authentication boundary on an
+  -- unauthenticated demo endpoint. Reader entrypoints remain textual-only.
+  let required = [CanReadAs contract.opener]
+  phase 1 "AGENT RIGHTS"
+  business 1 "Watching agents get exactly 1 right: readAs organiser; no actAs."
+  createUser (User userId (Some contract.opener)) required
   actual <- listUserRights userId
   assert (length actual == length required && all (`elem` actual) required)
   debug ("[STEP 1] dedicated user rights verified: " <> show actual)
+  -- CanActAs includes read access; no redundant explicit CanReadAs is needed.
+  let intakeUserName = input.userName <> "-intake"
+  intakeUserId <- validateUserId intakeUserName
+  let intakeRequired = [CanActAs contract.opener]
+  createUser (User intakeUserId (Some contract.opener)) intakeRequired
+  intakeActual <- listUserRights intakeUserId
+  assert (length intakeActual == length intakeRequired && all (`elem` intakeActual) intakeRequired)
+  outcomeLine 1 "Provisioned opener-only reader and separate Intake user; Intake submission is not implemented here."
   let state = LiveState with
         member; opener = contract.opener; governor
         userName = input.userName
         verifiedRights = actual
-        registry; rule; credentials
+        intakeUserName
+        intakeVerifiedRights = intakeActual
+        registry; rule; credentials; core
         windowSeconds = input.windowSeconds
         step = 1
   anchor <- submit contract.opener $ createCmd DemoAnchor with
     opener = contract.opener; demoRunId = input.userName; member; governor
-    userName = input.userName; registry; rule; credentials; windowSeconds = input.windowSeconds; step = 1
+    userName = input.userName; registry; rule; credentials; core
+    windowSeconds = input.windowSeconds; proposedRuleRef = input.proposedRuleRef; step = 1
   action 1 (who contract.opener <> " creates DemoAnchor (run " <> input.userName <> ", step 1)")
     ("DemoAnchor " <> cid anchor)
+  -- Setup evidence: what the ledger holds once the committee exists. This is
+  -- the baseline every later step's counts are read against.
+  let witnesses = [contract.opener, member]
+  phase 1 "LEDGER EVIDENCE"
+  evidenceLine 1 ("After setup" <> evidenceScope)
+  parties <- listKnownParties
+  users <- listAllUsers
+  directRows <- concat <$> forA witnesses (\p -> query @DirectVotingRight p)
+  registeredRows <- concat <$> forA witnesses (\p -> query @RegisteredVotingRight p)
+  registryRows <- concat <$> forA witnesses (\p -> query @RuleRegistry p)
+  e <- governanceEvidence witnesses
+  evidenceLine 1 ("Parties known: " <> show (length parties)
+    <> "; ledger users: " <> show (length users))
+  evidenceLine 1 ("VotingRights active: " <> show e.rights
+    <> " (direct " <> show (distinctCount directRows)
+    <> ", registered " <> show (distinctCount registeredRows) <> ")")
+  evidenceLine 1 ("Resolver (governor) active: " <> show e.resolvers
+    <> "; RuleRegistry active: " <> show (distinctCount registryRows))
+  evidenceLine 1 ("Agent read-only rights verified: " <> show (length actual)
+    <> " (no actAs)")
+  finalState 1 witnesses
+    "committee of 7 credentialed (5 direct-or-registered permanent + 2 alternates), governor created, architecture-review v1 seeded (unvoted), agent rights verified read-only."
   pure state
 
 -- Bounded wall-clock wait. An unbounded poll of getTime cannot distinguish a
@@ -154,6 +252,90 @@ waitTick closes tick = do
 extra : ExtraArgs
 extra = ExtraArgs with context = emptyChoiceContext; meta = emptyMetadata
 
+-- The governance rule in force is Count.decide (atLeastPresent 3)
+-- (shareOfVotes 1 2): at least three of the electorate must be present, and
+-- one option must hold at least half the weight actually voted. These two
+-- numbers are the demo's reading of that rule, not a change to it; nothing
+-- here is passed to the governor, which applies its own compiled rule.
+
+-- | Attendance threshold: how many members must take part at all.
+quorumSize : Int
+quorumSize = 3
+
+-- | How many of the electorate stay away in the positive story.
+absentSize : Int
+absentSize = 7 - quorumSize
+
+-- | A round where quorum is deliberately missed, for optional round 3.
+belowQuorumSize : Int
+belowQuorumSize = quorumSize - 1
+
+-- | Issues one ballot per member of the electorate, and nothing else.
+--
+-- Deliberately separate from casting. A LEDGER EVIDENCE snapshot taken
+-- "after ballots issued, before any cast" is only true if issuance has
+-- already happened at that point, so issuance must be its own statement that
+-- the caller sequences before the snapshot. Folding it into the casting
+-- helper put the snapshot before `InviteBallots` ever ran, which made the
+-- label describe a moment that had not occurred.
+inviteBallotsFor : Int -> Party -> ContractId AgendaProposal
+  -> Script [ContractId AgendaBallot]
+inviteBallotsFor step opener proposalRef = do
+  ballots <- submit opener $ exerciseCmd proposalRef InviteBallots
+  action step (who opener <> " exercises AgendaProposal.InviteBallots on " <> cid proposalRef)
+    (show (length ballots) <> " AgendaBallot contracts")
+  pure ballots
+
+-- | Casts YES on exactly the named voters' ballots and leaves every other
+-- ballot of the round untouched and Absent.
+--
+-- Three properties matter and are enforced here rather than left to the
+-- caller:
+--
+--   * every named voter must actually hold a ballot in this round, so a
+--     mis-specified voter aborts instead of quietly producing a smaller
+--     turnout than the narration claims;
+--   * the full electorate's ballots are returned, cast and uncast alike,
+--     because ResolveAgenda requires records covering exactly the electorate;
+--   * only the voters who were present are returned in the credential
+--     projection, because ResolveAgenda requires exactly one presented
+--     credential per participating voter.
+--
+-- The uncast ballots are returned as they are. An AgendaBallot created by
+-- InviteBallots already carries vote = Absent, so an untouched ballot is a
+-- genuine on-ledger record of a member who did not take part, which is what
+-- makes "4 absent" a ledger fact rather than a narrator's claim.
+castYesBy : Int -> Party -> [Party] -> [ContractId AgendaBallot] -> Text
+  -> Script [ContractId AgendaBallot]
+castYesBy step opener voters ballots label = do
+  loaded <- forA ballots $ \ballotCid -> do
+    Some ballot <- queryContractId opener ballotCid
+    pure (ballotCid, ballot)
+  let holders = map ((.voter) . snd) loaded
+  forA_ voters $ \voter ->
+    if voter `elem` holders then pure ()
+    else abort ("selected voter holds no ballot in this round: " <> show voter)
+  forA loaded $ \(ballotCid, ballot) ->
+    if ballot.voter `elem` voters then do
+      voteNarration step (name ballot.voter <> ": YES (core)")
+      cast <- submit ballot.voter $ exerciseCmd ballotCid CastAgendaVote with option = Count.Voted Yes
+      action step (who ballot.voter <> " exercises AgendaBallot.CastAgendaVote on " <> cid ballotCid
+        <> " -> Voted Yes; subject: " <> label) ("new ballot " <> cid cast)
+      pure cast
+    else do
+      voteNarration step (name ballot.voter <> ": ABSENT (no cast; not an abstention, not a NO)")
+      action step ("no cast for ballot " <> cid ballotCid <> " held by " <> who ballot.voter)
+        "Absent (ballot left uncast)"
+      pure ballotCid
+
+-- | The credentials of exactly the members who took part.
+--
+-- ResolveAgenda demands one presented credential per participating eligible
+-- voter and no more, so presenting all seven in a three-voter round is itself
+-- a refusal. The projection is derived from the voter list, never hard-coded.
+presentedRights : [Party] -> [(Party, RightRef)] -> [(Party, RightRef)]
+presentedRights voters credentials = [(m, r) | (m, r) <- credentials, m `elem` voters]
+
 -- [ACTION] logging. These helpers only format and print; they never alter a
 -- submission, a check or an assertion. One line per individual ledger action,
 -- so `... | grep ACTION` is a complete list of what touched the ledger.
@@ -171,6 +353,17 @@ who party =
         [] -> local
         _ -> Text.intercalate "-" (DA.List.take (length segments - 1) segments)
   in name <> " (party " <> abbreviate 20 stripped <> ")"
+
+-- The readable display name alone, without the party ID. Presentation lines
+-- name members; the full party ID belongs in the technical [ACTION] record.
+name : Party -> Text
+name party =
+  let stripped = Text.replace "'" "" (show party)
+      local = Text.takeWhile (/= ":") stripped
+      segments = Text.splitOn "-" local
+  in case segments of
+    [] -> local
+    _ -> Text.intercalate "-" (DA.List.take (length segments - 1) segments)
 
 -- Contract IDs are long; show enough to correlate and no more.
 abbreviate : Int -> Text -> Text
@@ -191,6 +384,311 @@ rejected step what err =
   debug ("[STEP " <> show step <> "][ACTION][REJECTED] " <> what
     <> " \x2192 participant error: " <> err <> " (BLOCKED as expected)")
 
+-- [BUSINESS], [VOTE], [DECISION], [RESULT] and [EXPECTED-REFUSAL] narration.
+-- These helpers hold exactly the same contract as the [ACTION] helpers above:
+-- they only format and print. None of them submits anything, reads anything,
+-- changes a window, a credential, a tally, an assertion or a criterion, so
+-- deleting every call would leave the executable governance behaviour
+-- identical. They exist so that a reader who is not a Daml engineer can follow
+-- what is being decided, by whom, and what it does and does not mean, while
+-- the [ACTION] and [TIMING] lines stay the exact technical record they were.
+
+-- Plain-English context: what is happening and why it matters.
+business : Int -> Text -> Script ()
+business step line = debug ("[STEP " <> show step <> "][BUSINESS] " <> line)
+
+-- One line per individual member vote, saying who votes and on what.
+voteNarration : Int -> Text -> Script ()
+voteNarration step line = debug ("[STEP " <> show step <> "][VOTE] " <> line)
+
+-- The collective decision of the members, as distinct from what it activates.
+decision : Int -> Text -> Script ()
+decision step line = debug ("[STEP " <> show step <> "][DECISION] " <> line)
+
+-- What the ledger now records as a consequence of that decision.
+outcomeLine : Int -> Text -> Script ()
+outcomeLine step line = debug ("[STEP " <> show step <> "][RESULT] " <> line)
+
+-- A refusal the demo is deliberately provoking: what should stop it, and what
+-- actually stopped it, which are not always the same boundary.
+expectedRefusal : Int -> Text -> Script ()
+expectedRefusal step line =
+  debug ("[STEP " <> show step <> "][EXPECTED-REFUSAL] " <> line)
+
+-- Step and phase headings. Same log-only contract as every helper above: they
+-- format and print, nothing more. ASCII '#' only, no box-drawing and no
+-- arrows, because the terminal that showed this demo rendered non-ASCII as
+-- escapes. The blank line before a heading is what makes the sections
+-- scannable on a projector.
+
+-- The banner that opens a step, matching a deck slide title.
+stepHeading : Int -> Text -> Script ()
+stepHeading step title =
+  debug ("[STEP " <> show step <> "][PHASE] \n################ STEP " <> show step
+    <> ": " <> title <> " ################")
+
+-- A phase within a step: PROPOSAL, VOTING, RESOLUTION, EXECUTION and so on.
+phase : Int -> Text -> Script ()
+phase step title =
+  debug ("[STEP " <> show step <> "][PHASE] \n########## " <> title <> " ##########")
+
+-- One LEDGER EVIDENCE line. Unlike every other narration helper, the text it
+-- prints is derived from a ledger query the caller just performed, so it is an
+-- observation rather than a claim. The helper itself still only formats.
+evidenceLine : Int -> Text -> Script ()
+evidenceLine step line = debug ("[STEP " <> show step <> "][EVIDENCE] " <> line)
+
+-- Active-contract counts read from the ledger, at the moment of the call.
+--
+-- Scope, stated explicitly because a count without a scope is not evidence:
+-- every query below runs as the demo opener and the demo member together, and
+-- those two are signatory/observer on everything this demo creates. A contract
+-- visible to neither would not be counted, and this is never claimed to be a
+-- participant-wide inventory.
+--
+-- Contract IDs are deduplicated across the two parties: the same contract is
+-- visible to both, so a naive sum would double-count it. `queryInterface`
+-- returns the interface's own contract IDs, which is what makes the dedup
+-- correct for interface counts too.
+--
+-- Only ACTIVE contracts are reported, and the wording says so. A consumed
+-- ballot or an archived proposal is simply absent; nothing here infers an
+-- archival count, because Daml Script offers no active/archived history query
+-- and inventing one from absence would overclaim.
+
+-- | Distinct contracts in query rows gathered from several parties.
+--
+-- The same contract is visible to both witnesses, so the rows must be
+-- deduplicated by contract ID or every count would be doubled. Contract IDs
+-- are compared by their rendered form, which is injective for a CID.
+--
+-- A plain function over rows the caller already fetched, rather than a generic
+-- query helper: Daml's type variables are not scoped into a function body, so
+-- a `forall i. ... queryInterface @i` helper cannot be written here. Keeping
+-- the query at the call site also keeps each one visible and auditable.
+distinctCount : [(ContractId a, b)] -> Int
+distinctCount rows = length (DA.List.dedup (map (show . fst) rows))
+
+-- | Every governance interface count, plus the decoded VoteRecord tally.
+--
+-- One fresh ledger read per interface, per witness party, deduplicated. The
+-- vote breakdown is decoded from each record's own on-ledger interface view,
+-- so "3 YES, 4 ABSENT" is what the ledger holds rather than what the script
+-- intended to cast.
+data GovernanceEvidence = GovernanceEvidence with
+    topics : Int
+    records : Int
+    yes : Int
+    no : Int
+    absent : Int
+    rights : Int
+    resolvers : Int
+    actions : Int
+    executables : Int
+  deriving (Eq, Show)
+
+governanceEvidence : [Party] -> Script GovernanceEvidence
+governanceEvidence parties = do
+  topicRows <- concat <$> forA parties (\p -> queryInterface @VoteTopic p)
+  recordRows <- concat <$> forA parties (\p -> queryInterface @VoteRecord p)
+  rightRows <- concat <$> forA parties (\p -> queryInterface @VotingRights p)
+  resolverRows <- concat <$> forA parties (\p -> queryInterface @Resolver p)
+  actionRows <- concat <$> forA parties (\p -> queryInterface @ActionV1.Action p)
+  executableRows <- concat <$> forA parties (\p -> queryInterface @Executable p)
+  -- Dedup the records themselves before decoding, so a vote is not tallied
+  -- twice because two parties can see the same ballot.
+  let uniqueRecords = DA.List.dedupOn (show . fst) recordRows
+      votes = concat [Map.values view.votes | (_, Some view) <- uniqueRecords]
+      tally wanted = length [() | vote <- votes, Some decoded <- [decodeRuleVote vote], decoded == wanted]
+  pure GovernanceEvidence with
+    topics = distinctCount topicRows
+    records = length uniqueRecords
+    yes = tally (Count.Voted Yes)
+    no = tally (Count.Voted No)
+    absent = tally Count.Absent
+    rights = distinctCount rightRows
+    resolvers = distinctCount resolverRows
+    actions = distinctCount actionRows
+    executables = distinctCount executableRows
+
+-- | What exists at the entry to a step, before anything is mutated.
+--
+-- Printed immediately after the step banner and before the first submission,
+-- so a listener knows the starting position rather than inferring it. Every
+-- number is a fresh query; the business meaning is stated alongside it rather
+-- than left as a bare count.
+initialState : Int -> [Party] -> Script ()
+initialState step parties = do
+  phase step "INITIAL STATE"
+  evidenceLine step ("What exists at entry to step " <> show step <> evidenceScope)
+  ruleRows <- concat <$> forA parties (\p -> query @EffectiveRule p)
+  grantRows <- concat <$> forA parties (\p -> query @ApprovedGrantProposal p)
+  milestoneRows <- concat <$> forA parties (\p -> query @ApprovedMilestone p)
+  anchorRows <- concat <$> forA parties (\p -> query @DemoAnchor p)
+  e <- governanceEvidence parties
+  let versions = DA.List.dedup (map (\(_, r) -> r.draft.version)
+        (DA.List.dedupOn (show . fst) ruleRows))
+      steps = DA.List.dedup (map (\(_, a) -> a.step)
+        (DA.List.dedupOn (show . fst) anchorRows))
+      grants = distinctCount grantRows
+      milestones = distinctCount milestoneRows
+  -- Rule book: which version governs the decisions this step is about.
+  evidenceLine step ("Rule book: architecture-review active versions " <> show versions
+    <> " (EffectiveRule active: " <> show (distinctCount ruleRows) <> ")")
+  -- Electorate and the thresholds that will be applied.
+  evidenceLine step ("Electorate: VotingRights active " <> show e.rights
+    <> " of 7; quorum needs " <> show quorumSize <> " present; majority is half of votes cast")
+  -- Governance machinery that must exist for a round to be possible.
+  evidenceLine step ("Governor (Resolver) active: " <> show e.resolvers
+    <> "; open rounds (VoteTopic) active: " <> show e.topics
+    <> "; vote records active: " <> show e.records)
+  evidenceLine step ("Pending authorisations: Action active " <> show e.actions
+    <> "; Executable active " <> show e.executables)
+  -- Outcomes so far, in business terms rather than as bare counts.
+  evidenceLine step ("Approvals so far: grant proposal "
+    <> (if grants == 0 then "NOT approved" else "approved (" <> show grants <> ")")
+    <> "; milestone "
+    <> (if milestones == 0 then "NOT accepted" else "accepted (" <> show milestones <> ")"))
+  evidenceLine step ("Run marker: DemoAnchor active " <> show (distinctCount anchorRows)
+    <> " at step " <> show steps)
+
+-- | What exists when a step finishes, plus what this step actually changed.
+--
+-- The "what changed" line is supplied by the caller from outcomes it observed,
+-- never derived by diffing counts: a count cannot attribute a change.
+finalState : Int -> [Party] -> Text -> Script ()
+finalState step parties changed = do
+  phase step "FINAL STATE"
+  evidenceLine step ("What exists at exit from step " <> show step <> evidenceScope)
+  ruleRows <- concat <$> forA parties (\p -> query @EffectiveRule p)
+  grantRows <- concat <$> forA parties (\p -> query @ApprovedGrantProposal p)
+  milestoneRows <- concat <$> forA parties (\p -> query @ApprovedMilestone p)
+  anchorRows <- concat <$> forA parties (\p -> query @DemoAnchor p)
+  e <- governanceEvidence parties
+  let versions = DA.List.dedup (map (\(_, r) -> r.draft.version)
+        (DA.List.dedupOn (show . fst) ruleRows))
+      steps = DA.List.dedup (map (\(_, a) -> a.step)
+        (DA.List.dedupOn (show . fst) anchorRows))
+  evidenceLine step ("Rule book: active versions " <> show versions
+    <> "; grant approvals " <> show (distinctCount grantRows)
+    <> "; milestone approvals " <> show (distinctCount milestoneRows))
+  evidenceLine step ("Open rounds: " <> show e.topics
+    <> "; vote records: " <> show e.records
+    <> "; pending Action " <> show e.actions
+    <> "; pending Executable " <> show e.executables)
+  evidenceLine step ("Run marker: DemoAnchor at step " <> show steps)
+  evidenceLine step ("What changed: " <> changed)
+
+-- | The governance-interface snapshot printed around a voting phase.
+--
+-- Every number is a fresh ledger read. The label says "active" throughout,
+-- because that is all these queries can honestly establish: a consumed ballot
+-- is simply absent, and this cannot prove it ever existed. The history
+-- commands named in the scope line are what corroborate that.
+votingEvidence : Int -> [Party] -> Text -> Script ()
+votingEvidence step parties moment = do
+  phase step "LEDGER EVIDENCE"
+  evidenceLine step (moment <> evidenceScope)
+  e <- governanceEvidence parties
+  evidenceLine step ("VoteTopic active: " <> show e.topics
+    <> "; Resolver active: " <> show e.resolvers)
+  -- A zero must not be explained, because a count cannot say WHY it is zero.
+  -- Before issuance and after resolution both read 0, and claiming
+  -- "consumed when counted" before any ballot existed would be a false
+  -- inference from absence. The neutral wording states only what was
+  -- observed; the consumption explanation belongs to the caller that just
+  -- observed a resolve, and is printed there.
+  evidenceLine step ("VoteRecord active: " <> show e.records
+    <> (if e.records == 0 then " (no active records visible in this scope)"
+        else " (" <> show e.yes <> " YES, " <> show e.no <> " NO, "
+          <> show e.absent <> " ABSENT)"))
+  evidenceLine step ("VotingRights active: " <> show e.rights)
+  evidenceLine step ("Action active: " <> show e.actions
+    <> "; Executable active: " <> show e.executables)
+
+-- | The post-resolution snapshot, plus the one explanation a zero can carry.
+--
+-- This is the only place that attributes a zero to consumption, and it may do
+-- so because the caller has just observed `ResolveAgenda` succeed on records
+-- it had already counted. The explanation cites the two surrounding snapshots
+-- rather than inferring anything from the number itself.
+resolutionEvidence : Int -> [Party] -> Text -> Script ()
+resolutionEvidence step parties moment = do
+  votingEvidence step parties moment
+  evidenceLine step ("The records counted in the snapshot above were consumed by the "
+    <> "resolve just observed; compare the before-casting and after-casting snapshots "
+    <> "for what they held. Archived contracts: ./ledger.sh archived")
+
+-- | The outcome-side snapshot: what the decisions actually produced.
+outcomeEvidence : Int -> [Party] -> Text -> Script ()
+outcomeEvidence step parties moment = do
+  phase step "LEDGER EVIDENCE"
+  evidenceLine step (moment <> evidenceScope)
+  ruleRows <- concat <$> forA parties (\p -> query @EffectiveRule p)
+  grantRows <- concat <$> forA parties (\p -> query @ApprovedGrantProposal p)
+  milestoneRows <- concat <$> forA parties (\p -> query @ApprovedMilestone p)
+  anchorRows <- concat <$> forA parties (\p -> query @DemoAnchor p)
+  executableRows <- concat <$> forA parties (\p -> queryInterface @Executable p)
+  let versions = DA.List.dedup (map (\(_, r) -> r.draft.version)
+        (DA.List.dedupOn (show . fst) ruleRows))
+      steps = DA.List.dedup (map (\(_, a) -> a.step)
+        (DA.List.dedupOn (show . fst) anchorRows))
+  evidenceLine step ("EffectiveRule active: " <> show (distinctCount ruleRows)
+    <> " (versions " <> show versions <> "); Executable active: "
+    <> show (distinctCount executableRows))
+  evidenceLine step ("ApprovedGrantProposal active: " <> show (distinctCount grantRows)
+    <> "; ApprovedMilestone active: " <> show (distinctCount milestoneRows))
+  evidenceLine step ("DemoAnchor active: " <> show (distinctCount anchorRows)
+    <> " (at step " <> show steps <> ")")
+
+-- The scope every evidence block carries. A count without a scope is not
+-- evidence, and an active count is not a history: the corroborating commands
+-- are named so a sceptic can check the archived side for themselves.
+evidenceScope : Text
+evidenceScope = " [active now; visible to opener+member; dedup by CID. "
+  <> "History: ./ledger.sh archived | history]"
+
+-- | Coupon-side evidence for step 5, including the amounts.
+--
+-- The DSO is the witness here because the unclaimed pot is DSO-visible, while
+-- the allocated coupon is visible to its beneficiary; both are queried and the
+-- scope says so rather than implying one party sees everything.
+couponEvidence : Int -> Party -> Party -> Text -> Script ()
+couponEvidence step dso beneficiary moment = do
+  phase step "LEDGER EVIDENCE"
+  evidenceLine step (moment <> " [active now; visible to DSO+beneficiary; dedup by CID]")
+  unclaimedRows <- concat <$> forA [dso] (\p -> query @UnclaimedDevelopmentFundCoupon p)
+  couponRows <- concat <$> forA [dso, beneficiary] (\p -> query @DevelopmentFundCoupon p)
+  roundRows <- concat <$> forA [dso] (\p -> query @OpenMiningRound p)
+  rulesRows <- concat <$> forA [dso] (\p -> query @AmuletRules p)
+  let unclaimed = DA.List.dedupOn (show . fst) unclaimedRows
+      coupons = DA.List.dedupOn (show . fst) couponRows
+  evidenceLine step ("AmuletRules active: " <> show (distinctCount rulesRows)
+    <> "; OpenMiningRound active: " <> show (distinctCount roundRows))
+  evidenceLine step ("UnclaimedDevelopmentFundCoupon active: " <> show (length unclaimed)
+    <> " (amounts " <> show (map (\(_, c) -> c.amount) unclaimed) <> ")")
+  evidenceLine step ("DevelopmentFundCoupon active: " <> show (length coupons)
+    <> " (amounts " <> show (map (\(_, c) -> c.amount) coupons) <> ")")
+
+-- A readable name for a voting round, for narration only. Round identifiers
+-- are "<runId>:<suffix>", and the run ID is noise to a human listener, so the
+-- suffix is translated into the words the demo uses out loud. This is a pure
+-- text function over a round ID the caller already holds: it performs no
+-- query, so naming a round costs no extra ledger read.
+roundName : Text -> Text
+roundName roundId =
+  let suffix = case DA.List.last (Text.splitOn ":" roundId) of
+        name -> name
+  in case suffix of
+    "rule-v2" -> "rule change"
+    "stale" -> "duplicate"
+    "grant" -> "grant"
+    "illustrative-milestone" -> "milestone"
+    "blocked-foreign" -> "bad-credential test"
+    "blocked-quorum" -> "quorum test"
+    "blocked-double" -> "double-vote test"
+    _ -> suffix
+
 -- Only a daml-prim Text crosses the JSON boundary. State/CIDs are fetched
 -- from a unique signed anchor on this participant, never coerced from JSON.
 ruleVote : Text -> Script Text
@@ -207,55 +705,84 @@ ruleVote runId = do
   assert (state.step == 1)
   action 2 ("query unique DemoAnchor for run " <> runId)
     ("DemoAnchor " <> cid anchorCid <> " at step " <> show state.step)
+  stepHeading 2 "RULE GOVERNANCE"
+  let witnesses = [state.opener, state.member]
+  initialState 2 witnesses
+  phase 2 "PROPOSAL"
+  business 2 "Rule architecture-review: v1 -> v2."
+  Some activeRule <- queryContractId state.member state.rule
+  business 2 ("Rule v" <> show activeRule.draft.version <> " (document " <> activeRule.draft.ruleRef.location <> ", sha " <> DA.Text.take 12 activeRule.draft.ruleRef.sha256 <> ") is active.")
+  business 2 ("The vote proposes v2 (document " <> state.proposedRuleRef.location <> ", sha " <> DA.Text.take 12 state.proposedRuleRef.sha256 <> ").")
+  business 2 "The proposal document does not change; only the rule does."
+  business 2 "Voters select a pre-published rule version; they cannot author rule text."
+  business 2 ("Entitled: 7. Turning up: " <> show quorumSize <> " core members.")
   debug "[STEP 2] proposing rule v2; host submits as synthetic opener/voters, not agent user"
-  debug "[STEP 2] v1 demands an independent security audit, which PR #184 never commits to, so the agent reports fail / REJECT under v1"
-  debug "[STEP 2] v2 replaces that clause with auditable-state-and-acceptance, which the same pinned text does satisfy"
+  debug "[STEP 2] clause interpretation is off-ledger; agents print the verified runtime document."
+  debug "[STEP 2] rule references identify documents, not compiled clause content."
   now <- getTime
   debug ("[TIMING] first proposal " <> show now <> " windowSeconds=" <> show state.windowSeconds)
   let closesAt = now `addRelTime` seconds state.windowSeconds
       propose roundId = do
         created <- submit state.member $ exerciseCmd state.governor ProposeAgenda with
-          proposer = state.member; roundId; agenda = Architecture (RuleDraft "architecture-review" 2 "live v2")
+          proposer = state.member; roundId; agenda = Architecture (RuleDraft "architecture-review" 2 "live v2" state.proposedRuleRef)
           baseVersion = 1; closesAt
         action 2 (who state.member <> " exercises AgendaGovernor.ProposeAgenda (round " <> roundId
           <> ", architecture-review v2, baseVersion 1)") ("AgendaProposal " <> cid created)
         pure created
+  business 2 "ONE round this step, start to finish: propose, vote, close, count, apply."
+  -- A single agenda. The stale-decision safety check used to be a second,
+  -- interleaved round opened here, which made the step hard to follow; it is
+  -- now its own self-contained round in step 6.
   proposal <- propose (runId <> ":rule-v2")
-  stale <- propose (runId <> ":stale")
-  let voteOn proposalRef = do
-        ballots <- submit state.opener $ exerciseCmd proposalRef InviteBallots
-        action 2 (who state.opener <> " exercises AgendaProposal.InviteBallots on " <> cid proposalRef)
-          (show (length ballots) <> " AgendaBallot contracts")
-        forA ballots $ \ballotCid -> do
-          Some ballot <- queryContractId state.opener ballotCid
-          cast <- submit ballot.voter $ exerciseCmd ballotCid CastAgendaVote with option = Count.Voted Yes
-          action 2 (who ballot.voter <> " exercises AgendaBallot.CastAgendaVote on " <> cid ballotCid
-            <> " \x2192 Voted Yes") ("new ballot " <> cid cast)
-          pure cast
-  ballots <- voteOn proposal
-  staleBallots <- voteOn stale
+  let voters = coreQuorum quorumSize state.core
+  assert (length voters == quorumSize)
+  phase 2 "VOTING"
+  business 2 "Ballots issued to all 7. Uncast ballots stay on the ledger as the record of absence."
+  business 2 ("Voting: " <> show quorumSize <> " core YES, " <> show absentSize
+    <> " ABSENT. The voters are read from the governor's permanent set, not ballot order.")
+  -- Issuance and casting are separate statements, in that order, so the
+  -- snapshot between them is taken when the ballots genuinely exist and none
+  -- has been cast.
+  issued <- inviteBallotsFor 2 state.opener proposal
+  votingEvidence 2 witnesses "After ballots issued, before any cast"
+  ballots <- castYesBy 2 state.opener voters issued "on moving architecture-review from v1 to v2."
   lastCast <- getTime
   debug ("[TIMING] last cast " <> show lastCast)
-  debug "[STEP 2] expected tally 7 Yes / 0 No / 0 abstentions; waiting for close plus 3s margin"
+  debug ("[STEP 2] expected tally " <> show quorumSize <> " Yes / 0 No / 0 abstentions / "
+    <> show absentSize <> " absent; waiting for close plus 3s margin")
+  votingEvidence 2 witnesses "After casting"
+  business 2 ("Tally: " <> show quorumSize <> " YES, 0 NO, " <> show absentSize
+    <> " ABSENT. Nothing is decided until the window closes.")
   waitUntilClosed closesAt
   sleep (seconds 3)
   resolving <- getTime
   debug ("[TIMING] resolve " <> show resolving)
-  let resolve label proposalRef votes = do
+  phase 2 "RESOLUTION"
+  business 2 "Window closed. Counting is a separate act from applying the result."
+  business 2 "All 7 ballots presented (exact electorate); credentials only for the 3 who voted."
+  let rights = presentedRights voters state.credentials
+      resolve label proposalRef votes = do
         outcome@(Resolution verdict executions) <- submit state.opener $ exerciseCmd state.governor ResolveAgenda with
-          proposalCid = proposalRef; ballotCids = votes; rights = state.credentials
+          proposalCid = proposalRef; ballotCids = votes; rights
         action 2 (who state.opener <> " exercises AgendaGovernor.ResolveAgenda (" <> label <> ", "
-          <> show (length votes) <> " ballots, " <> show (length state.credentials) <> " credentials)")
+          <> show (length votes) <> " ballots, " <> show (length rights) <> " credentials)")
           (show verdict <> "; " <> show (length executions) <> " execution(s)")
         pure outcome
+  assert (length rights == quorumSize)
   Resolution verdict [execution] <- resolve "rule-v2" proposal ballots
   assert (verdict == Count.Decided Yes)
-  Resolution _ [staleExecution] <- resolve "stale twin" stale staleBallots
+  decision 2 ("APPROVED - " <> show quorumSize <> " YES, 0 NO, " <> show absentSize
+    <> " ABSENT. Quorum " <> show quorumSize <> "/" <> show quorumSize <> "; majority "
+    <> show quorumSize <> "/" <> show quorumSize <> ".")
+  decision 2 ("Caveat: " <> show quorumSize <> " YES carried because nobody voted NO. "
+    <> "It is not a rule that " <> show quorumSize <> " YES always wins.")
+  decision 2 "This authorises execution; the rule book has not moved yet."
+  resolutionEvidence 2 witnesses "After RESOLUTION"
   let targets cid = Map.singleton (registryKey state.opener) (coerceContractId cid)
-  -- Positive twin: the stale execution is valid against the unchanged v1
-  -- snapshot; execute the chosen twin first, then assert live version mismatch.
   Some before <- queryContractId state.opener state.registry
   assert (before.version == 1)
+  phase 2 "EXECUTION"
+  business 2 "Rule book confirmed still at v1. Applying the decision now."
   result <- submit state.opener $ exerciseCmd execution Executable_Execute with
     actors = [state.opener]; targetCids = targets state.registry; extraArgs = extra
   action 2 (who state.opener <> " exercises Executable_Execute on " <> cid execution
@@ -267,24 +794,24 @@ ruleVote runId = do
   Some after <- queryContractId state.opener registry
   assert (after.version == 2)
   debug "[STEP 2] EffectiveRule now v2; outcome Decided Yes"
+  outcomeLine 2 "Rule v2 active. Reviews from here are judged against the voted rule."
+  outcomeLine 2 ("Same proposal: expected Reviewer REJECT (v1) -> APPROVE (v2). "
+    <> "Expected, not observed: this script does not read the agent's output.")
+  outcomeEvidence 2 witnesses "After EXECUTION"
   debug "[STEP 2] the voted rule changed, so the agent re-evaluates the SAME pinned proposal and its verdict flips to APPROVE"
   debug "[STEP 2] watch terminal 1: the reviewer prints fail/REJECT under v1, then all-pass/APPROVE under v2"
-  staleResult <- trySubmit state.opener $ exerciseCmd staleExecution Executable_Execute with
-    actors = [state.opener]; targetCids = targets registry; extraArgs = extra
-  case staleResult of
-    Left err -> do
-      rejected 2 (who state.opener <> " exercises Executable_Execute on stale execution "
-        <> cid staleExecution) (show err)
-      debug "[STEP 2] BLOCKED as expected: stale execution was rejected, reason unverified"
-    Right _ -> abort "stale execution unexpectedly succeeded"
+  outcomeLine 2 "The stale-decision safety check is now a separate optional round:"
+  outcomeLine 2 "  ./run-demo.sh opt-step 1   (proposes a v1-based change after v2 is active)"
   _ <- submit state.opener $ archiveCmd anchorCid
   action 2 (who state.opener <> " archives DemoAnchor " <> cid anchorCid) "archived"
   advanced <- submit state.opener $ createCmd DemoAnchor with
     opener = state.opener; demoRunId = runId; member = state.member; governor = state.governor
     userName = state.userName; registry; rule; credentials = state.credentials
-    windowSeconds = state.windowSeconds; step = 2
+    core = state.core; windowSeconds = state.windowSeconds; proposedRuleRef = state.proposedRuleRef; step = 2
   action 2 (who state.opener <> " creates DemoAnchor (step 2)") ("DemoAnchor " <> cid advanced)
-  debug "[STEP 2] signed DemoAnchor advanced to step 2 (not used by stale rejection)"
+  debug "[STEP 2] signed DemoAnchor advanced to step 2"
+  finalState 2 witnesses
+    "architecture-review advanced v1 -> v2 by 3 core YES / 4 ABSENT; one round, resolved and executed."
   pure "step 2 complete"
 
 -- `expected` is the step that must already be recorded; the query is labelled
@@ -304,6 +831,27 @@ findAnchor runId expected = do
     ("DemoAnchor " <> cid found <> " at step " <> show anchor.step)
   pure (found,anchor)
 
+-- | Finds the run's anchor at or after a minimum step, without advancing it.
+--
+-- The optional rounds are read-only with respect to the main journey: they
+-- need at least the committee (bootstrap); staleRuleChange additionally needs
+-- active v2 (step 2). They must not move the anchor or break the next main step.
+-- The main `findAnchor` keeps its exact-step guard; this is a separate,
+-- additive lookup rather than a relaxation of it.
+findAnchorAtLeast : Text -> Int -> Script (ContractId DemoAnchor, DemoAnchor)
+findAnchorAtLeast runId minimum = do
+  parties <- listKnownParties
+  found <- concat <$> forA parties (\p -> query @DemoAnchor p.party)
+  let matches = [(cid,a) | (cid,a) <- found, a.demoRunId == runId]
+      cids = DA.List.dedup (map fst matches)
+  assert (length cids == 1)
+  let [anchorRef] = cids
+      [anchor] = take 1 [a | (c,a) <- matches, c == anchorRef]
+  if anchor.step >= minimum then pure ()
+  else abort ("optional round needs the run at step " <> show minimum
+    <> " or later; the anchor is at step " <> show anchor.step)
+  pure (anchorRef, anchor)
+
 advance : ContractId DemoAnchor -> DemoAnchor -> Int -> Script ()
 advance reference anchor next = do
   _ <- submit anchor.opener $ archiveCmd reference
@@ -312,39 +860,228 @@ advance reference anchor next = do
   action next (who anchor.opener <> " creates DemoAnchor (step " <> show next <> ")")
     ("DemoAnchor " <> cid created)
 
+-- | OPTIONAL ROUND 1: a rule change that is legitimately decided and then
+-- refused at execution, because it was written against a superseded rule book.
+--
+-- Run with `./run-demo.sh opt-step 1`, after step 2 has activated v2.
+--
+-- What fails here, precisely. The proposal is accepted, the ballots are
+-- genuine, the vote is real and the count returns Decided Yes: nothing about
+-- the members' decision is invalid, and nothing is reversed. What fails is the
+-- EXECUTION, because an Architecture agenda pins the registry state it was
+-- written against (`agendaTargets` snapshots `baseVersion`), and executing it
+-- requires that snapshot to still match the live registry. This agenda is
+-- proposed with baseVersion 1 while the registry is already at 2, so the
+-- snapshot has drifted and the execution is refused.
+--
+-- This is a real drift refusal, not an artefact: the agenda is newly proposed
+-- here, its own execution contract is fresh and unconsumed, and no contract ID
+-- from step 2 is replayed. It does not move the run anchor, so the main
+-- journey can continue afterwards.
+staleRuleChange : Text -> Script Text
+staleRuleChange runId = do
+  (_, state) <- findAnchorAtLeast runId 2
+  stepHeading 0 "OPTIONAL ROUND 1: STALE RULE CHANGE"
+  let witnesses = [state.opener, state.member]
+  initialState 0 witnesses
+  -- The live registry and rule are read from the ledger, not from the anchor,
+  -- so this round acts on the current state rather than a remembered one.
+  registryRows <- concat <$> forA witnesses (\p -> query @RuleRegistry p)
+  let liveRegistries = DA.List.dedupOn (show . fst) registryRows
+  case liveRegistries of
+    [(registryRef, registry)] -> do
+      if registry.version >= 2 then pure ()
+        else abort ("optional round 1 needs architecture-review v2 active; the registry is at v"
+          <> show registry.version <> ". Run step 2 first.")
+      phase 0 "PROPOSAL"
+      business 0 ("The rule book is at v" <> show registry.version <> ".")
+      business 0 "A member proposes a change written against v1: a legitimate but outdated request."
+      business 0 "Nothing stops it being proposed or voted on. The question is whether it can be APPLIED."
+      now <- getTime
+      let closesAt = now `addRelTime` seconds state.windowSeconds
+      debug ("[TIMING] optional round 1 opens " <> show now)
+      proposal <- submit state.member $ exerciseCmd state.governor ProposeAgenda with
+        proposer = state.member; roundId = runId <> ":opt-stale"
+        agenda = Architecture (RuleDraft "architecture-review" 2 "stale v2 attempt" state.proposedRuleRef)
+        baseVersion = 1; closesAt
+      action 0 (who state.member <> " exercises AgendaGovernor.ProposeAgenda (round " <> runId
+        <> ":opt-stale, architecture-review v2, baseVersion 1 while live registry is v"
+        <> show registry.version <> ")") ("AgendaProposal " <> cid proposal)
+      phase 0 "VOTING"
+      let voters = coreQuorum quorumSize state.core
+          rights = presentedRights voters state.credentials
+      assert (length voters == quorumSize && length rights == quorumSize)
+      business 0 ("Ballots issued to all 7; " <> show quorumSize <> " core YES, "
+        <> show absentSize <> " ABSENT, exactly as in the main rounds.")
+      issued <- inviteBallotsFor 0 state.opener proposal
+      votingEvidence 0 witnesses "After ballots issued, before any cast"
+      voted <- castYesBy 0 state.opener voters issued
+        "on an outdated v1-based rule change (optional round)"
+      votingEvidence 0 witnesses "After casting"
+      waitUntilClosed closesAt
+      sleep (seconds 3)
+      phase 0 "RESOLUTION"
+      business 0 "The window has closed. The count runs exactly as it does in a main round."
+      Resolution verdict executions <- submit state.opener $ exerciseCmd state.governor ResolveAgenda with
+        proposalCid = proposal; ballotCids = voted; rights
+      action 0 (who state.opener <> " exercises AgendaGovernor.ResolveAgenda ("
+        <> show (length voted) <> " ballots, " <> show (length rights) <> " credentials)")
+        (show verdict <> "; " <> show (length executions) <> " execution(s)")
+      assert (verdict == Count.Decided Yes)
+      decision 0 ("APPROVED - " <> show quorumSize <> " YES, 0 NO, " <> show absentSize
+        <> " ABSENT. The decision itself is valid and is not in question.")
+      resolutionEvidence 0 witnesses "After RESOLUTION"
+      case executions of
+        [execution] -> do
+          phase 0 "EXPECTED REJECTION"
+          business 0 ("The agenda pinned registry state v1; the live registry is v"
+            <> show registry.version <> ".")
+          expectedRefusal 0 "Expected: applying a decision written against a superseded rule book must be refused."
+          expectedRefusal 0 "What is refused is the EXECUTION, not the vote: no ballot or verdict is undone."
+          let targets reference = Map.singleton (registryKey state.opener)
+                (coerceContractId reference)
+          outcome <- trySubmit state.opener $ exerciseCmd execution Executable_Execute with
+            actors = [state.opener]; targetCids = targets registryRef; extraArgs = extra
+          case outcome of
+            Left err -> do
+              rejected 0 (who state.opener <> " exercises Executable_Execute on the optional "
+                <> "stale execution " <> cid execution <> " (snapshot v1 vs live v"
+                <> show registry.version <> ")") (show err)
+              debug "[STEP OPT-1] BLOCKED as expected: snapshot drift on the registry target"
+              expectedRefusal 0 "Actual: REJECTED. The target had drifted from the snapshot the agenda pinned."
+              expectedRefusal 0 "Reason unverified by code; the full participant error is in the technical log."
+            Right _ -> abort "the stale execution unexpectedly succeeded"
+        _ -> abort "expected exactly one execution from an affirmative resolve"
+      -- The rule book must be untouched by the refusal.
+      Some stillThere <- queryContractId state.opener registryRef
+      assert (stillThere.version == registry.version)
+      finalState 0 witnesses
+        ("the round was APPROVED but NOT applied; rule book still at v"
+          <> show stillThere.version
+          <> ". The run anchor is unchanged, so the main journey can continue.")
+      pure "optional round 1 complete"
+    _ -> abort ("expected exactly one visible RuleRegistry; found "
+      <> show (length liveRegistries))
+
+-- Match opener-signed ledger evidence; ledger state cannot identify the external client.
+validateIntake : Party -> Text -> Agenda -> Time -> [AgendaProposal] -> [(ContractId AgendaAction, AgendaAction)] -> Bool
+validateIntake opener roundId agenda now proposals actions = case proposals of
+  [p] -> p.roundId == roundId && p.opener == opener && p.proposer == opener
+    && addRelTime now (seconds 10) <= p.closesAt
+    && case [a | (cid,a) <- actions, toInterfaceContractId cid == p.actionCid] of
+      [a] -> a.opener == opener && a.agenda == agenda && a.baseVersion == 0
+      _ -> False
+  _ -> False
+
+-- Wait for matching opener-signed evidence; never fall back to script submission.
+intakeTimedOut : Int -> [AgendaProposal] -> Bool
+intakeTimedOut remaining proposals = remaining <= 0 && null proposals
+
+awaitIntake : Party -> Text -> Agenda -> Int -> Script (ContractId AgendaProposal, Time)
+awaitIntake opener roundId agenda remaining = do
+  proposals <- query @AgendaProposal opener
+  let matches = [(cid,p) | (cid,p) <- proposals, p.roundId == roundId]
+  case matches of
+    [(proposal,p)] -> do
+      actions <- query @AgendaAction opener
+      now <- getTime
+      assertMsg "Intake evidence mismatch or less than 10 seconds remain before voting"
+        (validateIntake opener roundId agenda now [p] actions)
+      pure (proposal,p.closesAt)
+    [] -> if intakeTimedOut remaining [] then abort "Java Intake did not open requested round within bounded wait"
+      else do
+        sleep (seconds 1)
+        awaitIntake opener roundId agenda (remaining - 1)
+    _ -> abort "duplicate Intake round"
+
+intakeRequest : Party -> Text -> Text -> Text -> Int -> IntakeRequest
+intakeRequest opener runId sourceKey roundId windowSeconds = IntakeRequest with
+  opener; runId; sourceKey; roundId; windowSeconds; baseVersion = 0
+
+requestIntake : DemoAnchor -> Text -> Text -> Text -> Agenda -> Script (ContractId AgendaProposal, Time)
+requestIntake state runId sourceKey roundId agenda = do
+  existing <- query @IntakeRequest state.opener
+  assert (null existing)
+  rounds <- query @AgendaProposal state.opener
+  assert (null [p | (_,p) <- rounds, p.roundId == roundId])
+  assertMsg "Intake voting window must exceed minimum remaining budget" (state.windowSeconds >= 15)
+  _ <- submit state.opener $ createCmd (intakeRequest state.opener runId sourceKey roundId state.windowSeconds)
+  debug ("[INTAKE] waiting for Java opener bridge round " <> roundId)
+  awaitIntake state.opener roundId agenda 120
+
+-- Active opener-visible candidate observations, not a remote snapshot or authority.
+sourceCatalogueCounts : Party -> Script (Int, Int, Int, Int)
+sourceCatalogueCounts opener = do
+  rows <- query @Cap.Examples.BabyCdf.SourceCatalogue.SourceItem opener
+  let items = [item | (_, item) <- rows, item.opener == opener]
+  let keys = Set.fromList [(item.opener, item.repo, item.observation.number) | item <- items]
+  let proposals = length [item | item <- items, item.observation.kind == Cap.Examples.BabyCdf.SourceCatalogue.SourceProposal]
+  let milestones = length [item | item <- items, item.observation.kind == Cap.Examples.BabyCdf.SourceCatalogue.SourceMilestone]
+  pure (length items, Set.size keys, proposals, milestones)
+
+sourceCatalogueEvidence : Party -> Script ()
+sourceCatalogueEvidence opener = do
+  (active, keys, proposals, milestones) <- sourceCatalogueCounts opener
+  debug ("[EVIDENCE] SourceItem active contracts=" <> show active
+    <> "; distinct keys=" <> show keys
+    <> "; SourceProposal=" <> show proposals <> "; SourceMilestone=" <> show milestones)
+  debug "[EVIDENCE] Active now; visible to opener only; distinct (opener, repository, number) keys. Zero is valid while ingestion may still be running. Sync completeness unknown."
+  debug "[EVIDENCE] Persisted candidate observations carry observed/updated provenance, not a verified GitHub snapshot. Catalogue items are separate from the two curated governed subjects; ingestion creates no voting authority."
+
 proposalVote : Text -> Script Text
 proposalVote runId = do
   (anchorCid,state) <- findAnchor runId 2
+  stepHeading 3 "PROPOSAL REVIEW AND VOTE"
+  let witnesses = [state.opener, state.member]
+  initialState 3 witnesses
+  sourceCatalogueEvidence state.opener
+  phase 3 "PROPOSAL"
+  business 3 "Subject: Unlockit CAP Development Fund proposal, judged under rule v2."
+  business 3 ("Document: " <> proposalSubject.url)
+  business 3 ("Pinned by content, not title: Git blob " <> abbreviate 10 proposalBlob
+    <> ". Different bytes would be a different document and this vote would not apply.")
+  business 3 "Funding figures are not restated here; they are in the pinned document."
+  business 3 "Expected Reviewer recommendation under v2: APPROVE."
+  business 3 "Caveat: expected, not observed. This script never reads the agent's output."
+  business 3 "The votes are scripted and are not guided by any agent opinion."
   debug ("[STEP 3] proposal PR184 pinned blob " <> proposalBlob)
-  now <- getTime
-  debug ("[TIMING] proposal vote opens " <> show now)
-  let closesAt = now `addRelTime` seconds state.windowSeconds
-  proposal <- submit state.member $ exerciseCmd state.governor ProposeAgenda with
-    proposer = state.member; roundId = runId <> ":grant"
-    agenda = Grant proposalSubject; baseVersion = 0; closesAt
-  action 3 (who state.member <> " exercises AgendaGovernor.ProposeAgenda (round " <> runId
-    <> ":grant, subject PR#184 blob " <> abbreviate 10 proposalBlob <> ")")
+  (proposal,closesAt) <- requestIntake state runId "proposal-184" (runId <> ":grant") (Grant proposalSubject)
+  action 3 "Java Intake as opener exercises IntakeRequest.OpenAgenda; ledger bridge proposes pinned grant"
     ("AgendaProposal " <> cid proposal)
-  ballots <- submit state.opener $ exerciseCmd proposal InviteBallots
-  action 3 (who state.opener <> " exercises AgendaProposal.InviteBallots on " <> cid proposal)
-    (show (length ballots) <> " AgendaBallot contracts")
-  voted <- forA ballots $ \ballotCid -> do
-    Some ballot <- queryContractId state.opener ballotCid
-    cast <- submit ballot.voter $ exerciseCmd ballotCid CastAgendaVote with option = Count.Voted Yes
-    action 3 (who ballot.voter <> " exercises AgendaBallot.CastAgendaVote on " <> cid ballotCid
-      <> " \x2192 Voted Yes") ("new ballot " <> cid cast)
-    pure cast
+  phase 3 "VOTING"
+  business 3 "Ballots issued to all 7; the whole electorate is entitled to vote."
+  let voters = coreQuorum quorumSize state.core
+      rights = presentedRights voters state.credentials
+  assert (length voters == quorumSize && length rights == quorumSize)
+  business 3 (show quorumSize <> " core YES, " <> show absentSize <> " ABSENT, as in step 2.")
+  ballots <- inviteBallotsFor 3 state.opener proposal
+  votingEvidence 3 witnesses "After ballots issued, before any cast"
+  voted <- castYesBy 3 state.opener voters ballots
+    ("approve CAP Development Fund proposal blob " <> abbreviate 10 proposalBlob
+      <> " under architecture-review v2")
   castAt <- getTime
   debug ("[TIMING] proposal last cast " <> show castAt)
-  debug "[STEP 3] expected tally 7 Yes / 0 No / 0 abstained"
+  debug ("[STEP 3] expected tally " <> show quorumSize <> " Yes / 0 No / 0 abstained / "
+    <> show absentSize <> " absent")
+  votingEvidence 3 witnesses "After casting"
+  business 3 (show quorumSize <> " YES, 0 NO, " <> show absentSize
+    <> " ABSENT. Waiting for the window to close before counting.")
   waitUntilClosed closesAt
   sleep (seconds 3)
+  phase 3 "RESOLUTION"
+  business 3 "Window closed. Each vote is checked against its caster's credential."
   Resolution verdict [execution] <- submit state.opener $ exerciseCmd state.governor ResolveAgenda with
-    proposalCid = proposal; ballotCids = voted; rights = state.credentials
+    proposalCid = proposal; ballotCids = voted; rights
   action 3 (who state.opener <> " exercises AgendaGovernor.ResolveAgenda (" <> show (length voted)
-    <> " ballots, " <> show (length state.credentials) <> " credentials)")
+    <> " ballots, " <> show (length rights) <> " credentials)")
     (show verdict <> "; execution " <> cid execution)
   assert (verdict == Count.Decided Yes)
+  decision 3 ("APPROVED - " <> show quorumSize <> " YES, 0 NO, " <> show absentSize
+    <> " ABSENT. Quorum " <> show quorumSize <> "/" <> show quorumSize <> "; majority "
+    <> show quorumSize <> "/" <> show quorumSize <> ".")
+  decision 3 "Deciding and recording are separate acts; the approval is recorded next."
+  resolutionEvidence 3 witnesses "After RESOLUTION"
+  phase 3 "EXECUTION"
   result <- submit state.opener $ exerciseCmd execution Executable_Execute with
     actors = [state.opener]; targetCids = Map.empty; extraArgs = extra
   let [raw] = result.created
@@ -353,30 +1090,43 @@ proposalVote runId = do
   Some approved <- queryContractId state.member (coerceContractId raw : ContractId ApprovedGrantProposal)
   assert (approved.proposal == proposalSubject)
   debug ("[STEP 3] Decided Yes; ApprovedGrantProposal recorded " <> show raw)
+  outcomeLine 3 "ApprovedGrantProposal recorded, naming the document by content fingerprint."
+  outcomeLine 3 "Caveat: NOT a payment. No money moved, no budget committed, nobody invoiced."
   advance anchorCid state 3
   debug "[STEP 3] signed DemoAnchor advanced to step 3"
+  outcomeEvidence 3 witnesses "After EXECUTION"
+  finalState 3 witnesses
+    ("the pinned proposal was APPROVED by " <> show quorumSize <> " core YES / "
+      <> show absentSize <> " ABSENT and recorded as an ApprovedGrantProposal; no payment.")
   pure "step 3 complete"
 
 milestoneVote : Text -> Script Text
 milestoneVote runId = do
   (anchorCid,state) <- findAnchor runId 3
+  stepHeading 4 "MILESTONE REVIEW AND VOTE"
+  let witnesses = [state.opener, state.member]
+  initialState 4 witnesses
+  sourceCatalogueEvidence state.opener
+  phase 4 "SUBJECT"
+  business 4 ("Milestone tracked publicly as issue #540: " <> milestoneSubject.url)
+  business 4 "Caveat: a GitHub issue can be edited, so the link alone pins nothing."
+  business 4 "The vote is therefore on a curated ILLUSTRATIVE revision, demo-only."
+  business 4 "Caveat: no claim that #540 was submitted, accepted, paid or certified."
   debug "[STEP 4] review is advisory: issue text is not an immutable pin; the hard-coded agenda pin gates approval"
+  phase 4 "ADVISORY REVIEW"
   application <- submit state.member $ exerciseCmd state.rule ApplyRule with
     subject = milestoneSubject; reviewer = state.member
   action 4 (who state.member <> " exercises EffectiveRule.ApplyRule on " <> cid state.rule
     <> " (subject milestone)") ("RuleApplication " <> cid application)
   Some review <- queryContractId state.member application
-  forA_ review.findings $ \finding ->
-    debug ("[STEP 4] " <> finding.clauseId <> ": " <> show finding.status)
-  -- Milestone evidence contains executionClause.expected only, so neither the
-  -- composition excerpt nor the v2 auditable-state excerpt matches it. Review
-  -- findings do not gate the agenda choice.
-  assert ([(f.clauseId, f.status) | f <- review.findings] ==
-    [ ("compose-with-asset-layer", InsufficientEvidence)
-    , ("governance-execution-hooks", Pass)
-    , ("auditable-state-and-acceptance", InsufficientEvidence) ])
+  assert (review.draft.ruleRef == state.proposedRuleRef && null review.findings)
+  business 4 "RuleApplication records the approved rule reference only; interpretation is off-ledger."
+  business 4 "Caveat: Java findings are ADVISORY. They neither block nor permit anything."
   now <- getTime
   let closesAt = now `addRelTime` seconds state.windowSeconds
+  phase 4 "SAFETY CHECK: UNPINNED SUBJECT"
+  business 4 "What controls the outcome is the agenda pin: only an exact revision may be voted on."
+  expectedRefusal 4 "Expected: a vote on the bare editable issue link must be refused."
   refused <- trySubmit state.member $ exerciseCmd state.governor ProposeAgenda with
     proposer = state.member; roundId = runId <> ":unpinned-milestone"
     agenda = Milestone milestoneSubject; baseVersion = 0; closesAt
@@ -385,35 +1135,51 @@ milestoneVote runId = do
       rejected 4 (who state.member <> " exercises AgendaGovernor.ProposeAgenda (round " <> runId
         <> ":unpinned-milestone, unpinned milestone subject)") (show err)
       debug "[STEP 4] BLOCKED as expected: unpinned milestone approval; reason unverified by code"
+      expectedRefusal 4 "Actual: REJECTED. Reason unverified by code (shared with the window check)."
     Right _ -> abort "unpinned milestone accepted"
   debug "[STEP 4] only the curated illustrative revision matches the agenda pin; findings do not gate this vote"
-  proposal <- submit state.member $ exerciseCmd state.governor ProposeAgenda with
-    proposer = state.member; roundId = runId <> ":illustrative-milestone"
-    agenda = Milestone illustrativeMilestone; baseVersion = 0; closesAt
-  action 4 (who state.member <> " exercises AgendaGovernor.ProposeAgenda (round " <> runId
-    <> ":illustrative-milestone, curated illustrative revision)") ("AgendaProposal " <> cid proposal)
+  phase 4 "PROPOSAL"
+  business 4 "Java Intake opens only the curated illustrative revision; it has a fresh ledger-derived window."
+  business 4 "The unpinned refusal above is not treated as proof of its rejection reason."
+  (proposal,closesAt) <- requestIntake state runId "milestone-540" (runId <> ":illustrative-milestone") (Milestone illustrativeMilestone)
+  action 4 "Java Intake as opener exercises IntakeRequest.OpenAgenda; ledger bridge proposes curated milestone"
+    ("AgendaProposal " <> cid proposal)
   proposedAt <- getTime
   debug ("[TIMING] milestone proposal accepted " <> show proposedAt)
-  ballots <- submit state.opener $ exerciseCmd proposal InviteBallots
-  action 4 (who state.opener <> " exercises AgendaProposal.InviteBallots on " <> cid proposal)
-    (show (length ballots) <> " AgendaBallot contracts")
-  voted <- forA ballots $ \ballotCid -> do
-    Some ballot <- queryContractId state.opener ballotCid
-    cast <- submit ballot.voter $ exerciseCmd ballotCid CastAgendaVote with option = Count.Voted Yes
-    action 4 (who ballot.voter <> " exercises AgendaBallot.CastAgendaVote on " <> cid ballotCid
-      <> " \x2192 Voted Yes") ("new ballot " <> cid cast)
-    pure cast
+  phase 4 "VOTING"
+  business 4 "Ballots issued to all 7."
+  business 4 "Expected Reviewer finding: BLOCKED (no immutable evidence). Expected, not observed."
+  let voters = coreQuorum quorumSize state.core
+      rights = presentedRights voters state.credentials
+  assert (length voters == quorumSize && length rights == quorumSize)
+  ballots <- inviteBallotsFor 4 state.opener proposal
+  votingEvidence 4 witnesses "After ballots issued, before any cast"
+  voted <- castYesBy 4 state.opener voters ballots
+    "accept curated illustrative revision of milestone #540"
   castAt <- getTime
   debug ("[TIMING] milestone last cast " <> show castAt)
-  debug "[STEP 4] expected tally 7 Yes / 0 No / 0 abstained"
+  debug ("[STEP 4] expected tally " <> show quorumSize <> " Yes / 0 No / 0 abstained / "
+    <> show absentSize <> " absent")
+  votingEvidence 4 witnesses "After casting"
+  business 4 (show quorumSize <> " YES, 0 NO, " <> show absentSize <> " ABSENT.")
+  business 4 "The uncomfortable part: the members approve despite unproven findings."
+  business 4 "Advisory findings have no veto. Members remain accountable for their decision."
   waitUntilClosed closesAt
   sleep (seconds 3)
+  phase 4 "RESOLUTION"
+  business 4 "Window closed. Counting now."
   Resolution verdict [execution] <- submit state.opener $ exerciseCmd state.governor ResolveAgenda with
-    proposalCid = proposal; ballotCids = voted; rights = state.credentials
+    proposalCid = proposal; ballotCids = voted; rights
   action 4 (who state.opener <> " exercises AgendaGovernor.ResolveAgenda (" <> show (length voted)
-    <> " ballots, " <> show (length state.credentials) <> " credentials)")
+    <> " ballots, " <> show (length rights) <> " credentials)")
     (show verdict <> "; execution " <> cid execution)
   assert (verdict == Count.Decided Yes)
+  decision 4 ("APPROVED - " <> show quorumSize <> " YES, 0 NO, " <> show absentSize
+    <> " ABSENT. Quorum " <> show quorumSize <> "/" <> show quorumSize <> "; majority "
+    <> show quorumSize <> "/" <> show quorumSize <> ".")
+  decision 4 "The findings did not change the outcome either way; the members did."
+  resolutionEvidence 4 witnesses "After RESOLUTION"
+  phase 4 "EXECUTION"
   result <- submit state.opener $ exerciseCmd execution Executable_Execute with
     actors = [state.opener]; targetCids = Map.empty; extraArgs = extra
   let [raw] = result.created
@@ -422,8 +1188,15 @@ milestoneVote runId = do
   Some approved <- queryContractId state.member (coerceContractId raw : ContractId ApprovedMilestone)
   assert (approved.milestone == illustrativeMilestone)
   debug ("[STEP 4] Decided Yes; illustrative ApprovedMilestone recorded " <> show raw)
+  outcomeLine 4 "ApprovedMilestone recorded for the ILLUSTRATIVE revision."
+  outcomeLine 4 "Caveat: not a statement that #540 was delivered, certified or paid."
   advance anchorCid state 4
   debug "[STEP 4] signed DemoAnchor advanced to step 4"
+  outcomeEvidence 4 witnesses "After EXECUTION"
+  finalState 4 witnesses
+    ("the illustrative milestone revision was ACCEPTED by " <> show quorumSize
+      <> " core YES / " <> show absentSize
+      <> " ABSENT despite 2 of 3 advisory findings being unproven; findings advise, the pin constrains, members decide.")
   pure "step 4 complete"
 
 -- Step 5 runs the real Splice allocation choice on wall-clock time, with no
@@ -437,10 +1210,6 @@ milestoneVote runId = do
 -- must equal the submitting fundManager and the amount must be covered.
 couponTick : RelTime
 couponTick = seconds 20
-
--- Positional helper for the quorum case; [0 :: Int ..] is not available here.
-indices : [Int]
-indices = [0, 1, 2, 3, 4, 5, 6]
 
 -- A resolve can be stamped with a ledger time behind the script's own clock,
 -- for example when the container host is suspended mid-run and Canton resumes
@@ -472,6 +1241,14 @@ resolveWhenClosed attempt opener governor proposalCid ballotCids rights = do
 couponAllocate : Text -> Script Text
 couponAllocate runId = do
   (anchorCid,state) <- findAnchor runId 4
+  stepHeading 5 "COUPON ALLOCATION"
+  let witnesses = [state.opener, state.member]
+  initialState 5 witnesses
+  phase 5 "SETUP"
+  business 5 "Shows what an approved decision can hand to the money side, and where it stops."
+  business 5 "Three synthetic roles: issuer (DSO), configured fund manager, beneficiary."
+  business 5 "Allocating a Development Fund coupon: an entitlement voucher, not coins."
+  business 5 "Caveat: NOT a mint, NOT a payment. The beneficiary collects nothing."
   debug "[STEP 5] sandbox-local AmuletRules; the DSO, manager and beneficiary are synthetic demo parties"
   debug "[STEP 5] this allocates a DevelopmentFundCoupon only; it is NOT a payment and NOT a mint"
   -- The approved milestone from step 4 is the stated reason only. It carries no
@@ -537,6 +1314,11 @@ couponAllocate runId = do
   let Some source = issued.unclaimedDevelopmentFundCouponCid
   Some unclaimed <- queryContractId dso source
   debug ("[STEP 5] issuance produced an UnclaimedDevelopmentFundCoupon of " <> show unclaimed.amount)
+  business 5 ("Network issuance, not this demo, produced an unclaimed pot of "
+    <> show unclaimed.amount <> ". The manager may allocate only out of that pot.")
+  couponEvidence 5 dso beneficiary "After issuance, before any allocation"
+  phase 5 "SAFETY CHECK: WRONG MANAGER AND OVER-AMOUNT"
+  business 5 "Two bad allocations are tried first, so the boundaries are visible."
   now <- getTime
   let amount = 1.0
       expiresAt = now `addRelTime` hours 2
@@ -548,6 +1330,8 @@ couponAllocate runId = do
         unclaimedDevelopmentFundCouponCids = [source]
         beneficiary; amount = requestedAmount; expiresAt; reason; fundManager
   assert (unclaimed.amount >= amount)
+  expectedRefusal 5 ("Expected 1: " <> name wrongManager
+    <> " is not the configured manager. Seeing the fund is not being entitled to spend it.")
   wrong <- trySubmit (actAs wrongManager <> readAs dso) $ allocate wrongManager amount
   case wrong of
     Left err -> do
@@ -556,7 +1340,10 @@ couponAllocate runId = do
       -- Splice's own require text, stable in this pinned package version.
       assert (isInfixOf "configured Development Fund manager" (show err))
       debug "[STEP 5] BLOCKED as expected: submitter is not the configured Development Fund manager, asserted"
+      expectedRefusal 5 "Actual: REJECTED - must be the configured Development Fund manager (asserted)."
     Right _ -> abort "wrong manager allocated"
+  expectedRefusal 5 ("Expected 2: the correct manager asks for " <> show (unclaimed.amount + 1.0)
+    <> " when only " <> show unclaimed.amount <> " exists. The right role does not create funds.")
   over <- trySubmit (actAs manager <> readAs dso) $ allocate manager (unclaimed.amount + 1.0)
   case over of
     Left err -> do
@@ -564,7 +1351,12 @@ couponAllocate runId = do
         <> show (unclaimed.amount + 1.0) <> " exceeds " <> show unclaimed.amount <> ")") (show err)
       assert (isInfixOf "insufficient amount to cover the requested allocation" (show err))
       debug "[STEP 5] BLOCKED as expected: requested amount exceeds the unclaimed coupon, asserted"
+      expectedRefusal 5 "Actual: REJECTED - insufficient amount to cover the request (asserted)."
     Right _ -> abort "over-amount allocation accepted"
+  couponEvidence 5 dso beneficiary "After both refusals (nothing allocated)"
+  phase 5 "ALLOCATION"
+  business 5 ("The configured manager allocates " <> show amount <> " to the beneficiary.")
+  business 5 "Reason cites the step-4 sandbox milestone as provenance only; it confers nothing."
   debug ("[STEP 5] allocating " <> show amount <> " to the beneficiary, reason cites the sandbox milestone")
   result <- submit (actAs manager <> readAs dso) $ allocate manager amount
   action 5 (who manager <> " exercises AmuletRules_AllocateDevelopmentFundCoupon (amount "
@@ -578,27 +1370,53 @@ couponAllocate runId = do
   assert (leftover.amount == unclaimed.amount - amount)
   debug ("[STEP 5] verified DevelopmentFundCoupon " <> show result.developmentFundCouponCid
     <> "; leftover unclaimed " <> show leftover.amount)
+  outcomeLine 5 ("Recorded: coupon for " <> show amount
+    <> " to the beneficiary. Beneficiary, amount, manager and reason all read back and checked.")
+  outcomeLine 5 ("Pot reduced by exactly that amount: " <> show leftover.amount <> " unclaimed.")
   debug "[STEP 5] no Amulet was minted and no beneficiary collection was performed"
+  outcomeLine 5 "Caveat: no coins minted, nothing collected. Turning this into money is out of scope."
   advance anchorCid state 5
   debug "[STEP 5] signed DemoAnchor advanced to step 5"
+  couponEvidence 5 dso beneficiary "After ALLOCATION"
+  finalState 5 witnesses
+    ("a DevelopmentFundCoupon for " <> show amount
+      <> " was allocated by the configured manager after two refusals; the unclaimed pot fell to "
+      <> show leftover.amount <> ". No mint, no payment, nothing collected.")
   pure "step 5 complete"
 
--- Step 6 demonstrates four refusals with real submissions. Earlier approved
--- results are never mutated: each case opens its own throwaway round, and the
--- only contracts consumed are the ones the blocked attempt itself creates.
-blockedPaths : Text -> Script Text
-blockedPaths runId = do
-  (anchorCid,state) <- findAnchor runId 5
-  debug "[STEP 6] four refusals, each a real ledger submission with the printed participant error"
-  let members = map fst state.credentials
+-- Independent security fixtures. Each allocates its own round and ballots;
+-- bootstrap is sufficient, and no fixture consumes or replaces the run anchor.
+credentialRefusals : Text -> Script Text
+credentialRefusals = credentialRefusalsWith waitUntilClosed
+
+credentialRefusalsWith : (Time -> Script ()) -> Text -> Script Text
+credentialRefusalsWith closeWindow runId = do
+  (_,state) <- findAnchorAtLeast runId 1
+  stepHeading 6 "OPTIONAL 2: CREDENTIAL BOUNDARIES"
+  phase 6 "INDEPENDENT FIXTURE (BOOTSTRAP SUFFICIENT)"
+  business 6 "Wrong consortium reaches validation; foreign issuer hits lookup privacy."
+  business 6 "Lookup privacy is NOT proof of issuer-authority enforcement."
+  debug "[OPTIONAL 2] independent credential fixture; no main anchor mutation"
+  let witnesses = [state.opener, state.member]
+      members = map fst state.credentials
+      quorateVoters = coreQuorum quorumSize state.core
+      shortVoters = coreQuorum belowQuorumSize state.core
+  assert (length quorateVoters == quorumSize && length shortVoters == belowQuorumSize)
   -- Case 1: two invalid credentials, both resolved against the same closed
   -- proposal. ResolveAgenda is nonconsuming and only archives the proposal on
   -- success, so a refused attempt leaves the round reusable for the next one.
   debug "[STEP 6] case 1: invalid and foreign credentials presented at resolution"
+  phase 6 "CASE 1: WRONG CREDENTIALS"
+  business 6 "Somebody tries to get a vote counted with the wrong paperwork."
+  business 6 "Two variants: a wrong-consortium credential, and a foreign issuer's."
+  outcomeEvidence 6 witnesses "Before case 1"
   foreignCdf <- allocateParty "babycdf-foreign-issuer"
   action 6 ("allocate party " <> who foreignCdf) "allocated (issuer outside this consortium)"
   now0 <- getTime
-  let (voter :: _) = members
+  -- The substituted credential must belong to a member who actually votes in
+  -- this round: a credential presented for an absent member is refused for
+  -- that reason alone and would prove nothing about the credential check.
+  let (voter :: _) = quorateVoters
   foreignInvite <- submit foreignCdf $ createCmd VotingRightInvitation with
     cdf = foreignCdf; consortiumId = "foreign-consortium"
     member = voter; expiresAt = now0 `addRelTime` hours 1
@@ -623,23 +1441,21 @@ blockedPaths runId = do
     agenda = Grant proposalSubject; baseVersion = 0; closesAt = closes1
   action 6 (who state.member <> " exercises AgendaGovernor.ProposeAgenda (round " <> runId
     <> ":blocked-foreign)") ("AgendaProposal " <> cid p1)
-  b1 <- submit state.opener $ exerciseCmd p1 InviteBallots
-  action 6 (who state.opener <> " exercises AgendaProposal.InviteBallots on " <> cid p1)
-    (show (length b1) <> " AgendaBallot contracts")
-  v1 <- forA b1 $ \ballotCid -> do
-    Some ballot <- queryContractId state.opener ballotCid
-    cast <- submit ballot.voter $ exerciseCmd ballotCid CastAgendaVote with option = Count.Voted Yes
-    action 6 (who ballot.voter <> " exercises AgendaBallot.CastAgendaVote on " <> cid ballotCid
-      <> " \x2192 Voted Yes") ("new ballot " <> cid cast)
-    pure cast
-  waitUntilClosed closes1
+  b1 <- inviteBallotsFor 6 state.opener p1
+  business 6 ("A normal quorate round: " <> show quorumSize <> " core YES, "
+    <> show absentSize <> " ABSENT. The votes are legitimate; the paperwork will not be.")
+  v1 <- castYesBy 6 state.opener quorateVoters b1 "grant round used for the bad-credential test"
+  closeWindow closes1
   sleep (seconds 3)
-  let substitute right =
-        [if m == voter then (m, right) else (m, r) | (m, r) <- state.credentials]
+  let validRights = presentedRights quorateVoters state.credentials
+      substitute right = [if m == voter then (m, right) else (m, r) | (m, r) <- validRights]
   -- Guard: if the window were still open, ResolveAgenda would refuse for that
   -- reason alone and these two cases would prove nothing about credentials.
   beforeCase1 <- getTime
   assert (beforeCase1 >= closes1)
+  business 6 "Window confirmed closed first, so a refusal cannot just mean 'too early'."
+  expectedRefusal 6 ("Expected 1: a different consortium's credential substituted for "
+    <> name voter <> ". Membership of one group is not membership of another.")
   r1a <- trySubmit state.opener $ exerciseCmd state.governor ResolveAgenda with
     proposalCid = p1; ballotCids = v1; rights = substitute (DirectRight wrongRight)
   case r1a of
@@ -650,7 +1466,11 @@ blockedPaths runId = do
       -- RightKey carrying the consortium, so a mismatch is reported by name.
       assert (isInfixOf "Contract group identifier mismatch" (show err))
       debug "[STEP 6] BLOCKED as expected: wrong-consortium credential, mismatch asserted from the participant message"
+      expectedRefusal 6 "Actual: REJECTED by the credential check - group identifier mismatch (asserted)."
     Right _ -> abort "wrong-consortium credential accepted"
+  hiddenRight <- queryContractId state.opener foreignRight
+  assert (hiddenRight == None)
+  expectedRefusal 6 "Expected 2: a foreign issuer's credential substituted instead; not visible to opener (queried)."
   r1b <- trySubmit state.opener $ exerciseCmd state.governor ResolveAgenda with
     proposalCid = p1; ballotCids = v1; rights = substitute (DirectRight foreignRight)
   case r1b of
@@ -662,10 +1482,37 @@ blockedPaths runId = do
       -- Only the window reason is excluded; the exact text is not asserted.
       assert (not (isInfixOf "voting still open" (show err)))
       debug "[STEP 6] BLOCKED as expected: foreign-issuer credential unusable here, and not refused for the window; reason unverified by code"
+      expectedRefusal 6 "Actual: REJECTED by a DIFFERENT boundary - privacy, not governance."
+      expectedRefusal 6 "The foreign credential is invisible here, so it failed as a lookup."
+      expectedRefusal 6 "Proven positively: the refusal was not 'voting still open'. Wording not asserted."
     Right _ -> abort "foreign credential accepted"
+  outcomeEvidence 6 witnesses "After case 1 (no new approval or execution)"
   -- Case 2: quorum is atLeastPresent 3, so two casts cannot decide. The engine
   -- returns Lapsed rather than failing, so this reason IS asserted in code.
-  debug "[STEP 6] case 2: only two of seven cast, below the atLeastPresent 3 quorum"
+  -- This is the deliberate near-miss of the positive steps: the same kind of
+  -- round, with the same kind of voters and valid credentials, one vote short.
+  pure runId
+
+-- Bootstrap is sufficient; this fixture never advances the main anchor.
+noQuorum : Text -> Script Text
+noQuorum = noQuorumWith waitUntilClosed
+
+noQuorumWith : (Time -> Script ()) -> Text -> Script Text
+noQuorumWith closeWindow runId = do
+  (_,state) <- findAnchorAtLeast runId 1
+  stepHeading 6 "OPTIONAL 3: NO QUORUM"
+  let witnesses = [state.opener, state.member]
+      shortVoters = coreQuorum belowQuorumSize state.core
+  assert (length shortVoters == belowQuorumSize)
+  debug ("[STEP 6] case 2: only " <> show belowQuorumSize
+    <> " of seven cast, below the atLeastPresent 3 quorum")
+  phase 6 "CASE 2: NO QUORUM"
+  business 6 ("Too few turn up: " <> show belowQuorumSize <> " core YES, "
+    <> show (7 - belowQuorumSize) <> " ABSENT. Quorum needs " <> show quorumSize <> ".")
+  business 6 "Deliberately the approved round, one vote lighter. Credentials genuine, both YES."
+  business 6 "Only the attendance differs from steps 2-4."
+  expectedRefusal 6 ("Expected: " <> show belowQuorumSize
+    <> " of 7 present must not decide, even though all present voted YES.")
   -- Each case re-reads the clock after the previous one, so its own window is
   -- always opened fresh; otherwise the earlier attempts eat into the margin and
   -- ResolveAgenda refuses with "voting still open".
@@ -676,22 +1523,14 @@ blockedPaths runId = do
     agenda = Grant proposalSubject; baseVersion = 0; closesAt = closes2
   action 6 (who state.member <> " exercises AgendaGovernor.ProposeAgenda (round " <> runId
     <> ":blocked-quorum)") ("AgendaProposal " <> cid p2)
-  b2 <- submit state.opener $ exerciseCmd p2 InviteBallots
-  action 6 (who state.opener <> " exercises AgendaProposal.InviteBallots on " <> cid p2)
-    (show (length b2) <> " AgendaBallot contracts")
-  v2 <- forA (zip b2 indices) $ \(ballotCid, index) ->
-    if index < 2 then do
-      Some ballot <- queryContractId state.opener ballotCid
-      cast <- submit ballot.voter $ exerciseCmd ballotCid CastAgendaVote with option = Count.Voted Yes
-      action 6 (who ballot.voter <> " exercises AgendaBallot.CastAgendaVote on " <> cid ballotCid
-        <> " \x2192 Voted Yes") ("new ballot " <> cid cast)
-      pure cast
-    else do
-      action 6 ("no cast for ballot " <> cid ballotCid <> " (deliberately absent voter)") "Absent"
-      pure ballotCid
-  waitUntilClosed closes2
+  b2 <- inviteBallotsFor 6 state.opener p2
+  votingEvidence 6 witnesses "Case 2: after ballots issued, before any cast"
+  v2 <- castYesBy 6 state.opener shortVoters b2 "grant round used for the quorum test"
+  votingEvidence 6 witnesses "Case 2: after casting (one vote short of quorum)"
+  closeWindow closes2
   sleep (seconds 3)
-  let present2 = [(m, r) | ((m, r), index) <- zip state.credentials indices, index < 2]
+  let present2 = presentedRights shortVoters state.credentials
+  assert (length present2 == belowQuorumSize)
   -- Only this resolve is routed through the protected helper. The other
   -- resolves in steps 2-4 and case 1 use a plain submit, so a clock-lag
   -- refusal there still fails the run loudly rather than being retried.
@@ -703,9 +1542,28 @@ blockedPaths runId = do
   assert (verdict2 == Count.Lapsed && null executions2)
   debug ("[STEP 6] verdict " <> show verdict2 <> " with no executions")
   debug "[STEP 6] BLOCKED as expected: quorum not met, asserted as Lapsed in code"
+  decision 6 ("LAPSED - " <> show belowQuorumSize <> " YES, 0 NO, "
+    <> show (7 - belowQuorumSize) <> " ABSENT. Quorum " <> show belowQuorumSize <> "/"
+    <> show quorumSize <> " NOT met. 0 executions.")
+  decision 6 "Nothing was rejected and no transaction failed: the count simply did not decide."
+  decision 6 ("Side by side: " <> show quorumSize <> " present YES carried steps 2-4; "
+    <> show belowQuorumSize <> " present YES decides nothing. Attendance is checked first.")
+  decision 6 "A lapsed round is the absence of a decision, not a defeat. Asserted in code."
+  outcomeEvidence 6 witnesses "After case 2 (Lapsed: no execution, no new approval)"
   -- Case 3: a ballot already cast cannot be cast again; the invitation it came
   -- from is consumed by the first cast.
+  pure runId
+
+-- Own proposal and ballots: no dependency on any other optional fixture.
+doubleVote : Text -> Script Text
+doubleVote runId = do
+  (_,state) <- findAnchorAtLeast runId 1
+  stepHeading 6 "OPTIONAL 4: DOUBLE VOTE"
+  let witnesses = [state.opener, state.member]
   debug "[STEP 6] case 3: double vote on an already-consumed ballot"
+  phase 6 "CASE 3: DOUBLE VOTE"
+  business 6 "One member casts a valid vote, then tries to vote again on the same entitlement."
+  expectedRefusal 6 "Expected: one member, one vote. A spent ballot cannot be reused."
   now3 <- getTime
   let closes3 = now3 `addRelTime` seconds state.windowSeconds
   p3 <- submit state.member $ exerciseCmd state.governor ProposeAgenda with
@@ -713,21 +1571,25 @@ blockedPaths runId = do
     agenda = Grant proposalSubject; baseVersion = 0; closesAt = closes3
   action 6 (who state.member <> " exercises AgendaGovernor.ProposeAgenda (round " <> runId
     <> ":blocked-double)") ("AgendaProposal " <> cid p3)
-  b3 <- submit state.opener $ exerciseCmd p3 InviteBallots
-  action 6 (who state.opener <> " exercises AgendaProposal.InviteBallots on " <> cid p3)
-    (show (length b3) <> " AgendaBallot contracts")
+  b3 <- inviteBallotsFor 6 state.opener p3
   let (firstBallot :: _) = b3
   Some ballot3 <- queryContractId state.opener firstBallot
+  voteNarration 6 (name ballot3.voter <> ": YES on " <> roundName ballot3.roundId
+    <> " (valid, accepted)")
   cast3 <- submit ballot3.voter $ exerciseCmd firstBallot CastAgendaVote with option = Count.Voted Yes
   action 6 (who ballot3.voter <> " exercises AgendaBallot.CastAgendaVote on " <> cid firstBallot
     <> " \x2192 Voted Yes") ("new ballot " <> cid cast3)
+  voteNarration 6 (name ballot3.voter <> ": tries YES again on the same spent ballot")
   reused <- trySubmit ballot3.voter $ exerciseCmd firstBallot CastAgendaVote with option = Count.Voted Yes
   case reused of
     Left err -> do
       rejected 6 (who ballot3.voter <> " exercises AgendaBallot.CastAgendaVote on consumed ballot "
         <> cid firstBallot) (show err)
       debug "[STEP 6] BLOCKED as expected: the consumed ballot cannot be exercised twice"
+      expectedRefusal 6 "Actual: REJECTED. The spent ballot no longer exists to vote with."
     Right _ -> abort "consumed ballot accepted a second cast"
+  voteNarration 6 (name ballot3.voter <> ": tries to change the cast vote to NO")
+  expectedRefusal 6 "Expected: a cast vote is final within the round."
   recast <- trySubmit ballot3.voter $ exerciseCmd cast3 CastAgendaVote with option = Count.Voted No
   case recast of
     Left err -> do
@@ -736,11 +1598,29 @@ blockedPaths runId = do
       -- "already cast" is a stable assertMsg in CastAgendaVote, so assert it.
       assert (isInfixOf "already cast" (show err))
       debug "[STEP 6] BLOCKED as expected: already cast, asserted from the participant message"
+      expectedRefusal 6 "Actual: REJECTED - 'already cast' (asserted; the governance rule, not a side effect)."
     Right _ -> abort "already-cast ballot accepted another vote"
+  outcomeEvidence 6 witnesses "After case 3 (no new approval or execution)"
   -- Case 4: a party outside the electorate holds no ballot and cannot propose.
+  pure runId
+
+outsiderRefusals : Text -> Script Text
+outsiderRefusals runId = do
+  (_,state) <- findAnchorAtLeast runId 1
+  stepHeading 6 "OPTIONAL 5: OUTSIDER BOUNDARIES"
+  let witnesses = [state.opener, state.member]
+  now3 <- getTime
+  p3 <- submit state.member $ exerciseCmd state.governor ProposeAgenda with
+    proposer = state.member; roundId = runId <> ":blocked-outsider-ballot"
+    agenda = Grant proposalSubject; baseVersion = 0
+    closesAt = now3 `addRelTime` seconds state.windowSeconds
+  b3 <- inviteBallotsFor 6 state.opener p3
   debug "[STEP 6] case 4: non-member attempts to take part"
+  phase 6 "CASE 4: NON-MEMBER"
+  business 6 "An outsider tries to put an item to a vote, then to cast somebody else's ballot."
   outsider <- allocateParty "babycdf-non-member"
   action 6 ("allocate party " <> who outsider) "allocated (outside the electorate)"
+  expectedRefusal 6 "Expected 1: a non-member must not put an item on this agenda."
   stranger <- trySubmit outsider $ exerciseCmd state.governor ProposeAgenda with
     proposer = outsider; roundId = runId <> ":blocked-nonmember"
     agenda = Grant proposalSubject; baseVersion = 0
@@ -752,6 +1632,8 @@ blockedPaths runId = do
       -- The governor is not visible to a non-observer, so this refusal is a
       -- lookup failure; the "not a member" assertion is never reached.
       debug "[STEP 6] BLOCKED as expected: non-member cannot even see the governor; reason unverified by code"
+      expectedRefusal 6 "Actual: REJECTED by visibility, not the membership rule."
+      expectedRefusal 6 "The outsider cannot see the governor, so 'not a member' was never reached."
     Right _ -> abort "non-member proposed an agenda"
   -- A still-live ballot: case 3 consumed only the first one, so take a later
   -- ballot of the same round whose own voter has not cast it yet. Attempting a
@@ -762,6 +1644,8 @@ blockedPaths runId = do
   Some liveBefore <- queryContractId state.opener liveBallot
   assert (liveBefore.vote == Count.Absent && liveBefore.voter /= outsider)
   debug ("[STEP 6] the target ballot is live and uncast, owned by " <> show liveBefore.voter)
+  business 6 ("Target ballot is genuinely live and uncast, owned by " <> name liveBefore.voter <> ".")
+  expectedRefusal 6 "Expected 2: a non-member must not cast somebody else's vote."
   nonMemberCast <- trySubmit outsider $ exerciseCmd liveBallot CastAgendaVote with option = Count.Voted Yes
   case nonMemberCast of
     Left err -> do
@@ -770,18 +1654,61 @@ blockedPaths runId = do
       -- The ballot is an unconsumed contract whose observer is its own voter,
       -- so the outsider cannot see it and the refusal is a lookup failure.
       debug "[STEP 6] BLOCKED as expected: outsider cannot cast a live ballot it does not own; reason unverified by code"
+      expectedRefusal 6 "Actual: REJECTED by visibility again. Wording not asserted."
     Right _ -> abort "non-member cast a ballot"
   -- Prove the refusal left the ballot usable: its real voter still can cast.
+  unauthorized <- trySubmit (actAs outsider <> readAs state.opener) $ exerciseCmd state.governor ProposeAgenda with
+    proposer = outsider; roundId = runId <> ":blocked-unauthorized-proposer"
+    agenda = Grant proposalSubject; baseVersion = 0
+    closesAt = now3 `addRelTime` seconds state.windowSeconds
+  case unauthorized of
+    Left err -> do
+      rejected 6 "Outsider controller with opener read authority: ProposeAgenda" (show err)
+      assert (isInfixOf "not opener or eligible member" (show err))
+      expectedRefusal 6 "Actual: proposer authorization asserted, with visibility supplied by opener read authority."
+    Right _ -> abort "unauthorized proposer accepted with read authority"
   Some liveAfter <- queryContractId state.opener liveBallot
   assert (liveAfter.vote == Count.Absent)
+  voteNarration 6 (name liveBefore.voter <> ": YES on their own ballot (the one just refused to the outsider)")
   ownerCast <- submit liveBefore.voter $ exerciseCmd liveBallot CastAgendaVote with option = Count.Voted Yes
   action 6 (who liveBefore.voter <> " exercises AgendaBallot.CastAgendaVote on " <> cid liveBallot
     <> " \x2192 Voted Yes") ("new ballot " <> cid ownerCast)
   debug "[STEP 6] the same ballot was still castable by its own voter, so it was live when the outsider was refused"
-  -- The step-4 approval must still be intact and untouched by these attempts.
-  approvals <- query @ApprovedMilestone state.member
-  assert (any (\(_,a) -> a.milestone == illustrativeMilestone) approvals)
-  debug "[STEP 6] the step-4 ApprovedMilestone is still intact; no approved result was mutated"
-  advance anchorCid state 6
-  debug "[STEP 6] signed DemoAnchor advanced to step 6"
-  pure "step 6 complete"
+  outcomeLine 6 "That vote succeeded: the ballot was live throughout. The outsider was turned away for who they were."
+  outcomeEvidence 6 witnesses "Optional outsider fixture complete; main anchor untouched"
+  pure runId
+
+-- Legacy script entry point fails closed, just like the runner dispatch.
+blockedPaths : Text -> Script Text
+blockedPaths _ = abort "Step 6 retired; use independent optional rounds 2-5."
+
+-- Each entry point also runs alone from bootstrap, with an unchanged anchor.
+checkOptional : Text -> (Text -> Script Text) -> Script ()
+checkOptional runId optional = do
+  _ <- bootstrap (BootstrapInput runId 5 ruleRefV1 ruleRefV2)
+  before <- findAnchorAtLeast runId 1
+  result <- optional runId
+  after <- findAnchorAtLeast runId 1
+  assert (result == runId && before == after)
+
+optionalCredentialsStandalone : Script ()
+optionalCredentialsStandalone = checkOptional "optional-credentials-alone" (credentialRefusalsWith setTime)
+
+optionalQuorumStandalone : Script ()
+optionalQuorumStandalone = checkOptional "optional-quorum-alone" (noQuorumWith setTime)
+
+optionalDoubleStandalone : Script ()
+optionalDoubleStandalone = checkOptional "optional-double-alone" doubleVote
+
+optionalOutsiderStandalone : Script ()
+optionalOutsiderStandalone = checkOptional "optional-outsider-alone" outsiderRefusals
+
+optionalShuffled : Script ()
+optionalShuffled = do
+  let runId = "optional-shuffled"
+  _ <- bootstrap (BootstrapInput runId 5 ruleRefV1 ruleRefV2)
+  before <- findAnchorAtLeast runId 1
+  forA_ [outsiderRefusals, noQuorumWith setTime, credentialRefusalsWith setTime, doubleVote] $ \optional -> do
+    result <- optional runId
+    after <- findAnchorAtLeast runId 1
+    assert (result == runId && before == after)

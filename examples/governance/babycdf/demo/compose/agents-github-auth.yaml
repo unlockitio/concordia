@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: Apache-2.0
+# Same optional validated file secret as Intake; grants no publication capability.
+services:
+  advisory:
+    environment:
+      INTAKE_GITHUB_TOKEN_FILE: /run/secrets/intake_github_token
+    secrets:
+      - source: intake_github_token
+        target: /run/secrets/intake_github_token
+  reviewer:
+    environment:
+      INTAKE_GITHUB_TOKEN_FILE: /run/secrets/intake_github_token
+    secrets:
+      - source: intake_github_token
+        target: /run/secrets/intake_github_token
+secrets:
+  intake_github_token:
+    file: ${INTAKE_GITHUB_TOKEN_FILE:?Set an absolute host credential file path}

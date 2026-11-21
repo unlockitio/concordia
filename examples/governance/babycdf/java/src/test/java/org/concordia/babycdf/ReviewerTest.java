@@ -105,6 +105,11 @@ class ReviewerTest {
                                 .addElements(text("ledger required phrase")))))
                 .addFields(ValueOuterClass.RecordField.newBuilder().setLabel("forbiddenPhrases")
                         .setValue(ValueOuterClass.Value.newBuilder().setList(ValueOuterClass.List.newBuilder()))).build();
+        var reference=ValueOuterClass.Record.newBuilder()
+            .addFields(ValueOuterClass.RecordField.newBuilder().setLabel("location").setValue(text("rules/rule-v2.json")))
+            .addFields(ValueOuterClass.RecordField.newBuilder().setLabel("sha256").setValue(text(Advisory.RULE_SHA256)))
+            .addFields(ValueOuterClass.RecordField.newBuilder().setLabel("commit").setValue(ValueOuterClass.Value.newBuilder().setOptional(ValueOuterClass.Optional.getDefaultInstance()))).build();
+        draft=draft.toBuilder().addFields(ValueOuterClass.RecordField.newBuilder().setLabel("ruleRef").setValue(ValueOuterClass.Value.newBuilder().setRecord(reference))).build();
         ValueOuterClass.Record args = ValueOuterClass.Record.newBuilder()
                 .addFields(ValueOuterClass.RecordField.newBuilder().setLabel("draft")
                         .setValue(ValueOuterClass.Value.newBuilder().setRecord(draft)))
@@ -117,13 +122,9 @@ class ReviewerTest {
         assertEquals("#ledger-contract", rule.contractId());
         assertEquals("architecture-review", rule.ruleId());
         assertEquals(2, rule.version());
-        assertEquals("on-ledger", rule.clauses().get(0).id());
-        assertEquals("ledger quote", rule.clauses().get(0).expected());
-        assertEquals("other quote", rule.clauses().get(0).conflict());
-        // The voted text criterion must come from the ledger payload too.
-        assertEquals("ledger-stated criterion", rule.clauses().get(0).criterion());
-        assertEquals(List.of("ledger required phrase"), rule.clauses().get(0).requiredPhrases());
-        assertEquals(List.of(), rule.clauses().get(0).forbiddenPhrases());
+        assertEquals("rules/rule-v2.json",rule.ruleRef().location());
+        assertNull(rule.ruleFailure());
+        assertEquals("compose-with-asset-layer",rule.clauses().get(0).id());
         assertThrows(IOException.class, () -> Reviewer.LocalSandboxGateway.decode(
                 event.toBuilder().setCreateArguments(ValueOuterClass.Record.getDefaultInstance()).build()));
     }

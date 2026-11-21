@@ -420,6 +420,15 @@
 </style>
 </head>
 <body>
+<div style="position:relative;padding:8px 20px;background:#152535;color:#dcecff;font:14px sans-serif">Offline validated · live acceptance pending. Intake submits as opener via OpenAgenda; Advisory/Reviewer read only. Discovery: live catalogue ingestion by default, explicit offline synthetic fixture only, two curated voting topics. Bounded catalogue; live acceptance pending. Real opt-in LLM assessments are supplemental; ledger rules decide.</div>
+<!-- Current implementation note: three Java agents; Intake acts as opener via
+OpenAgenda in steps 3/4, Advisory/Reviewer read only. Anonymous sandbox rights are
+not an enforced security boundary. Catalogue ingestion uses live GitHub pagination by default; synthetic inventory
+requires explicit offline fixture mode. SourceItems are bounded candidate observations,
+not additional voting subjects; the two curated subjects remain unchanged. Steps 3/4 separately query active SourceItem contracts and proposal/milestone kinds
+as opener, with distinct ledger keys. Zero is valid; sync completeness is unknown.
+Persisted observations are not a verified GitHub snapshot. Client logs stay separately labeled. Real opt-in LLM responses are supplemental; deterministic and ledger
+checks retain authority. Offline validated, live participant acceptance pending. -->
 
 <div id="topbar">
   <span class="brand">BabyCDF — Voted rules, agentic review</span>
@@ -882,9 +891,9 @@
         <div class="kicker" style="color: var(--ok)">Happy paths</div>
         <ul class="tight">
           <li><b>Ledger-resident clause sets</b>: v1 fails on a missing required phrase; a vote activates the predefined v2, which passes</li>
-          <li><b>Deterministic literal phrase matching</b> against the pinned PR #184 text — no semantic or LLM evaluation</li>
+          <li><b>Deterministic literal phrase matching</b> against the pinned PR #184 text — authoritative checks stay deterministic; opt-in real LLM assessments are supplemental</li>
           <li>Recommendations <b>printed to the terminal and log only</b>; nothing is posted or published</li>
-          <li><b>Read-only agents</b>: <span class="mono">readAs</span> only, no <span class="mono">actAs</span>, so they cannot vote or submit</li>
+          <li><b>Demo readers</b>: state-query-only wiring, no vote or submission path; provisioned <span class="mono">CanReadAs opener</span> only. The unauthenticated API does not enforce these user rights as a caller boundary.</li>
           <li>Agenda, credentialed vote, quorum and tally → <b>ApprovedGrantProposal</b></li>
           <li>Milestone vote → real sandbox <b>DevelopmentFundCoupon</b> allocation (not a payment, not a mint)</li>
         </ul>
@@ -910,7 +919,11 @@
     </div>
     <aside class="notes">
       <h4>Speaker notes</h4>
-      Demo the refusals, not just the approvals. The blocked paths in the middle column run today
+      Demo the refusals, not just the approvals. Main all ends at step 5; independent
+      opt-step 2 credentials, 3 no quorum, 4 double vote, 5 outsider need only bootstrap
+      and leave the main anchor unchanged. Foreign credential invisibility is lookup privacy,
+      not proof of issuer authority. Outsider proposing with opener read authority separately
+      asserts the authorization guard. The blocked paths in the middle column run today
       and are the most persuasive part of the session. Be scrupulous about the third column:
       the unratified-change flag and the hash-mismatch block are planned design, not running code.
       If asked, say exactly that — the credibility of the whole deck rests on not blurring this line.
@@ -949,7 +962,7 @@
           <tr><td class="mark" style="color: var(--gh)">→</td><td>A rule-change agent watches the golden-copy repository</td></tr>
           <tr><td class="mark" style="color: var(--gh)">→</td><td>Reviewer fetches and hash-verifies the rules at the attested commit</td></tr>
           <tr><td class="mark" style="color: var(--gh)">→</td><td>An unratified-change flag</td></tr>
-          <tr><td class="mark" style="color: var(--gh)">→</td><td>LLM-assisted clause evaluation — kept advisory, pinned to the evidence and the rule version</td></tr>
+          <tr><td class="mark" style="color: var(--gh)">→</td><td>Further semantic evaluation; opt-in real Java LLM supplemental assessments already run, without replacing deterministic evidence or ledger authority</td></tr>
           <tr><td class="mark" style="color: var(--gh)">→</td><td>Immutable milestone evidence</td></tr>
           <tr><td class="mark" style="color: var(--gh)">→</td><td>An authenticated ledger adapter</td></tr>
         </table>

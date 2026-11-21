@@ -1,0 +1,21 @@
+-- SPDX-License-Identifier: Apache-2.0
+module Cap.Examples.BabyCdf.IdentityDemo where
+
+import Daml.Script
+import Cap.Examples.BabyCdf.Live
+import Cap.Examples.BabyCdf.RuleVote (ruleRefV1, ruleRefV2)
+
+bootstrapIdentities : Script ()
+bootstrapIdentities = do
+  state <- bootstrap (BootstrapInput "identity-reader" 5 ruleRefV1 ruleRefV2)
+  reader <- validateUserId state.userName
+  intake <- validateUserId state.intakeUserName
+  readerRights <- listUserRights reader
+  intakeRights <- listUserRights intake
+  assert (readerRights == [CanReadAs state.opener])
+  assert (intakeRights == [CanActAs state.opener])
+  assert (state.userName /= state.intakeUserName)
+  assert (state.member /= state.opener)
+  Some _ <- queryContractId state.opener state.rule
+  Some _ <- queryContractId state.opener state.governor
+  pure ()

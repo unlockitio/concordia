@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: Apache-2.0
+# Optional file secret; never mounted into Intake or Canton.
+services:
+  advisory:
+    environment:
+      LLM_API_KEY_FILE: /run/secrets/llm_api_key
+    secrets:
+      - source: llm_api_key
+        target: /run/secrets/llm_api_key
+  reviewer:
+    environment:
+      LLM_API_KEY_FILE: /run/secrets/llm_api_key
+    secrets:
+      - source: llm_api_key
+        target: /run/secrets/llm_api_key
+secrets:
+  llm_api_key:
+    file: ${LLM_API_KEY_FILE:?Set an absolute host credential file path}

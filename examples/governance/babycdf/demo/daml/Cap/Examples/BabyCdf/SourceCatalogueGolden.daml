@@ -1,0 +1,32 @@
+-- SPDX-License-Identifier: Apache-2.0
+module Cap.Examples.BabyCdf.SourceCatalogueGolden where
+
+import Daml.Script
+import DA.Time
+import DA.Date
+import Cap.Examples.BabyCdf.SourceCatalogue
+
+-- Executed by the pinned SDK; Java expectations must come from this output.
+goldenVectors : Script [Text]
+goldenVectors = script do
+  let base = Observation with
+        number = 7
+        kind = SourceMilestone
+        sourceUrl = "https://github.com/canton-foundation/canton-dev-fund/issues/7"
+        title = "café2 😀3"
+        body = "line\n\t\"\\\SOH4"
+        state = SourceClosed
+        updatedAt = time (date 2026 Jan 1) 0 0 0
+        observedAt = time (date 2026 Jan 2) 0 0 0
+        verification = ObservedUnverified
+        parentPR = None
+        linkEvidence = "evidence"
+  let v1 = base with parentPR = Some 3; updatedAt = addRelTime base.updatedAt (microseconds 100000)
+      v2 = base with parentPR = Some 3; updatedAt = addRelTime base.updatedAt (microseconds 123000)
+      v3 = base with parentPR = Some 3; updatedAt = addRelTime base.updatedAt (microseconds 123456)
+      vectors = [base, v1, v2, v3]
+  _ <- mapA (\o -> do
+    debug (show ((o.number,o.kind,o.sourceUrl,o.title,o.body),
+      (o.state,o.updatedAt,o.verification,o.parentPR,o.linkEvidence)))
+    debug (contentDigest o)) vectors
+  pure (map contentDigest vectors)

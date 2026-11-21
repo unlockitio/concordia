@@ -44,6 +44,12 @@ public final class ClauseCheck {
      *                   is available; that yields {@link #INSUFFICIENT} rather than a verdict.
      */
     public static ObjectNode evaluate(Advisory.Clause clause, String pinnedText, boolean pinned) {
+        return evaluate(clause,pinnedText,pinned,false);
+    }
+    public static ObjectNode evaluate(Advisory.Clause clause,String pinnedText,boolean pinned,boolean complete) {
+        return evaluate(clause,pinnedText,pinned,null,false);
+    }
+    static ObjectNode evaluate(Advisory.Clause clause,String pinnedText,boolean pinned,EvidenceBundle bundle,boolean eligible) {
         ObjectNode result = Advisory.JSON.createObjectNode()
                 .put("clause_id", clause.id())
                 .put("criterion", clause.criterion() == null ? "" : clause.criterion())
@@ -53,6 +59,13 @@ public final class ClauseCheck {
         ArrayNode forbidden = result.putArray("forbidden_phrases");
         clause.forbiddenPhrases().forEach(forbidden::add);
 
+        ClauseKind kind=ClauseKind.recognized(clause.kind());
+        if(kind==null) return result.put("status",INSUFFICIENT).put("detail","unknown_clause_kind");
+        if(kind==ClauseKind.PRESENCE_REQUIRED) {
+            if(Presence.malformed(clause)) return result.put("status",INSUFFICIENT).put("detail","malformed_clause");
+            var resolution=Presence.resolve(clause,eligible?bundle:null,pinned?pinnedText:null,eligible,null,List.of());
+            return result.put("status",resolution.verdict()==RuleVerdict.Verdict.PASS?PASS:resolution.verdict()==RuleVerdict.Verdict.FAIL?FAIL:INSUFFICIENT).put("detail",resolution.reason());
+        }
         if (!pinned || pinnedText == null || pinnedText.isBlank()) {
             return result.put("status", INSUFFICIENT)
                     .put("source", "no_pinned_text")

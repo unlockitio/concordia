@@ -3,19 +3,29 @@ module Cap.Examples.BabyCdf.RuleVoteDemo where
 
 import DA.Assert ((===))
 import DA.Foldable (forA_)
+import DA.List (sort, unique)
+import qualified DA.List
 import qualified DA.Map as Map
 import qualified DA.Set as Set
 import DA.Time (addRelTime, hours, minutes)
 import Daml.Script hiding (AnyContractId)
+import Cap.Examples.BabyCdf.LiveVote (coreQuorum)
 import Cap.Governance.ExecutableV1
 import Cap.Governance.ResolverV1
 import Cap.Governance.VoteRecordV1
+import Cap.Governance.VoteTopicV1 (VoteTopic)
 import Cap.Governance.Types
 import qualified DA.TextMap as TextMap
 import Splice.Api.Token.MetadataV1 (ExtraArgs (..), ChoiceContext (..), AnyValue (..), emptyChoiceContext, emptyMetadata)
 import qualified Cap.Governance.Utils.Count as Count
 import Cap.Examples.BabyCdf.RuleVote
 import Cap.Examples.BabyCdf.Rights
+
+ruleReferencesAreValidated : Script ()
+ruleReferencesAreValidated = do
+  validRuleRef ruleRefV1 === True
+  validRuleRef ruleRefV2 === True
+  validRuleRef (ruleRefV1 with sha256 = "bad") === False
 
 assemblyAttendanceIsSelfRegistered : Script ()
 assemblyAttendanceIsSelfRegistered = do
@@ -73,6 +83,50 @@ assemblyAttendanceIsSelfRegistered = do
 
 extra : ExtraArgs
 extra = ExtraArgs with context = emptyChoiceContext; meta = emptyMetadata
+
+-- Proposal authority is independent of voting membership: the opener can
+-- propose without acquiring a ballot or changing the seven-member electorate.
+proposerAuthorization : Script ()
+proposerAuthorization = do
+  opener <- allocateParty "authorization-opener"
+  a <- allocateParty "authorization-member-a"
+  b <- allocateParty "authorization-member-b"
+  c <- allocateParty "authorization-member-c"
+  d <- allocateParty "authorization-member-d"
+  e <- allocateParty "authorization-member-e"
+  f <- allocateParty "authorization-alternate-f"
+  g <- allocateParty "authorization-alternate-g"
+  outsider <- allocateParty "authorization-outsider"
+  let permanent = Set.fromList [a,b,c,d,e]
+      alternates = Set.fromList [f,g]
+      members = eligible permanent alternates
+  governor <- submit opener $ createCmd AgendaGovernor with
+    opener; consortiumId = "authorization-cdf"; permanent; alternates
+  now <- getTime
+  let proposal proposer roundId = exerciseCmd governor ProposeAgenda with
+        proposer; roundId; agenda = Grant proposalSubject; baseVersion = 0
+        closesAt = now `addRelTime` hours 1
+      checkProposal proposer roundId = do
+        cid <- submit proposer $ proposal proposer roundId
+        Some created <- queryContractId opener cid
+        created.proposer === proposer
+        created.members === members
+        Set.size created.members === 7
+        Set.member opener created.members === False
+        ballots <- submit opener $ exerciseCmd cid InviteBallots
+        length ballots === 7
+        voters <- forA ballots $ \ballot -> do
+          Some recorded <- queryContractId opener ballot
+          pure recorded.voter
+        Set.fromList voters === members
+  checkProposal opener "opener"
+  checkProposal a "permanent"
+  checkProposal f "alternate"
+  -- Supply opener read authority so rejection is not a visibility accident.
+  submitMultiMustFail [outsider] [opener] $ proposal outsider "outsider"
+  Some unchanged <- queryContractId opener governor
+  unchanged.permanent === permanent
+  unchanged.alternates === alternates
 
 -- Consumer path exercises actual CAP Action authorization and Executable
 -- execution; the Java fixture remains advisory and does not read this ledger.
@@ -142,10 +196,10 @@ capRuleAndSeparateApprovalsWithMilestone = do
   submitMustFail outsider $ exerciseCmd governor ProposeAgenda with
     proposer = outsider; roundId = "outsider"; agenda = Grant proposalSubject
     baseVersion = 0; closesAt = now `addRelTime` hours 1
-  first <- propose a "rule-v1" (Architecture (RuleDraft "architecture-review" 1 "interfaces")) 0
+  first <- propose a "rule-v1" (Architecture (RuleDraft "architecture-review" 1 "interfaces" ruleRefV1)) 0
   -- A second architecture agenda fixes the same base version before either
   -- executes. Its resolved execution must fail against the advanced registry.
-  stale <- propose b "rule-v1-stale" (Architecture (RuleDraft "architecture-review" 1 "stale")) 0
+  stale <- propose b "rule-v1-stale" (Architecture (RuleDraft "architecture-review" 1 "stale" ruleRefV1)) 0
   [tf,tg,ta,tb,tc,td,te] <- invite stale
   ta1 <- cast a ta (Count.Voted Yes)
   tb1 <- cast b tb (Count.Voted Yes)
@@ -244,13 +298,9 @@ capRuleAndSeparateApprovalsWithMilestone = do
   application <- submit a $ exerciseCmd (coerceContractId ruleCid : ContractId EffectiveRule) ApplyRule with
     subject = proposalSubject; reviewer = a
   Some applied <- queryContractId a application
-  -- v1 also demands an independent security audit, which the curated proposal
-  -- evidence does not contain, so that clause cannot pass under v1.
-  applied.findings === [ClauseFinding "compose-with-asset-layer" Pass
-      "Architectural Notes / CAP is designed to sit above"
-    , ClauseFinding "independent-security-audit" InsufficientEvidence
-        "no matching pinned excerpt"]
-  second <- propose b "rule-v2" (Architecture (RuleDraft "architecture-review" 2 "migration")) 1
+  applied.draft.ruleRef === ruleRefV1
+  applied.findings === []
+  second <- propose b "rule-v2" (Architecture (RuleDraft "architecture-review" 2 "migration" ruleRefV2)) 1
   [sf,sg,sa,sb,sc,sd,se] <- invite second
   sa1 <- cast a sa (Count.Voted Yes)
   sb1 <- cast b sb (Count.Voted Yes)
@@ -265,12 +315,8 @@ capRuleAndSeparateApprovalsWithMilestone = do
   milestoneReview <- submit b $ exerciseCmd (coerceContractId secondRule : ContractId EffectiveRule) ApplyRule with
     subject = milestoneSubject; reviewer = b
   Some reviewed <- queryContractId b milestoneReview
-  reviewed.findings ===
-    [ ClauseFinding "compose-with-asset-layer" InsufficientEvidence "no matching pinned excerpt"
-    , ClauseFinding "governance-execution-hooks" Pass
-        "Milestones and Deliverables / Milestone 3 / Deliverables"
-    , ClauseFinding "auditable-state-and-acceptance" InsufficientEvidence
-        "no matching pinned excerpt" ]
+  reviewed.draft.ruleRef === ruleRefV2
+  reviewed.findings === []
   grant <- propose a "grant" (Grant proposalSubject) 0
   [gf,gg,ga,gb,gc,gd,ge] <- invite grant
   ga1 <- cast a ga (Count.Voted Yes)
@@ -338,11 +384,263 @@ capRuleAndSeparateApprovalsWithMilestone = do
   let [milestoneCid] = milestoneResult.created
   Some approvedMilestone <- queryContractId g (coerceContractId milestoneCid : ContractId ApprovedMilestone)
   approvedMilestone.milestone === illustrativeMilestone
+
+  -- Quorum of three core members, offline. This mirrors exactly what the live
+  -- journey does in steps 2-4 and in step 6 case 2, so the behaviour the demo
+  -- narrates is proven here without a network, a container or wall-clock time.
+  rd <- issue d False
+  re <- issue e True
+  let permanentList = [a, b, c, d, e]
+      alternateList = [f, g]
+      allCredentials = [ra, rb, rc, rd, re, rf, rg]
+      three = coreQuorum 3 permanentList
+      two = coreQuorum 2 permanentList
+  -- Selection comes from the permanent membership, never from ballot order.
+  -- An alternate must never appear in it, however the party IDs happen to
+  -- sort, which is the mistake "just take the first three ballots" makes.
+  length three === 3
+  unique three === True
+  forA_ three $ \voter -> do
+    assert (voter `elem` permanentList)
+    assert (not (voter `elem` alternateList))
+  -- Deterministic and prefix-stable: the smaller selection is the start of the
+  -- larger one, so the no-quorum round is the same round one voter lighter.
+  two === take 2 three
+  length two === 2
+  -- Selecting more than the committee holds returns what exists rather than
+  -- inventing a voter, and a non-positive count selects nobody.
+  coreQuorum 9 permanentList === sort permanentList
+  coreQuorum 0 permanentList === []
+  let presentedFor voters = [(m, r) | (m, r) <- allCredentials, m `elem` voters]
+  length (presentedFor three) === 3
+  length (presentedFor two) === 2
+
+  -- A quorate round: all seven ballots exist, exactly three are cast YES, four
+  -- stay Absent, and only the three participants present a credential.
+  quorate <- propose a "core-quorum-three" (Grant proposalSubject) 0
+  quorateBallots <- invite quorate
+  length quorateBallots === 7
+  loadedQuorate <- forA quorateBallots $ \cid -> do
+    Some ballot <- queryContractId opener cid
+    pure (cid, ballot)
+  -- Every member of the electorate holds exactly one ballot in the round.
+  Set.fromList (map ((.voter) . snd) loadedQuorate) === Set.fromList (permanentList ++ alternateList)
+  castQuorate <- forA loadedQuorate $ \(cid, ballot) ->
+    if ballot.voter `elem` three then cast ballot.voter cid (Count.Voted Yes) else pure cid
+  -- Exactly four ballots were never cast and still record Absent on the ledger.
+  absentVotes <- forA [cid | (cid, ballot) <- loadedQuorate, not (ballot.voter `elem` three)] $ \cid -> do
+    Some untouched <- queryContractId opener cid
+    pure untouched.vote
+  length absentVotes === 4
+  forA_ absentVotes (=== Count.Absent)
+  current <- getTime
+  setTime (current `addRelTime` hours 1)
+  -- Presenting the whole electorate's credentials in a three-voter round is
+  -- itself a refusal: the count demands one credential per participant, so the
+  -- projection is a requirement and not a convenience.
+  submitMustFail opener $ exerciseCmd governor ResolveAgenda with
+    proposalCid = quorate; ballotCids = castQuorate; rights = allCredentials
+  -- Dropping a participant's credential is refused for the same reason.
+  submitMustFail opener $ exerciseCmd governor ResolveAgenda with
+    proposalCid = quorate; ballotCids = castQuorate; rights = presentedFor two
+  Resolution quorateVerdict quorateExecutions <-
+    resolve quorate castQuorate (presentedFor three)
+  quorateVerdict === Count.Decided Yes
+  length quorateExecutions === 1
+
+  -- OPERATION-ORDER REGRESSION.
+  --
+  -- Each evidence snapshot in the live journey is labelled with a moment
+  -- ("after ballots issued, before any cast"), and a label is only true if the
+  -- operation really has happened by then. A previous revision took that
+  -- snapshot before `InviteBallots` executed. Asserting the label, or the
+  -- source order, would not have caught it; these assertions instead QUERY the
+  -- ledger at each stage with the same interface queries the live evidence
+  -- block uses, so a regression in operation order changes a NUMBER here
+  -- rather than only a word in a log.
+  --
+  -- SCOPE NOTE. The live steps now run ONE round at a time: step 2 proposes,
+  -- votes, resolves and executes a single agenda before anything else starts.
+  -- The two-round section below is therefore an offline QUERY-SEMANTICS test
+  -- (how counts accumulate and dedup across concurrently visible rounds), NOT
+  -- a model of the live workflow; `singleRoundStages` immediately after it is
+  -- the one that mirrors the live sequence. Nothing here should be read as
+  -- evidence that the live journey interleaves two rounds, because it does
+  -- not.
+  let voteRecordsVisibleTo witnessList = do
+        rows <- concat <$> forA witnessList (\w -> queryInterface @VoteRecord w)
+        let uniqueRows = DA.List.dedupOn (show . fst) rows
+            decoded = concat [Map.values view.votes | (_, Some view) <- uniqueRows]
+            countOf wanted = length
+              [() | v <- decoded, Some d <- [decodeRuleVote v], d == wanted]
+        pure (length uniqueRows, countOf (Count.Voted Yes), countOf Count.Absent)
+      witnesses = [opener, a]
+      topicsVisible = do
+        rows <- concat <$> forA witnesses (\w -> queryInterface @VoteTopic w)
+        pure (length (DA.List.dedupOn (show . fst) rows))
+
+  -- Stage A: nothing of this round exists yet. The count is 0 because no
+  -- record has been created, NOT because anything was consumed.
+  (before, _, _) <- voteRecordsVisibleTo witnesses
+  before === 0
+
+  orderA <- propose a "order-round-a" (Grant proposalSubject) 0
+  orderB <- propose b "order-round-b" (Grant proposalSubject) 0
+  topicsAfterPropose <- topicsVisible
+  topicsAfterPropose === 2
+
+  -- Stage B: issuance only. Both rounds issue 7 ballots, all Absent, and no
+  -- YES exists yet. This is exactly the moment the live snapshot claims.
+  issuedA <- invite orderA
+  length issuedA === 7
+  (afterFirstIssue, yesFirstIssue, absentFirstIssue) <- voteRecordsVisibleTo witnesses
+  afterFirstIssue === 7
+  yesFirstIssue === 0
+  absentFirstIssue === 7
+  issuedB <- invite orderB
+  length issuedB === 7
+  (afterBothIssued, yesBothIssued, absentBothIssued) <- voteRecordsVisibleTo witnesses
+  afterBothIssued === 14
+  yesBothIssued === 0
+  absentBothIssued === 14
+
+  -- Stage C: casting. Three core YES per round, four Absent per round.
+  castA <- forA (zip issuedA [0, 1, 2, 3, 4, 5, 6]) $ \(cid, _) -> do
+    Some ballot <- queryContractId opener cid
+    if ballot.voter `elem` three then cast ballot.voter cid (Count.Voted Yes) else pure cid
+  (afterCastA, yesCastA, absentCastA) <- voteRecordsVisibleTo witnesses
+  afterCastA === 14
+  yesCastA === 3
+  absentCastA === 11
+  castB <- forA (zip issuedB [0, 1, 2, 3, 4, 5, 6]) $ \(cid, _) -> do
+    Some ballot <- queryContractId opener cid
+    if ballot.voter `elem` three then cast ballot.voter cid (Count.Voted Yes) else pure cid
+  (afterCastB, yesCastB, absentCastB) <- voteRecordsVisibleTo witnesses
+  afterCastB === 14
+  yesCastB === 6
+  absentCastB === 8
+
+  -- Stage D: resolution consumes the records it counted. Exactly three
+  -- credentials are presented, one per participant.
+  current <- getTime
+  setTime (current `addRelTime` hours 1)
+  Resolution orderVerdictA _ <- resolve orderA castA (presentedFor three)
+  orderVerdictA === Count.Decided Yes
+  (afterResolveA, _, _) <- voteRecordsVisibleTo witnesses
+  afterResolveA === 7
+  Resolution orderVerdictB _ <- resolve orderB castB (presentedFor three)
+  orderVerdictB === Count.Decided Yes
+  (afterResolveB, yesAfterResolve, absentAfterResolve) <- voteRecordsVisibleTo witnesses
+  -- Zero now, and for a different reason than at stage A: these records were
+  -- consumed by the resolves just observed. The count alone cannot tell the
+  -- two cases apart, which is why the live narration does not explain a zero
+  -- except where a resolve was actually observed.
+  afterResolveB === 0
+  yesAfterResolve === 0
+  absentAfterResolve === 0
+  -- Both zeros are equal as numbers; the stages that produced them are not.
+  before === afterResolveB
+
+  -- SINGLE-ROUND SEQUENCE, mirroring the live steps.
+  --
+  -- One agenda, carried from proposal to execution with nothing else open, so
+  -- the counts a listener sees in the live run are the counts asserted here.
+  (cleanStart, _, _) <- voteRecordsVisibleTo witnesses
+  cleanStart === 0
+  soloTopicsBefore <- topicsVisible
+  soloTopicsBefore === 0
+  solo <- propose a "single-round" (Grant proposalSubject) 0
+  soloTopicsOpen <- topicsVisible
+  soloTopicsOpen === 1
+  soloIssued <- invite solo
+  length soloIssued === 7
+  (soloAfterIssue, soloYesIssue, soloAbsentIssue) <- voteRecordsVisibleTo witnesses
+  soloAfterIssue === 7
+  soloYesIssue === 0
+  soloAbsentIssue === 7
+  soloCast <- forA soloIssued $ \cid -> do
+    Some ballot <- queryContractId opener cid
+    if ballot.voter `elem` three then cast ballot.voter cid (Count.Voted Yes) else pure cid
+  (soloAfterCast, soloYesCast, soloAbsentCast) <- voteRecordsVisibleTo witnesses
+  soloAfterCast === 7
+  soloYesCast === 3
+  soloAbsentCast === 4
+  current <- getTime
+  setTime (current `addRelTime` hours 1)
+  Resolution soloVerdict soloExecutions <- resolve solo soloCast (presentedFor three)
+  soloVerdict === Count.Decided Yes
+  length soloExecutions === 1
+  (soloAfterResolve, _, _) <- voteRecordsVisibleTo witnesses
+  soloAfterResolve === 0
+  soloTopicsAfter <- topicsVisible
+  soloTopicsAfter === 0
+  -- Only one round was ever open, so the step's counts cannot be confused
+  -- with a second agenda's.
+  case soloExecutions of
+    [soloExec] -> do
+      soloResult <- execute soloExec Map.empty
+      length soloResult.created === 1
+    _ -> abort "expected one execution"
+
+  -- STALE RULE CHANGE (optional round 1), as a real drift refusal.
+  --
+  -- An Architecture agenda pins the registry state it was written against, so
+  -- an agenda proposed with baseVersion 1 while the registry has already moved
+  -- to v2 cannot be applied. This asserts the governed semantics the optional
+  -- round demonstrates: the vote SUCCEEDS and the EXECUTION is refused, and
+  -- the refusal is snapshot drift on a freshly created execution, not a
+  -- replay of a consumed contract.
+  -- The live registry is read from the ledger: earlier rounds in this script
+  -- have already advanced and replaced it, so a remembered CID would be stale
+  -- for the wrong reason and would prove nothing about snapshot drift.
+  liveRegistryRows <- query @RuleRegistry opener
+  let [(bumpedRegistry, atV2)] = DA.List.dedupOn (show . fst) liveRegistryRows
+  -- This script's earlier rounds already took the rule book to v2.
+  atV2.version === 2
+  -- Now the stale agenda: baseVersion 1 against a live v2 registry.
+  staleAgenda <- propose a "stale-after-v2"
+    (Architecture (RuleDraft "architecture-review" 2 "stale attempt" ruleRefV2)) 1
+  staleIssued <- invite staleAgenda
+  length staleIssued === 7
+  staleCast <- forA staleIssued $ \cid -> do
+    Some ballot <- queryContractId opener cid
+    if ballot.voter `elem` three then cast ballot.voter cid (Count.Voted Yes) else pure cid
+  (staleRecords, staleYes, staleAbsent) <- voteRecordsVisibleTo witnesses
+  staleRecords === 7
+  staleYes === 3
+  staleAbsent === 4
+  currentStale <- getTime
+  setTime (currentStale `addRelTime` hours 1)
+  -- The VOTE succeeds: three core YES, exactly three credentials presented.
+  Resolution staleVerdict staleExecutions <- resolve staleAgenda staleCast (presentedFor three)
+  staleVerdict === Count.Decided Yes
+  length staleExecutions === 1
+  -- The EXECUTION is refused, on the current registry, for snapshot drift.
+  case staleExecutions of
+    [staleExec] -> submitMustFail opener $ exerciseCmd staleExec Executable_Execute with
+      actors = [opener]; targetCids = target bumpedRegistry; extraArgs = extra
+    _ -> abort "expected one execution"
+  -- The rule book is untouched by the refusal.
+  Some afterRefusal <- queryContractId opener bumpedRegistry
+  afterRefusal.version === 2
+
+  -- The same round one voter short: two core members, five absent. Nothing is
+  -- rejected and nothing fails; the count answers Lapsed with no executions.
+  short <- propose a "core-quorum-two" (Grant proposalSubject) 0
+  shortBallots <- invite short
+  length shortBallots === 7
+  loadedShort <- forA shortBallots $ \cid -> do
+    Some ballot <- queryContractId opener cid
+    pure (cid, ballot)
+  castShort <- forA loadedShort $ \(cid, ballot) ->
+    if ballot.voter `elem` two then cast ballot.voter cid (Count.Voted Yes) else pure cid
+  current <- getTime
+  setTime (current `addRelTime` hours 1)
+  Resolution shortVerdict shortExecutions <- resolve short castShort (presentedFor two)
+  shortVerdict === Count.Lapsed
+  shortExecutions === []
   pure (coerceContractId milestoneCid)
 
-reviewClauseIsThreeValued : Script ()
-reviewClauseIsThreeValued = do
-  reviewClause [] compositionClause === ClauseFinding "compose-with-asset-layer"
-    InsufficientEvidence "no matching pinned excerpt"
-  reviewClause [compositionClause.expected, compositionClause.contradicts] compositionClause ===
-    ClauseFinding "compose-with-asset-layer" Fail "synthetic/conflict"
+ruleReferenceLocationIsOpaque : Script ()
+ruleReferenceLocationIsOpaque = do
+  validRuleRef (ruleRefV1 with location = "https://example.org/another/rule.json") === True

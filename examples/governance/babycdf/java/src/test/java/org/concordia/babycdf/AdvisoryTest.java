@@ -15,7 +15,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class AdvisoryTest {
     @TempDir Path directory;
-    String proposal = "CAP is designed to sit above existing Canton asset and settlement infrastructure";
+    String proposal = "compose with existing Canton asset and settlement infrastructure rather than replace it";
     String issue = "downstream execution hooks for approved proposals";
     String updated = "2026-10-14T12:34:17Z";
     boolean corrupt;
@@ -57,7 +57,7 @@ class AdvisoryTest {
         assertEquals(blobSha(), pr.path("revision").asText());
         assertNotEquals(pr.path("revision").asText(), pr.path("head_commit").asText());
         assertEquals("pass", pr.path("findings").get(0).path("status").asText());
-        assertEquals("Architectural Notes / CAP is designed to sit above", pr.path("findings").get(0).path("source_anchor").asText());
+        assertEquals("Architectural Notes / composition", pr.path("findings").get(0).path("source_anchor").asText());
         assertEquals("insufficient_evidence", pr.path("findings").get(1).path("status").asText());
         assertEquals(Advisory.AUTHORITY, pr.path("rule_authority").asText());
         assertFalse(milestone.path("pinned").asBoolean());
@@ -234,7 +234,8 @@ class AdvisoryTest {
     @Test void fixturePinAndConflictPrecedence() throws Exception {
         assertThrows(IllegalArgumentException.class, () -> Advisory.fixture(Advisory.RULE, "bad", 2));
         assertThrows(IllegalArgumentException.class, () -> Advisory.fixture(Advisory.RULE, Advisory.RULE_SHA256, 3));
-        assertEquals(1, Advisory.fixture(Advisory.RULE, Advisory.RULE_SHA256, 1).clauses().size());
+        assertEquals(2, Advisory.fixture(Advisory.RULE, RuleDocument.sha(Files.readAllBytes(Path.of("../rules/rule-v1.json"))), 1).clauses().size());
+        assertEquals("rule_unverified", assertThrows(IOException.class, () -> Advisory.fixture(Advisory.RULE, "0".repeat(64), 2)).getMessage());
         Path changed = directory.resolve("rule.daml");
         Files.writeString(changed, "changed");
         assertThrows(IOException.class, () -> Advisory.fixture(changed, Advisory.RULE_SHA256, 2));

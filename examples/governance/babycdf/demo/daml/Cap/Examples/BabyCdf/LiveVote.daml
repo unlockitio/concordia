@@ -1,3 +1,26 @@
 -- SPDX-License-Identifier: Apache-2.0
--- Live entry points now reside together in Live; retained module has no scripts.
+-- Live entry points reside together in Live. This module holds the pure voter
+-- selection shared by the live journey and by the offline regression
+-- assertions in RuleVoteDemo, so both prove the same selection rule.
 module Cap.Examples.BabyCdf.LiveVote where
+
+import qualified DA.List
+
+-- | The members who take part in a round, chosen from the committee's own
+-- permanent (core) membership.
+--
+-- This exists because ballot order is the wrong source. `InviteBallots`
+-- creates one ballot per member of the electorate in party-ID order, and an
+-- alternate's party ID can sort before a permanent member's, so "the first
+-- three ballots" is not "three core members". Selecting from the permanent set
+-- only, sorted so the choice is stable across runs, keeps the demo's spoken
+-- claim -- three core members voted -- true by construction rather than by
+-- luck of the ordering.
+--
+-- Returns fewer than `count` parties only when `core` itself holds fewer, so a
+-- caller can detect an under-populated committee instead of silently voting
+-- with too few members.
+coreQuorum : Int -> [Party] -> [Party]
+coreQuorum count core
+  | count <= 0 = []
+  | otherwise = DA.List.take count (DA.List.sort (DA.List.dedup core))

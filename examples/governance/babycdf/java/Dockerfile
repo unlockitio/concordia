@@ -8,7 +8,9 @@ FROM eclipse-temurin:21-jre
 WORKDIR /app/java
 COPY --from=build /build/target/classes/ /app/classes/
 COPY --from=build /build/target/dependency/ /app/lib/
-COPY impl/daml/ /app/impl/daml/
+COPY rules/ /app/rules/
 COPY demo/compose/agents/entrypoint.sh /app/entrypoint.sh
+# Docker initializes the named journal volume from this unprivileged-owned path.
+RUN mkdir /journal && chown 65532:65532 /journal && chmod 700 /journal
 USER 65532:65532
 ENTRYPOINT ["sh", "/app/entrypoint.sh"]

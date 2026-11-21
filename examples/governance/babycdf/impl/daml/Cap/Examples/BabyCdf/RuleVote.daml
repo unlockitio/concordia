@@ -1,6 +1,8 @@
 -- SPDX-License-Identifier: Apache-2.0
 module Cap.Examples.BabyCdf.RuleVote where
 
+import qualified DA.Text
+
 import Prelude hiding (Action)
 import qualified DA.Map as Map
 import DA.Map (Map)
@@ -119,10 +121,28 @@ template ResolvedAssembly
     signatory opener
     observer Set.toList permanent ++ Set.toList alternates ++ Set.toList advisers
 
+data RuleRef = RuleRef with
+    location : Text
+    commit : Optional Text
+    sha256 : Text
+  deriving (Eq, Show)
+
+validRuleRef : RuleRef -> Bool
+validRuleRef ref = ref.location /= "" && DA.Text.length ref.location <= 2048
+  && DA.Text.length ref.sha256 == 64
+  && all (\c -> c `elem` ["0","1","2","3","4","5","6","7","8","9","a","b","c","d","e","f"]) (DA.Text.explode ref.sha256)
+
+ruleRefV1 : RuleRef
+ruleRefV1 = RuleRef "synthetic/test-v1.json" None "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+ruleRefV2 : RuleRef
+ruleRefV2 = RuleRef "synthetic/test-v2.json" None "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+
 data RuleDraft = RuleDraft with
     ruleId : Text
     version : Int
     designText : Text
+    ruleRef : RuleRef
   deriving (Eq, Show)
 
 data GithubSubject = GithubSubject with
@@ -145,28 +165,6 @@ milestoneSubject = GithubSubject "milestone"
   "https://github.com/canton-foundation/canton-dev-fund/issues/540"
   ""
 
-data PinnedExcerpt = PinnedExcerpt with
-    anchor : Text
-    quote : Text
-  deriving (Eq, Show)
-
--- The clause carries its own text criterion as ledger data, so an off-ledger
--- reviewer evaluates what the voted rule actually says rather than a constant
--- compiled into the agent. Matching is deterministic: phrases are compared
--- case-insensitively on whitespace-normalized text. No semantic understanding
--- is claimed; LLM-assisted evaluation remains planned.
-data ReviewClause = ReviewClause with
-    clauseId : Text
-    expected : PinnedExcerpt
-    contradicts : PinnedExcerpt
-    criterion : Text
-      -- ^ Human-readable statement of what this clause demands.
-    requiredPhrases : [Text]
-      -- ^ All must appear in the pinned text for the clause to pass.
-    forbiddenPhrases : [Text]
-      -- ^ Any appearance fails the clause.
-  deriving (Eq, Show)
-
 data ClauseStatus = Pass | Fail | InsufficientEvidence deriving (Eq, Show)
 
 data ClauseFinding = ClauseFinding with
@@ -175,61 +173,7 @@ data ClauseFinding = ClauseFinding with
     sourceAnchor : Text
   deriving (Eq, Show)
 
-reviewClause : [PinnedExcerpt] -> ReviewClause -> ClauseFinding
-reviewClause evidence clause =
-  let positive = clause.expected `elem` evidence
-      negative = clause.contradicts `elem` evidence
-      status = if negative then Fail else if positive then Pass else InsufficientEvidence
-      sourceAnchor = if negative then clause.contradicts.anchor
-        else if positive then clause.expected.anchor else "no matching pinned excerpt"
-  in ClauseFinding clause.clauseId status sourceAnchor
-
--- Demo architecture clauses, never official Foundation policies.
-compositionClause : ReviewClause
-compositionClause = ReviewClause "compose-with-asset-layer"
-  (PinnedExcerpt "Architectural Notes / CAP is designed to sit above" "CAP is designed to sit above existing Canton asset and settlement infrastructure")
-  (PinnedExcerpt "synthetic/conflict" "CAP replaces existing Canton asset and settlement infrastructure")
-  "the proposal must state that CAP composes with, rather than replaces, the existing Canton asset layer"
-  ["CAP is designed to sit above existing Canton asset and settlement infrastructure"]
-  ["CAP replaces existing Canton asset and settlement infrastructure"]
-
-executionClause : ReviewClause
-executionClause = ReviewClause "governance-execution-hooks"
-  (PinnedExcerpt "Milestones and Deliverables / Milestone 3 / Deliverables" "downstream execution hooks for approved proposals")
-  (PinnedExcerpt "synthetic/conflict" "no downstream execution hooks for approved proposals")
-  "the proposal must describe downstream execution hooks for approved proposals"
-  ["downstream execution hooks for approved proposals"]
-  ["no downstream execution hooks for approved proposals"]
-
--- v1 seed clause. A plausible Fund requirement that the real PR #184 text does
--- NOT satisfy: the proposal mentions "auditable contract state" but never
--- commits to an independent security audit. The v1 rule therefore fails.
-auditCommitmentClause : ReviewClause
-auditCommitmentClause = ReviewClause "independent-security-audit"
-  (PinnedExcerpt "Acceptance Criteria / independent security audit" "independent security audit")
-  (PinnedExcerpt "synthetic/conflict" "no independent security audit is planned")
-  "the proposal must commit to an independent security audit before release"
-  ["independent security audit"]
-  ["no independent security audit is planned"]
-
--- v2 replaces the clause above with what the Fund can actually evidence from
--- the pinned text: auditable on-ledger state plus a stated acceptance bar.
-auditTransparencyClause : ReviewClause
-auditTransparencyClause = ReviewClause "auditable-state-and-acceptance"
-  (PinnedExcerpt "Architectural Notes / auditable contract state" "auditable contract state")
-  (PinnedExcerpt "synthetic/conflict" "contract state is opaque")
-  "the proposal must evidence auditable contract state and a stated acceptance bar"
-  ["auditable contract state", "Acceptance Criteria"]
-  ["contract state is opaque"]
-
--- On-ledger curated excerpt sets. The proposal evidence deliberately omits
--- auditCommitmentClause.expected, so the v1 audit clause cannot pass, and
--- includes auditTransparencyClause.expected, so the v2 clause can.
-proposalEvidence : [PinnedExcerpt]
-proposalEvidence = [compositionClause.expected, auditTransparencyClause.expected]
-
-milestoneEvidence : [PinnedExcerpt]
-milestoneEvidence = [executionClause.expected]
+-- Clause content and interpretation live exclusively in the hash-verified document.
 
 data RuleVote = Yes | No deriving (Eq, Ord, Show)
 
@@ -256,7 +200,7 @@ data Agenda = Architecture RuleDraft | Grant GithubSubject | Milestone GithubSub
 
 validAgenda : Agenda -> Bool
 validAgenda (Architecture draft) = draft.ruleId == "architecture-review"
-  && draft.version `elem` [1, 2] && draft.designText /= ""
+  && draft.version `elem` [1, 2] && draft.designText /= "" && validRuleRef draft.ruleRef
 validAgenda (Grant subject) = subject == proposalSubject
 -- This pin is illustrative, not a verified immutable revision of issue #540.
 validAgenda (Milestone subject) = subject == illustrativeMilestone
@@ -283,11 +227,8 @@ template RuleRegistry
       do
         assertMsg "rule must advance the active version" (draft.version == version + 1)
         next <- create this with version = draft.version
-        -- v1 demands an independent security audit, which the pinned proposal
-        -- does not evidence; v2 replaces it with the auditable-state clause.
-        let clauses = if draft.version == 1 then [compositionClause, auditCommitmentClause]
-              else [compositionClause, executionClause, auditTransparencyClause]
-        rule <- create EffectiveRule with opener; members; draft; clauses
+        assertMsg "invalid rule reference" (validRuleRef draft.ruleRef)
+        rule <- create EffectiveRule with opener; members; draft
         pure (next, rule)
 
 instance HasState RuleRegistry Int where
@@ -297,10 +238,11 @@ instance HasCheckedFetch RuleRegistry AuthenticKey where
   contractGroupId = signedKey "babycdf-architecture-registry"
 
 template EffectiveRule
-  with opener : Party; members : Set Party; draft : RuleDraft; clauses : [ReviewClause]
+  with opener : Party; members : Set Party; draft : RuleDraft
   where
     signatory opener
     observer Set.toList members
+    ensure validRuleRef draft.ruleRef
     nonconsuming choice ApplyRule : ContractId RuleApplication
       with subject : GithubSubject; reviewer : Party
       controller reviewer
@@ -308,10 +250,9 @@ template EffectiveRule
         assertMsg "reviewer is not a member" (reviewer `Set.member` members)
         assertMsg "only curated demo subjects are reviewable"
           (subject == proposalSubject || subject == milestoneSubject)
-        let evidence = if subject == proposalSubject then proposalEvidence else milestoneEvidence
         create RuleApplication with
           opener; reviewer; draft; subject
-          findings = map (reviewClause evidence) clauses
+          findings = [] -- Rule interpretation is off-ledger; this records the approved reference only.
 
 template RuleApplication
   with opener : Party; reviewer : Party; draft : RuleDraft
@@ -554,7 +495,8 @@ template AgendaGovernor
       controller proposer
       do
         now <- getTime
-        assertMsg "not a member" (proposer `Set.member` eligible permanent alternates)
+        assertMsg "not opener or eligible member"
+          (proposer == opener || proposer `Set.member` eligible permanent alternates)
         assertMsg "invalid agenda or window" (validAgenda agenda && now < closesAt)
         action <- create AgendaAction with
           opener; members = eligible permanent alternates; agenda; baseVersion

@@ -19,14 +19,16 @@ import java.util.Set;
 /**
  * Independent reviewer. The discovery agent's pinned Daml source is never a ledger read.
  *
- * <p>This agent responds in text only. It has no HTTP client, no comment gateway and no ledger
+ * <p>This agent responds in text only. It has no GitHub write/publication capability, no comment gateway and no ledger
  * submission seam: the GitHub comment-posting path was removed outright rather than left behind a
  * flag, so no configuration can make it publish. Its only outputs are log lines.
  */
 public final class Reviewer {
     private Reviewer() { }
 
-    public record EffectiveRule(String contractId, String ruleId, int version, List<Advisory.Clause> clauses) { }
+    public record EffectiveRule(String contractId, String ruleId, int version, List<Advisory.Clause> clauses, RuleDocument.Ref ruleRef, String ruleFailure) {
+        public EffectiveRule(String contractId,String ruleId,int version,List<Advisory.Clause> clauses) { this(contractId,ruleId,version,clauses,null,null); }
+    }
 
     /**
      * A visible agenda, read as a read-only observer. Never a voting capability.
@@ -102,9 +104,9 @@ public final class Reviewer {
         }
 
         /**
-         * Reads visible AgendaProposal contracts. The demo member is an observer on them, so this
-         * needs no additional right: it is the same read-only party used for the rule, with no
-         * actAs and no vote capability.
+         * Reads visible AgendaProposal contracts. The demo opener signs both proposals and rules;
+         * the same opener party filter therefore needs only CanReadAs opener. This gateway
+         * constructs state queries only, never command submissions.
          */
         public List<OpenAgenda> openAgendas() throws IOException {
             ManagedChannel channel = NettyChannelBuilder.forAddress("127.0.0.1", port).usePlaintext().build();
@@ -169,21 +171,13 @@ public final class Reviewer {
             ValueOuterClass.Record draft = record(field(event.getCreateArguments(), "draft"));
             int version = Math.toIntExact(integer(field(draft, "version")));
             String ruleId = text(field(draft, "ruleId"));
-            ValueOuterClass.Value clauses = field(event.getCreateArguments(), "clauses");
-            if (!clauses.hasList()) throw new IOException("BLOCKED: EffectiveRule clauses not a list");
-            List<Advisory.Clause> parsed = new ArrayList<>();
-            for (ValueOuterClass.Value clause : clauses.getList().getElementsList()) {
-                ValueOuterClass.Record c = record(clause);
-                ValueOuterClass.Record expected = record(field(c, "expected"));
-                ValueOuterClass.Record conflict = record(field(c, "contradicts"));
-                // The voted text criterion is ledger data; the agent must not substitute
-                // a constant of its own when the rule states one.
-                parsed.add(new Advisory.Clause(text(field(c, "clauseId")), text(field(expected, "anchor")),
-                        text(field(expected, "quote")), text(field(conflict, "anchor")), text(field(conflict, "quote")),
-                        text(field(c, "criterion")), textList(field(c, "requiredPhrases")),
-                        textList(field(c, "forbiddenPhrases"))));
-            }
-            return new EffectiveRule(event.getContractId(), ruleId, version, List.copyOf(parsed));
+            ValueOuterClass.Record reference=record(field(draft,"ruleRef"));
+            var commitValue=field(reference,"commit");
+            String commit=commitValue.hasOptional()&&commitValue.getOptional().hasValue()?text(commitValue.getOptional().getValue()):null;
+            var ref=new RuleDocument.Ref(text(field(reference,"location")),commit,text(field(reference,"sha256")));
+            var resolved=RuleDocument.runtime(ref);
+            boolean matches=resolved.verified()&&resolved.version()==version;
+            return new EffectiveRule(event.getContractId(),ruleId,version,matches?resolved.clauses():List.of(),ref,matches?null:"rule_unverified");
         }
 
         static List<String> textList(ValueOuterClass.Value value) throws IOException {
@@ -212,7 +206,7 @@ public final class Reviewer {
         }
     }
 
-    private static EffectiveRule select(List<EffectiveRule> rules) throws IOException {
+    static EffectiveRule select(List<EffectiveRule> rules) throws IOException {
         if (rules == null || rules.isEmpty()) throw new IOException("BLOCKED: no visible active EffectiveRule");
         int latest = rules.stream().filter(r -> r != null && "architecture-review".equals(r.ruleId()))
                 .mapToInt(EffectiveRule::version).max().orElseThrow(() -> new IOException("BLOCKED: no architecture-review EffectiveRule"));
@@ -220,7 +214,7 @@ public final class Reviewer {
         if (current.size() != 1) throw new IOException("BLOCKED: ambiguous active architecture-rule version");
         EffectiveRule rule = current.get(0);
         if (rule.contractId() == null || rule.contractId().isBlank() || latest < 1 || rule.clauses() == null
-                || rule.clauses().isEmpty()) throw new IOException("BLOCKED: incomplete effective rule contract");
+                || rule.clauses().isEmpty() && rule.ruleFailure()==null) throw new IOException("BLOCKED: incomplete effective rule contract");
         Set<String> ids = new HashSet<>();
         for (Advisory.Clause c : rule.clauses()) {
             if (c == null || c.id() == null || c.id().isBlank() || !ids.add(c.id())
@@ -231,9 +225,25 @@ public final class Reviewer {
         return rule;
     }
 
+    /** Consistency re-check against collected head identity, not an independent GitHub observation. */
+    static void verifyBundle(ObjectNode item) throws IOException {
+        if(item.has("evidence_bundle")) {
+            EvidenceBundle bundle=Advisory.JSON.treeToValue(item.get("evidence_bundle"),EvidenceBundle.class);
+            if("proposal_pr".equals(Advisory.value(item,"kind"))&&!bundle.verified(Advisory.value(item,"head_commit")))
+                item.put("supplemental_valid",false).put("evidence_warning","bundle_verification_failed");
+        }
+    }
     public static ObjectNode review(LedgerRuleGateway ledger, Advisory.Api evidence) throws Exception {
+        return review(ledger, evidence, null);
+    }
+
+    static ObjectNode review(LedgerRuleGateway ledger, Advisory.Api evidence, SupplementalAssessment supplemental) throws Exception {
+        return review(ledger,evidence,supplemental,null);
+    }
+    @FunctionalInterface interface Collection { ObjectNode collect() throws Exception; }
+    static ObjectNode review(LedgerRuleGateway ledger,Advisory.Api evidence,SupplementalAssessment supplemental,Collection collector) throws Exception {
         EffectiveRule rule = select(ledger.activeRules());
-        ObjectNode collected = Advisory.collect(evidence);
+        ObjectNode collected = collector==null?Advisory.collect(evidence,(supplemental!=null&&supplemental.enabled())||rule.clauses().stream().anyMatch(c->"PRESENCE_REQUIRED".equals(c.kind()))):collector.collect();
         ObjectNode result = Advisory.JSON.createObjectNode().put("scope", Advisory.SCOPE)
                 .put("rule_authority", "authenticated_active_effective_rule")
                 .put("rule_id", rule.ruleId()).put("rule_version", rule.version())
@@ -245,23 +255,28 @@ public final class Reviewer {
         for (JsonNode input : collected.path("inputs")) {
             ObjectNode item = input.deepCopy();
             String text = Advisory.value(item, "_review_text");
+            verifyBundle(item);
+            if(item.has("evidence_bundle")) item.put("absence_eligible",Presence.eligible(item,Advisory.JSON.treeToValue(item.get("evidence_bundle"),EvidenceBundle.class)));
             item.remove("_review_text");
             item.put("rule_authority", "authenticated_active_effective_rule")
                     .put("rule_id", rule.ruleId()).put("rule_version", rule.version())
                     .put("rule_contract_id", rule.contractId());
             ArrayNode findings = item.putArray("findings");
             boolean pinned = item.path("pinned").asBoolean();
+            if(rule.ruleFailure()!=null) findings.add(Advisory.JSON.createObjectNode().put("clause_id","rule_document").put("status","insufficient_evidence").put("detail",rule.ruleFailure()));
             for (Advisory.Clause clause : rule.clauses()) {
                 // When the voted clause states a text criterion, evaluate the pinned
                 // proposal text against it. Otherwise fall back to excerpt matching.
                 ObjectNode finding = clause.requiredPhrases().isEmpty()
                         && clause.forbiddenPhrases().isEmpty()
-                        ? Advisory.finding(text, pinned, clause)
-                        : ClauseCheck.evaluate(clause, text, pinned);
+                        && !"PRESENCE_REQUIRED".equals(clause.kind()) ? Advisory.finding(text, pinned, clause)
+                        : ClauseCheck.evaluate(clause, text, pinned, item.has("evidence_bundle")?Advisory.JSON.treeToValue(item.get("evidence_bundle"),EvidenceBundle.class):null, item.path("absence_eligible").asBoolean(false));
                 finding.put("rule_id", rule.ruleId()).put("rule_version", rule.version())
                         .put("rule_contract_id", rule.contractId());
                 findings.add(finding);
             }
+            if (supplemental != null) supplemental.assess(item, text, rule, "review-proposal-or-milestone", "ledger_effective_rule");
+            Advisory.stripBundleContents(item);
             reviews.add(item);
         }
         // Read-only agenda discovery. A failure here must not fail the review: the
@@ -291,13 +306,39 @@ public final class Reviewer {
     }
 
     static void runCycle(LedgerRuleGateway ledger, Advisory.Api evidence) throws Exception {
-        runCycle(ledger, evidence, new HashSet<>());
+        runCycle(ledger, evidence, new HashSet<>(), null);
     }
 
     static void runCycle(LedgerRuleGateway ledger, Advisory.Api evidence, Set<String> emitted) throws Exception {
+        runCycle(ledger, evidence, emitted, null);
+    }
+
+    /**
+     * One polling cycle.
+     *
+     * <p>The machine-readable JSON on stdout and the detailed activity line on stderr are
+     * unchanged and still produced whenever the demo log is not the active presentation, so the
+     * existing CLI contract holds. When {@code demo} is presenting, those two are withheld by
+     * default and reinstated by {@code --verbose} / {@code --json}: what is suppressed is volume,
+     * never a check, and never an error.
+     */
+    static void runCycle(LedgerRuleGateway ledger, Advisory.Api evidence, Set<String> emitted,
+                         DemoLog demo) throws Exception {
+        runCycle(ledger, evidence, emitted, demo, null);
+    }
+
+    static void runCycle(LedgerRuleGateway ledger, Advisory.Api evidence, Set<String> emitted,
+                         DemoLog demo, SupplementalAssessment supplemental) throws Exception {
+        boolean presenting = demo != null && demo.enabled();
+        boolean failed = false;
         ObjectNode result;
+        // The outcome is recorded here but NOT acted on yet. Recovery of a
+        // category may only be announced once the whole cycle's health is
+        // known, because a cycle can read the rule successfully and still be
+        // degraded elsewhere.
+        String cycleFailure = null;
         try {
-            result = review(ledger, evidence);
+            result = review(ledger, evidence, supplemental);
         }
         catch (InterruptedException interrupted) {
             Thread.currentThread().interrupt();
@@ -309,31 +350,59 @@ public final class Reviewer {
             result = Advisory.JSON.createObjectNode().put("status", "BLOCKED")
                     .put("reason", reason).put("publication", "none: text output only");
             result.putArray("errors").add(reason);
+            // The failure is never swallowed: it is stated once, in one short
+            // sentence, and repeated only when it changes. The narration is
+            // skipped for this result because it has nothing further to add:
+            // the cycle produced no rule, no findings and no agendas.
+            cycleFailure = "Waiting: " + DemoLog.summarize(blocked);
+            failed = true;
         }
-        System.err.println(AgentPolling.reviewerLine(result));
+        if (presenting) {
+            // `review` acquires two different things: the active rule from the
+            // ledger and the proposal evidence. A thrown failure does not say
+            // which stage failed, so the wording is deliberately neutral about
+            // provenance rather than claiming the ledger specifically. For the
+            // same reason the recovery sentence does not assert that the ledger
+            // recovered, since it may never have been the thing that failed.
+            if (cycleFailure != null) demo.failed(DemoLog.CYCLE, cycleFailure);
+            else demo.recovered(DemoLog.CYCLE, "Cycle completed again; resuming evaluation.");
+        }
+        if (!presenting || demo.verbose()) System.err.println(AgentPolling.reviewerLine(result));
+        if (presenting && !failed) ReviewerNarration.report(demo, result);
         // Text-only advisory recommendation, deduplicated per agenda per rule version.
-        for (String recommendation : Recommendation.lines(result, emitted)) System.err.println(recommendation);
-        System.out.println(Advisory.JSON.writeValueAsString(result));
+        for (String recommendation : Recommendation.lines(result, emitted))
+            if (!presenting || demo.verbose()) System.err.println(recommendation);
+        if (!presenting || demo.verbose()) System.out.println(Advisory.JSON.writeValueAsString(result));
     }
 
     public static void main(String[] args) throws Exception {
         LedgerRuleGateway gateway = new BlockedLedgerGateway();
         long interval = 0;
         java.nio.file.Path offlineFile = null;
+        boolean demoMode = false, verbose = AgentFlags.verboseFromEnvironment();
         for (int i = 0; i < args.length; i++) {
             if ("--interval".equals(args[i]) && i + 1 < args.length)
                 interval = AgentPolling.intervalMillis(args[++i]);
             else if ("--offline-pr184-file".equals(args[i]) && i + 1 < args.length)
                 offlineFile = java.nio.file.Path.of(args[++i]);
+            // Presentation output is opt-in, so every existing invocation keeps
+            // the exact machine-readable behaviour it had.
+            else if ("--demo".equals(args[i])) demoMode = true;
+            // Either flag restores the full detail, including inside --demo.
+            else if ("--verbose".equals(args[i]) || "--json".equals(args[i])) verbose = true;
             else if ("--local-sandbox".equals(args[i]) && i + 3 < args.length) {
                 gateway = new LocalSandboxGateway(Integer.parseInt(args[++i]), args[++i], args[++i]);
-            } else throw new IllegalArgumentException("usage: Reviewer [--interval seconds] [--offline-pr184-file path] [--local-sandbox port party package-id]");
+            } else throw new IllegalArgumentException("usage: Reviewer [--interval seconds] [--offline-pr184-file path] [--local-sandbox port party package-id] [--demo] [--verbose|--json]");
         }
         final LedgerRuleGateway ledger = gateway;
         final Advisory.Api evidence = offlineFile == null ? new Advisory.GitHub() : new OfflineFile(offlineFile);
         // Survives across polls so each agenda is recommended once per rule version.
         final Set<String> emitted = new HashSet<>();
+        final DemoLog demo = new DemoLog("Reviewer", demoMode, verbose, System.err);
+        demo.banner();
         // Never fall back to the pinned source fixture as an active ledger contract.
-        AgentPolling.run(interval, () -> runCycle(ledger, evidence, emitted), Thread::sleep);
+        try (SupplementalAssessment supplemental = SupplementalAssessment.runtime("Reviewer", System.err)) {
+            AgentPolling.run(interval, () -> runCycle(ledger, evidence, emitted, demo, supplemental), Thread::sleep);
+        }
     }
 }

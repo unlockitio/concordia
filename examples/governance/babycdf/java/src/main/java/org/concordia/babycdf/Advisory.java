@@ -1,4 +1,8 @@
 package org.concordia.babycdf;
+import java.util.Collections;
+import java.util.WeakHashMap;
+import java.util.HashMap;
+import java.util.Map;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -32,12 +36,16 @@ public final class Advisory {
     static final ObjectMapper JSON = new ObjectMapper();
     static final String REPO = "canton-foundation/canton-dev-fund";
     static final String PREFIX = "repos/" + REPO;
-    static final String RULE_SHA256 = "dbf9506fb19643a0baa7f028ca348ea662d133a2451212329ae4417a0db698db";
+    static final String RULE_SHA256 = documentHash();
+    private static String documentHash() {
+        try { return RuleDocument.sha(Files.readAllBytes(RuleDocument.rulesRoot().resolve("rule-v2.json"))); }
+        catch(Exception unavailable) { return ""; }
+    } // Offline v2 document identity, never ledger authority.
     static final String AUTHORITY = "pinned_demo_voted_fixture_not_live_ledger";
     static final String SCOPE = "demo_only_advisory_no_votes_or_official_status_changes";
     static final Pattern SHA = Pattern.compile("[0-9a-f]{40}");
     static final Pattern CLAUSE = Pattern.compile("(?m)^%s = ReviewClause \"([^\"]+)\"\\s*\\(PinnedExcerpt \"([^\"]+)\" \"([^\"]+)\"\\)\\s*\\(PinnedExcerpt \"([^\"]+)\" \"([^\"]+)\"\\)");
-    static final Path RULE = Path.of("../impl/daml/Cap/Examples/BabyCdf/RuleVote.daml");
+    static final Path RULE = Path.of("../rules/rule-v2.json");
 
     private Advisory() { }
 
@@ -46,19 +54,44 @@ public final class Advisory {
         // Discovery provenance only; every offline adapter must override this.
         // It never bypasses blob digest checks or supplies ledger rule authority.
         default boolean offlineSeed() { return false; }
+        default JsonNode fresh(String path) throws IOException,InterruptedException { return get(path); }
     }
 
     public static final class GitHub implements Api {
-        private final HttpClient client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(15)).build();
-        public JsonNode get(String path) throws IOException, InterruptedException {
+        private final HttpClient client = HttpClient.newBuilder().followRedirects(HttpClient.Redirect.NEVER).connectTimeout(Duration.ofSeconds(15)).build();
+        private final IntakeGitHub auth;
+        HttpClient.Redirect redirectPolicy() { return client.followRedirects(); }
+        private long windowStart=System.nanoTime();
+        private int requests;
+        private final Map<String,JsonNode> recent=new HashMap<>();
+        private final Map<String,Long> fetched=new HashMap<>();
+        public GitHub() { this(System.getenv()); }
+        GitHub(Map<String,String> env) {
+            try { auth=env.containsKey("INTAKE_GITHUB_TOKEN_FILE")?IntakeGitHub.configured(env):null; }
+            catch(IOException invalid) { throw new IllegalArgumentException("GitHub file credential invalid"); }
+        }
+        @Override public synchronized JsonNode fresh(String path) throws IOException,InterruptedException {
+            recent.remove(path); fetched.remove(path); return get(path);
+        }
+        public synchronized JsonNode get(String path) throws IOException, InterruptedException {
+            long now=System.nanoTime();
+            if(recent.containsKey(path)&&now-fetched.get(path)<Duration.ofMinutes(10).toNanos()) return recent.get(path);
+            if(now-windowStart>Duration.ofHours(1).toNanos()) { windowStart=now; requests=0; }
+            if(auth==null&&requests>=60) throw new IOException("GitHub anonymous hourly request budget exhausted");
+            requests++;
             HttpRequest.Builder request = HttpRequest.newBuilder(URI.create("https://api.github.com/" + path))
                     .timeout(Duration.ofSeconds(15)).header("Accept", "application/vnd.github+json")
                     .header("User-Agent", "concordia-babycdf-advisory-demo").GET();
-            String token = System.getenv("GITHUB_TOKEN");
-            if (token != null && !token.isBlank()) request.header("Authorization", "Bearer " + token);
-            HttpResponse<String> response = client.send(request.build(), HttpResponse.BodyHandlers.ofString());
-            if (response.statusCode() != 200) throw new IOException("GitHub HTTP " + response.statusCode() + " for " + path);
-            return JSON.readTree(response.body());
+            if(auth!=null) auth.authorizeRead(request,URI.create("https://api.github.com/"+path));
+            HttpResponse<java.io.InputStream> response = client.send(request.build(), HttpResponse.BodyHandlers.ofInputStream());
+            try(var input=response.body()) {
+                if (response.statusCode() != 200) throw new IOException("GitHub HTTP " + response.statusCode());
+                byte[] bytes=readBounded(input,Duration.ofSeconds(15));
+                if(bytes.length>2*1024*1024) throw new IOException("GitHub response limit");
+                JsonNode parsed=JSON.readTree(bytes);
+                if(recent.size()<64&&!path.contains("/git/blobs/")&&bytes.length<=256*1024) { recent.put(path,parsed); fetched.put(path,now); }
+                return parsed;
+            }
         }
     }
 
@@ -97,8 +130,15 @@ public final class Advisory {
      */
     public record Clause(String id, String expectedAnchor, String expected, String conflictAnchor,
                          String conflict, String criterion, List<String> requiredPhrases,
-                         List<String> forbiddenPhrases) {
+                         List<String> forbiddenPhrases, String kind, List<String> indicators) {
+        public Clause(String id,String expectedAnchor,String expected,String conflictAnchor,String conflict,String criterion,List<String> requiredPhrases,List<String> forbiddenPhrases,String kind) {
+            this(id,expectedAnchor,expected,conflictAnchor,conflict,criterion,requiredPhrases,forbiddenPhrases,kind,List.of());
+        }
+        public Clause(String id,String expectedAnchor,String expected,String conflictAnchor,String conflict,String criterion,List<String> requiredPhrases,List<String> forbiddenPhrases) {
+            this(id,expectedAnchor,expected,conflictAnchor,conflict,criterion,requiredPhrases,forbiddenPhrases,"CONTRADICTION_OR_SUPPORT");
+        }
         public Clause {
+            indicators=indicators==null?List.of():List.copyOf(indicators);
             criterion = criterion == null ? "" : criterion;
             requiredPhrases = requiredPhrases == null ? List.of() : List.copyOf(requiredPhrases);
             forbiddenPhrases = forbiddenPhrases == null ? List.of() : List.copyOf(forbiddenPhrases);
@@ -123,19 +163,13 @@ public final class Advisory {
     static String sha256(String s) { return digest("SHA-256", s.getBytes(StandardCharsets.UTF_8)); }
 
     public static Fixture fixture(Path source, String expected, int version) throws IOException {
-        if (!RULE_SHA256.equals(expected) || (version != 1 && version != 2))
-            throw new IllegalArgumentException("explicit recognized demo fixture SHA-256 and rule version required");
-        byte[] raw = Files.readAllBytes(source);
-        if (!expected.equals(digest("SHA-256", raw))) throw new IOException("demo voted fixture changed; review and explicitly repin");
-        String text = new String(raw, StandardCharsets.UTF_8);
-        List<Clause> clauses = new ArrayList<>();
-        Set<String> ids = new HashSet<>();
-        for (String name : List.of("compositionClause", "executionClause").subList(0, version)) {
-            Matcher m = Pattern.compile(CLAUSE.pattern().formatted(name)).matcher(text);
-            if (!m.find() || !ids.add(m.group(1))) throw new IOException("voted demo fixture clause cannot be parsed uniquely");
-            clauses.add(new Clause(m.group(1), m.group(2), m.group(3), m.group(4), m.group(5)));
-        }
-        return new Fixture(version, List.copyOf(clauses));
+        if(version!=1&&version!=2||expected==null||!expected.matches("[a-f0-9]{64}"))throw new IllegalArgumentException("invalid offline document identity");
+        Path document=Path.of("../rules/rule-v"+version+".json");
+        if(!source.equals(RULE))throw new IOException("unrecognized offline fixture location");
+        var resolved=RuleDocument.local(new RuleDocument.Ref(document.getFileName().toString(),null,expected),document.getParent());
+        if(!resolved.verified())throw new IOException("rule_unverified");
+        if(resolved.version()!=version)throw new IOException("rule_unverified");
+        return new Fixture(version,resolved.clauses());
     }
 
     static String value(JsonNode node, String field) { return node.path(field).asText(""); }
@@ -155,7 +189,69 @@ public final class Advisory {
         return item;
     }
 
-    public static ObjectNode collect(Api api) throws IOException, InterruptedException {
+    static byte[] readBounded(java.io.InputStream input,Duration deadline) throws IOException {
+        var timer=java.util.concurrent.Executors.newSingleThreadScheduledExecutor();
+        var expired=new java.util.concurrent.atomic.AtomicBoolean();
+        var timeout=timer.schedule(()->{expired.set(true);try {input.close();}catch(IOException ignored){}},deadline.toMillis(),java.util.concurrent.TimeUnit.MILLISECONDS);
+        try {
+            byte[] bytes=input.readNBytes(2*1024*1024+1);
+            if(expired.get()) throw new IOException("GitHub body deadline exceeded");
+            return bytes;
+        } finally { timeout.cancel(false);timer.shutdownNow(); }
+    }
+    static void stripBundleContents(ObjectNode item) {
+        if(item.path("evidence_bundle") instanceof ObjectNode bundle) {
+            for(JsonNode file:bundle.path("files")) if(file instanceof ObjectNode object) object.remove("content");
+            bundle.remove(List.of("title","body"));
+        }
+    }
+    static EvidenceBundle collectBundle(Api api,JsonNode pr,JsonNode listed) throws InterruptedException {
+        List<EvidenceBundle.File> offered=new ArrayList<>(); Set<String> expected=new HashSet<>();
+        boolean complete=listed.isArray()&&listed.size()<100;
+        if(pr.has("changed_files")&&pr.path("changed_files").asInt()!=listed.size()) complete=false;
+        int used=0;
+        for(JsonNode file:listed) {
+            String path=value(file,"filename"),sha=value(file,"sha"); expected.add(path);
+            if("removed".equals(value(file,"status"))||path.isBlank()||!SHA.matcher(sha).matches()) { complete=false;continue; }
+            try {
+                JsonNode blob=cachedBlob(api,sha);
+                if(!"base64".equals(value(blob,"encoding"))||!sha.equals(value(blob,"sha"))||blob.path("truncated").asBoolean()) { complete=false;continue; }
+                String encoded=value(blob,"content");
+                if(encoded.length()>4L*(EvidenceBundle.MAX_EVIDENCE_BYTES-used)/3+8192) { complete=false;continue; }
+                byte[] bytes=Base64.getMimeDecoder().decode(encoded);
+                if(bytes.length>EvidenceBundle.MAX_EVIDENCE_BYTES-used) { complete=false;continue; }
+                String content=StandardCharsets.UTF_8.newDecoder().onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+                        .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT).decode(java.nio.ByteBuffer.wrap(bytes)).toString();
+                if(content.indexOf('\0')>=0||!EvidenceBundle.blob(content).equals(sha)) { complete=false;continue; }
+                offered.add(new EvidenceBundle.File(path,sha,bytes.length,content)); used+=bytes.length;
+            } catch(IOException|IllegalArgumentException failure) { complete=false; }
+        }
+        return EvidenceBundle.proposal(value(pr,"html_url"),value(pr.path("head"),"sha"),offered,expected,complete);
+    }
+
+    public static ObjectNode collect(Api api) throws IOException, InterruptedException { return collect(api,false); }
+    private record FileSnapshot(String head,JsonNode files) {}
+    private static final Map<Api,FileSnapshot> FILE_SNAPSHOTS=Collections.synchronizedMap(new WeakHashMap<>());
+    private static final Map<Api,Map<String,EvidenceBundle>> BUNDLES=Collections.synchronizedMap(new WeakHashMap<>());
+    private record VerifiedBlob(String sha,String text) {
+        JsonNode json() { return JSON.createObjectNode().put("sha",sha).put("encoding","base64").put("content",Base64.getEncoder().encodeToString(text.getBytes(StandardCharsets.UTF_8))); }
+    }
+    private static final Map<Api,Map<String,VerifiedBlob>> BLOBS=Collections.synchronizedMap(new WeakHashMap<>());
+    private static JsonNode cachedBlob(Api api,String sha) throws IOException,InterruptedException {
+        synchronized(BLOBS) {
+            var cache=BLOBS.computeIfAbsent(api,k->new HashMap<>());
+            if(cache.containsKey(sha)) return cache.get(sha).json();
+            JsonNode blob=api.get(PREFIX+"/git/blobs/"+sha);
+            try {
+                byte[] raw=Base64.getMimeDecoder().decode(value(blob,"content"));
+                String text=StandardCharsets.UTF_8.newDecoder().decode(java.nio.ByteBuffer.wrap(raw)).toString();
+                if(cache.size()<64&&raw.length<=EvidenceBundle.MAX_EVIDENCE_BYTES&&text.indexOf('\0')<0
+                    &&"base64".equals(value(blob,"encoding"))&&!blob.path("truncated").asBoolean()&&EvidenceBundle.blob(text).equals(sha)) cache.put(sha,new VerifiedBlob(sha,text));
+            } catch(java.nio.charset.CharacterCodingException|IllegalArgumentException rejected) { /* Rejected blobs are never retained. */ }
+            return blob;
+        }
+    }
+    static ObjectNode collect(Api api,boolean llmEnabled) throws IOException, InterruptedException {
         ArrayNode inputs = JSON.createArrayNode();
         ArrayNode errors = JSON.createArrayNode();
         boolean proposalFound = false;
@@ -165,12 +261,39 @@ public final class Advisory {
             if (number(pr) != 184 || !SHA.matcher(value(pr.path("head"), "sha")).matches()) {
                 errors.add("proposal PR identity not verified"); continue;
             }
-            JsonNode files = api.get(PREFIX + "/pulls/184/files?per_page=100");
+            JsonNode files;
+            String observedHead=value(pr.path("head"),"sha");
+            synchronized(FILE_SNAPSHOTS) {
+                var snapshot=FILE_SNAPSHOTS.get(api);
+                if(snapshot!=null&&snapshot.head().equals(observedHead)) files=snapshot.files();
+                else {
+                    files=api.fresh(PREFIX+"/pulls/184/files?per_page=100");
+                    FILE_SNAPSHOTS.put(api,new FileSnapshot(observedHead,files));
+                }
+            }
+            EvidenceBundle bundle=null;
+            boolean headConsistent=false;
+            if(llmEnabled) {
+                String identity=value(pr,"html_url")+":"+value(pr.path("head"),"sha")+":"+files.toString();
+                synchronized(BUNDLES) {
+                    var cache=BUNDLES.computeIfAbsent(api,k->new HashMap<>());
+                    bundle=cache.get(identity);
+                    headConsistent=bundle!=null;
+                    if(bundle==null) {
+                        bundle=collectBundle(api,pr,files);
+                        JsonNode after=api.fresh(PREFIX+"/pulls/184");
+                        headConsistent=value(pr.path("head"),"sha").equals(value(after.path("head"),"sha"));
+                        if(!headConsistent)
+                            bundle=new EvidenceBundle(bundle.url(),bundle.headSha(),bundle.files(),null,null,false);
+                        else if(cache.size()<16) cache.put(identity,bundle);
+                    }
+                }
+            }
             for (JsonNode file : files) {
                 if (!"proposals/concordia.md".equals(value(file, "filename"))) continue;
                 String sha = value(file, "sha");
                 if (!SHA.matcher(sha).matches()) { errors.add("proposal blob SHA missing"); continue; }
-                JsonNode blob = api.get(PREFIX + "/git/blobs/" + sha);
+                JsonNode blob = cachedBlob(api,sha);
                 if (!"base64".equals(value(blob, "encoding")) || !sha.equals(value(blob, "sha"))) {
                     errors.add("proposal blob response unverified"); continue;
                 }
@@ -185,6 +308,12 @@ public final class Advisory {
                 String text = new String(raw, StandardCharsets.UTF_8);
                 ObjectNode item = item("proposal_pr", 184, pr, sha, true, text);
                 item.put("head_commit", value(pr.path("head"), "sha"));
+                if(bundle!=null) {
+                    item.set("evidence_bundle",JSON.valueToTree(bundle));
+                    item.put("supplemental_valid",bundle.completeness());
+                    item.put("head_consistent",headConsistent);
+                    item.put("absence_eligible",Presence.eligible(item,bundle));
+                }
                 item.set("github_merged_at", pr.path("merged_at"));
                 item.put("source_url", "https://github.com/" + REPO + "/blob/" + value(pr.path("head"), "sha") + "/proposals/concordia.md");
                 inputs.add(item); proposalFound = true;
@@ -201,7 +330,9 @@ public final class Advisory {
             if (issue.has("pull_request") || !value(issue, "title").startsWith("Concordia #184 - Milestone ")) continue;
             String revision = value(issue, "updated_at");
             if (revision.isEmpty()) errors.add("milestone issue #" + n + " lacks revision time");
-            inputs.add(item("milestone_issue", n, issue, revision, false, value(issue, "body")));
+            ObjectNode issueItem=item("milestone_issue", n, issue, revision, false, value(issue,"body"));
+            issueItem.set("evidence_bundle",JSON.valueToTree(EvidenceBundle.issue(value(issue,"html_url"),value(issue,"title"),value(issue,"body"))));
+            inputs.add(issueItem);
         }
         if (seen.isEmpty()) errors.add("no Concordia milestone issues discovered");
         List<JsonNode> sorted = new ArrayList<>(); inputs.forEach(sorted::add);
@@ -214,6 +345,7 @@ public final class Advisory {
     }
 
     static ObjectNode finding(String text, boolean pinned, Clause clause) {
+        if(!"CONTRADICTION_OR_SUPPORT".equals(clause.kind())) return ClauseCheck.evaluate(clause,text,pinned,false);
         ObjectNode result = JSON.createObjectNode();
         String status = "insufficient_evidence", anchor = "no matching pinned excerpt";
         if (pinned) {
@@ -227,21 +359,46 @@ public final class Advisory {
     }
 
     public static ObjectNode pollOnce(Api api, Fixture fixture, Set<String> state) throws IOException, InterruptedException {
-        ObjectNode collected = collect(api);
+        return pollOnce(api, fixture, state, null);
+    }
+
+    static ObjectNode pollOnce(Api api, Fixture fixture, Set<String> state, SupplementalAssessment supplemental) throws IOException, InterruptedException {
+        return pollOnce(api, fixture, state, supplemental, fixture, "pinned_demo_fixture_not_live_authority");
+    }
+
+    static ObjectNode pollOnce(Api api, Fixture fixture, Set<String> state, SupplementalAssessment supplemental,
+                               Object context, String source) throws IOException, InterruptedException {
+        List<Clause> activeClauses=context instanceof Reviewer.EffectiveRule effective?effective.clauses():fixture.clauses();
+        String documentSha=context instanceof Reviewer.EffectiveRule effective&&effective.ruleRef()!=null?effective.ruleRef().sha256():RULE_SHA256;
+        if(!(context instanceof Reviewer.EffectiveRule)) {
+            try { documentSha=RuleDocument.sha(Files.readAllBytes(Path.of("../rules/rule-v"+fixture.version()+".json"))); }
+            catch(Exception unavailable) { documentSha=RULE_SHA256; }
+        }
+        ObjectNode collected = collect(api,(supplemental!=null&&supplemental.enabled())||activeClauses.stream().anyMatch(c->"PRESENCE_REQUIRED".equals(c.kind())));
         ObjectNode result = JSON.createObjectNode().put("scope", SCOPE);
         ArrayNode reviews = result.putArray("reviews");
         result.set("errors", collected.path("errors"));
         for (JsonNode input : collected.path("inputs")) {
             String key = JSON.writeValueAsString(List.of(REPO, value(input, "kind"), number(input),
-                    value(input, "revision"), value(input, "body_sha256"), "architecture-review", fixture.version(), RULE_SHA256));
+                    value(input, "revision"), value(input, "body_sha256"), "architecture-review", context instanceof Reviewer.EffectiveRule effective?effective.version():fixture.version(), documentSha));
             if (state.contains(key)) continue;
             ObjectNode review = input.deepCopy();
             String text = value(review, "_review_text");
             review.remove("_review_text");
             review.put("rule_id", "architecture-review").put("rule_version", fixture.version())
-                    .put("rule_source_sha256", RULE_SHA256).put("rule_authority", AUTHORITY);
+                    .put("rule_source_sha256", RULE_SHA256).put("ballot_rule_authority",AUTHORITY)
+                    .put("rule_document_sha256",documentSha)
+                    .put("rule_version_evaluated",context instanceof Reviewer.EffectiveRule effective?effective.version():fixture.version())
+                    .put("rule_authority",context instanceof Reviewer.EffectiveRule effective?"ledger_effective_rule:"+effective.contractId()+":v"+effective.version():AUTHORITY);
+            if(context instanceof Reviewer.EffectiveRule effective) review.put("rule_version",effective.version());
             ArrayNode findings = review.putArray("findings");
-            for (Clause clause : fixture.clauses()) findings.add(finding(text, input.path("pinned").asBoolean(), clause));
+            if(context instanceof Reviewer.EffectiveRule effective&&effective.ruleFailure()!=null) findings.add(JSON.createObjectNode().put("clause_id","rule_document").put("status","insufficient_evidence").put("detail","rule_unverified"));
+            for (Clause clause : activeClauses) {
+                EvidenceBundle bundle=review.has("evidence_bundle")?JSON.treeToValue(review.get("evidence_bundle"),EvidenceBundle.class):null;
+                findings.add("PRESENCE_REQUIRED".equals(clause.kind())?ClauseCheck.evaluate(clause,text,input.path("pinned").asBoolean(),bundle,Presence.eligible(review,bundle)):finding(text,input.path("pinned").asBoolean(),clause));
+            }
+            if (supplemental != null && context != null) supplemental.assess(review, text, context, "advisory-proposal-or-milestone", source);
+            stripBundleContents(review);
             reviews.add(review);
             state.add(key);
         }
@@ -257,6 +414,11 @@ public final class Advisory {
         void propose(BallotCommand command) throws Exception;
     }
 
+    static ObjectNode prepareBallotSafely(JsonNode review,String proposer,String governorContractId,boolean authorized,LedgerApi ledger) throws Exception {
+        try { return prepareBallot(review,proposer,governorContractId,authorized,ledger); }
+        catch(RuntimeException failure) { return JSON.createObjectNode().put("kind",value(review,"kind")).put("submitted",false).put("status","blocked_invalid_review").put("reason","review_validation_failed"); }
+    }
+
     /** Fail closed: discovery is not authority, and issue timestamps are not immutable pins. */
     public static ObjectNode prepareBallot(JsonNode review, String proposer, String governorContractId,
                                             boolean submissionAuthorized, LedgerApi ledger) throws Exception {
@@ -265,7 +427,7 @@ public final class Advisory {
         int number = number(review);
         String url = value(review, "url");
         // Only reviews produced by the pinned demo fixture may become command previews.
-        if (!AUTHORITY.equals(value(review, "rule_authority"))
+        if (!(AUTHORITY.equals(value(review,"rule_authority")) || value(review,"rule_authority").startsWith("ledger_effective_rule:") && AUTHORITY.equals(value(review,"ballot_rule_authority")))
                 || !RULE_SHA256.equals(value(review, "rule_source_sha256")))
             throw new IllegalArgumentException("review lacks verified demo rule provenance");
         boolean proposal = "proposal_pr".equals(kind) && number == 184;
@@ -315,6 +477,99 @@ public final class Advisory {
         return result;
     }
 
+    /**
+     * Presentation lines for one Advisory cycle.
+     *
+     * <p>This agent's job in the demo is evidence, not judgement: it confirms what it loaded and
+     * verified, and says nothing about whether a proposal should be approved. The confirmation is
+     * only printed for an input the collector actually produced, which it does only after the Git
+     * blob digest check has passed, so the sentence reports a verified fact rather than an
+     * intention. Errors the collector reported are surfaced, never swallowed.
+     *
+     * <p>{@code pollOnce} suppresses an input it has already seen, so an unchanged cycle produces
+     * no reviews and therefore no repeated lines, and a changed revision produces a new one.
+     */
+    static ObjectNode pollWithLedger(Api api, Fixture fixture, Set<String> state,
+                                     SupplementalAssessment supplemental, Reviewer.LedgerRuleGateway ledger) throws IOException, InterruptedException {
+        List<Reviewer.EffectiveRule> rules = null;
+        int agendaCount = 0;
+        if (ledger != null) {
+            // Preserve readback failures before pollOnce can mutate polling state.
+            try {
+                rules = ledger.activeRules();
+                agendaCount = ledger.openAgendas().size();
+            } catch (InterruptedException interrupted) {
+                throw interrupted;
+            } catch (IOException unavailable) {
+                throw unavailable;
+            } catch (Exception unavailable) {
+                throw new IOException("ledger readback unavailable", unavailable);
+            }
+        }
+        Object context = fixture;
+        String source = "pinned_demo_fixture_not_live_authority";
+        if (ledger != null) {
+            context = null;
+            source = "ledger_effective_rule";
+            if (rules != null) {
+                try { context = Reviewer.select(rules); }
+                catch (Exception unavailable) { if(supplemental!=null&&supplemental.enabled()) supplemental.contextFailure(); }
+            }
+        }
+        ObjectNode result = pollOnce(api, fixture, state, supplemental, context, source);
+        if (ledger != null) {
+            result.put("visible_active_rule_count", rules.size());
+            result.put("visible_open_agenda_count", agendaCount);
+            result.put("ledger_read_scope", "configured_party_only_textual_readback");
+        }
+        return result;
+    }
+
+    static void narrate(DemoLog demo, ObjectNode result) {
+        for (JsonNode review : result.path("reviews")) {
+            String label = DemoLog.subjectLabel(review);
+            boolean pinned = review.path("pinned").asBoolean();
+            String key = "advisory:" + value(review, "kind") + ":" + number(review);
+            demo.observed(key, pinned
+                    ? label + " loaded; pinned evidence verified."
+                    : label + " loaded; no immutable revision, so its evidence is not pinned.");
+        }
+        // The cycle's evidence health, assessed once, from the collector's own
+        // errors. Failure and recovery are both decided here and nowhere else,
+        // so a healthy aspect of the cycle can never clear an unhealthy one.
+        //
+        // The default demo seed is PR-only and therefore legitimately reports
+        // no milestone issue. That is an expected shortfall, not a fault, but
+        // it is still reported accurately rather than filtered out: it prints
+        // once, and stays silent while unchanged, so it neither disappears nor
+        // flaps. A changed shortfall prints again, and its clearing is a
+        // genuine recovery.
+        // Verification failures and the routine shortfall are different facts
+        // with different severities, so they are classified and tracked apart
+        // using the same rule the Reviewer applies. A digest mismatch or an
+        // unverified identity must never be presented as a routine "Note".
+        JsonNode errors = result.path("errors");
+        java.util.List<String> serious = new java.util.ArrayList<>();
+        java.util.List<String> expected = new java.util.ArrayList<>();
+        if (errors.isArray()) {
+            for (JsonNode error : errors) {
+                String text = DemoLog.trim(error.asText());
+                if (text.isBlank()) continue;
+                if (ReviewerNarration.isExpectedShortfall(text)) expected.add(text);
+                else serious.add(text);
+            }
+        }
+        if (!serious.isEmpty()) {
+            demo.failed(DemoLog.EVIDENCE, "Evidence verification failed: "
+                    + String.join("; ", serious) + ".");
+            return;
+        }
+        demo.recovered(DemoLog.EVIDENCE, "Evidence verified again.");
+        if (!expected.isEmpty())
+            demo.failed(DemoLog.EVIDENCE_NOTE, "Note: " + String.join("; ", expected) + ".");
+        else demo.recovered(DemoLog.EVIDENCE_NOTE, "All expected evidence is present again.");
+    }
+
     public static Set<String> loadState(Path path) throws IOException {
         JsonNode data = JSON.readTree(Files.readString(path));
         if (data.path("schema").asInt(-1) != 1 || !data.path("identities").isArray())
@@ -340,19 +595,32 @@ public final class Advisory {
         long interval = 0;
         Path statePath = null;
         SandboxBallots sandbox = null;
+        Reviewer.LocalSandboxGateway readLedger = null;
         Path offlineRepository = null;
         Path offlineFixture = null;
+        boolean demoMode = false, verboseFlag = AgentFlags.verboseFromEnvironment();
         for (int i = 0; i < args.length; i++) {
             if ("--interval".equals(args[i]) && ++i < args.length) interval = AgentPolling.intervalMillis(args[i]);
             else if ("--state-file".equals(args[i]) && ++i < args.length) statePath = Path.of(args[i]).toAbsolutePath();
             else if ("--offline-pr184-file".equals(args[i]) && ++i < args.length) offlineFixture = Path.of(args[i]);
             else if ("--offline-pr184-repo".equals(args[i]) && ++i < args.length) offlineRepository = Path.of(args[i]);
+            // Presentation output is opt-in; without it this agent behaves exactly as before.
+            else if ("--demo".equals(args[i])) demoMode = true;
+            else if ("--verbose".equals(args[i]) || "--json".equals(args[i])) verboseFlag = true;
+            else if ("--read-only-sandbox".equals(args[i]) && i + 3 < args.length && readLedger == null) {
+                readLedger = new Reviewer.LocalSandboxGateway(Integer.parseInt(args[++i]), args[++i], args[++i]);
+            }
             else if ("--local-sandbox".equals(args[i]) && i + 5 < args.length && sandbox == null) {
                 sandbox = new SandboxBallots(Integer.parseInt(args[++i]), args[++i], args[++i], args[++i], args[++i]);
-            } else throw new IllegalArgumentException("usage: [--interval positive-seconds] [--state-file direct-local-filename] [--offline-pr184-file local-fixture] [--offline-pr184-repo local-repository] [--local-sandbox port demo-member deployed-package-id governor-cid sandbox-user-id]");
+            } else throw new IllegalArgumentException("usage: [--interval positive-seconds] [--state-file direct-local-filename] [--offline-pr184-file local-fixture] [--offline-pr184-repo local-repository] [--local-sandbox port demo-member deployed-package-id governor-cid sandbox-user-id] [--demo] [--verbose|--json]");
         }
+        final DemoLog demo = new DemoLog("Advisory", demoMode, verboseFlag, System.err);
+        demo.banner();
         final long pollInterval = interval;
         final Path pollStatePath = statePath;
+        if (readLedger != null && sandbox != null)
+            throw new IllegalArgumentException("read-only ledger mode cannot enable submission");
+        final Reviewer.LocalSandboxGateway pollReadLedger = readLedger;
         final SandboxBallots pollSandbox = sandbox;
         if (offlineRepository != null && offlineFixture != null)
             throw new IllegalArgumentException("choose one offline source");
@@ -367,14 +635,14 @@ public final class Advisory {
         Set<String> state = statePath != null && Files.exists(statePath) ? loadState(statePath) : new HashSet<>();
         Api api = offlineFixture != null ? new OfflineFile(offlineFixture)
                 : offlineRepository == null ? new GitHub() : new OfflinePr184(offlineRepository);
-        try {
+        try (SupplementalAssessment supplemental = SupplementalAssessment.runtime("Advisory", System.err)) {
             AgentPolling.run(pollInterval, () -> {
                 final SandboxBallots sandboxCycle = pollSandbox;
                 try {
-                    ObjectNode result = pollOnce(api, fixture, sandboxCycle == null ? state : new HashSet<>());
+                    ObjectNode result = pollWithLedger(api, fixture, sandboxCycle == null ? state : new HashSet<>(), supplemental, pollReadLedger);
                     ArrayNode ballots = result.putArray(sandboxCycle == null ? "ballot_previews" : "ballot_submissions");
                     for (JsonNode review : result.path("reviews"))
-                        ballots.add(prepareBallot(review, sandboxCycle == null ? null : sandboxCycle.party(),
+                        ballots.add(prepareBallotSafely(review, sandboxCycle == null ? null : sandboxCycle.party(),
                                 sandboxCycle == null ? null : sandboxCycle.governorCid(), sandboxCycle != null, sandboxCycle));
                     result.put("ledger_submission", sandboxCycle == null ? "blocked: explicit local sandbox configuration required"
                             : "demo_local_only_no_foundation_decision");
@@ -383,15 +651,26 @@ public final class Advisory {
                         String round = "babycdf:grant:184:f591787a772848e4537aba5d8ba02be1764647da";
                         result.put("matching_active_proposal_and_action_count", sandboxCycle.activeRoundCount(round));
                     }
-                    System.err.println(AgentPolling.advisoryLine(result));
-                    System.out.println(JSON.writeValueAsString(result));
+                    boolean presenting = demo.enabled();
+                    // narrate assesses the whole cycle's health and reports
+                    // both failure and recovery itself. Announcing recovery
+                    // here, before the collector's own errors were examined,
+                    // cleared a failure that was still present and produced a
+                    // false recovery on every poll.
+                    if (presenting) narrate(demo, result);
+                    if (!presenting || demo.verbose()) System.err.println(AgentPolling.advisoryLine(result));
+                    if (!presenting || demo.verbose()) System.out.println(JSON.writeValueAsString(result));
                     if (pollStatePath != null) saveState(pollStatePath, state);
                 } catch (IOException e) {
                     ObjectNode error = JSON.createObjectNode().put("scope", SCOPE);
                     error.putArray("reviews"); error.putArray("errors").add("poll or sandbox unavailable: " + e.getMessage());
-                    System.err.println("[advisory] BLOCKED errors=" + error.path("errors").size()
-                            + ": " + e.getMessage());
-                    System.out.println(JSON.writeValueAsString(error));
+                    // The failure is stated once in plain words; repeats of the
+                    // same failure are silent, and the detail stays available.
+                    if (demo.enabled()) demo.failed(DemoLog.EVIDENCE, "Waiting: " + DemoLog.summarize(e));
+                    if (!demo.enabled() || demo.verbose())
+                        System.err.println("[advisory] BLOCKED errors=" + error.path("errors").size()
+                                + ": " + e.getMessage());
+                    if (!demo.enabled() || demo.verbose()) System.out.println(JSON.writeValueAsString(error));
                     if (pollInterval == 0 || sandboxCycle != null) throw e;
                 }
             }, Thread::sleep);

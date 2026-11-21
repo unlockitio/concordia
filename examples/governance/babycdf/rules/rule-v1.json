@@ -1,0 +1,8 @@
+{
+  "schema": "babycdf.rule/1",
+  "version": 1,
+  "clauses": [
+    {"id":"first-release-scope","kind":"CONTRADICTION_OR_SUPPORT","text":"The first release must cover at least three proving domains.","expectedAnchor":"First release / three proving domains","expected":"at least three proving domains","conflictAnchor":"Acceptance Criteria / Working implementation","conflict":"Both reference flows (auction and governance) run end-to-end on a Canton sandbox.","requiredPhrases":[],"forbiddenPhrases":["Both reference flows (auction and governance) run end-to-end on a Canton sandbox."],"indicators":[]},
+    {"id":"independent-security-audit","kind":"PRESENCE_REQUIRED","text":"The proposal must commit to an independent security audit before release.","expectedAnchor":"Security assurance","expected":"independent security audit","conflictAnchor":"Security assurance absent","conflict":"no independent security audit is planned","requiredPhrases":[],"forbiddenPhrases":[],"indicators":["security audit","security review","threat model","penetration test","audit report"]}
+  ]
+}
