@@ -22,6 +22,11 @@ def config(env, auth=False, llm=False):
     return json.loads(subprocess.check_output(
         command + ["config", "--format", "json"], text=True, env=env))
 model = config(environment)
+budget_model = config(dict(environment, BABYCDF_LLM_MAX_ASSESSMENTS='6'))
+for agent in ('advisory','reviewer'):
+    assert budget_model['services'][agent]['environment']['BABYCDF_LLM_MAX_ASSESSMENTS'] == '6'
+for other in ('intake','canton'):
+    assert 'BABYCDF_LLM_MAX_ASSESSMENTS' not in budget_model['services'][other].get('environment', {})
 mode_model = config(dict(environment, AGENT_EVIDENCE_MODE='offline'))
 for agent in ('advisory', 'reviewer'):
     assert mode_model['services'][agent]['environment']['AGENT_EVIDENCE_MODE'] == 'offline'

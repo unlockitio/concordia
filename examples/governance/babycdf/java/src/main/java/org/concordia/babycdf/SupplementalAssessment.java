@@ -15,6 +15,19 @@ final class SupplementalAssessment implements AutoCloseable {
     private final PrintStream log;
     private final RuleVerdictCache cache;
     private int assessments, reservedAttempts, reservedTokens;
+    private int maximumAssessments=MAX_ASSESSMENTS;
+    static int assessmentLimit(Map<String,String> env) {
+        String value=env.getOrDefault("BABYCDF_LLM_MAX_ASSESSMENTS","");
+        if(value.isEmpty())return MAX_ASSESSMENTS;
+        if(!value.matches("[1-9][0-9]?"))throw new IllegalArgumentException("invalid_llm_assessment_budget");
+        int limit=Integer.parseInt(value);if(limit>32)throw new IllegalArgumentException("invalid_llm_assessment_budget");return limit;
+    }
+    void assessCycle(com.fasterxml.jackson.databind.node.ArrayNode items,Object rule,String task,String source) {
+        List<ObjectNode> ordered=new ArrayList<>();items.forEach(n->ordered.add((ObjectNode)n));
+        ordered.sort(Comparator.comparingInt((ObjectNode n)->n.path("pinned").asBoolean()&&"proposal_pr".equals(n.path("kind").asText())?0:n.path("explicit_milestone_subject").asBoolean()?1:2).thenComparingInt(n->n.path("number").asInt()));
+        for(var item:ordered)assess(item,item.path("_supplemental_text").asText(),rule,task,source);
+        for(var item:ordered){item.remove("_supplemental_text");Advisory.stripBundleContents(item);}
+    }
     private boolean notice;
     private final Set<String> emitted=new HashSet<>();
     private final Map<ObjectNode,String> displayKeys=new IdentityHashMap<>();
@@ -24,8 +37,10 @@ final class SupplementalAssessment implements AutoCloseable {
         boolean enabled="1".equals(env.get("BABYCDF_LLM_ENABLED"));
         var settings=LlmSettings.fromEnvironment(enabled?env:Map.of());
         String disabled=enabled?settings.disabledReason():"runtime_opt_in_required";
-        return new SupplementalAssessment(agent,settings,disabled==null?new LlmClient(settings):null,disabled,log,
+        int limit=assessmentLimit(env);
+        var session=new SupplementalAssessment(agent,settings,disabled==null?new LlmClient(settings):null,disabled,log,
                 Path.of(System.getProperty("java.io.tmpdir"),"babycdf-"+safe(agent)+"-rule-verdict"));
+        session.maximumAssessments=limit;return session;
     }
     SupplementalAssessment(String agent,LlmSettings settings,LlmClient client,String disabled,PrintStream log) {
         this(agent,settings,client,disabled,log,null);
@@ -100,7 +115,7 @@ final class SupplementalAssessment implements AutoCloseable {
             if(prompt.getBytes(StandardCharsets.UTF_8).length>MAX_INPUT_BYTES) return failure("input_budget_exhausted");
             int attempts=client.maximumAttempts();
             int tokens=Math.multiplyExact(attempts,Math.addExact(client.requestBody(prompt).length,2048));
-            if(assessments>=MAX_ASSESSMENTS||reservedAttempts+attempts>MAX_ATTEMPTS||reservedTokens+tokens>MAX_RESERVED_TOKENS) return failure("run_budget_exhausted");
+            if(assessments>=maximumAssessments||reservedAttempts+attempts>maximumAssessments*2||reservedTokens+tokens>maximumAssessments*500000) return failure("run_budget_exhausted");
             assessments++; reservedAttempts+=attempts; reservedTokens+=tokens;
             var output=client.assessRule(prompt,ids,evidence);
             var metadata=client.ruleMetadata();

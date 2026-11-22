@@ -280,10 +280,11 @@ public final class Reviewer {
                         .put("rule_contract_id", rule.contractId());
                 findings.add(finding);
             }
-            if (supplemental != null) supplemental.assess(item, text, rule, "review-proposal-or-milestone", "ledger_effective_rule");
-            Advisory.stripBundleContents(item);
+            if(supplemental!=null)item.put("_supplemental_text",text);
+            else Advisory.stripBundleContents(item);
             reviews.add(item);
         }
+        if(supplemental!=null)supplemental.assessCycle(reviews,rule,"review-proposal-or-milestone","ledger_effective_rule");
         // Read-only agenda discovery. A failure here must not fail the review: the
         // recommendation is advisory, so it degrades to "no open agenda seen".
         ArrayNode agendas = result.putArray("open_agendas");

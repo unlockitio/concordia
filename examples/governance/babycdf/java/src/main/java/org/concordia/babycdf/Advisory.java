@@ -369,6 +369,7 @@ public final class Advisory {
             String revision = value(issue, "updated_at");
             if (revision.isEmpty()) errors.add("milestone issue #" + n + " lacks revision time");
             ObjectNode issueItem=item("milestone_issue", n, issue, revision, false, value(issue,"body"));
+            issueItem.put("explicit_milestone_subject",explicitMilestones.contains(n));
             issueItem.set("evidence_bundle",JSON.valueToTree(EvidenceBundle.issue(value(issue,"html_url"),value(issue,"title"),value(issue,"body"))));
             if(api.offlineSeed())issueItem.put("observation","offline_packaged_issue_unpinned");
             inputs.add(issueItem);
@@ -442,11 +443,12 @@ public final class Advisory {
                 EvidenceBundle bundle=review.has("evidence_bundle")?JSON.treeToValue(review.get("evidence_bundle"),EvidenceBundle.class):null;
                 findings.add("PRESENCE_REQUIRED".equals(clause.kind())?ClauseCheck.evaluate(clause,text,input.path("pinned").asBoolean(),bundle,Presence.eligible(review,bundle)):finding(text,input.path("pinned").asBoolean(),clause));
             }
-            if (supplemental != null && context != null) supplemental.assess(review, text, context, "advisory-proposal-or-milestone", source);
-            stripBundleContents(review);
+            if(supplemental!=null&&context!=null)review.put("_supplemental_text",text);
+            else stripBundleContents(review);
             reviews.add(review);
             state.add(key);
         }
+        if(supplemental!=null&&context!=null)supplemental.assessCycle(reviews,context,"advisory-proposal-or-milestone",source);
         return result;
     }
 
