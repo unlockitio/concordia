@@ -19,7 +19,8 @@ class ReviewerOfflineTest {
         assertEquals(7, result.path("rule_version").asInt());
         assertEquals("offline_pinned_pr184_seed_not_fresh_github_poll", result.path("discovery").asText());
         assertFalse(result.path("errors").isEmpty());
-        assertEquals(0, result.path("reviews").size());
+        assertEquals(1, result.path("reviews").size());
+        assertEquals("milestone_issue",result.path("reviews").get(0).path("kind").asText());
         for (var review : result.path("reviews")) {
             assertFalse(review.path("pinned").asBoolean());
             for (var finding : review.path("findings")) assertNotEquals("pass", finding.path("status").asText());

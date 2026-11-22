@@ -143,10 +143,26 @@ flags_case() {
   printf '%s flags ok: %s\n' "$name" "$args"
 }
 
+# Baseline assertions are intentionally overlay-free, regardless of caller env.
+unset INTAKE_GITHUB_TOKEN_FILE AGENT_EVIDENCE_MODE
 flags_case reviewer-default reviewer no
 flags_case advisory-default advisory no
 flags_case reviewer-verbose reviewer yes
 flags_case advisory-verbose advisory yes
+
+for agent in reviewer advisory; do
+  ARGS_FILE="$DIR/$agent-live.args"; export ARGS_FILE
+  READBACK_FILE="$READBACK" PATH="$STUB:$PATH" INTAKE_GITHUB_TOKEN_FILE=/synthetic/not-read sh "$HERE/entrypoint.sh" "$agent"
+  case "$(cat "$ARGS_FILE")" in *--offline-pr184-file*) echo 'FAIL: live auth selects offline'; exit 1;; esac
+  READBACK_FILE="$READBACK" PATH="$STUB:$PATH" INTAKE_GITHUB_TOKEN_FILE=/synthetic/not-read AGENT_EVIDENCE_MODE=offline sh "$HERE/entrypoint.sh" "$agent"
+  case "$(cat "$ARGS_FILE")" in *--offline-pr184-file*) ;; *) echo 'FAIL: explicit offline lost'; exit 1;; esac
+  unset ARGS_FILE
+done
+
+code=0
+READBACK_FILE="$READBACK" PATH="$STUB:$PATH" AGENT_EVIDENCE_MODE=unknown sh "$HERE/entrypoint.sh" reviewer > "$DIR/unknown-mode.log" 2>&1 || code=$?
+[ "$code" -eq 2 ] || { echo 'FAIL: unknown evidence mode accepted'; exit 1; }
+grep -q 'AGENT_EVIDENCE_MODE must be empty or offline' "$DIR/unknown-mode.log" || exit 1
 
 # DEMO_AGENT_VERBOSE=0 means "no", like unset: the demo default stays quiet.
 ARGS_FILE="$DIR/verbose-zero.args"

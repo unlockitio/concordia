@@ -402,7 +402,7 @@ public final class Reviewer {
         }
         final LedgerRuleGateway ledger = gateway;
         final Advisory.Api evidence = offlineFile == null ? new Advisory.GitHub() : new OfflineFile(offlineFile);
-        if(evidence instanceof Advisory.GitHub github)github.logMode("Reviewer",System.err);
+        evidence.logMode("Reviewer",System.err);
         // Survives across polls so each agenda is recommended once per rule version.
         final Set<String> emitted = new HashSet<>();
         final DemoLog demo = new DemoLog("Reviewer", demoMode, verbose, System.err);

@@ -16,11 +16,17 @@ final class OfflineFile implements Advisory.Api {
             throw new IOException("offline fixture must be a direct regular file");
         bytes = Files.readAllBytes(path);
     }
+    public void logMode(String agent,java.io.PrintStream log){log.println("["+agent+"] GitHub mode=offline_fixture");}
+    private JsonNode issue() throws IOException {
+        Path root=Path.of(System.getProperty("babycdf.fixtures.root",Files.isDirectory(Path.of("/app/fixtures"))?"/app/fixtures":"../demo/fixtures"));
+        return Advisory.JSON.readTree(Files.readAllBytes(root.resolve("issue540.json")));
+    }
     public boolean offlineSeed() { return true; }
     public JsonNode get(String path) throws IOException {
         if (path.startsWith("search/issues?"))
             return Advisory.JSON.readTree(path.contains("is%3Apr")
-                    ? "{\"items\":[{\"number\":184}]}" : "{\"items\":[]}");
+                    ? "{\"items\":[{\"number\":184}]}" : issue().path("title").asText().startsWith("Concordia #184 - Milestone ")?"{\"items\":[{\"number\":540}]}":"{\"items\":[]}");
+        if(path.equals(Advisory.PREFIX+"/issues/540"))return issue();
         if (path.endsWith("/pulls/184"))
             return Advisory.JSON.readTree("{\"number\":184,\"head\":{\"sha\":\"c6964dc9545f4046d6f4e4c1cb81cfd01fd6b521\"},\"html_url\":\"https://github.com/canton-foundation/canton-dev-fund/pull/184\"}");
         if (path.contains("/pulls/184/files?"))
@@ -28,6 +34,6 @@ final class OfflineFile implements Advisory.Api {
         if (path.endsWith("/git/blobs/" + BLOB))
             return Advisory.JSON.createObjectNode().put("sha", BLOB).put("encoding", "base64")
                     .put("content", Base64.getEncoder().encodeToString(bytes));
-        throw new IOException("offline fixture has no evidence for " + path);
+        throw new GitHubFetchFailure(GitHubFetchFailure.Code.offline_no_evidence);
     }
 }

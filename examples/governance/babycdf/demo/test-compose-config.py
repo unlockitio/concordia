@@ -22,6 +22,11 @@ def config(env, auth=False, llm=False):
     return json.loads(subprocess.check_output(
         command + ["config", "--format", "json"], text=True, env=env))
 model = config(environment)
+mode_model = config(dict(environment, AGENT_EVIDENCE_MODE='offline'))
+for agent in ('advisory', 'reviewer'):
+    assert mode_model['services'][agent]['environment']['AGENT_EVIDENCE_MODE'] == 'offline'
+for other in ('intake', 'canton'):
+    assert 'AGENT_EVIDENCE_MODE' not in mode_model['services'][other].get('environment', {})
 
 assert model["name"] == "babycdf-live", model["name"]
 assert set(model["services"]) == {"canton", "advisory", "reviewer", "intake"}

@@ -9,6 +9,7 @@ WORKDIR /app/java
 COPY --from=build /build/target/classes/ /app/classes/
 COPY --from=build /build/target/dependency/ /app/lib/
 COPY rules/ /app/rules/
+COPY demo/fixtures/ /app/fixtures/
 COPY demo/compose/agents/entrypoint.sh /app/entrypoint.sh
 # Docker initializes the named journal volume from this unprivileged-owned path.
 RUN mkdir /journal && chown 65532:65532 /journal && chmod 700 /journal

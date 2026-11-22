@@ -32,6 +32,7 @@ services:
       AGENT_INTERVAL: ${AGENT_INTERVAL:-10}
       # Presentation logs by default; set to 1 for the full JSON and detail.
       DEMO_AGENT_VERBOSE: ${DEMO_AGENT_VERBOSE:-}
+      AGENT_EVIDENCE_MODE: ${AGENT_EVIDENCE_MODE:-}
       BABYCDF_LLM_ENABLED: ${BABYCDF_LLM_ENABLED:-0}
       LLM_BASE_URL: ${LLM_BASE_URL:-}
       LLM_MODEL: ${LLM_MODEL:-}
@@ -79,6 +80,7 @@ services:
       AGENT_INTERVAL: ${AGENT_INTERVAL:-10}
       # Presentation logs by default; set to 1 for the full JSON and detail.
       DEMO_AGENT_VERBOSE: ${DEMO_AGENT_VERBOSE:-}
+      AGENT_EVIDENCE_MODE: ${AGENT_EVIDENCE_MODE:-}
       BABYCDF_LLM_ENABLED: ${BABYCDF_LLM_ENABLED:-0}
       LLM_BASE_URL: ${LLM_BASE_URL:-}
       LLM_MODEL: ${LLM_MODEL:-}

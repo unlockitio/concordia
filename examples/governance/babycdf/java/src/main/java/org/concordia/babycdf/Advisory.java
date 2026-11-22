@@ -51,6 +51,7 @@ public final class Advisory {
 
     public interface Api {
         JsonNode get(String path) throws IOException, InterruptedException;
+        default void logMode(String agent,java.io.PrintStream log) {}
         // Discovery provenance only; every offline adapter must override this.
         // It never bypasses blob digest checks or supplies ledger rule authority.
         default boolean offlineSeed() { return false; }
@@ -88,7 +89,7 @@ public final class Advisory {
             catch(IOException failed){return classified.bodyReadFailed();}
         }
         String mode(){return auth==null?"anonymous":"authenticated_file";}
-        void logMode(String agent,java.io.PrintStream log){log.println("["+agent+"] GitHub mode="+mode());}
+        public void logMode(String agent,java.io.PrintStream log){log.println("["+agent+"] GitHub mode="+mode());}
         private JsonNode getChecked(String path) throws IOException,InterruptedException {
             long now=System.nanoTime();
             if(recent.containsKey(path)&&now-fetched.get(path)<Duration.ofMinutes(10).toNanos()) return recent.get(path);
@@ -119,6 +120,7 @@ public final class Advisory {
 
     /** Offline seed for the previously verified PR identity; blob bytes still pass collect's Git digest check. */
     public static final class OfflinePr184 implements Api {
+        public void logMode(String agent,java.io.PrintStream log){log.println("["+agent+"] GitHub mode=offline_repository");}
         private static final String BLOB = "f591787a772848e4537aba5d8ba02be1764647da";
         private final byte[] bytes;
         public boolean offlineSeed() { return true; }
@@ -141,7 +143,7 @@ public final class Advisory {
                         .put("content", Base64.getEncoder().encodeToString(bytes));
             if (path.equals(query("repo:" + REPO + " is:issue \"Concordia #184\"")))
                 return JSON.readTree("{\"items\":[]}");
-            throw new IOException("offline seed has no evidence for " + path);
+            throw new GitHubFetchFailure(GitHubFetchFailure.Code.offline_no_evidence);
         }
     }
 
@@ -317,6 +319,7 @@ public final class Advisory {
             for (JsonNode file : files) {
                 if (!"proposals/concordia.md".equals(value(file, "filename"))) continue;
                 String sha = value(file, "sha");
+                if(api instanceof GitHub && (!sha.equals("f591787a772848e4537aba5d8ba02be1764647da")||!value(pr.path("head"),"sha").equals("c6964dc9545f4046d6f4e4c1cb81cfd01fd6b521"))) {errors.add("proposal pinned identity mismatch");continue;}
                 if (!SHA.matcher(sha).matches()) { errors.add("proposal blob SHA missing"); continue; }
                 JsonNode blob = cachedBlob(api,sha);
                 if (!"base64".equals(value(blob, "encoding")) || !sha.equals(value(blob, "sha"))) {
@@ -367,6 +370,7 @@ public final class Advisory {
             if (revision.isEmpty()) errors.add("milestone issue #" + n + " lacks revision time");
             ObjectNode issueItem=item("milestone_issue", n, issue, revision, false, value(issue,"body"));
             issueItem.set("evidence_bundle",JSON.valueToTree(EvidenceBundle.issue(value(issue,"html_url"),value(issue,"title"),value(issue,"body"))));
+            if(api.offlineSeed())issueItem.put("observation","offline_packaged_issue_unpinned");
             inputs.add(issueItem);
             seen.add(n);
         }
@@ -688,7 +692,7 @@ public final class Advisory {
         Set<String> state = statePath != null && Files.exists(statePath) ? loadState(statePath) : new HashSet<>();
         Api api = offlineFixture != null ? new OfflineFile(offlineFixture)
                 : offlineRepository == null ? new GitHub() : new OfflinePr184(offlineRepository);
-        if(api instanceof GitHub github)github.logMode("Advisory",System.err);
+        api.logMode("Advisory",System.err);
         try (SupplementalAssessment supplemental = SupplementalAssessment.runtime("Advisory", System.err)) {
             AgentPolling.run(pollInterval, () -> {
                 final SandboxBallots sandboxCycle = pollSandbox;

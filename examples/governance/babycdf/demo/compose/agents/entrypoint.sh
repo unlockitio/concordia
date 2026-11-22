@@ -40,6 +40,15 @@ DEMO_FLAGS='--demo'
 if [ -n "${DEMO_AGENT_VERBOSE:-}" ] && [ "${DEMO_AGENT_VERBOSE}" != 0 ]; then
   DEMO_FLAGS='--demo --verbose'
 fi
+case "${AGENT_EVIDENCE_MODE:-}" in
+  ''|offline) ;;
+  *) fail 'AGENT_EVIDENCE_MODE must be empty or offline' ;;
+esac
+# File auth selects live evidence; offline is an explicit fallback.
+EVIDENCE_FLAGS='--offline-pr184-file /state/proposal-blob.txt'
+if [ -n "${INTAKE_GITHUB_TOKEN_FILE:-}" ] && [ "${AGENT_EVIDENCE_MODE:-live}" != offline ]; then
+  EVIDENCE_FLAGS=''
+fi
 # Shared Canton namespace uses internal port 6865, not host readback port.
 case "${1:-}" in
   intake)
@@ -52,7 +61,7 @@ case "${1:-}" in
     exec java -cp '/app/classes:/app/lib/*' org.concordia.babycdf.Intake --offline-fixture /state/proposal-blob.txt 6865 "$party" "$package" "$demo_package" "$governor" "$user" "$JOURNAL" --poll "${INTAKE_POLL_ATTEMPTS:-86400}" "${INTAKE_POLL_MILLIS:-1000}" ;;
   reviewer)
     # shellcheck disable=SC2086  # DEMO_FLAGS is a script-controlled literal word list
-    exec java -cp '/app/classes:/app/lib/*' org.concordia.babycdf.Reviewer --local-sandbox 6865 "$party" "$package" --offline-pr184-file /state/proposal-blob.txt --interval "$INTERVAL" $DEMO_FLAGS ;;
+    exec java -cp '/app/classes:/app/lib/*' org.concordia.babycdf.Reviewer --local-sandbox 6865 "$party" "$package" $EVIDENCE_FLAGS --interval "$INTERVAL" $DEMO_FLAGS ;;
   advisory)
     # Text output only. The ledger-submission invocation (--local-sandbox) is
     # deliberately not reachable from this demo entrypoint, and ADVISORY_SUBMIT
@@ -61,6 +70,6 @@ case "${1:-}" in
       fail 'ADVISORY_SUBMIT is not supported: demo agents respond in text only'
     fi
     # shellcheck disable=SC2086  # DEMO_FLAGS is a script-controlled literal word list
-    exec java -cp '/app/classes:/app/lib/*' org.concordia.babycdf.Advisory --read-only-sandbox 6865 "$party" "$package" --offline-pr184-file /state/proposal-blob.txt --interval "$INTERVAL" $DEMO_FLAGS ;;
+    exec java -cp '/app/classes:/app/lib/*' org.concordia.babycdf.Advisory --read-only-sandbox 6865 "$party" "$package" $EVIDENCE_FLAGS --interval "$INTERVAL" $DEMO_FLAGS ;;
   *) fail 'unknown agent';;
 esac

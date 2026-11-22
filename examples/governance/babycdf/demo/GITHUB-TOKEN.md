@@ -149,3 +149,7 @@ securely and deliberately restart only Intake. Existing 403/429 reset/retry rule
 remain in force: a token is not a bypass. Authenticated PAT reads usually share a
 5000 requests/hour user budget with other applications; secondary limits and
 account-specific policies still apply. This is not a quota guarantee.
+
+### Agent evidence mode
+
+With the shared PAT overlay (`INTAKE_GITHUB_TOKEN_FILE` set), Reviewer and Advisory use live authenticated GitHub evidence by default. The fixed PR #184 head/blob identity remains required; mismatch fails closed. Without the overlay, or with `AGENT_EVIDENCE_MODE=offline`, they use the explicit offline PR fixture plus packaged issue #540 observation. Startup logs identify authenticated_file, anonymous, offline_fixture or offline_repository without credentials. Canton must already be running. To recreate only the agents after selecting the overlays, run `docker compose -p babycdf-live --profile agents -f compose/compose.yaml -f compose/intake-auth.yaml -f compose/agents-github-auth.yaml -f compose/llm-auth.yaml up -d --no-deps --build --force-recreate advisory reviewer` from the demo directory. This command is documented only, not run by validation.

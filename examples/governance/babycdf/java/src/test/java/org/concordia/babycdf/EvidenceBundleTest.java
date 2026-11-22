@@ -12,7 +12,7 @@ class EvidenceBundleTest {
         String content=Files.readString(golden); assertEquals(28024,Files.size(golden)); assertEquals(360,content.lines().count());
         assertEquals("f591787a772848e4537aba5d8ba02be1764647da",EvidenceBundle.blob(content));
         var collected=Advisory.collect(new OfflineFile(golden),true);
-        var bundle=Advisory.JSON.treeToValue(collected.path("inputs").get(0).path("evidence_bundle"),EvidenceBundle.class);
+        var bundle=Advisory.JSON.treeToValue(java.util.stream.StreamSupport.stream(collected.path("inputs").spliterator(),false).filter(n->n.path("kind").asText().equals("proposal_pr")).findFirst().orElseThrow().path("evidence_bundle"),EvidenceBundle.class);
         assertEquals(content,bundle.files().getFirst().content()); assertTrue(bundle.completeness()); assertTrue(bundle.verified(HEAD));
         var issue=Advisory.JSON.readTree(Files.readString(Path.of("../demo/fixtures/issue540.json")));
         var issueBundle=EvidenceBundle.issue(issue.path("html_url").asText(),issue.path("title").asText(),issue.path("body").asText());

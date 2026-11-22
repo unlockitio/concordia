@@ -6,7 +6,7 @@ import java.util.*;
 
 /** Only fixed categories and narrowly validated public metadata cross this boundary. */
 final class GitHubFetchFailure extends IOException {
-    enum Code { http_401,http_403,http_404,http_410,http_422,http_429,http_5xx,http_other,budget,deadline,size,parse,transport,interrupted }
+    enum Code { http_401,http_403,http_404,http_410,http_422,http_429,http_5xx,http_other,budget,deadline,size,parse,transport,interrupted,offline_no_evidence }
     enum Message { none,api_rate_limit_exceeded,pat_resource_not_accessible,not_found,must_have_admin_rights }
     final Code code;
     GitHubFetchFailure(Code code) { this(code,Message.none,Map.of()); }
