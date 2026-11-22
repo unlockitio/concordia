@@ -51,6 +51,7 @@ class ReviewerNarrationTest {
 
     private Advisory.Api evidence() {
         return path -> {
+            if(path.endsWith("/issues/540"))return Advisory.JSON.readTree("{\"number\":540,\"pull_request\":{}}");
             if (path.startsWith("search/issues?"))
                 return Advisory.JSON.readTree(path.contains("is%3Apr")
                         ? "{\"items\":[{\"number\":184}]}" : "{\"items\":[]}");

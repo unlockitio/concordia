@@ -156,3 +156,9 @@ Additional log reason codes: `semantic_support_unconfirmed` (verified semantic q
 ### S5 cache reference integrity
 
 Quote references expose only an opaque index into the bundle sorted by file path (slot 0 for single text or issue title/body), normalized-text start/end offsets (and hence length), and redacted display text. File paths and per-quote digests are not persisted. All verified quotes are whitespace-normalized before resolution. The evidence-bound cache key selects the current bundle; references are bounds-checked, reconstructed, normally quote-verified and re-resolved. The private owner-checked cache directory is the integrity boundary; offsets are not a cryptographic authenticity proof. This supersedes the earlier SHA-256 quote-reference description.
+
+### Live assessment and recovery clarifications
+
+Issue #540 is expected to be INCONCLUSIVE, but contradiction/support outcomes remain model-dependent; deterministic quote verification rejects invented support, not all possible interpretations. Presence without eligible complete proposal evidence deterministically yields `incomplete_evidence`. Diagnostics exist only on fresh assessments; memory and disk cache hits report `diagnostics: unavailable_cached`. Diagnostic quotes are redacted, control-cleaned and capped at eight quotes of 240 bytes each. They are not persisted to the verdict cache.
+
+Generic uncertain or pending Intake failures are retried automatically at the configured interval, without blind replay. Progress resumes only when authoritative reconciliation succeeds. Definitely-rejected commands or unavailable historical proof require operator investigation; do not remove intents or reset checkpoints. HTTP-policy suspension is a separate condition and may require controlled restart after its cause clears.

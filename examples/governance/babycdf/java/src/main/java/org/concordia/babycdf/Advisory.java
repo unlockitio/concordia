@@ -60,6 +60,8 @@ public final class Advisory {
     public static final class GitHub implements Api {
         private final HttpClient client = HttpClient.newBuilder().followRedirects(HttpClient.Redirect.NEVER).connectTimeout(Duration.ofSeconds(15)).build();
         private final IntakeGitHub auth;
+        private Api testTransport;
+        GitHub(Api transport) { this(Map.of());testTransport=transport; }
         HttpClient.Redirect redirectPolicy() { return client.followRedirects(); }
         private long windowStart=System.nanoTime();
         private int requests;
@@ -79,6 +81,11 @@ public final class Advisory {
             if(now-windowStart>Duration.ofHours(1).toNanos()) { windowStart=now; requests=0; }
             if(auth==null&&requests>=60) throw new IOException("GitHub anonymous hourly request budget exhausted");
             requests++;
+            if(testTransport!=null) {
+                JsonNode parsed=testTransport.get(path);
+                if(recent.size()<64&&!path.contains("/git/blobs/")&&parsed.toString().length()<=256*1024){recent.put(path,parsed);fetched.put(path,now);}
+                return parsed;
+            }
             HttpRequest.Builder request = HttpRequest.newBuilder(URI.create("https://api.github.com/" + path))
                     .timeout(Duration.ofSeconds(15)).header("Accept", "application/vnd.github+json")
                     .header("User-Agent", "concordia-babycdf-advisory-demo").GET();
@@ -251,7 +258,8 @@ public final class Advisory {
             return blob;
         }
     }
-    static ObjectNode collect(Api api,boolean llmEnabled) throws IOException, InterruptedException {
+    static ObjectNode collect(Api api,boolean llmEnabled) throws IOException, InterruptedException { return collect(api,llmEnabled,List.of(Integer.getInteger("babycdf.milestone.default",540))); }
+    static ObjectNode collect(Api api,boolean llmEnabled,List<Integer> explicitMilestones) throws IOException, InterruptedException {
         ArrayNode inputs = JSON.createArrayNode();
         ArrayNode errors = JSON.createArrayNode();
         boolean proposalFound = false;
@@ -322,17 +330,24 @@ public final class Advisory {
         }
         if (!proposalFound) errors.add("proposal PR not discovered");
         Set<Integer> seen = new HashSet<>();
-        for (JsonNode hit : api.get(query("repo:" + REPO + " is:issue \"Concordia #184\"")).path("items")) {
-            int n = number(hit);
-            if (n < 1 || !seen.add(n)) continue;
-            JsonNode issue = api.get(PREFIX + "/issues/" + n);
+        if(explicitMilestones.size()>8)errors.add("milestone subjects omitted (limit_8): "+(explicitMilestones.size()-8));
+        explicitMilestones=explicitMilestones.stream().distinct().limit(8).toList();
+        Set<Integer> requested=new java.util.LinkedHashSet<>(explicitMilestones);
+        for(JsonNode hit:api.get(query("repo:"+REPO+" is:issue \"Concordia #184\"")).path("items")) requested.add(number(hit));
+        for (int n : requested) {
+            if (n < 1 || seen.contains(n)) continue;
+            JsonNode issue;
+            try { issue=api.get(PREFIX+"/issues/"+n); }
+            catch(IOException unavailable) { if(explicitMilestones.contains(n)){errors.add("milestone issue #"+n+" unavailable (fetch_failed)");continue;}throw unavailable; }
             if (number(issue) != n) { errors.add("milestone issue #" + n + " identity not verified"); continue; }
-            if (issue.has("pull_request") || !value(issue, "title").startsWith("Concordia #184 - Milestone ")) continue;
+            if (issue.has("pull_request") || (!explicitMilestones.contains(n)&&!value(issue,"title").startsWith("Concordia #184 - Milestone "))) continue;
+            if(!value(issue,"html_url").equals("https://github.com/"+REPO+"/issues/"+n)) {errors.add("milestone issue #"+n+" URL not verified");continue;}
             String revision = value(issue, "updated_at");
             if (revision.isEmpty()) errors.add("milestone issue #" + n + " lacks revision time");
             ObjectNode issueItem=item("milestone_issue", n, issue, revision, false, value(issue,"body"));
             issueItem.set("evidence_bundle",JSON.valueToTree(EvidenceBundle.issue(value(issue,"html_url"),value(issue,"title"),value(issue,"body"))));
             inputs.add(issueItem);
+            seen.add(n);
         }
         if (seen.isEmpty()) errors.add("no Concordia milestone issues discovered");
         List<JsonNode> sorted = new ArrayList<>(); inputs.forEach(sorted::add);
@@ -368,13 +383,16 @@ public final class Advisory {
 
     static ObjectNode pollOnce(Api api, Fixture fixture, Set<String> state, SupplementalAssessment supplemental,
                                Object context, String source) throws IOException, InterruptedException {
+        return pollOnce(api,fixture,state,supplemental,context,source,List.of(Integer.getInteger("babycdf.milestone.default",540)));
+    }
+    static ObjectNode pollOnce(Api api,Fixture fixture,Set<String> state,SupplementalAssessment supplemental,Object context,String source,List<Integer> milestones) throws IOException,InterruptedException {
         List<Clause> activeClauses=context instanceof Reviewer.EffectiveRule effective?effective.clauses():fixture.clauses();
         String documentSha=context instanceof Reviewer.EffectiveRule effective&&effective.ruleRef()!=null?effective.ruleRef().sha256():RULE_SHA256;
         if(!(context instanceof Reviewer.EffectiveRule)) {
             try { documentSha=RuleDocument.sha(Files.readAllBytes(Path.of("../rules/rule-v"+fixture.version()+".json"))); }
             catch(Exception unavailable) { documentSha=RULE_SHA256; }
         }
-        ObjectNode collected = collect(api,(supplemental!=null&&supplemental.enabled())||activeClauses.stream().anyMatch(c->"PRESENCE_REQUIRED".equals(c.kind())));
+        ObjectNode collected = collect(api,(supplemental!=null&&supplemental.enabled())||activeClauses.stream().anyMatch(c->"PRESENCE_REQUIRED".equals(c.kind())),milestones);
         ObjectNode result = JSON.createObjectNode().put("scope", SCOPE);
         ArrayNode reviews = result.putArray("reviews");
         result.set("errors", collected.path("errors"));
@@ -492,12 +510,14 @@ public final class Advisory {
     static ObjectNode pollWithLedger(Api api, Fixture fixture, Set<String> state,
                                      SupplementalAssessment supplemental, Reviewer.LedgerRuleGateway ledger) throws IOException, InterruptedException {
         List<Reviewer.EffectiveRule> rules = null;
+        List<Reviewer.OpenAgenda> agendas=List.of();
         int agendaCount = 0;
         if (ledger != null) {
             // Preserve readback failures before pollOnce can mutate polling state.
             try {
                 rules = ledger.activeRules();
-                agendaCount = ledger.openAgendas().size();
+                agendas=ledger.openAgendas();
+                agendaCount = agendas.size();
             } catch (InterruptedException interrupted) {
                 throw interrupted;
             } catch (IOException unavailable) {
@@ -516,7 +536,7 @@ public final class Advisory {
                 catch (Exception unavailable) { if(supplemental!=null&&supplemental.enabled()) supplemental.contextFailure(); }
             }
         }
-        ObjectNode result = pollOnce(api, fixture, state, supplemental, context, source);
+        ObjectNode result = pollOnce(api, fixture, state, supplemental, context, source,milestoneNumbers(agendas));
         if (ledger != null) {
             result.put("visible_active_rule_count", rules.size());
             result.put("visible_open_agenda_count", agendaCount);
@@ -525,6 +545,16 @@ public final class Advisory {
         return result;
     }
 
+    static List<Integer> milestoneNumbers(List<Reviewer.OpenAgenda> agendas) {
+        Set<Integer> numbers=new java.util.LinkedHashSet<>();
+        String prefix="https://github.com/"+REPO+"/issues/";
+        for(var agenda:agendas) if(agenda.subjectUrl()!=null&&agenda.subjectUrl().startsWith(prefix)) {
+            String suffix=agenda.subjectUrl().substring(prefix.length());
+            if(suffix.matches("[1-9][0-9]{0,8}"))numbers.add(Integer.parseInt(suffix));
+        }
+        if(numbers.isEmpty())numbers.add(Integer.getInteger("babycdf.milestone.default",540));
+        return List.copyOf(numbers);
+    }
     static void narrate(DemoLog demo, ObjectNode result) {
         for (JsonNode review : result.path("reviews")) {
             String label = DemoLog.subjectLabel(review);

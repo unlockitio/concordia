@@ -36,7 +36,7 @@ public final class LlmClient {
     private String ruleEvidence="";
     private RuleVerdict.Output ruleOutput;
     synchronized RuleVerdict.Output assessRule(String prompt,List<String> ids,String evidence) {
-        ruleMode=true; ruleIds=List.copyOf(ids); ruleEvidence=evidence; ruleOutput=null; ruleMetadata=null;
+        ruleMode=true; ruleIds=List.copyOf(ids); ruleEvidence=evidence; ruleOutput=null; ruleMetadata=null; ruleResponseContent=null;
         try {
             Result result=assess(prompt);
             ruleMetadata=result.metadata();
@@ -50,6 +50,8 @@ public final class LlmClient {
                 Map.of("role","system","content",RuleVerdict.SYSTEM),Map.of("role","user","content",evidence))));
     }
     private Metadata ruleMetadata;
+    private String ruleResponseContent;
+    String consumeRuleResponseContent() { String content=ruleResponseContent;ruleResponseContent=null;return content; }
     Metadata ruleMetadata() { return ruleMetadata; }
     /** Short evidence-based explanation, never a request for hidden reasoning. */
     public record Assessment(Verdict verdict, String summary, List<String> risks) {
@@ -177,6 +179,7 @@ public final class LlmClient {
                 && !message.has("tool_calls") && !message.has("function_call"));
         String content = text(message.get("content"), 65536);
         if(ruleMode) {
+            ruleResponseContent=content;
             ruleOutput=RuleVerdict.parse(content,ruleIds,ruleEvidence);
             String returned=root.has("model")?text(root.get("model"),200):null;
             ruleMetadata=metadata(id,calls,start,returned,null);

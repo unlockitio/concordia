@@ -39,7 +39,8 @@ class SupplementalAssessmentTest {
         int reserved=session.reservedTokens(); assertTrue(reserved>0);
         var second=item(); session.assess(second,"CAP evidence",rule(2),"review","ledger_effective_rule");
         for(int i=0;i<10;i++) session.assess(item(),"CAP evidence",rule(2),"review","ledger_effective_rule");
-        assertEquals(first,second); assertEquals(1,calls.get()); assertEquals(reserved,session.reservedTokens()); assertEquals(1,session.assessments());
+        assertEquals(first.path("supplemental_assessment").path("exact"),second.path("supplemental_assessment").path("exact"));
+        assertEquals("unavailable_cached",second.path("supplemental_assessment").path("diagnostics").asText()); assertEquals(1,calls.get()); assertEquals(reserved,session.reservedTokens()); assertEquals(1,session.assessments());
         var request=Advisory.JSON.readTree(requests.getFirst());
         assertEquals(0,request.path("temperature").asInt());
         assertEquals(requests.getFirst().length+2048,reserved);

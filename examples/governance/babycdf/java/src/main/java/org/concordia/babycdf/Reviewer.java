@@ -243,7 +243,11 @@ public final class Reviewer {
     @FunctionalInterface interface Collection { ObjectNode collect() throws Exception; }
     static ObjectNode review(LedgerRuleGateway ledger,Advisory.Api evidence,SupplementalAssessment supplemental,Collection collector) throws Exception {
         EffectiveRule rule = select(ledger.activeRules());
-        ObjectNode collected = collector==null?Advisory.collect(evidence,(supplemental!=null&&supplemental.enabled())||rule.clauses().stream().anyMatch(c->"PRESENCE_REQUIRED".equals(c.kind()))):collector.collect();
+        List<OpenAgenda> agendaSnapshot=List.of();Exception agendaFailure=null;
+        try { agendaSnapshot=ledger.openAgendas(); }
+        catch(InterruptedException interrupted){Thread.currentThread().interrupt();throw interrupted;}
+        catch(Exception unavailable){agendaFailure=unavailable;}
+        ObjectNode collected = collector==null?Advisory.collect(evidence,(supplemental!=null&&supplemental.enabled())||rule.clauses().stream().anyMatch(c->"PRESENCE_REQUIRED".equals(c.kind())),Advisory.milestoneNumbers(agendaSnapshot)):collector.collect();
         ObjectNode result = Advisory.JSON.createObjectNode().put("scope", Advisory.SCOPE)
                 .put("rule_authority", "authenticated_active_effective_rule")
                 .put("rule_id", rule.ruleId()).put("rule_version", rule.version())
@@ -285,7 +289,8 @@ public final class Reviewer {
         try {
             // closesAt is microseconds since the epoch, as carried by the Ledger API.
             long nowMicros = System.currentTimeMillis() * 1000L;
-            for (OpenAgenda agenda : ledger.openAgendas()) {
+            if(agendaFailure!=null)throw agendaFailure;
+            for (OpenAgenda agenda : agendaSnapshot) {
                 long closes = agenda.closesAt().isBlank() ? 0L : Long.parseLong(agenda.closesAt());
                 // Recommending on a closed agenda would be advice nobody can act on.
                 if (closes > 0L && closes <= nowMicros) continue;

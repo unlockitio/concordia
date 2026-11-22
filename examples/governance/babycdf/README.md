@@ -93,3 +93,9 @@ Pinned PR #184 (one complete verified file): v1 fails the three-proving-domain r
 Verified unsafe model quotes are represented in cache by normalized-file offsets and SHA-256, not plaintext; text is reconstructed against current evidence and displayed only redacted. A verified unsafe contradiction can retain FAIL; presence without an indicator remains `semantic_support_unconfirmed`.
 
 Additional log reason codes: `semantic_support_unconfirmed` (verified semantic quote without code indicator), `presence_evaluation_failed` (contained predicate error), `malformed_clause` (invalid rule clause), `unsafe_quote_redacted` (unsafe display content; quote references avoid plaintext persistence), `rule_unverified` (document authority unavailable).
+
+### Live assessment and recovery clarifications
+
+Issue #540 is expected to be INCONCLUSIVE, but contradiction/support outcomes remain model-dependent; deterministic quote verification rejects invented support, not all possible interpretations. Presence without eligible complete proposal evidence deterministically yields `incomplete_evidence`. Diagnostics exist only on fresh assessments; memory and disk cache hits report `diagnostics: unavailable_cached`. Diagnostic quotes are redacted, control-cleaned and capped at eight quotes of 240 bytes each. They are not persisted to the verdict cache.
+
+Generic uncertain or pending Intake failures are retried automatically at the configured interval, without blind replay. Progress resumes only when authoritative reconciliation succeeds. Definitely-rejected commands or unavailable historical proof require operator investigation; do not remove intents or reset checkpoints. HTTP-policy suspension is a separate condition and may require controlled restart after its cause clears.

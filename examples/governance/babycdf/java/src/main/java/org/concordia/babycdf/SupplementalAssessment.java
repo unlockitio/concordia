@@ -67,7 +67,9 @@ final class SupplementalAssessment implements AutoCloseable {
             String key=RuleVerdictCache.key(RuleVerdict.PROMPT_VERSION,model,context,evidence+(bundle==null?"":bundle.cacheIdentity()),
                     ruleClauses(context).stream().map(Advisory.Clause::kind).toList(),absenceEligible);
             // Lock, lookup and evaluation are atomic. Cache hits bypass every budget counter.
-            var hit=cache.get(key,entry->trusted(entry,context,evidence,bundle,absenceEligible),()->evaluate(context,evidence,source,bundle,absenceEligible));
+            Evaluation[] fresh=new Evaluation[1];
+            var hit=cache.get(key,entry->trusted(entry,context,evidence,bundle,absenceEligible),()->{fresh[0]=evaluateWithDiagnostics(context,evidence,source,bundle,absenceEligible);return fresh[0].entry();});
+            if(!hit.cached()&&fresh[0]!=null)item.set("_fresh_diagnostics",fresh[0].diagnostics());
             displayKeys.put(item,key);
             try { display(item,rule,source,hit.entry(),hit.cached(),start); }
             finally { displayKeys.remove(item); }
@@ -76,6 +78,12 @@ final class SupplementalAssessment implements AutoCloseable {
                     "cache_unavailable".equals(failure.getMessage())?"cache_unavailable":"cache_or_internal_failure"),""),"unknown"),false,start); }
             catch(Exception ignored) { /* Never interfere with deterministic evaluation. */ }
         }
+    }
+    private record Evaluation(RuleVerdictCache.Entry entry,com.fasterxml.jackson.databind.JsonNode diagnostics) {}
+    private Evaluation evaluateWithDiagnostics(String context,String evidence,String source,EvidenceBundle bundle,boolean eligible) {
+        var entry=evaluate(context,evidence,source,bundle,eligible);
+        String content=client.consumeRuleResponseContent();
+        return new Evaluation(entry,quoteDiagnostics(content,evidence,bundle));
     }
     private RuleVerdictCache.Entry evaluate(String context,String evidence,String source,EvidenceBundle bundle,boolean eligible) {
         try {
@@ -110,9 +118,33 @@ final class SupplementalAssessment implements AutoCloseable {
             if(exact.reason()==null) exact=RuleVerdict.resolve(exact,ruleClauses(context),bundle,eligible);
             var clauses=exact.verdicts().stream().map(c->new RuleVerdict.Clause(c.id(),c.verdict(),clean(c.rationale()),
                     c.quotes().stream().map(this::cleanQuote).toList())).toList();
-            return new RuleVerdictCache.Entry(new RuleVerdict.Output(new RuleVerdict.Exact(exact.overall(),clauses,exact.reason()),clean(output.commentary())),
+            var entry=new RuleVerdictCache.Entry(new RuleVerdict.Output(new RuleVerdict.Exact(exact.overall(),clauses,exact.reason()),clean(output.commentary())),
                     metadata==null?"unknown":clean(metadata.returnedModel()),raw,references);
+            return entry;
         } catch(Exception failure) { return failure("internal_failure"); }
+    }
+    com.fasterxml.jackson.databind.JsonNode quoteDiagnostics(String content,String evidence,EvidenceBundle bundle) {
+        var result=Advisory.JSON.createArrayNode();
+        try {
+            if(content==null)return result;
+            for(var clause:RuleVerdict.JSON.readTree(content).path("verdicts")) {
+                if(!clause.isObject())continue;
+                if(!clause.path("id").isTextual()||!clause.path("quotes").isArray())continue;
+                var diagnostic=result.addObject().put("clause_id",clean(clause.path("id").asText())).put("model_verdict",Set.of("PASS","FAIL","INCONCLUSIVE","NOT_APPLICABLE").contains(clause.path("verdict").asText())?clause.path("verdict").asText():"invalid_response").put("model_quote_count",clause.path("quotes").size());
+                var quotes=diagnostic.putArray("quotes");
+                int quoteCount=0;
+                for(var node:clause.path("quotes")) {
+                    if(quoteCount++>=8)break;
+                    if(!node.isTextual()){quotes.addObject().put("verification","not_in_evidence").put("text","");continue;}
+                    String quote=RuleVerdict.normalize(node.asText(""));String compact=quote.replace(" ","");
+                    String outcome=compact.codePointCount(0,compact.length())<8?"too_short":!RuleVerdict.normalize(evidence).contains(quote)?"not_in_evidence":bundle!=null&&!bundle.containsQuote(quote)?"cross_file":"verified";
+                    var q=quotes.addObject().put("text",clean(quote)).put("verification",outcome);
+                    q.put("redacted",!cleanQuote(quote).equals(quote));
+                    if(!cleanQuote(quote).equals(quote)&&outcome.equals("verified"))q.put("verification","redacted").put("verified",true);
+                }
+            }
+        } catch(Exception invalid) { /* Diagnostics cannot change assessment. */ }
+        return result;
     }
     private List<Advisory.Clause> ruleClauses(String context) throws java.io.IOException {
         List<Advisory.Clause> clauses=new ArrayList<>();
@@ -178,11 +210,13 @@ final class SupplementalAssessment implements AutoCloseable {
         var stored=item.putObject("supplemental_assessment");
         stored.put("authority","none_deterministic_findings_unchanged").put("rule_context_source",source);
         stored.set("exact",Advisory.JSON.valueToTree(output.exact()));
+        if(!cached&&item.has("_fresh_diagnostics"))stored.set("clause_diagnostics",item.remove("_fresh_diagnostics"));
+        else {item.remove("_fresh_diagnostics");stored.put("diagnostics","unavailable_cached");}
         for(var clause:stored.path("exact").path("verdicts")) if("conflict".equals(clause.path("rationale").asText())) ((ObjectNode)clause).put("conflict_quote_role","verified_supporting_non_authoritative");
         stored.put("commentary",clean(output.commentary()));
         var tree=Advisory.JSON.valueToTree(rule);
         String subject=safe(item.path("kind").asText("proposal"))+" #"+item.path("number").asText("unknown");
-        String perClause=String.join(", ",output.exact().verdicts().stream().map(c->safe(c.id())+"="+c.verdict()+(Set.of("absent","incomplete_evidence","conflict","unknown_clause_kind","semantic_support_unconfirmed","presence_evaluation_failed","malformed_clause","unsafe_quote_redacted","rule_unverified").contains(c.rationale())?"("+c.rationale()+")":"")).toList());
+        String perClause=String.join(", ",output.exact().verdicts().stream().map(c->safe(c.id())+"="+c.verdict()+(Set.of("absent","incomplete_evidence","conflict","unknown_clause_kind","semantic_support_unconfirmed","presence_evaluation_failed","malformed_clause","unsafe_quote_redacted","rule_unverified","unverified_quote","invalid_response","invalid_input","invalid_rule","input_budget_exhausted","evidence_budget_exhausted","run_budget_exhausted","internal_failure","cache_unavailable","cache_or_internal_failure").contains(c.rationale())?"("+c.rationale()+")":"")).toList());
         String identity=displayKeys.remove(item);
         if(identity==null) identity=RuleVerdictCache.key(RuleVerdict.PROMPT_VERSION,model,tree.toString(),item.path("body_sha256").asText()+output.exact().toString());
         if(!emitted.add(identity+":"+item.path("kind").asText()+":"+item.path("number").asText()+":"+output.exact().reason())) return;
