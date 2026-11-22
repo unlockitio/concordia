@@ -8,6 +8,16 @@ import com.fasterxml.jackson.databind.*;
 /** Exact-byte rule authority. No document is parsed before hash verification. */
 final class RuleDocument {
     private static final Set<String> ANNOUNCED=java.util.concurrent.ConcurrentHashMap.newKeySet();
+    private static String activeIdentity;
+    static synchronized void announceActive(Reviewer.EffectiveRule rule,java.io.PrintStream log) {
+        if(rule.ruleFailure()!=null){log.println("[Reviewer] rule verification verified=false reason=rule_unverified");return;}
+        if(rule.ruleRef()==null)return;
+        String identity=rule.ruleRef().toString();
+        if(identity.equals(activeIdentity))return;
+        activeIdentity=identity;
+        log.println("rule v"+rule.version()+" active "+rule.ruleRef().sha256().substring(0,12));
+        if(ANNOUNCED.add(identity))for(var clause:rule.clauses())log.println("rule v"+rule.version()+" "+rule.ruleRef().sha256().substring(0,12)+": "+SupplementalAssessment.presentation(clause.id())+" — "+SupplementalAssessment.presentation(clause.criterion()));
+    }
     record Ref(String location,String commit,String sha256) {}
     record Resolved(int version,List<Advisory.Clause> clauses,String reason) { boolean verified(){return reason==null;} }
     static Path rulesRoot() { return Path.of(System.getProperty("babycdf.rules.root","../rules")); }
@@ -53,7 +63,6 @@ final class RuleDocument {
             }
             if(bytes.length>256*1024||!sha(bytes).equals(ref.sha256())) return bad("rule_unverified");
             var resolved=parse(bytes);
-            if(resolved.verified()&&ANNOUNCED.add(ref.sha256())) for(var clause:resolved.clauses()) System.err.println("rule v"+resolved.version()+" "+ref.sha256().substring(0,12)+": "+clause.id()+" — "+clause.criterion());
             return resolved;
         } catch(Exception | LinkageError failure) { return bad("rule_unverified"); }
     }

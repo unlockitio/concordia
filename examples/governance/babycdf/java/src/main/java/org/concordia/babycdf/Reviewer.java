@@ -243,6 +243,7 @@ public final class Reviewer {
     @FunctionalInterface interface Collection { ObjectNode collect() throws Exception; }
     static ObjectNode review(LedgerRuleGateway ledger,Advisory.Api evidence,SupplementalAssessment supplemental,Collection collector) throws Exception {
         EffectiveRule rule = select(ledger.activeRules());
+        RuleDocument.announceActive(rule,System.err);
         List<OpenAgenda> agendaSnapshot=List.of();Exception agendaFailure=null;
         try { agendaSnapshot=ledger.openAgendas(); }
         catch(InterruptedException interrupted){Thread.currentThread().interrupt();throw interrupted;}

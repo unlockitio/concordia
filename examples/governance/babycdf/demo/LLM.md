@@ -190,3 +190,11 @@ if [ "$#" -eq 1 ]; then
 fi
 docker compose -p babycdf-live --profile agents -f compose/compose.yaml -f compose/intake-auth.yaml -f compose/agents-github-auth.yaml -f compose/llm-auth.yaml up -d --no-deps --build --force-recreate reviewer
 ```
+
+## S2 active-rule budgets and logging
+
+Each verified document SHA has its own process-local assessment, attempt and token bucket. A→B→A retains A counters; cache hits remain free, provider failures stay charged, and invalid/oversized input is uncharged. Non-live injected fixtures use an explicit non-live identity. Two versions can together spend up to 2× the configured per-rule cap per process. No bucket is authorized by failed verification. Rule-reference success logs appear on activation/change only; failures remain immediate. Clause announcements occur only after active-rule selection and once per document; switching back prints activation without repeating clauses.
+
+Dependency inspection found slf4j-api 2.0.6 and no local slf4j-nop 2.0.6 JAR. Offline packaging therefore registers the API-provided NOP_FallbackServiceProvider via ServiceLoader rather than downloading a binding. JUL configuration raises only shaded gRPC/Netty logger levels to WARNING; root and console stay INFO, warnings/errors remain visible. JAVA_TOOL_OPTIONS is unchanged, including its JVM startup notice.
+
+S2 invariants: N distinct verified documents may spend up to N × the per-document process cap (2× for the v1/v2 demo). Rule verification failure is reported at selection on every cycle, even without subjects or supplemental enablement. The application-scoped SLF4J fallback registration is temporary: replace it with the matching `org.slf4j:slf4j-nop` artifact when locally available, removing the services file. Validation requires exactly one runtime provider, the fallback, so adding another backend fails rather than silently losing to NOP.

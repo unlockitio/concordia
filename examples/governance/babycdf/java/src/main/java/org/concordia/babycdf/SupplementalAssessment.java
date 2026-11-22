@@ -15,6 +15,14 @@ final class SupplementalAssessment implements AutoCloseable {
     private final PrintStream log;
     private final RuleVerdictCache cache;
     private int assessments, reservedAttempts, reservedTokens;
+    private static final class Bucket {int assessments,attempts,tokens;}
+    private final Map<String,Bucket> buckets=new HashMap<>();
+    private Bucket activeBucket;
+    private String successfulRef;
+    private void selectBucket(Object rule) {
+        String identity=rule instanceof Reviewer.EffectiveRule effective&&effective.ruleRef()!=null?"live:"+effective.ruleRef().sha256():"non_live_fixture:"+Advisory.sha256(Advisory.JSON.valueToTree(rule).toString());
+        activeBucket=buckets.computeIfAbsent(identity,k->new Bucket());assessments=activeBucket.assessments;reservedAttempts=activeBucket.attempts;reservedTokens=activeBucket.tokens;
+    }
     private int maximumAssessments=MAX_ASSESSMENTS;
     static int assessmentLimit(Map<String,String> env) {
         String value=env.getOrDefault("BABYCDF_LLM_MAX_ASSESSMENTS","");
@@ -60,12 +68,14 @@ final class SupplementalAssessment implements AutoCloseable {
         long start=System.nanoTime();
         if(!enabled()) { disabledNotice(); return; }
         if(rule instanceof Reviewer.EffectiveRule effective && effective.ruleFailure()!=null) {
+            log.println("["+agent+"] rule_ref="+safe(effective.ruleRef()==null?"unknown":effective.ruleRef().location())+" verified=false");
             display(item,rule,source,failure("rule_unverified"),false,start); return;
         }
         if(!enabled()) { disabledNotice(); return; }
         try {
             if(rule instanceof Reviewer.EffectiveRule effective&&effective.ruleRef()!=null) {
-                log.println("["+agent+"] rule_ref="+safe(effective.ruleRef().location())+" sha="+safe(effective.ruleRef().sha256().substring(0,12))+" verified="+(effective.ruleFailure()==null));
+                String identity=effective.ruleRef().toString();
+                if(!identity.equals(successfulRef)){log.println("["+agent+"] rule_ref="+safe(effective.ruleRef().location())+" sha="+safe(effective.ruleRef().sha256().substring(0,12))+" verified=true");successfulRef=identity;}
                 if(effective.ruleFailure()!=null) {display(item,rule,source,failure("rule_unverified"),false,start);return;}
             }
             boolean issue=item.path("kind").asText().contains("issue");
@@ -78,6 +88,7 @@ final class SupplementalAssessment implements AutoCloseable {
             if(evidence.getBytes(StandardCharsets.UTF_8).length>EvidenceBundle.MAX_EVIDENCE_BYTES) {
                 display(item,rule,source,failure("evidence_budget_exhausted"),false,start); return;
             }
+            selectBucket(rule);
             boolean absenceEligible=Presence.eligible(item,bundle);
             String key=RuleVerdictCache.key(RuleVerdict.PROMPT_VERSION,model,context,evidence+(bundle==null?"":bundle.cacheIdentity()),
                     ruleClauses(context).stream().map(Advisory.Clause::kind).toList(),absenceEligible);
@@ -117,6 +128,7 @@ final class SupplementalAssessment implements AutoCloseable {
             int tokens=Math.multiplyExact(attempts,Math.addExact(client.requestBody(prompt).length,2048));
             if(assessments>=maximumAssessments||reservedAttempts+attempts>maximumAssessments*2||reservedTokens+tokens>maximumAssessments*500000) return failure("run_budget_exhausted");
             assessments++; reservedAttempts+=attempts; reservedTokens+=tokens;
+            activeBucket.assessments=assessments;activeBucket.attempts=reservedAttempts;activeBucket.tokens=reservedTokens;
             var output=client.assessRule(prompt,ids,evidence);
             var metadata=client.ruleMetadata();
             // Redact before any persistence; commentary cannot influence exact identity.
@@ -260,6 +272,7 @@ final class SupplementalAssessment implements AutoCloseable {
             if(used+n>bytes) break; out.append(s); used+=n; offset+=Character.charCount(cp);
         } return out.toString();
     }
+    static String presentation(String value){return safe(value);}
     private static String safe(String value) {
         return bounded(value==null?"unknown":value.replaceAll("[\\p{Cc}\\p{Cf}\\p{Zl}\\p{Zp}]"," ")
                 .replaceAll("(?i)(bearer\\s+|(?:api[_-]?key|token|secret)\\s*[:=]\\s*)\\S+","$1[REDACTED]"),240);

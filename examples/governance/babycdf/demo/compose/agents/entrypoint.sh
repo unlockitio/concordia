@@ -58,10 +58,10 @@ case "${1:-}" in
     case "$user" in *-intake) ;; *) fail 'Intake requires dedicated intake user';; esac
     JOURNAL=${INTAKE_JOURNAL:-/journal}
     [ -d "$JOURNAL" ] && [ ! -L "$JOURNAL" ] && [ -w "$JOURNAL" ] || fail 'existing writable Intake journal required'
-    exec java -cp '/app/classes:/app/lib/*' org.concordia.babycdf.Intake --offline-fixture /state/proposal-blob.txt 6865 "$party" "$package" "$demo_package" "$governor" "$user" "$JOURNAL" --poll "${INTAKE_POLL_ATTEMPTS:-86400}" "${INTAKE_POLL_MILLIS:-1000}" ;;
+    exec java -Djava.util.logging.config.file=/app/classes/logging.properties -cp '/app/classes:/app/lib/*' org.concordia.babycdf.Intake --offline-fixture /state/proposal-blob.txt 6865 "$party" "$package" "$demo_package" "$governor" "$user" "$JOURNAL" --poll "${INTAKE_POLL_ATTEMPTS:-86400}" "${INTAKE_POLL_MILLIS:-1000}" ;;
   reviewer)
     # shellcheck disable=SC2086  # DEMO_FLAGS is a script-controlled literal word list
-    exec java -cp '/app/classes:/app/lib/*' org.concordia.babycdf.Reviewer --local-sandbox 6865 "$party" "$package" $EVIDENCE_FLAGS --interval "$INTERVAL" $DEMO_FLAGS ;;
+    exec java -Djava.util.logging.config.file=/app/classes/logging.properties -cp '/app/classes:/app/lib/*' org.concordia.babycdf.Reviewer --local-sandbox 6865 "$party" "$package" $EVIDENCE_FLAGS --interval "$INTERVAL" $DEMO_FLAGS ;;
   advisory) fail 'Advisory retired: use reviewer; no second poller is supported' ;;
   *) fail 'unknown agent';;
 esac
