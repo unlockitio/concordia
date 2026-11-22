@@ -255,6 +255,7 @@ public final class Reviewer {
         if (evidence.offlineSeed())
             result.put("discovery", "offline_pinned_pr184_seed_not_fresh_github_poll");
         result.set("errors", collected.path("errors"));
+        result.set("milestone_search_status",collected.path("milestone_search_status"));
         ArrayNode reviews = result.putArray("reviews");
         for (JsonNode input : collected.path("inputs")) {
             ObjectNode item = input.deepCopy();
@@ -401,6 +402,7 @@ public final class Reviewer {
         }
         final LedgerRuleGateway ledger = gateway;
         final Advisory.Api evidence = offlineFile == null ? new Advisory.GitHub() : new OfflineFile(offlineFile);
+        if(evidence instanceof Advisory.GitHub github)github.logMode("Reviewer",System.err);
         // Survives across polls so each agenda is recommended once per rule version.
         final Set<String> emitted = new HashSet<>();
         final DemoLog demo = new DemoLog("Reviewer", demoMode, verbose, System.err);

@@ -76,10 +76,24 @@ public final class Advisory {
             recent.remove(path); fetched.remove(path); return get(path);
         }
         public synchronized JsonNode get(String path) throws IOException, InterruptedException {
+            try {return getChecked(path);}
+            catch(GitHubFetchFailure categorized){throw categorized;}
+            catch(java.net.http.HttpTimeoutException timeout){throw new GitHubFetchFailure(GitHubFetchFailure.Code.deadline);}
+            catch(InterruptedException interrupted){Thread.currentThread().interrupt();throw new GitHubFetchFailure(GitHubFetchFailure.Code.interrupted);}
+            catch(IOException failure){throw new GitHubFetchFailure(GitHubFetchFailure.Code.transport);}
+        }
+        static GitHubFetchFailure errorResponse(int status,java.net.http.HttpHeaders headers,java.io.InputStream input,Duration deadline) {
+            var classified=GitHubFetchFailure.http(status,headers,new byte[0]);
+            try {return GitHubFetchFailure.http(status,headers,readBounded(input,deadline));}
+            catch(IOException failed){return classified.bodyReadFailed();}
+        }
+        String mode(){return auth==null?"anonymous":"authenticated_file";}
+        void logMode(String agent,java.io.PrintStream log){log.println("["+agent+"] GitHub mode="+mode());}
+        private JsonNode getChecked(String path) throws IOException,InterruptedException {
             long now=System.nanoTime();
             if(recent.containsKey(path)&&now-fetched.get(path)<Duration.ofMinutes(10).toNanos()) return recent.get(path);
             if(now-windowStart>Duration.ofHours(1).toNanos()) { windowStart=now; requests=0; }
-            if(auth==null&&requests>=60) throw new IOException("GitHub anonymous hourly request budget exhausted");
+            if(auth==null&&requests>=60) throw new GitHubFetchFailure(GitHubFetchFailure.Code.budget);
             requests++;
             if(testTransport!=null) {
                 JsonNode parsed=testTransport.get(path);
@@ -92,10 +106,11 @@ public final class Advisory {
             if(auth!=null) auth.authorizeRead(request,URI.create("https://api.github.com/"+path));
             HttpResponse<java.io.InputStream> response = client.send(request.build(), HttpResponse.BodyHandlers.ofInputStream());
             try(var input=response.body()) {
-                if (response.statusCode() != 200) throw new IOException("GitHub HTTP " + response.statusCode());
+                if(response.statusCode()!=200)throw errorResponse(response.statusCode(),response.headers(),input,Duration.ofSeconds(2));
                 byte[] bytes=readBounded(input,Duration.ofSeconds(15));
-                if(bytes.length>2*1024*1024) throw new IOException("GitHub response limit");
-                JsonNode parsed=JSON.readTree(bytes);
+                if(bytes.length>2*1024*1024) throw new GitHubFetchFailure(GitHubFetchFailure.Code.size);
+                JsonNode parsed;
+                try { parsed=JSON.readTree(bytes); } catch(IOException invalid){throw new GitHubFetchFailure(GitHubFetchFailure.Code.parse);}
                 if(recent.size()<64&&!path.contains("/git/blobs/")&&bytes.length<=256*1024) { recent.put(path,parsed); fetched.put(path,now); }
                 return parsed;
             }
@@ -202,9 +217,11 @@ public final class Advisory {
         var timeout=timer.schedule(()->{expired.set(true);try {input.close();}catch(IOException ignored){}},deadline.toMillis(),java.util.concurrent.TimeUnit.MILLISECONDS);
         try {
             byte[] bytes=input.readNBytes(2*1024*1024+1);
-            if(expired.get()) throw new IOException("GitHub body deadline exceeded");
+            if(expired.get()) throw new GitHubFetchFailure(GitHubFetchFailure.Code.deadline);
+            if(bytes.length>2*1024*1024)throw new GitHubFetchFailure(GitHubFetchFailure.Code.size);
             return bytes;
-        } finally { timeout.cancel(false);timer.shutdownNow(); }
+        } catch(IOException failure) {if(expired.get())throw new GitHubFetchFailure(GitHubFetchFailure.Code.deadline);throw failure;}
+        finally { timeout.cancel(false);timer.shutdownNow(); }
     }
     static void stripBundleContents(ObjectNode item) {
         if(item.path("evidence_bundle") instanceof ObjectNode bundle) {
@@ -333,12 +350,16 @@ public final class Advisory {
         if(explicitMilestones.size()>8)errors.add("milestone subjects omitted (limit_8): "+(explicitMilestones.size()-8));
         explicitMilestones=explicitMilestones.stream().distinct().limit(8).toList();
         Set<Integer> requested=new java.util.LinkedHashSet<>(explicitMilestones);
-        for(JsonNode hit:api.get(query("repo:"+REPO+" is:issue \"Concordia #184\"")).path("items")) requested.add(number(hit));
+        boolean searchFailed=false;int searchCount=0;
+        try { var hits=api.get(query("repo:"+REPO+" is:issue \"Concordia #184\"")).path("items");
+            searchCount=hits.size();
+            for(JsonNode hit:hits)requested.add(number(hit)); }
+        catch(IOException unavailable){if(unavailable instanceof GitHubFetchFailure f&&f.code==GitHubFetchFailure.Code.interrupted)throw unavailable;searchFailed=true;errors.add("milestone search failed ("+GitHubFetchFailure.safeSummary(unavailable)+")");}
         for (int n : requested) {
             if (n < 1 || seen.contains(n)) continue;
             JsonNode issue;
             try { issue=api.get(PREFIX+"/issues/"+n); }
-            catch(IOException unavailable) { if(explicitMilestones.contains(n)){errors.add("milestone issue #"+n+" unavailable (fetch_failed)");continue;}throw unavailable; }
+            catch(IOException unavailable) { if(unavailable instanceof GitHubFetchFailure f&&f.code==GitHubFetchFailure.Code.interrupted)throw unavailable; if(explicitMilestones.contains(n)){errors.add("milestone issue #"+n+" unavailable (fetch_failed:"+GitHubFetchFailure.safeSummary(unavailable)+")");continue;}throw unavailable; }
             if (number(issue) != n) { errors.add("milestone issue #" + n + " identity not verified"); continue; }
             if (issue.has("pull_request") || (!explicitMilestones.contains(n)&&!value(issue,"title").startsWith("Concordia #184 - Milestone "))) continue;
             if(!value(issue,"html_url").equals("https://github.com/"+REPO+"/issues/"+n)) {errors.add("milestone issue #"+n+" URL not verified");continue;}
@@ -349,10 +370,11 @@ public final class Advisory {
             inputs.add(issueItem);
             seen.add(n);
         }
-        if (seen.isEmpty()) errors.add("no Concordia milestone issues discovered");
+        if (seen.isEmpty()&&!searchFailed) errors.add("no Concordia milestone issues discovered");
         List<JsonNode> sorted = new ArrayList<>(); inputs.forEach(sorted::add);
         sorted.sort(Comparator.comparing((JsonNode n) -> value(n, "kind")).thenComparingInt(Advisory::number));
         ObjectNode result = JSON.createObjectNode();
+        result.put("milestone_search_status",searchFailed?"failed":"returned_"+searchCount);
         ArrayNode ordered = result.put("scope", SCOPE).putArray("inputs");
         sorted.forEach(ordered::add);
         result.set("errors", errors);
@@ -396,6 +418,7 @@ public final class Advisory {
         ObjectNode result = JSON.createObjectNode().put("scope", SCOPE);
         ArrayNode reviews = result.putArray("reviews");
         result.set("errors", collected.path("errors"));
+        result.set("milestone_search_status",collected.path("milestone_search_status"));
         for (JsonNode input : collected.path("inputs")) {
             String key = JSON.writeValueAsString(List.of(REPO, value(input, "kind"), number(input),
                     value(input, "revision"), value(input, "body_sha256"), "architecture-review", context instanceof Reviewer.EffectiveRule effective?effective.version():fixture.version(), documentSha));
@@ -665,6 +688,7 @@ public final class Advisory {
         Set<String> state = statePath != null && Files.exists(statePath) ? loadState(statePath) : new HashSet<>();
         Api api = offlineFixture != null ? new OfflineFile(offlineFixture)
                 : offlineRepository == null ? new GitHub() : new OfflinePr184(offlineRepository);
+        if(api instanceof GitHub github)github.logMode("Advisory",System.err);
         try (SupplementalAssessment supplemental = SupplementalAssessment.runtime("Advisory", System.err)) {
             AgentPolling.run(pollInterval, () -> {
                 final SandboxBallots sandboxCycle = pollSandbox;
