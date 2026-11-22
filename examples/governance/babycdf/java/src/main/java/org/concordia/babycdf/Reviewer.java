@@ -266,6 +266,7 @@ public final class Reviewer {
             item.put("rule_authority", "authenticated_active_effective_rule")
                     .put("rule_id", rule.ruleId()).put("rule_version", rule.version())
                     .put("rule_contract_id", rule.contractId());
+            item.put("rule_version_evaluated",rule.version()).put("rule_document_sha256",rule.ruleRef()!=null?rule.ruleRef().sha256():"legacy-injected-rule:"+rule.contractId());
             ArrayNode findings = item.putArray("findings");
             boolean pinned = item.path("pinned").asBoolean();
             if(rule.ruleFailure()!=null) findings.add(Advisory.JSON.createObjectNode().put("clause_id","rule_document").put("status","insufficient_evidence").put("detail",rule.ruleFailure()));
@@ -285,6 +286,7 @@ public final class Reviewer {
             reviews.add(item);
         }
         if(supplemental!=null)supplemental.assessCycle(reviews,rule,"review-proposal-or-milestone","ledger_effective_rule");
+        buildPreviews(result);
         // Read-only agenda discovery. A failure here must not fail the review: the
         // recommendation is advisory, so it degrades to "no open agenda seen".
         ArrayNode agendas = result.putArray("open_agendas");
@@ -312,6 +314,24 @@ public final class Reviewer {
         return result;
     }
 
+    static void buildPreviews(ObjectNode result) throws Exception {
+        ArrayNode previews=result.putArray("ballot_previews");
+        for(JsonNode item:result.path("reviews"))previews.add(Advisory.prepareReviewPreview(item));
+        result.put("ledger_submission","blocked: merged reviewer is read-only; previews only");
+    }
+    static void filterPreviewState(ObjectNode result,Set<String> previewState) throws Exception { attachPreviews(result,previewState); }
+    static void attachPreviews(ObjectNode result,Set<String> previewState) throws Exception {
+        JsonNode built=result.path("ballot_previews").deepCopy();
+        ArrayNode previews=result.putArray("ballot_previews");int index=0;
+        for(JsonNode node:result.path("reviews")) {
+            ObjectNode item=(ObjectNode)node;
+            String key=Advisory.JSON.writeValueAsString(List.of(Advisory.REPO,Advisory.value(item,"kind"),Advisory.number(item),Advisory.value(item,"revision"),Advisory.value(item,"body_sha256"),"architecture-review",item.path("rule_version_evaluated").asInt(item.path("rule_version").asInt()),item.path("rule_document_sha256").asText("legacy-injected-rule")));
+            JsonNode preview=built.get(index++);
+            if(!previewState.add(key))continue;
+            if(preview!=null)previews.add(preview);
+        }
+        result.put("ledger_submission","blocked: merged reviewer is read-only; previews only");
+    }
     static void runCycle(LedgerRuleGateway ledger, Advisory.Api evidence) throws Exception {
         runCycle(ledger, evidence, new HashSet<>(), null);
     }
@@ -336,6 +356,9 @@ public final class Reviewer {
 
     static void runCycle(LedgerRuleGateway ledger, Advisory.Api evidence, Set<String> emitted,
                          DemoLog demo, SupplementalAssessment supplemental) throws Exception {
+        runCycle(ledger,evidence,emitted,demo,supplemental,new HashSet<>(),null);
+    }
+    static void runCycle(LedgerRuleGateway ledger,Advisory.Api evidence,Set<String> emitted,DemoLog demo,SupplementalAssessment supplemental,Set<String> previewState,java.nio.file.Path statePath) throws Exception {
         boolean presenting = demo != null && demo.enabled();
         boolean failed = false;
         ObjectNode result;
@@ -344,8 +367,10 @@ public final class Reviewer {
         // known, because a cycle can read the rule successfully and still be
         // degraded elsewhere.
         String cycleFailure = null;
+        Set<String> stagedPreviewState=new HashSet<>(previewState);
         try {
             result = review(ledger, evidence, supplemental);
+            filterPreviewState(result,stagedPreviewState);
         }
         catch (InterruptedException interrupted) {
             Thread.currentThread().interrupt();
@@ -375,23 +400,30 @@ public final class Reviewer {
             else demo.recovered(DemoLog.CYCLE, "Cycle completed again; resuming evaluation.");
         }
         if (!presenting || demo.verbose()) System.err.println(AgentPolling.reviewerLine(result));
-        if (presenting && !failed) ReviewerNarration.report(demo, result);
+        if (presenting && !failed) {
+            ReviewerNarration.report(demo, result);
+            for(JsonNode item:result.path("reviews"))demo.observed("evidence:"+Advisory.value(item,"kind")+":"+Advisory.number(item),DemoLog.subjectLabel(item)+(item.path("pinned").asBoolean()?" loaded; pinned evidence verified.":" loaded; no immutable revision, so its evidence is not pinned."));
+        }
         // Text-only advisory recommendation, deduplicated per agenda per rule version.
         for (String recommendation : Recommendation.lines(result, emitted))
             if (!presenting || demo.verbose()) System.err.println(recommendation);
-        if (!presenting || demo.verbose()) System.out.println(Advisory.JSON.writeValueAsString(result));
+        if (!presenting || demo.verbose()) {System.out.println(Advisory.JSON.writeValueAsString(result));if(System.out.checkError())throw new IOException("review output failed");}
+        if(presenting&&System.err.checkError())throw new IOException("review presentation output failed");
+        if(!failed){if(statePath!=null)Advisory.saveState(statePath,stagedPreviewState);previewState.clear();previewState.addAll(stagedPreviewState);}
     }
 
     public static void main(String[] args) throws Exception {
         LedgerRuleGateway gateway = new BlockedLedgerGateway();
         long interval = 0;
-        java.nio.file.Path offlineFile = null;
+        java.nio.file.Path offlineFile = null,offlineRepository=null,stateFile=null;
         boolean demoMode = false, verbose = AgentFlags.verboseFromEnvironment();
         for (int i = 0; i < args.length; i++) {
             if ("--interval".equals(args[i]) && i + 1 < args.length)
                 interval = AgentPolling.intervalMillis(args[++i]);
             else if ("--offline-pr184-file".equals(args[i]) && i + 1 < args.length)
                 offlineFile = java.nio.file.Path.of(args[++i]);
+            else if("--offline-pr184-repo".equals(args[i])&&i+1<args.length)offlineRepository=java.nio.file.Path.of(args[++i]);
+            else if("--state-file".equals(args[i])&&i+1<args.length)stateFile=java.nio.file.Path.of(args[++i]).toAbsolutePath();
             // Presentation output is opt-in, so every existing invocation keeps
             // the exact machine-readable behaviour it had.
             else if ("--demo".equals(args[i])) demoMode = true;
@@ -402,7 +434,11 @@ public final class Reviewer {
             } else throw new IllegalArgumentException("usage: Reviewer [--interval seconds] [--offline-pr184-file path] [--local-sandbox port party package-id] [--demo] [--verbose|--json]");
         }
         final LedgerRuleGateway ledger = gateway;
-        final Advisory.Api evidence = offlineFile == null ? new Advisory.GitHub() : new OfflineFile(offlineFile);
+        if(offlineFile!=null&&offlineRepository!=null)throw new IllegalArgumentException("choose one offline source");
+        final Advisory.Api evidence = offlineFile!=null?new OfflineFile(offlineFile):offlineRepository!=null?new Advisory.OfflinePr184(offlineRepository):new Advisory.GitHub();
+        final java.nio.file.Path previewPath=stateFile;
+        if(previewPath!=null&&(!previewPath.normalize().getParent().equals(java.nio.file.Path.of(".").toRealPath())||java.nio.file.Files.isSymbolicLink(previewPath)))throw new IllegalArgumentException("state file must be direct local file");
+        final Set<String> previewState=previewPath!=null&&java.nio.file.Files.exists(previewPath)?Advisory.loadState(previewPath):new HashSet<>();
         evidence.logMode("Reviewer",System.err);
         // Survives across polls so each agenda is recommended once per rule version.
         final Set<String> emitted = new HashSet<>();
@@ -410,7 +446,7 @@ public final class Reviewer {
         demo.banner();
         // Never fall back to the pinned source fixture as an active ledger contract.
         try (SupplementalAssessment supplemental = SupplementalAssessment.runtime("Reviewer", System.err)) {
-            AgentPolling.run(interval, () -> runCycle(ledger, evidence, emitted, demo, supplemental), Thread::sleep);
+            AgentPolling.run(interval, () -> runCycle(ledger, evidence, emitted, demo, supplemental,previewState,previewPath), Thread::sleep);
         }
     }
 }

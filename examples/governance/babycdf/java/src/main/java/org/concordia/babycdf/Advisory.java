@@ -461,6 +461,12 @@ public final class Advisory {
         void propose(BallotCommand command) throws Exception;
     }
 
+    static ObjectNode prepareReviewPreview(JsonNode review) throws Exception {
+        if(!"authenticated_active_effective_rule".equals(value(review,"rule_authority")))throw new IllegalArgumentException("active ledger review required");
+        ObjectNode preview=JSON.createObjectNode().put("kind",value(review,"kind")).put("subject_url",value(review,"url")).put("content_version",value(review,"revision")).put("submitted",false);
+        if(!"proposal_pr".equals(value(review,"kind"))||!review.path("pinned").asBoolean())return preview.put("status","blocked_unpinned_evidence").put("requirement","immutable independently verified evidence required");
+        return preview.put("status","preview_submission_blocked").put("command","AgendaGovernor.ProposeAgenda").put("round_id","babycdf:grant:"+number(review)+":"+value(review,"revision"));
+    }
     static ObjectNode prepareBallotSafely(JsonNode review,String proposer,String governorContractId,boolean authorized,LedgerApi ledger) throws Exception {
         try { return prepareBallot(review,proposer,governorContractId,authorized,ledger); }
         catch(RuntimeException failure) { return JSON.createObjectNode().put("kind",value(review,"kind")).put("submitted",false).put("status","blocked_invalid_review").put("reason","review_validation_failed"); }
@@ -650,90 +656,7 @@ public final class Advisory {
         Files.move(temp, path, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
     }
 
-    public static void main(String[] args) throws Exception {
-        long interval = 0;
-        Path statePath = null;
-        SandboxBallots sandbox = null;
-        Reviewer.LocalSandboxGateway readLedger = null;
-        Path offlineRepository = null;
-        Path offlineFixture = null;
-        boolean demoMode = false, verboseFlag = AgentFlags.verboseFromEnvironment();
-        for (int i = 0; i < args.length; i++) {
-            if ("--interval".equals(args[i]) && ++i < args.length) interval = AgentPolling.intervalMillis(args[i]);
-            else if ("--state-file".equals(args[i]) && ++i < args.length) statePath = Path.of(args[i]).toAbsolutePath();
-            else if ("--offline-pr184-file".equals(args[i]) && ++i < args.length) offlineFixture = Path.of(args[i]);
-            else if ("--offline-pr184-repo".equals(args[i]) && ++i < args.length) offlineRepository = Path.of(args[i]);
-            // Presentation output is opt-in; without it this agent behaves exactly as before.
-            else if ("--demo".equals(args[i])) demoMode = true;
-            else if ("--verbose".equals(args[i]) || "--json".equals(args[i])) verboseFlag = true;
-            else if ("--read-only-sandbox".equals(args[i]) && i + 3 < args.length && readLedger == null) {
-                readLedger = new Reviewer.LocalSandboxGateway(Integer.parseInt(args[++i]), args[++i], args[++i]);
-            }
-            else if ("--local-sandbox".equals(args[i]) && i + 5 < args.length && sandbox == null) {
-                sandbox = new SandboxBallots(Integer.parseInt(args[++i]), args[++i], args[++i], args[++i], args[++i]);
-            } else throw new IllegalArgumentException("usage: [--interval positive-seconds] [--state-file direct-local-filename] [--offline-pr184-file local-fixture] [--offline-pr184-repo local-repository] [--local-sandbox port demo-member deployed-package-id governor-cid sandbox-user-id] [--demo] [--verbose|--json]");
-        }
-        final DemoLog demo = new DemoLog("Advisory", demoMode, verboseFlag, System.err);
-        demo.banner();
-        final long pollInterval = interval;
-        final Path pollStatePath = statePath;
-        if (readLedger != null && sandbox != null)
-            throw new IllegalArgumentException("read-only ledger mode cannot enable submission");
-        final Reviewer.LocalSandboxGateway pollReadLedger = readLedger;
-        final SandboxBallots pollSandbox = sandbox;
-        if (offlineRepository != null && offlineFixture != null)
-            throw new IllegalArgumentException("choose one offline source");
-        final Path pollOfflineRepository = offlineRepository != null ? offlineRepository : offlineFixture;
-        if (statePath != null) {
-            Path root = Path.of(".").toRealPath();
-            if (!statePath.normalize().getParent().equals(root) || Files.isSymbolicLink(statePath))
-                throw new IllegalArgumentException("state file must be a direct regular file in the Java project directory");
-            if (Files.exists(statePath) && !Files.isRegularFile(statePath)) throw new IllegalArgumentException("state file is not regular");
-        }
-        Fixture fixture = fixture(RULE, RULE_SHA256, 2);
-        Set<String> state = statePath != null && Files.exists(statePath) ? loadState(statePath) : new HashSet<>();
-        Api api = offlineFixture != null ? new OfflineFile(offlineFixture)
-                : offlineRepository == null ? new GitHub() : new OfflinePr184(offlineRepository);
-        api.logMode("Advisory",System.err);
-        try (SupplementalAssessment supplemental = SupplementalAssessment.runtime("Advisory", System.err)) {
-            AgentPolling.run(pollInterval, () -> {
-                final SandboxBallots sandboxCycle = pollSandbox;
-                try {
-                    ObjectNode result = pollWithLedger(api, fixture, sandboxCycle == null ? state : new HashSet<>(), supplemental, pollReadLedger);
-                    ArrayNode ballots = result.putArray(sandboxCycle == null ? "ballot_previews" : "ballot_submissions");
-                    for (JsonNode review : result.path("reviews"))
-                        ballots.add(prepareBallotSafely(review, sandboxCycle == null ? null : sandboxCycle.party(),
-                                sandboxCycle == null ? null : sandboxCycle.governorCid(), sandboxCycle != null, sandboxCycle));
-                    result.put("ledger_submission", sandboxCycle == null ? "blocked: explicit local sandbox configuration required"
-                            : "demo_local_only_no_foundation_decision");
-                    if (pollOfflineRepository != null) result.put("discovery", "offline_pinned_pr184_seed_not_fresh_github_poll");
-                    if (sandboxCycle != null && pollOfflineRepository != null) {
-                        String round = "babycdf:grant:184:f591787a772848e4537aba5d8ba02be1764647da";
-                        result.put("matching_active_proposal_and_action_count", sandboxCycle.activeRoundCount(round));
-                    }
-                    boolean presenting = demo.enabled();
-                    // narrate assesses the whole cycle's health and reports
-                    // both failure and recovery itself. Announcing recovery
-                    // here, before the collector's own errors were examined,
-                    // cleared a failure that was still present and produced a
-                    // false recovery on every poll.
-                    if (presenting) narrate(demo, result);
-                    if (!presenting || demo.verbose()) System.err.println(AgentPolling.advisoryLine(result));
-                    if (!presenting || demo.verbose()) System.out.println(JSON.writeValueAsString(result));
-                    if (pollStatePath != null) saveState(pollStatePath, state);
-                } catch (IOException e) {
-                    ObjectNode error = JSON.createObjectNode().put("scope", SCOPE);
-                    error.putArray("reviews"); error.putArray("errors").add("poll or sandbox unavailable: " + e.getMessage());
-                    // The failure is stated once in plain words; repeats of the
-                    // same failure are silent, and the detail stays available.
-                    if (demo.enabled()) demo.failed(DemoLog.EVIDENCE, "Waiting: " + DemoLog.summarize(e));
-                    if (!demo.enabled() || demo.verbose())
-                        System.err.println("[advisory] BLOCKED errors=" + error.path("errors").size()
-                                + ": " + e.getMessage());
-                    if (!demo.enabled() || demo.verbose()) System.out.println(JSON.writeValueAsString(error));
-                    if (pollInterval == 0 || sandboxCycle != null) throw e;
-                }
-            }, Thread::sleep);
-        } finally { if (sandbox != null) sandbox.close(); }
+    public static void main(String[] args) {
+        throw new IllegalArgumentException("Advisory retired: use Reviewer; no second poller is supported");
     }
 }

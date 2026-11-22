@@ -94,14 +94,14 @@ chmod +x "$WORK/stub/dpm"
 for script in "$HERE/demo/run-demo.sh up" "$HERE/prepare-dependencies.sh"; do
   name=$(basename "${script%% *}")
   RC=0
-  OUT=$(PATH="$WORK/stub:$PATH" BABYCDF_BUILD_ROOT='relative/path' sh $script 2>&1) || RC=$?
+  OUT=$(unset INTAKE_GITHUB_TOKEN_FILE LLM_API_KEY_FILE BABYCDF_LLM_ENABLED; export INTAKE_DISCOVERY_MODE=fixture; PATH="$WORK/stub:$PATH" BABYCDF_BUILD_ROOT='relative/path' sh $script 2>&1) || RC=$?
   check "$name rejects relative" '2' "$RC"
   REASON=no
   case "$OUT" in *'must be absolute'*) REASON=yes ;; esac
   check "$name names the reason" 'yes' "$REASON"
   MISS="$WORK/missing-for-$name"
   RC=0
-  OUT=$(PATH="$WORK/stub:$PATH" BABYCDF_BUILD_ROOT="$MISS" sh $script 2>&1) || RC=$?
+  OUT=$(unset INTAKE_GITHUB_TOKEN_FILE LLM_API_KEY_FILE BABYCDF_LLM_ENABLED; export INTAKE_DISCOVERY_MODE=fixture; PATH="$WORK/stub:$PATH" BABYCDF_BUILD_ROOT="$MISS" sh $script 2>&1) || RC=$?
   check "$name rejects nonexistent" '2' "$RC"
   check "$name does not create it" 'no' "$([ -e "$MISS" ] && echo yes || echo no)"
 done

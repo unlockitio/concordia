@@ -6,7 +6,7 @@ and Advisory are read-only; LLM results never submit votes or write the ledger.
 
 ## Evidence bundles
 
-Reviewer and Advisory fetch public GitHub data anonymously by default, or use
+Reviewer fetch public GitHub data anonymously by default, or use
 the same validated `INTAKE_GITHUB_TOKEN_FILE` as Intake via the optional
 `agents-github-auth.yaml` overlay. Ambient `GITHUB_TOKEN` is ignored. Tokens are
 sent only to api.github.com and never to the LLM gateway. Requests embed a JSON-string evidence bundle with the subject URL,
@@ -24,7 +24,7 @@ Completeness is evidence metadata only in this slice, not new absence semantics.
 
 Large requests share the existing absolute 60-second request/parser deadline;
 production does not retry. Bodies are byte-bounded before parsing. See
-[GITHUB-TOKEN.md](GITHUB-TOKEN.md) for the exact Advisory/Reviewer-only recreation
+[GITHUB-TOKEN.md](GITHUB-TOKEN.md) for the exact Reviewer-only recreation
 command for shared GitHub auth, preserving ledger and Intake. GitHub PATs never
 enter bundles, LLM requests or cache identities.
 
@@ -130,7 +130,7 @@ operate the live stack, recreate **only** the two read-only agents:
 docker compose -p babycdf-live --profile agents \
   -f examples/governance/babycdf/demo/compose/compose.yaml \
   -f examples/governance/babycdf/demo/compose/llm-auth.yaml \
-  up -d --no-deps --force-recreate advisory reviewer
+  up -d --no-deps --force-recreate reviewer
 ```
 
 Do not run down or recreate Canton/Intake: the ledger and source inventory must
@@ -165,8 +165,28 @@ Generic uncertain or pending Intake failures are retried automatically at the co
 
 ### Agent evidence mode
 
-With the shared PAT overlay (`INTAKE_GITHUB_TOKEN_FILE` set), Reviewer and Advisory use live authenticated GitHub evidence by default. The fixed PR #184 head/blob identity remains required; mismatch fails closed. Without the overlay, or with `AGENT_EVIDENCE_MODE=offline`, they use the explicit offline PR fixture plus packaged issue #540 observation. Startup logs identify authenticated_file, anonymous, offline_fixture or offline_repository without credentials. Canton must already be running. To recreate only the agents after selecting the overlays, run `docker compose -p babycdf-live --profile agents -f compose/compose.yaml -f compose/intake-auth.yaml -f compose/agents-github-auth.yaml -f compose/llm-auth.yaml up -d --no-deps --build --force-recreate advisory reviewer` from the demo directory. This command is documented only, not run by validation.
+With the shared PAT overlay (`INTAKE_GITHUB_TOKEN_FILE` set), Reviewer use live authenticated GitHub evidence by default. The fixed PR #184 head/blob identity remains required; mismatch fails closed. Without the overlay, or with `AGENT_EVIDENCE_MODE=offline`, they use the explicit offline PR fixture plus packaged issue #540 observation. Startup logs identify authenticated_file, anonymous, offline_fixture or offline_repository without credentials. Canton must already be running. To recreate only the agents after selecting the overlays, run `docker compose -p babycdf-live --profile agents -f compose/compose.yaml -f compose/intake-auth.yaml -f compose/agents-github-auth.yaml -f compose/llm-auth.yaml up -d --no-deps --build --force-recreate reviewer` from the demo directory. This command is documented only, not run by validation.
 
 ### Supplemental scheduling and cost
 
-Within each cycle, budget is consumed by pinned proposals first (#184), explicit ledger/default milestones next (#540), then other searched milestones by issue number. Deterministic findings and output ordering do not change. `BABYCDF_LLM_MAX_ASSESSMENTS` defaults to 4; empty means default, otherwise only integers 1–32 are accepted and invalid configuration fails startup. Compose forwards it only to Advisory/Reviewer. For the demo, `BABYCDF_LLM_MAX_ASSESSMENTS=6` allows the main subjects and a few others. Increasing it increases potential paid calls and proportional attempt/token reservations (2 attempts and 500,000 reserved-token units per assessment); per-input byte limits remain fixed. Cache hits consume no run budget. This remains a per-process run budget, not a fresh allowance each poll.
+Within each cycle, budget is consumed by pinned proposals first (#184), explicit ledger/default milestones next (#540), then other searched milestones by issue number. Deterministic findings and output ordering do not change. `BABYCDF_LLM_MAX_ASSESSMENTS` defaults to 4; empty means default, otherwise only integers 1–32 are accepted and invalid configuration fails startup. Compose forwards it only to Reviewer. For the demo, `BABYCDF_LLM_MAX_ASSESSMENTS=6` allows the main subjects and a few others. Increasing it increases potential paid calls and proportional attempt/token reservations (2 attempts and 500,000 reserved-token units per assessment); per-input byte limits remain fixed. Cache hits consume no run budget. This remains a per-process run budget, not a fresh allowance each poll.
+
+## Single reviewer runtime
+
+Reviewer is the sole read-only evidence agent. One ledger rule read and one evidence collection feed deterministic review, at most one supplemental assessment per subject, narration and non-submitted ballot previews. Advisory remains a library; its main and old service invocation are retired, not aliases. Existing schema-1 preview state is accepted via `Reviewer --state-file`; existing Reviewer cache location remains unchanged. `--offline-pr184-file` and `--offline-pr184-repo` are evidence modes only and never replace active ledger rule authority. No submission adapter is reachable from Reviewer. Budget/log cleanup is deferred to S2.
+
+### Bounded migration from the old Advisory container
+Source retirement affects new invocations only; an already-running old container must be retired separately. Canton must already be running. Do not perform this migration during offline validation.
+
+```sh
+old=$(docker ps -aq --filter label=com.docker.compose.project=babycdf-live --filter label=com.docker.compose.service=advisory) || { echo 'BLOCKED: cannot list containers' >&2; exit 2; }
+set -- $old
+if [ "$#" -gt 1 ]; then
+  echo 'Refused: multiple old Advisory containers match' >&2
+  exit 2
+fi
+if [ "$#" -eq 1 ]; then
+  docker stop "$1" && docker rm "$1" || exit 2
+fi
+docker compose -p babycdf-live --profile agents -f compose/compose.yaml -f compose/intake-auth.yaml -f compose/agents-github-auth.yaml -f compose/llm-auth.yaml up -d --no-deps --build --force-recreate reviewer
+```

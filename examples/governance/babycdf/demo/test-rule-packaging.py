@@ -13,7 +13,7 @@ model=json.loads(subprocess.check_output(['docker','compose','--profile','agents
 def covers(target):
     target=target.rstrip('/') or '/'
     return target=='/' or target=='/app/rules' or '/app/rules'.startswith(target+'/')
-for name in ('advisory','reviewer','intake'):
+for name in ('reviewer','intake'):
     service=model['services'][name]
     assert service['read_only'] is True,name
     for mount in service.get('volumes',[]):

@@ -354,7 +354,7 @@ PY
     }
     up_stage impl-inspection 'Checking implementation package' up_inspect_impl
     up_stage readback-publication 'Publishing verified reader and Intake metadata' python3 "$HERE/publish-readback.py" "$STATE" "$LEDGER_PORT" "$STATE/impl-package.json" "$STATE/demo-inspect.json"
-    up_stage agents 'Starting Intake opener and read-only Advisory/Reviewer' compose up -d --build --wait --wait-timeout 60 intake advisory reviewer
+    up_stage agents 'Starting Intake opener and merged read-only Reviewer' compose up -d --build --wait --wait-timeout 60 intake reviewer
     ;;
   logs) compose logs -f --timestamps ;;
   down)

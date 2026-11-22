@@ -62,14 +62,6 @@ case "${1:-}" in
   reviewer)
     # shellcheck disable=SC2086  # DEMO_FLAGS is a script-controlled literal word list
     exec java -cp '/app/classes:/app/lib/*' org.concordia.babycdf.Reviewer --local-sandbox 6865 "$party" "$package" $EVIDENCE_FLAGS --interval "$INTERVAL" $DEMO_FLAGS ;;
-  advisory)
-    # Text output only. The ledger-submission invocation (--local-sandbox) is
-    # deliberately not reachable from this demo entrypoint, and ADVISORY_SUBMIT
-    # is no longer honoured, so no configuration here can make an agent publish.
-    if [ -n "${ADVISORY_SUBMIT:-}" ] && [ "${ADVISORY_SUBMIT}" != 0 ]; then
-      fail 'ADVISORY_SUBMIT is not supported: demo agents respond in text only'
-    fi
-    # shellcheck disable=SC2086  # DEMO_FLAGS is a script-controlled literal word list
-    exec java -cp '/app/classes:/app/lib/*' org.concordia.babycdf.Advisory --read-only-sandbox 6865 "$party" "$package" $EVIDENCE_FLAGS --interval "$INTERVAL" $DEMO_FLAGS ;;
+  advisory) fail 'Advisory retired: use reviewer; no second poller is supported' ;;
   *) fail 'unknown agent';;
 esac

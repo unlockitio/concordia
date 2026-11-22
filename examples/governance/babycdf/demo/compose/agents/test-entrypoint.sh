@@ -146,11 +146,9 @@ flags_case() {
 # Baseline assertions are intentionally overlay-free, regardless of caller env.
 unset INTAKE_GITHUB_TOKEN_FILE AGENT_EVIDENCE_MODE
 flags_case reviewer-default reviewer no
-flags_case advisory-default advisory no
 flags_case reviewer-verbose reviewer yes
-flags_case advisory-verbose advisory yes
 
-for agent in reviewer advisory; do
+for agent in reviewer; do
   ARGS_FILE="$DIR/$agent-live.args"; export ARGS_FILE
   READBACK_FILE="$READBACK" PATH="$STUB:$PATH" INTAKE_GITHUB_TOKEN_FILE=/synthetic/not-read sh "$HERE/entrypoint.sh" "$agent"
   case "$(cat "$ARGS_FILE")" in *--offline-pr184-file*) echo 'FAIL: live auth selects offline'; exit 1;; esac

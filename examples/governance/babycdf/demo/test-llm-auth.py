@@ -24,6 +24,6 @@ class LlmAuth(unittest.TestCase):
     def test_overlay_boundary(self):
         overlay=(HERE/'compose/llm-auth.yaml').read_text()
         self.assertNotIn('  intake:',overlay); self.assertNotIn('  canton:',overlay)
-        self.assertEqual(2,overlay.count('LLM_API_KEY_FILE: /run/secrets/llm_api_key'))
+        self.assertEqual(1,overlay.count('LLM_API_KEY_FILE: /run/secrets/llm_api_key'))
         self.assertNotIn('LLM_API_KEY:',overlay)
 if __name__=='__main__': unittest.main()

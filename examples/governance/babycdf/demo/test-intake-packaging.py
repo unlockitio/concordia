@@ -120,7 +120,7 @@ class IntakePackaging(unittest.TestCase):
         runner=(HERE/'run-demo.sh').read_text()
         self.assertLess(runner.index('up_stage impl-inspection'),runner.index('up_stage readback-publication'))
         self.assertLess(runner.index('up_stage readback-publication'),runner.index('up_stage agents'))
-        self.assertIn('60 intake advisory reviewer',runner)
+        self.assertIn('60 intake reviewer',runner)
         compose=(HERE/'compose/compose.yaml').read_text().split('  intake:\n')[1].split('  reviewer:\n')[0]
         for required in ['intake-journal:/journal','read_only: true','cap_drop: [ALL]','no-new-privileges:true','restart: "no"','network_mode: "service:canton"']:
             self.assertIn(required,compose)

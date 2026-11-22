@@ -1,14 +1,14 @@
 # BabyCDF live sandbox demo
 
-Optional shared GitHub file-secret authentication for Advisory/Reviewer is
+Optional shared GitHub file-secret authentication for Reviewer is
 specified in [GITHUB-TOKEN.md](GITHUB-TOKEN.md), including the exact agent-only
 recreate command preserving the ledger. Reads are anonymous without that overlay;
 legacy ambient GITHUB_TOKEN is ignored. The same Intake validator is reused.
 
 **Status of this revision: OFFLINE VALIDATED, LIVE ACCEPTANCE PENDING.**
 
-Current runtime: three Java agents. Intake has CanActAs opener and submits one
-OpenAgenda bridge per step 3/4; Advisory and Reviewer have CanReadAs opener only.
+Current runtime: two Java processes (Intake and Reviewer). Intake has CanActAs opener and submits one
+OpenAgenda bridge per step 3/4; Reviewer have CanReadAs opener only.
 The unauthenticated sandbox API is not an enforced security boundary. Main `all`
 ends at step 5; optional rounds 1–5 remain separate. Intake defaults to bounded
 token-authenticated GitHub pagination (first provision the explicit file secret:
@@ -65,7 +65,7 @@ milestone was approved, and it never moves value to anyone. The coupon step
 allocates a `DevelopmentFundCoupon` in a sandbox-local Amulet configuration
 whose DSO and fund manager are parties this demo created seconds earlier.
 
-Presentation: [`docs/babycdf-pitch.html`](../docs/babycdf-pitch.html) is a self-contained slide deck; open it in a browser and navigate with the left and right arrow keys, or press `N` for presenter notes. The attestation storage model remains planned. The running Java agents support opt-in real LLM-assisted supplemental assessments; deterministic evidence checks and ledger rules retain authority. Intake now submits as opener through OpenAgenda, while Advisory and Reviewer remain read-only.
+Presentation: [`docs/babycdf-pitch.html`](../docs/babycdf-pitch.html) is a self-contained slide deck; open it in a browser and navigate with the left and right arrow keys, or press `N` for presenter notes. The attestation storage model remains planned. The running Java agents support opt-in real LLM-assisted supplemental assessments; deterministic evidence checks and ledger rules retain authority. Intake now submits as opener through OpenAgenda, while Reviewer remain read-only.
 
 ## Compose service and network naming
 
@@ -867,7 +867,7 @@ in a heading all fail too.
 
 ## What the agents log
 
-The Advisory and Reviewer containers run throughout, non-root, read-only, with
+The Reviewer containers run throughout, non-root, read-only, with
 bounded resources, sharing Canton's network namespace.
 
 ### Presentation-first logs
@@ -1005,7 +1005,7 @@ The only constants in code are the matching mechanics.
 counts as present when it appears after case folding and whitespace
 normalization, so a phrase wrapped across a markdown line break still matches.
 These authoritative findings do not claim semantic understanding. Optional Java
-LLM assessments interpret each supplied rule clause against bounded evidence, but are not replacements for these checks. See [LLM.md](LLM.md) for file-secret provisioning, opt-in flags, and the command to recreate only Advisory and Reviewer. Exact `PASS`/`FAIL`/`INCONCLUSIVE`/`NOT_APPLICABLE` verdicts have verified quotes and deterministic aggregation; optional commentary is separately labelled advisory and cannot affect the exact result. Reproducibility is per cached input, not mathematical determinism; container recreation loses the existing tmpfs cache. No live LLM acceptance is claimed by offline tests;
+LLM assessments interpret each supplied rule clause against bounded evidence, but are not replacements for these checks. See [LLM.md](LLM.md) for file-secret provisioning, opt-in flags, and the command to recreate only Reviewer. Exact `PASS`/`FAIL`/`INCONCLUSIVE`/`NOT_APPLICABLE` verdicts have verified quotes and deterministic aggregation; optional commentary is separately labelled advisory and cannot affect the exact result. Reproducibility is per cached input, not mathematical determinism; container recreation loses the existing tmpfs cache. No live LLM acceptance is claimed by offline tests;
 
 returned-model/log metadata identifies the actual provider response. Every finding cites the clause ID, the
 rule ID, version and contract, the criterion it checked, and the phrases
@@ -1327,4 +1327,24 @@ Additional log reason codes: `semantic_support_unconfirmed` (verified semantic q
 
 ### Agent evidence mode
 
-With the shared PAT overlay (`INTAKE_GITHUB_TOKEN_FILE` set), Reviewer and Advisory use live authenticated GitHub evidence by default. The fixed PR #184 head/blob identity remains required; mismatch fails closed. Without the overlay, or with `AGENT_EVIDENCE_MODE=offline`, they use the explicit offline PR fixture plus packaged issue #540 observation. Startup logs identify authenticated_file, anonymous, offline_fixture or offline_repository without credentials. Canton must already be running. To recreate only the agents after selecting the overlays, run `docker compose -p babycdf-live --profile agents -f compose/compose.yaml -f compose/intake-auth.yaml -f compose/agents-github-auth.yaml -f compose/llm-auth.yaml up -d --no-deps --build --force-recreate advisory reviewer` from the demo directory. This command is documented only, not run by validation.
+With the shared PAT overlay (`INTAKE_GITHUB_TOKEN_FILE` set), Reviewer use live authenticated GitHub evidence by default. The fixed PR #184 head/blob identity remains required; mismatch fails closed. Without the overlay, or with `AGENT_EVIDENCE_MODE=offline`, they use the explicit offline PR fixture plus packaged issue #540 observation. Startup logs identify authenticated_file, anonymous, offline_fixture or offline_repository without credentials. Canton must already be running. To recreate only the agents after selecting the overlays, run `docker compose -p babycdf-live --profile agents -f compose/compose.yaml -f compose/intake-auth.yaml -f compose/agents-github-auth.yaml -f compose/llm-auth.yaml up -d --no-deps --build --force-recreate reviewer` from the demo directory. This command is documented only, not run by validation.
+
+## Single reviewer runtime
+
+Reviewer is the sole read-only evidence agent. One ledger rule read and one evidence collection feed deterministic review, at most one supplemental assessment per subject, narration and non-submitted ballot previews. Advisory remains a library; its main and old service invocation are retired, not aliases. Existing schema-1 preview state is accepted via `Reviewer --state-file`; existing Reviewer cache location remains unchanged. `--offline-pr184-file` and `--offline-pr184-repo` are evidence modes only and never replace active ledger rule authority. No submission adapter is reachable from Reviewer. Budget/log cleanup is deferred to S2.
+
+### Bounded migration from the old Advisory container
+Source retirement affects new invocations only; an already-running old container must be retired separately. Canton must already be running. Do not perform this migration during offline validation.
+
+```sh
+old=$(docker ps -aq --filter label=com.docker.compose.project=babycdf-live --filter label=com.docker.compose.service=advisory) || { echo 'BLOCKED: cannot list containers' >&2; exit 2; }
+set -- $old
+if [ "$#" -gt 1 ]; then
+  echo 'Refused: multiple old Advisory containers match' >&2
+  exit 2
+fi
+if [ "$#" -eq 1 ]; then
+  docker stop "$1" && docker rm "$1" || exit 2
+fi
+docker compose -p babycdf-live --profile agents -f compose/compose.yaml -f compose/intake-auth.yaml -f compose/agents-github-auth.yaml -f compose/llm-auth.yaml up -d --no-deps --build --force-recreate reviewer
+```
