@@ -284,6 +284,7 @@ case "${1:-help}" in
     # gitignored .build; an explicit value must be absolute and already exist,
     # and an invalid one creates nothing.
     babycdf_build_root "$HERE/.." || exit 2
+    python3 "$HERE/check-ledger-ports.py" || exit 2
     BUILD="$BABYCDF_BUILD_ROOT"
     REPO=$(CDPATH= cd -- "$HERE/../../../.." && pwd -P)
     RAW_DIR="$BUILD/demo-logs/up-$(date +%Y%m%d-%H%M%S)-$$"

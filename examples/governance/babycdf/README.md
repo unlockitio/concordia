@@ -103,3 +103,9 @@ Generic uncertain or pending Intake failures are retried automatically at the co
 ## Single reviewer runtime
 
 Reviewer is the sole read-only evidence agent. One ledger rule read and one evidence collection feed deterministic review, at most one supplemental assessment per subject, narration and non-submitted ballot previews. Advisory remains a library; its main and old service invocation are retired, not aliases. Existing schema-1 preview state is accepted via `Reviewer --state-file`; existing Reviewer cache location remains unchanged. `--offline-pr184-file` and `--offline-pr184-repo` are evidence modes only and never replace active ledger rule authority. No submission adapter is reachable from Reviewer. Budget/log cleanup is deferred to S2.
+
+## Host HTTP and gRPC ledger access
+
+Both unauthenticated demo APIs are published on host loopback only: gRPC `127.0.0.1:${LEDGER_PORT:-41000}` and HTTP JSON `http://127.0.0.1:${LEDGER_HTTP_PORT:-41001}`. Never expose these mappings on 0.0.0.0 or a public interface. `up` validates distinct ports in 1024–65535 and probes both loopback binds before starting. A busy port requires an explicit override. The pinned Canton config already listens on container 0.0.0.0:7575; host loopback publication is the security boundary. Applying the new mapping requires recreating Canton at the next user-authorized down/up; no running stack was changed.
+
+Use `BABYCDF_HTTP_VIA=host ./ledger.sh http contracts` or `BABYCDF_HTTP_VIA=host ./ledger.sh rule` for host curl without container exec; exec remains the compatibility default. The read-only allowlists apply equally. Rule output shows the ledger reference, not nonexistent embedded clauses. See `demo/postman/grpc-requests.md` (from repo example root) / `postman/grpc-requests.md` (from demo) for Postman HTTP collection import, gRPC reflection, request bodies, curl and pinned grpcurl client commands. This supersedes older text describing HTTP as unpublished.

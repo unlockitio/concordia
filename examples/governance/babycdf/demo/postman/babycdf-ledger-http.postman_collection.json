@@ -1,0 +1,266 @@
+{
+  "info": {
+    "name": "BabyCDF ledger read-only HTTP",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://127.0.0.1:41001"
+    },
+    {
+      "key": "party",
+      "value": ""
+    },
+    {
+      "key": "offset",
+      "value": "0"
+    }
+  ],
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "pm.sendRequest(pm.collectionVariables.get('baseUrl')+'/v2/state/ledger-end', (err,res) => { if(err) throw err; pm.collectionVariables.set('offset',res.json().offset); });"
+        ]
+      }
+    }
+  ],
+  "item": [
+    {
+      "name": "/v2/version",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{baseUrl}}/v2/version"
+      }
+    },
+    {
+      "name": "/v2/state/ledger-end",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{baseUrl}}/v2/state/ledger-end"
+      }
+    },
+    {
+      "name": "/v2/parties",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{baseUrl}}/v2/parties"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const p=(pm.response.json().partyDetails || []).find(p => (p.party || '').startsWith('demo-opener-')); if(p) pm.collectionVariables.set('party',p.party);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "All contracts for party",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{baseUrl}}/v2/state/active-contracts",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"activeAtOffset\": {{offset}},\n  \"eventFormat\": {\n    \"filtersByParty\": {\n      \"{{party}}\": {\n        \"cumulative\": [\n          {\n            \"identifierFilter\": {\n              \"WildcardFilter\": {\n                \"value\": {}\n              }\n            }\n          }\n        ]\n      }\n    },\n    \"verbose\": true\n  }\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "SourceItem",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{baseUrl}}/v2/state/active-contracts",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"activeAtOffset\": {{offset}},\n  \"eventFormat\": {\n    \"filtersForAnyParty\": {\n      \"cumulative\": [\n        {\n          \"identifierFilter\": {\n            \"TemplateFilter\": {\n              \"value\": {\n                \"templateId\": \"#cap-example-babycdf-demo:Cap.Examples.BabyCdf.SourceCatalogue:SourceItem\"\n              }\n            }\n          }\n        }\n      ]\n    },\n    \"verbose\": true\n  }\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "SourceCheckpoint",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{baseUrl}}/v2/state/active-contracts",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"activeAtOffset\": {{offset}},\n  \"eventFormat\": {\n    \"filtersForAnyParty\": {\n      \"cumulative\": [\n        {\n          \"identifierFilter\": {\n            \"TemplateFilter\": {\n              \"value\": {\n                \"templateId\": \"#cap-example-babycdf-demo:Cap.Examples.BabyCdf.SourceCatalogue:SourceCheckpoint\"\n              }\n            }\n          }\n        }\n      ]\n    },\n    \"verbose\": true\n  }\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "EffectiveRule",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{baseUrl}}/v2/state/active-contracts",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"activeAtOffset\": {{offset}},\n  \"eventFormat\": {\n    \"filtersForAnyParty\": {\n      \"cumulative\": [\n        {\n          \"identifierFilter\": {\n            \"TemplateFilter\": {\n              \"value\": {\n                \"templateId\": \"#cap-example-babycdf:Cap.Examples.BabyCdf.RuleVote:EffectiveRule\"\n              }\n            }\n          }\n        }\n      ]\n    },\n    \"verbose\": true\n  }\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "AgendaProposal",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{baseUrl}}/v2/state/active-contracts",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"activeAtOffset\": {{offset}},\n  \"eventFormat\": {\n    \"filtersForAnyParty\": {\n      \"cumulative\": [\n        {\n          \"identifierFilter\": {\n            \"TemplateFilter\": {\n              \"value\": {\n                \"templateId\": \"#cap-example-babycdf:Cap.Examples.BabyCdf.RuleVote:AgendaProposal\"\n              }\n            }\n          }\n        }\n      ]\n    },\n    \"verbose\": true\n  }\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "AgendaBallot",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{baseUrl}}/v2/state/active-contracts",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"activeAtOffset\": {{offset}},\n  \"eventFormat\": {\n    \"filtersForAnyParty\": {\n      \"cumulative\": [\n        {\n          \"identifierFilter\": {\n            \"TemplateFilter\": {\n              \"value\": {\n                \"templateId\": \"#cap-example-babycdf:Cap.Examples.BabyCdf.RuleVote:AgendaBallot\"\n              }\n            }\n          }\n        }\n      ]\n    },\n    \"verbose\": true\n  }\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "ApprovedGrantProposal",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{baseUrl}}/v2/state/active-contracts",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"activeAtOffset\": {{offset}},\n  \"eventFormat\": {\n    \"filtersForAnyParty\": {\n      \"cumulative\": [\n        {\n          \"identifierFilter\": {\n            \"TemplateFilter\": {\n              \"value\": {\n                \"templateId\": \"#cap-example-babycdf:Cap.Examples.BabyCdf.RuleVote:ApprovedGrantProposal\"\n              }\n            }\n          }\n        }\n      ]\n    },\n    \"verbose\": true\n  }\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "ApprovedMilestone",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{baseUrl}}/v2/state/active-contracts",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"activeAtOffset\": {{offset}},\n  \"eventFormat\": {\n    \"filtersForAnyParty\": {\n      \"cumulative\": [\n        {\n          \"identifierFilter\": {\n            \"TemplateFilter\": {\n              \"value\": {\n                \"templateId\": \"#cap-example-babycdf:Cap.Examples.BabyCdf.RuleVote:ApprovedMilestone\"\n              }\n            }\n          }\n        }\n      ]\n    },\n    \"verbose\": true\n  }\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "Bounded updates",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{baseUrl}}/v2/updates",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"beginExclusive\": 0,\n  \"endInclusive\": {{offset}},\n  \"updateFormat\": {\n    \"includeTransactions\": {\n      \"transactionShape\": \"TRANSACTION_SHAPE_ACS_DELTA\",\n      \"eventFormat\": {\n        \"filtersByParty\": {\n          \"{{party}}\": {\n            \"cumulative\": [\n              {\n                \"identifierFilter\": {\n                  \"WildcardFilter\": {\n                    \"value\": {}\n                  }\n                }\n              }\n            ]\n          }\n        },\n        \"verbose\": true\n      }\n    }\n  }\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      }
+    }
+  ]
+}

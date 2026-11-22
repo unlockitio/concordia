@@ -34,6 +34,10 @@ for other in ('intake', 'canton'):
     assert 'AGENT_EVIDENCE_MODE' not in mode_model['services'][other].get('environment', {})
 
 assert model["name"] == "babycdf-live", model["name"]
+ports=model['services']['canton']['ports']
+assert {(p['target'],str(p['published']),p['host_ip']) for p in ports} == {(6865,'41000','127.0.0.1'),(7575,'41001','127.0.0.1')}
+http_override=config(dict(environment,LEDGER_HTTP_PORT='42001'))
+assert any(p['target']==7575 and str(p['published'])=='42001' and p['host_ip']=='127.0.0.1' for p in http_override['services']['canton']['ports'])
 assert set(model["services"]) == {"canton", "reviewer", "intake"}
 assert set(model["networks"]) == {"canton"}, model["networks"]
 assert model["networks"]["canton"]["name"] == "babycdf-live_canton"

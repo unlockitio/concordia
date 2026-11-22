@@ -14,8 +14,8 @@
 # before Docker is invoked. This script never creates, exercises, submits,
 # allocates or uploads anything, and never starts or stops a container.
 #
-# To reach the JSON API from the host without `exec`, you would publish 7575 on
-# loopback; see DEMO.md. That change is NOT applied and is not needed here.
+# BABYCDF_HTTP_VIA=host reaches the loopback HTTP publication without exec.
+# The unauthenticated API must never be exposed on a public host interface.
 set -eu
 
 # shellcheck disable=SC1007  # `CDPATH= cd` is the intended env prefix, as in run-demo.sh
@@ -24,6 +24,11 @@ STATE="$HERE/compose/state"
 PROJECT=${BABYCDF_PROJECT:-babycdf-live}
 SERVICE=canton
 API=http://localhost:7575
+if [ "${BABYCDF_HTTP_VIA:-exec}" = host ]; then
+  case "${LEDGER_HTTP_PORT:-41001}" in ''|*[!0-9]*) echo 'Invalid LEDGER_HTTP_PORT' >&2; exit 2;; esac
+  [ "${LEDGER_HTTP_PORT:-41001}" -ge 1024 ] && [ "${LEDGER_HTTP_PORT:-41001}" -le 65535 ] || exit 2
+  API=http://127.0.0.1:${LEDGER_HTTP_PORT:-41001}
+fi
 LEDGER_PORT=${LEDGER_PORT:-41000}
 # Pinned to the immutable digest verified against this demo (grpcurl, linux/arm64,
 # fullstorydev/grpcurl:latest as of 2026-11-18). A tag can be re-pointed; a
@@ -157,13 +162,21 @@ guarded() {
 
 # Checked HTTP GET. Fails on transport error, on HTTP >= 400, and on a body
 # that is not JSON (the OpenAPI doc and /readyz are the documented exceptions).
+http_curl() {
+  case "${BABYCDF_HTTP_VIA:-exec}" in
+    exec) compose exec -T "$SERVICE" curl "$@" ;;
+    host) curl "$@" ;;
+    *) refuse 'BABYCDF_HTTP_VIA must be exec or host' ;;
+  esac
+}
+
 http_get() {
   http_get_allowed "$1" ||
     refuse "Refused: GET $1 is not in the read-only allowlist.
 This viewer only performs queries. See './ledger.sh help'."
   _body=$(scratch)
   _code=0
-  compose exec -T "$SERVICE" curl -sS -o /dev/stdout -w '\n%{http_code}' "$API$1" \
+  http_curl -sS -o /dev/stdout -w '\n%{http_code}' "$API$1" \
     >"$_body" 2>"$_body.err" || _code=$?
   if [ "$_code" -ne 0 ]; then
     _msg=$(cat "$_body.err" 2>/dev/null)
@@ -194,7 +207,7 @@ Only query endpoints are permitted (active-contracts, updates,
 events-by-contract-id, package-vetting/list). See './ledger.sh help'."
   _body=$(scratch)
   _code=0
-  compose exec -T "$SERVICE" curl -sS -o /dev/stdout -w '\n%{http_code}' \
+  http_curl -sS -o /dev/stdout -w '\n%{http_code}' \
     -X POST "$API$1" -H 'Content-Type: application/json' -d @- \
     >"$_body" 2>"$_body.err" || _code=$?
   if [ "$_code" -ne 0 ]; then
@@ -276,6 +289,12 @@ or use the HTTP transport instead:            $0 http <command>"
 
 # Fails friendly when the demo is not up, instead of leaking a docker error.
 need_demo() {
+  if [ "$TRANSPORT" = http ] && [ "${BABYCDF_HTTP_VIA:-exec}" = host ]; then
+    command -v curl >/dev/null 2>&1 || die 'curl required for host HTTP'
+    command -v jq >/dev/null 2>&1 || die 'jq required'
+    [ -f "$STATE/bootstrap.json" ] || die 'bootstrap.json unavailable; demo not bootstrapped'
+    return 0
+  fi
   need_deps
   cid=$(compose ps -q "$SERVICE" 2>/dev/null || true)
   [ -n "$cid" ] || die "The babycdf demo is not running (compose project '$PROJECT').
@@ -654,11 +673,11 @@ cmd_rule() {
                "  version  \(.arg.draft.version)",
                "  design   \(.arg.draft.designText)",
                "  members  \(.arg.members.map | length)",
-               (.arg.clauses[]
-                | "  clause \(.clauseId)",
-                  "    criterion: \(.criterion)",
-                  "    required:  \(.requiredPhrases | join(" | "))",
-                  "    forbidden: \(.forbiddenPhrases | join(" | "))")'
+               "  location \(.arg.draft.ruleRef.location)",
+               "  commit   \(.arg.draft.ruleRef.commit // "none")",
+               "  sha256   \(.arg.draft.ruleRef.sha256)",
+               "  document not verified (reference only)"'
+
 }
 
 cmd_votes() {
@@ -900,7 +919,9 @@ the host.
 Requires the demo to be up: ./run-demo.sh up
 Environment:
   BABYCDF_PROJECT     Compose project name (default babycdf-live)
-  LEDGER_PORT         published gRPC port (default 41000)
+  LEDGER_PORT         published loopback gRPC port (default 41000)
+  LEDGER_HTTP_PORT    published loopback HTTP port (default 41001)
+  BABYCDF_HTTP_VIA    exec (default) or host (curl, no container exec)
   GRPCURL_IMAGE       gRPC client image reference (digest-pinned by default)
   BABYCDF_GRPC_VIA    'host' (default, Docker Desktop) or 'container' to join
                       the participant's network namespace, useful on Linux

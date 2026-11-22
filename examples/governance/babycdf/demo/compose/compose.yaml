@@ -12,9 +12,10 @@ services:
       context: .cips/8e36c20e5106014efb8348f749d9535afbc48921/cn-credentials-standard
       dockerfile: Dockerfile.canton
     # Unauthenticated demo API: never inherit all-interface host bindings.
-    # HTTP remains container-internal for the inherited healthcheck.
+    # Both unauthenticated APIs are host-loopback only.
     ports: !override
       - "127.0.0.1:${LEDGER_PORT:-41000}:6865"
+      - "127.0.0.1:${LEDGER_HTTP_PORT:-41001}:7575"
     # One-host resource workaround; see DESIGN-NOTES.md for evidence/limits.
     mem_limit: ${CREDENTIAL_CANTON_MEM_LIMIT:-4g}
     environment:
