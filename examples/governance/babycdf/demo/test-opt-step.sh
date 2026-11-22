@@ -64,6 +64,8 @@ babycdf_build_root() { BABYCDF_BUILD_ROOT=$WORK/build; mkdir -p "\$BABYCDF_BUILD
 HARNESS
   awk '/^raw_log_path\(\) \{/,/^\}/' "$HERE/run-demo.sh" >> "$WORK/harness.sh"
   awk '/^render_step\(\) \{/,/^\}/' "$HERE/run-demo.sh" >> "$WORK/harness.sh"
+  awk '/^agent_log_summary\(\) \{/,/^\}/' "$HERE/run-demo.sh" >> "$WORK/harness.sh"
+  cp "$HERE/summarize-agent-log.py" "$WORK/here/summarize-agent-log.py"
   awk '/^run_step\(\) \{/,/^\}/' "$HERE/run-demo.sh" >> "$WORK/harness.sh"
   awk '/^run_opt_step\(\) \{/,/^\}/' "$HERE/run-demo.sh" >> "$WORK/harness.sh"
   printf '\n"$@"\n' >> "$WORK/harness.sh"

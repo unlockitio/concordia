@@ -98,15 +98,17 @@ class IntakePackaging(unittest.TestCase):
             result=subprocess.run(['sh',str(harness),str(root)],env=env,text=True,capture_output=True)
             self.assertEqual(0,result.returncode,result.stderr)
             self.assertEqual(['compose','-p','babycdf-live','--profile','agents','-f','synthetic','down','--volumes'],result.stdout.splitlines())
-    def test_discovery_log_failure_refuses_before_marker_or_daml(self):
+    def test_discovery_failure_continues_to_package_gate(self):
         runner=(HERE/'run-demo.sh').read_text(); start=runner.index('run_step() {'); end=runner.index('\n}',start)+2
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp); (root/'step-2.json').write_text('{}')
             harness=root/'h.sh'
-            harness.write_text('set -eu\n'+runner[start:end]+'\nRAW_DIR=x\nSTATE="$1"\nHERE="$2"\ncompose() { case "$*" in "ps --status running -q intake") echo running;; "logs --no-color --tail 30 intake") return 2;; *) exit 99;; esac; }\nrun_step 3\n')
+            summary_start=runner.index('agent_log_summary() {'); summary_end=runner.index('\n}',summary_start)+2
+            harness.write_text('set -eu\n'+runner[summary_start:summary_end]+'\n'+runner[start:end]+'\nRAW_DIR=x\nSTATE="$1"\nHERE="$2"\ncompose() { case "$*" in "ps --status running -q intake") echo running;; "logs --no-color intake") return 2;; *) exit 99;; esac; }\npython3() { echo package-gate-reached; return 2; }\nrun_step 3\n')
             result=subprocess.run(['sh',str(harness),str(root),str(HERE)],text=True,capture_output=True)
             self.assertEqual(2,result.returncode)
-            self.assertIn('client report follows; not ledger evidence or voting authority',result.stdout)
+            self.assertIn('summary unavailable (log_read_failed)',result.stdout)
+            self.assertIn('package-gate-reached',result.stdout)
             self.assertFalse((root/'step-3.attempted').exists())
     def test_live_mode_environment_is_inherited_by_java(self):
         with tempfile.TemporaryDirectory() as tmp:

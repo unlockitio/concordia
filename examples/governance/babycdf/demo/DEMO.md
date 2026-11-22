@@ -1348,3 +1348,7 @@ if [ "$#" -eq 1 ]; then
 fi
 docker compose -p babycdf-live --profile agents -f compose/compose.yaml -f compose/intake-auth.yaml -f compose/agents-github-auth.yaml -f compose/llm-auth.yaml up -d --no-deps --build --force-recreate reviewer
 ```
+
+## Intake summary before proposal/milestone steps
+
+Steps 3 and 4 print a compact informational catalogue summary, not raw container lines. The shared helper reads the complete current-project Intake log with `compose logs --no-color intake`, without tail/since limits. Added and updated events are deduplicated by kind and number; repeated restart lines do not inflate counts. Distinct pause/error messages are sanitized and limited to five displayed messages plus an omitted count. Log-read or summary failure prints a categorical unavailable line and never changes the vote, markers or step outcome. Counts describe retained container logs, not ledger evidence, authoritative catalogue totals, archived containers or voting authority. Steps 2/5 and optional steps do not paste agent log slices; `all` uses the same step helper. The explicit `logs` command remains an intentional interactive raw-log viewer.

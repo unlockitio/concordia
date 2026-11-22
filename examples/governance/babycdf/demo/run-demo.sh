@@ -140,6 +140,23 @@ render_step() {
 }
 # One step, with the same prerequisite, marker and package gate for `step` and
 # `all`. Keeping a single implementation stops the two paths from drifting.
+agent_log_summary() {
+  # Full current-project log, spooled to disk so producer failure is not hidden
+  # by a successful summarizer in a POSIX pipeline. Never touches step state.
+  (
+    agent=${1:-intake}
+    case "$agent" in intake|reviewer) ;; *) printf '[DISCOVERY] agent summary unavailable (invalid_agent)\n'; exit 0;; esac
+    summary_tmp=$(mktemp -d "${TMPDIR:-/tmp}/babycdf-summary-XXXXXXXX") || { printf '[DISCOVERY] intake summary unavailable (temporary_storage)\n'; exit 0; }
+    trap 'rm -f -- "$summary_tmp/log"; rmdir "$summary_tmp"' EXIT HUP INT TERM
+    if ! compose logs --no-color "$agent" > "$summary_tmp/log" 2>/dev/null; then
+      printf '[DISCOVERY] %s summary unavailable (log_read_failed)\n' "$agent"
+      exit 0
+    fi
+    python3 "$HERE/summarize-agent-log.py" "$agent" < "$summary_tmp/log" 2>/dev/null || printf '[DISCOVERY] %s summary unavailable (summary_failed)\n' "$agent"
+    exit 0
+  )
+}
+
 run_step() {
   # Raw logs live under the gitignored build root, never in the repository.
   if [ -z "$RAW_DIR" ]; then
@@ -167,8 +184,7 @@ run_step() {
     fi
   fi
   if [ "$NUMBER" = 3 ] || [ "$NUMBER" = 4 ]; then
-    echo '[DISCOVERY] Intake client report follows; not ledger evidence or voting authority.'
-    compose logs --no-color --tail 30 intake || return 2
+    agent_log_summary intake
   fi
   python3 "$HERE/package-gate.py" "$STATE" "$HERE/.daml/dist/cap-example-babycdf-demo-0.1.0.dar"
   : > "$STATE/step-$NUMBER.attempted"
