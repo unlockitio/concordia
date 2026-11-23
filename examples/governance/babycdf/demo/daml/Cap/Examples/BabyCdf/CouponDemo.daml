@@ -37,7 +37,7 @@ managerAllocatesIssuedCoupon = do
   manager <- allocateParty "babycdf-coupon-demo-manager"
   wrongManager <- allocateParty "babycdf-coupon-demo-wrong-manager"
   beneficiary <- allocateParty "babycdf-coupon-demo-beneficiary"
-  milestoneCid <- capRuleAndSeparateApprovalsWithMilestone
+  _ <- capRuleAndSeparateApprovalsWithMilestone
   let issuanceCurve = defaultAmuletConfig.issuanceCurve
       issuance = issuanceCurve.initialValue with optDevelopmentFundPercentage = Some 0.05
       config = defaultAmuletConfig with
@@ -71,7 +71,7 @@ managerAllocatesIssuedCoupon = do
   let Some source = issued.unclaimedDevelopmentFundCouponCid
       amount = 1.0
       expiresAt = addRelTime now (hours 2)
-      reason = "sandbox ApprovedMilestone " <> show milestoneCid <> " " <> milestoneSubject.url
+      reason = "sandbox coupon API test only; no ApprovedMilestone or delivery claim " <> milestoneSubject.url
       allocate fundManager requestedAmount = exerciseCmd rules AmuletRules_AllocateDevelopmentFundCoupon with
         unclaimedDevelopmentFundCouponCids = [source]
         beneficiary

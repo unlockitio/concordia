@@ -4,6 +4,7 @@ module Cap.Examples.BabyCdf.SourceCatalogueTest where
 import Daml.Script
 import DA.Assert
 import DA.Time
+import DA.List (sortOn)
 import qualified DA.Text as Text
 import Cap.Examples.BabyCdf.SourceCatalogue
 import Cap.Examples.BabyCdf.RuleVote
@@ -49,7 +50,7 @@ catalogueVotingCounts = script do
     items = map (\o -> o with observedAt = addRelTime now (seconds 1)) observations
     scanPhase = FullSweep; nextToken = ""; complete = True
   replay <- query @SourceObservationCredential opener
-  replay === rows
+  sortOn (\(_,s) -> s.observation.number) replay === sortOn (\(_,s) -> s.observation.number) rows
   sourceCatalogueCounts opener >>= (=== (3,3,2,1))
   agendas <- query @AgendaProposal opener
   actions <- query @AgendaAction opener

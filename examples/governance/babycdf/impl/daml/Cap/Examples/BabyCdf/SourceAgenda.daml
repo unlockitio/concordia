@@ -1,0 +1,86 @@
+-- SPDX-License-Identifier: Apache-2.0
+module Cap.Examples.BabyCdf.SourceAgenda where
+
+import Canton.Network.Credentials.V1
+import Cap.Examples.BabyCdf.SourceObservationCredential
+import qualified DA.Text as Text
+import DA.List (unique)
+import DA.NonEmpty (NonEmpty(..))
+
+-- A Git blob identifies file bytes; a head/delivery commit identifies a tree.
+-- Neither an editable issue URL nor an observation digest is a delivery pin.
+data FilePin = FilePin with path : Text; blob : Text deriving (Eq, Show)
+data EvidencePin
+  = ProposalPin with headCommit : Text; files : [FilePin]
+  | DeliveryPin with deliveryCommit : Text; issueDigest : Text; voteCommentId : Int; voteCommentAt : Time
+  | BlockedPin with reason : Text
+  deriving (Eq, Show)
+
+data SourceAgendaSnapshot = SourceAgendaSnapshot with
+    sourceCid : ContractId SourceObservationCredential
+    opener : Party
+    observation : Observation
+    fingerprint : Text
+    version : Int
+    previousDigest : Optional Text
+    evidenceDigest : Text
+    pin : EvidencePin
+    roundId : Text
+    originalProposal : Int
+    previousRound : Optional Text
+  deriving (Eq, Show)
+
+validSha1 : Text -> Bool
+validSha1 t = Text.length t == 40 && all (\c -> (c >= 48 && c <= 57) || (c >= 97 && c <= 102)) (Text.toCodePoints t)
+
+validPin : SourceKind -> EvidencePin -> Bool
+validPin SourceProposal (ProposalPin head files) = validSha1 head && not (null files)
+  && unique (map (.path) files) && all (\f -> f.path /= "" && Text.length f.path <= 1024 && validSha1 f.blob) files
+validPin SourceMilestone (DeliveryPin commit digest comment _) = validSha1 commit && validDigest digest && comment > 0
+validPin _ (BlockedPin reason) = reason /= "" && Text.length reason <= 512
+validPin _ _ = False
+
+validSnapshot : SourceAgendaSnapshot -> Bool
+validSnapshot copied = copied.version > 0 && copied.roundId /= "" && copied.originalProposal > 0
+  && copied.evidenceDigest == copied.observation.bodySha256 && validObservation copied.observation
+  && validDigest copied.fingerprint && validPin copied.observation.kind copied.pin
+  && (case copied.pin of
+    DeliveryPin _ digest _ triggerAt -> digest == copied.observation.bodySha256 && triggerAt >= copied.observation.updatedAt
+    _ -> True)
+  && copied.fingerprint == fingerprintOf repository copied.observation copied.version copied.previousDigest
+  && (if copied.version == 1 then copied.previousDigest == None else maybe False validDigest copied.previousDigest)
+
+executablePin : EvidencePin -> Bool
+executablePin (BlockedPin _) = False
+executablePin _ = True
+
+data SourceAgendaRequest = SourceAgendaRequest with
+    credentialCid : ContractId SourceObservationCredential
+    expectedFingerprint : Text
+    expectedVersion : Int
+    pin : EvidencePin
+    originalProposal : Int
+    previousRound : Optional Text
+  deriving (Eq, Show)
+
+-- Both standardized fetches execute under opener authority. The exact generated
+-- view comparison verifies the profile, not factory provenance or external truth.
+readSourceSnapshot : Party -> ContractId SourceObservationCredential -> Text -> Int -> EvidencePin -> Text -> Int -> Optional Text -> Update SourceAgendaSnapshot
+readSourceSnapshot opener cid expectedFingerprint expectedVersion pin roundId originalProposal previousRound = do
+  source <- fetch cid
+  credential <- exercise (toInterfaceContractId @Credential cid) (Credential_PublicFetch opener)
+  registered <- exercise (toInterfaceContractId @RegisteredCredential cid) (RegisteredCredential_PublicFetch opener opener)
+  assertMsg "source opener or repository mismatch" (source.opener == opener && source.repo == repository)
+  assertMsg "source credential profile mismatch" (sourceCredentialValid credential
+    && credential == credentialOf opener repository source.observation source.version source.previousDigest
+    && registered.credential == credential && registered.registration == registrationOf opener source.observation)
+  assertMsg "source fingerprint or version mismatch" (source.fingerprint == expectedFingerprint && source.version == expectedVersion
+    && source.fingerprint == fingerprintOf repository source.observation source.version source.previousDigest)
+  assertMsg "invalid source round or pin" (roundId /= "" && originalProposal > 0 && validPin source.observation.kind pin
+    && (case previousRound of None -> True; Some previous -> previous /= "" && previous /= roundId))
+  assertMsg "source original proposal mismatch" (if source.observation.kind == SourceProposal
+    then originalProposal == source.observation.number else source.observation.parentPR == Some originalProposal)
+  pure SourceAgendaSnapshot with
+    sourceCid = cid; opener; observation = source.observation
+    fingerprint = source.fingerprint; version = source.version; previousDigest = source.previousDigest
+    evidenceDigest = source.observation.bodySha256; pin; roundId; originalProposal; previousRound

@@ -23,6 +23,8 @@ import Cap.Governance.ResolverV1
 import Cap.Governance.Utils
 import qualified Cap.Governance.Utils.Count as Count
 import Cap.Examples.BabyCdf.Rights (RightRef, checkRight)
+import Cap.Examples.BabyCdf.SourceAgenda
+import qualified Cap.Examples.BabyCdf.SourceObservationCredential as Source
 
 -- Attendance and agenda ballots are independent. Alternates vote as themselves,
 -- not as proxies for permanent members. This is not Foundation governance.
@@ -201,9 +203,27 @@ data Agenda = Architecture RuleDraft | Grant GithubSubject | Milestone GithubSub
 validAgenda : Agenda -> Bool
 validAgenda (Architecture draft) = draft.ruleId == "architecture-review"
   && draft.version `elem` [1, 2] && draft.designText /= "" && validRuleRef draft.ruleRef
-validAgenda (Grant subject) = subject == proposalSubject
--- This pin is illustrative, not a verified immutable revision of issue #540.
-validAgenda (Milestone subject) = subject == illustrativeMilestone
+validAgenda (Grant subject) = validGithubSubject "proposal" subject
+validAgenda (Milestone subject) = validGithubSubject "milestone" subject
+
+-- One canonical relation at every construction and execution boundary.
+agendaSnapshotConsistent : Party -> Agenda -> Optional SourceAgendaSnapshot -> Bool
+agendaSnapshotConsistent opener (Architecture _) snapshot = snapshot == None
+agendaSnapshotConsistent opener agenda snapshot = case snapshot of
+  None -> False
+  Some copied -> validSnapshot copied && copied.opener == opener && case agenda of
+    Grant subject -> subject.kind == "proposal" && copied.observation.kind == Source.SourceProposal
+      && subject.url == copied.observation.sourceUrl && subject.contentVersion == copied.fingerprint
+      && (case copied.pin of ProposalPin _ _ -> True; BlockedPin _ -> True; _ -> False)
+    Milestone subject -> subject.kind == "milestone" && copied.observation.kind == Source.SourceMilestone
+      && subject.url == copied.observation.sourceUrl && subject.contentVersion == copied.fingerprint
+      && (case copied.pin of DeliveryPin _ _ _ _ -> True; BlockedPin _ -> True; _ -> False)
+    _ -> False
+
+validGithubSubject : Text -> GithubSubject -> Bool
+validGithubSubject kind subject = subject.kind == kind && subject.url /= ""
+  && DA.Text.length subject.url <= 2048 && subject.contentVersion /= ""
+  && DA.Text.length subject.contentVersion <= 512
 
 illustrativeMilestone : GithubSubject
 illustrativeMilestone = GithubSubject "milestone"
@@ -248,8 +268,8 @@ template EffectiveRule
       controller reviewer
       do
         assertMsg "reviewer is not a member" (reviewer `Set.member` members)
-        assertMsg "only curated demo subjects are reviewable"
-          (subject == proposalSubject || subject == milestoneSubject)
+        assertMsg "invalid review subject"
+          (subject.kind `elem` ["proposal", "milestone"] && subject.url /= "" && DA.Text.length subject.url <= 2048)
         create RuleApplication with
           opener; reviewer; draft; subject
           findings = [] -- Rule interpretation is off-ledger; this records the approved reference only.
@@ -261,17 +281,19 @@ template RuleApplication
 
 template ApprovedGrantProposal
   with opener : Party; members : Set Party; proposal : GithubSubject
+       sourceSnapshot : SourceAgendaSnapshot
   where
     signatory opener
     observer Set.toList members
-    ensure proposal == proposalSubject
+    ensure agendaSnapshotConsistent opener (Grant proposal) (Some sourceSnapshot) && executablePin sourceSnapshot.pin
 
 template ApprovedMilestone
   with opener : Party; members : Set Party; milestone : GithubSubject
+       sourceSnapshot : SourceAgendaSnapshot
   where
     signatory opener
     observer Set.toList members
-    ensure milestone == illustrativeMilestone
+    ensure agendaSnapshotConsistent opener (Milestone milestone) (Some sourceSnapshot) && executablePin sourceSnapshot.pin
 
 agendaTargets : Party -> Agenda -> Int -> Map AuthenticKey Snapshot
 agendaTargets opener agenda baseVersion = case agenda of
@@ -281,12 +303,39 @@ agendaTargets opener agenda baseVersion = case agenda of
 
 -- A real Action contract is signed by the demo authority. The registry target
 -- is snapshotted by state; approval agendas have no execution target.
+-- Durable keyed identity survives proposal/action archival and local journal loss.
+-- Built-in Archive is an authorized opener reset: duplicate protection lasts
+-- only WHILE the receipt is active. S3 scheduler MUST NEVER archive receipts.
+-- Mutable head is separate from immutable receipts. Key serialization makes
+-- milestone continuation exactly latest-only; proposal amendments may branch.
+template SourceRoundHead
+  with opener : Party; number : Int; latest : Text
+  where
+    signatory opener
+    key (opener,number) : (Party,Int)
+    maintainer key._1
+
+template AgendaRoundReceipt
+  with opener : Party; proposer : Party; roundId : Text; baseVersion : Int
+       agenda : Agenda; actionCid : ContractId Action
+       sourceSnapshot : Optional SourceAgendaSnapshot
+  where
+    signatory opener
+    ensure roundId /= "" && baseVersion >= 0 && validAgenda agenda
+      && agendaSnapshotConsistent opener agenda sourceSnapshot
+      && (case sourceSnapshot of
+        None -> case agenda of Architecture _ -> True; _ -> False
+        Some copied -> validSnapshot copied && copied.roundId == roundId && copied.opener == opener)
+    key (opener,roundId) : (Party,Text)
+    maintainer key._1
+
 template AgendaAction
   with opener : Party; members : Set Party; agenda : Agenda; baseVersion : Int
+       sourceSnapshot : Optional SourceAgendaSnapshot
   where
     signatory opener
     observer Set.toList members
-    ensure validAgenda agenda
+    ensure validAgenda agenda && agendaSnapshotConsistent opener agenda sourceSnapshot
     interface instance Action for AgendaAction where
       view = ActionView with
         authorizers = [[opener]]
@@ -296,9 +345,13 @@ template AgendaAction
         | key == registryKey opener = readState @RuleRegistry key cid
         | otherwise = abort "not an action target"
       action_authorizeExecutionImpl _ arg = do
+        assertMsg "agenda snapshot mismatch" (agendaSnapshotConsistent opener agenda sourceSnapshot)
+        assertMsg "blocked_pin: no executable approval" (case agenda of
+          Architecture _ -> True
+          _ -> case sourceSnapshot of Some copied -> executablePin copied.pin; None -> False)
         snapshots <- mergeSnapshotsWithoutConflicts (agendaTargets opener agenda baseVersion) arg.snapshots
         execution <- create AgendaExecution with
-          opener; members; agenda; baseVersion; snapshots
+          opener; members; agenda; baseVersion; snapshots; sourceSnapshot
           core = arg.executionCore; outcome = arg.outcome
         pure Action_AuthorizeExecutionResult with
           executionCids = [toInterfaceContractId execution]
@@ -306,6 +359,7 @@ template AgendaAction
 
 template AgendaExecution
   with opener : Party; members : Set Party; agenda : Agenda; baseVersion : Int
+       sourceSnapshot : Optional SourceAgendaSnapshot
        core : ExecutionCore; snapshots : Map AuthenticKey Snapshot
        outcome : Optional AnyValue
   where
@@ -315,9 +369,13 @@ template AgendaExecution
       view = ExecutableView with executionCore = core; snapshots; outcome
       executable_cancelImpl _ = abort "demo execution cannot be cancelled"
       executable_executeImpl targetCids _ = do
+        assertMsg "agenda snapshot mismatch" (agendaSnapshotConsistent opener agenda sourceSnapshot)
         requireMet (validTargetsForSnapshots snapshots targetCids)
         assertMsg "execution requires an affirmative resolved vote"
           (outcome == Some (toAnyValue True))
+        assertMsg "blocked_pin: no executable approval without immutable evidence" (case agenda of
+          Architecture _ -> True
+          _ -> case sourceSnapshot of Some copied -> executablePin copied.pin; None -> False)
         created <- case agenda of
           Architecture draft -> do
             (registry, live) <- fetchTargetMatchingSnapshot @RuleRegistry unchanged
@@ -325,12 +383,16 @@ template AgendaExecution
             assertMsg "version did not advance" (draft.version == live.version + 1 && live.version == baseVersion)
             (next, rule) <- exercise registry ActivateRule with draft
             pure [coerceContractId next, coerceContractId rule]
-          Grant proposal -> do
-            cid <- create ApprovedGrantProposal with opener; members; proposal
-            pure [coerceContractId cid]
-          Milestone milestone -> do
-            cid <- create ApprovedMilestone with opener; members; milestone
-            pure [coerceContractId cid]
+          Grant proposal -> case sourceSnapshot of
+            Some copied -> do
+              cid <- create ApprovedGrantProposal with opener; members; proposal; sourceSnapshot = copied
+              pure [coerceContractId cid]
+            None -> abort "blocked_pin: approval requires a copied source snapshot"
+          Milestone milestone -> case sourceSnapshot of
+            Some copied -> do
+              cid <- create ApprovedMilestone with opener; members; milestone; sourceSnapshot = copied
+              pure [coerceContractId cid]
+            None -> abort "blocked_pin: approval requires a copied source snapshot"
         pure Executable_ExecuteResult with created; meta = emptyMetadata
 
 -- One signed, keyed ballot per voter. Resolution checks the group, action,
@@ -378,6 +440,7 @@ template AgendaProposal
   with opener : Party; members : Set Party; roundId : Text
        actionCid : ContractId Action; closesAt : Time
        proposer : Party; subject : Reason
+       sourceSnapshot : Optional SourceAgendaSnapshot
   where
     signatory opener
     observer Set.toList members
@@ -492,17 +555,61 @@ template AgendaGovernor
     nonconsuming choice ProposeAgenda : ContractId AgendaProposal
       with proposer : Party; roundId : Text; agenda : Agenda
            baseVersion : Int; closesAt : Time
+           source : Optional SourceAgendaRequest
       controller proposer
       do
         now <- getTime
         assertMsg "not opener or eligible member"
           (proposer == opener || proposer `Set.member` eligible permanent alternates)
         assertMsg "invalid agenda or window" (validAgenda agenda && now < closesAt)
+        existing <- lookupByKey @AgendaRoundReceipt (opener,roundId)
+        assertMsg "round already opened" (existing == None)
+        snapshot <- case (agenda,source) of
+          (Architecture _,None) -> pure None
+          (Architecture _,Some _) -> abort "architecture cannot carry a source credential"
+          (_,None) -> abort "source credential required"
+          (_,Some request) -> do
+            copied <- readSourceSnapshot opener request.credentialCid request.expectedFingerprint request.expectedVersion
+              request.pin roundId request.originalProposal request.previousRound
+            assertMsg "source kind or subject mismatch" (case agenda of
+              Grant subject -> copied.observation.kind == Source.SourceProposal && subject.kind == "proposal"
+              Milestone subject -> copied.observation.kind == Source.SourceMilestone && subject.kind == "milestone"
+              _ -> False)
+            assertMsg "source pin subject mismatch" (case agenda of
+              Grant subject -> subject.url == copied.observation.sourceUrl && subject.contentVersion == request.expectedFingerprint
+              Milestone subject -> subject.url == copied.observation.sourceUrl && subject.contentVersion == request.expectedFingerprint
+              _ -> False)
+            assertMsg "agenda snapshot mismatch" (agendaSnapshotConsistent opener agenda (Some copied))
+            case copied.observation.kind of
+              Source.SourceMilestone -> do
+                head <- lookupByKey @SourceRoundHead (opener,copied.observation.number)
+                case head of
+                  None -> assertMsg "first milestone round must omit previous" (request.previousRound == None)
+                  Some cid -> do
+                    current <- fetch cid
+                    assertMsg "milestone must link latest round" (request.previousRound == Some current.latest)
+                    archive cid
+                _ <- create SourceRoundHead with opener; number = copied.observation.number; latest = roundId
+                pure ()
+              Source.SourceProposal -> pure ()
+            case request.previousRound of
+              None -> pure ()
+              Some previous -> do
+                (_,receipt) <- fetchByKey @AgendaRoundReceipt (opener,previous)
+                assertMsg "previous round subject mismatch" (case receipt.sourceSnapshot of
+                  Some prior -> prior.originalProposal == copied.originalProposal
+                    && prior.observation.kind == copied.observation.kind
+                    && prior.observation.number == copied.observation.number
+                  None -> False)
+            pure (Some copied)
         action <- create AgendaAction with
-          opener; members = eligible permanent alternates; agenda; baseVersion
+          opener; members = eligible permanent alternates; agenda; baseVersion; sourceSnapshot = snapshot
+        _ <- create AgendaRoundReceipt with
+          opener; proposer; roundId; baseVersion; agenda
+          actionCid = toInterfaceContractId action; sourceSnapshot = snapshot
         create AgendaProposal with
           opener; members = eligible permanent alternates; roundId
-          actionCid = toInterfaceContractId action; closesAt; proposer
+          actionCid = toInterfaceContractId action; closesAt; proposer; sourceSnapshot = snapshot
           subject = case agenda of
             Architecture draft -> Reason with url = proposalSubject.url; body = draft.designText <> " proposal-blob:" <> proposalBlob
             Grant proposal -> Reason with url = proposal.url; body = proposal.contentVersion
@@ -545,8 +652,13 @@ template AgendaGovernor
           checkRight opener consortiumId member now right
         let verdict = Count.decide (Count.atLeastPresent 3) (Count.shareOfVotes 1 2) casts
         consumeVoteRecords cids
+        let actionDataCid = fromInterfaceContractId @AgendaAction @Action proposal.actionCid
+        actionData <- fetch actionDataCid
+        let canExecute = case actionData.sourceSnapshot of
+              None -> case actionData.agenda of Architecture _ -> True; _ -> False
+              Some copied -> executablePin copied.pin
         executions <- case verdict of
-          Count.Decided Yes -> do
+          Count.Decided Yes | canExecute -> do
             result <- exercise proposal.actionCid Action_AuthorizeExecution with
               actors = [opener]
               executionCore = ExecutionCore with

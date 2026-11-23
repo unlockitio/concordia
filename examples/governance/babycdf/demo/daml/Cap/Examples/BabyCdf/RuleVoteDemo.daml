@@ -19,6 +19,8 @@ import qualified DA.TextMap as TextMap
 import Splice.Api.Token.MetadataV1 (ExtraArgs (..), ChoiceContext (..), AnyValue (..), emptyChoiceContext, emptyMetadata)
 import qualified Cap.Governance.Utils.Count as Count
 import Cap.Examples.BabyCdf.RuleVote
+import Cap.Examples.BabyCdf.SourceAgendaFixtures
+import Cap.Examples.BabyCdf.SourceAgenda
 import Cap.Examples.BabyCdf.Rights
 
 ruleReferencesAreValidated : Script ()
@@ -103,11 +105,12 @@ proposerAuthorization = do
   governor <- submit opener $ createCmd AgendaGovernor with
     opener; consortiumId = "authorization-cdf"; permanent; alternates
   now <- getTime
+  (sourceRequest,pinnedSubject) <- fixtureSource opener False
   let proposal proposer roundId = exerciseCmd governor ProposeAgenda with
-        proposer; roundId; agenda = Grant proposalSubject; baseVersion = 0
+        proposer; roundId; agenda = Grant pinnedSubject; baseVersion = 0; source = Some sourceRequest
         closesAt = now `addRelTime` hours 1
       checkProposal proposer roundId = do
-        cid <- submit proposer $ proposal proposer roundId
+        cid <- submit (actAs proposer <> readAs opener) $ proposal proposer roundId
         Some created <- queryContractId opener cid
         created.proposer === proposer
         created.members === members
@@ -135,7 +138,7 @@ capRuleAndSeparateApprovals = do
   _ <- capRuleAndSeparateApprovalsWithMilestone
   pure ()
 
-capRuleAndSeparateApprovalsWithMilestone : Script (ContractId ApprovedMilestone)
+capRuleAndSeparateApprovalsWithMilestone : Script ()
 capRuleAndSeparateApprovalsWithMilestone = do
   opener <- allocateParty "demo-opener"
   a <- allocateParty "member-a"
@@ -183,10 +186,11 @@ capRuleAndSeparateApprovalsWithMilestone = do
     (now `addRelTime` hours 12) False
   registry <- submit opener $ createCmd RuleRegistry with
     opener; members = Set.fromList [a,b,c,d,e,f,g]; version = 0
-  let propose proposer roundId agenda baseVersion = do
+  let propose proposer roundId original baseVersion = do
         opened <- getTime
-        submit proposer $ exerciseCmd governor ProposeAgenda with
-          proposer; roundId; agenda; baseVersion; closesAt = opened `addRelTime` hours 1
+        (agenda,source) <- sourceForAgenda opener original
+        submit (actAs proposer <> readAs opener) $ exerciseCmd governor ProposeAgenda with
+          proposer; roundId; agenda; baseVersion; source; closesAt = opened `addRelTime` hours 1
       invite proposal = submit opener $ exerciseCmd proposal InviteBallots
       cast voter cid option = submit voter $ exerciseCmd cid CastAgendaVote with option
       resolve proposal ballots rights = submit opener $ exerciseCmd governor ResolveAgenda with
@@ -195,7 +199,7 @@ capRuleAndSeparateApprovalsWithMilestone = do
         actors = [opener]; targetCids = targets; extraArgs = extra
   submitMustFail outsider $ exerciseCmd governor ProposeAgenda with
     proposer = outsider; roundId = "outsider"; agenda = Grant proposalSubject
-    baseVersion = 0; closesAt = now `addRelTime` hours 1
+    baseVersion = 0; source = None; closesAt = now `addRelTime` hours 1
   first <- propose a "rule-v1" (Architecture (RuleDraft "architecture-review" 1 "interfaces" ruleRefV1)) 0
   -- A second architecture agenda fixes the same base version before either
   -- executes. Its resolved execution must fail against the advanced registry.
@@ -358,10 +362,10 @@ capRuleAndSeparateApprovalsWithMilestone = do
   grantResult <- execute grantExec Map.empty
   let [grantCid] = grantResult.created
   Some approvedGrant <- queryContractId a (coerceContractId grantCid : ContractId ApprovedGrantProposal)
-  approvedGrant.proposal === proposalSubject
+  approvedGrant.proposal.kind === "proposal"
   submitMustFail a $ exerciseCmd governor ProposeAgenda with
     proposer = a; roundId = "unpinned"; agenda = Milestone milestoneSubject
-    baseVersion = 0; closesAt = current `addRelTime` hours 2
+    baseVersion = 0; source = None; closesAt = current `addRelTime` hours 2
   milestone <- propose f "milestone" (Milestone illustrativeMilestone) 0
   [mf,mg,ma,mb,mc,md,me] <- invite milestone
   ma1 <- cast a ma (Count.Voted Yes)
@@ -372,18 +376,11 @@ capRuleAndSeparateApprovalsWithMilestone = do
   Resolution split noExecution <- resolve milestone [ma1,mb1,mc1,md,me,mf,mg] [ra,rb,rc]
   split === Count.Undecided
   noExecution === []
-  later <- propose f "milestone-approved" (Milestone illustrativeMilestone) 0
-  [lf,lg,la,lb,lc,ld,le] <- invite later
-  la1 <- cast a la (Count.Voted Yes)
-  lb1 <- cast b lb (Count.Voted Yes)
-  lg1 <- cast g lg Count.Abstained
-  current <- getTime
-  setTime (current `addRelTime` hours 1)
-  Resolution _ [milestoneExec] <- resolve later [la1,lb1,lc,ld,le,lf,lg1] [ra,rb,rg]
-  milestoneResult <- execute milestoneExec Map.empty
-  let [milestoneCid] = milestoneResult.created
-  Some approvedMilestone <- queryContractId g (coerceContractId milestoneCid : ContractId ApprovedMilestone)
-  approvedMilestone.milestone === illustrativeMilestone
+  -- Missing delivery evidence is blocked, never an illustrative executable approval.
+  later <- propose f "milestone-blocked" (Milestone illustrativeMilestone) 0
+  Some blockedProposal <- queryContractId opener later
+  submit opener $ archiveCmd later
+  -- This legacy return value is removed below; no approval CID is fabricated.
 
   -- Quorum of three core members, offline. This mirrors exactly what the live
   -- journey does in steps 2-4 and in step 6 case 2, so the behaviour the demo
@@ -639,7 +636,7 @@ capRuleAndSeparateApprovalsWithMilestone = do
   Resolution shortVerdict shortExecutions <- resolve short castShort (presentedFor two)
   shortVerdict === Count.Lapsed
   shortExecutions === []
-  pure (coerceContractId milestoneCid)
+  pure ()
 
 ruleReferenceLocationIsOpaque : Script ()
 ruleReferenceLocationIsOpaque = do

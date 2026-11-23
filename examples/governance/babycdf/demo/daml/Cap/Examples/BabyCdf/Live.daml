@@ -3,6 +3,8 @@
 module Cap.Examples.BabyCdf.Live where
 
 import Cap.Examples.BabyCdf.Intake
+import Cap.Examples.BabyCdf.SourceAgenda
+import Cap.Examples.BabyCdf.SourceAgendaFixtures
 import qualified Cap.Examples.BabyCdf.SourceCatalogue
 
 import DA.Foldable (forA_)
@@ -723,9 +725,9 @@ ruleVote runId = do
   debug ("[TIMING] first proposal " <> show now <> " windowSeconds=" <> show state.windowSeconds)
   let closesAt = now `addRelTime` seconds state.windowSeconds
       propose roundId = do
-        created <- submit state.member $ exerciseCmd state.governor ProposeAgenda with
+        created <- submit (actAs state.member <> readAs state.opener) $ exerciseCmd state.governor ProposeAgenda with
           proposer = state.member; roundId; agenda = Architecture (RuleDraft "architecture-review" 2 "live v2" state.proposedRuleRef)
-          baseVersion = 1; closesAt
+          baseVersion = 1; source = None; closesAt
         action 2 (who state.member <> " exercises AgendaGovernor.ProposeAgenda (round " <> roundId
           <> ", architecture-review v2, baseVersion 1)") ("AgendaProposal " <> cid created)
         pure created
@@ -900,10 +902,10 @@ staleRuleChange runId = do
       now <- getTime
       let closesAt = now `addRelTime` seconds state.windowSeconds
       debug ("[TIMING] optional round 1 opens " <> show now)
-      proposal <- submit state.member $ exerciseCmd state.governor ProposeAgenda with
+      proposal <- submit (actAs state.member <> readAs state.opener) $ exerciseCmd state.governor ProposeAgenda with
         proposer = state.member; roundId = runId <> ":opt-stale"
         agenda = Architecture (RuleDraft "architecture-review" 2 "stale v2 attempt" state.proposedRuleRef)
-        baseVersion = 1; closesAt
+        baseVersion = 1; source = None; closesAt
       action 0 (who state.member <> " exercises AgendaGovernor.ProposeAgenda (round " <> runId
         <> ":opt-stale, architecture-review v2, baseVersion 1 while live registry is v"
         <> show registry.version <> ")") ("AgendaProposal " <> cid proposal)
@@ -994,9 +996,9 @@ awaitIntake opener roundId agenda remaining = do
         awaitIntake opener roundId agenda (remaining - 1)
     _ -> abort "duplicate Intake round"
 
-intakeRequest : Party -> Text -> Text -> Text -> Int -> IntakeRequest
-intakeRequest opener runId sourceKey roundId windowSeconds = IntakeRequest with
-  opener; runId; sourceKey; roundId; windowSeconds; baseVersion = 0
+intakeRequest : Party -> Text -> Text -> Text -> Int -> Agenda -> SourceAgendaRequest -> IntakeRequest
+intakeRequest opener runId sourceKey roundId windowSeconds agenda source = IntakeRequest with
+  opener; runId; sourceKey; roundId; windowSeconds; agenda; source; baseVersion = 0
 
 requestIntake : DemoAnchor -> Text -> Text -> Text -> Agenda -> Script (ContractId AgendaProposal, Time)
 requestIntake state runId sourceKey roundId agenda = do
@@ -1005,9 +1007,10 @@ requestIntake state runId sourceKey roundId agenda = do
   rounds <- query @AgendaProposal state.opener
   assert (null [p | (_,p) <- rounds, p.roundId == roundId])
   assertMsg "Intake voting window must exceed minimum remaining budget" (state.windowSeconds >= 15)
-  _ <- submit state.opener $ createCmd (intakeRequest state.opener runId sourceKey roundId state.windowSeconds)
+  (boundAgenda,Some source) <- sourceForAgenda state.opener agenda
+  _ <- submit state.opener $ createCmd (intakeRequest state.opener runId sourceKey roundId state.windowSeconds boundAgenda source)
   debug ("[INTAKE] waiting for Java opener bridge round " <> roundId)
-  awaitIntake state.opener roundId agenda 120
+  awaitIntake state.opener roundId boundAgenda 120
 
 -- Active opener-visible candidate observations, not a remote snapshot or authority.
 sourceCatalogueCounts : Party -> Script (Int, Int, Int, Int)
@@ -1088,7 +1091,7 @@ proposalVote runId = do
   action 3 (who state.opener <> " exercises Executable_Execute on " <> cid execution)
     ("ApprovedGrantProposal " <> cid raw)
   Some approved <- queryContractId state.member (coerceContractId raw : ContractId ApprovedGrantProposal)
-  assert (approved.proposal == proposalSubject)
+  assert (approved.proposal.kind == "proposal")
   debug ("[STEP 3] Decided Yes; ApprovedGrantProposal recorded " <> show raw)
   outcomeLine 3 "ApprovedGrantProposal recorded, naming the document by content fingerprint."
   outcomeLine 3 "Caveat: NOT a payment. No money moved, no budget committed, nobody invoiced."
@@ -1110,94 +1113,21 @@ milestoneVote runId = do
   phase 4 "SUBJECT"
   business 4 ("Milestone tracked publicly as issue #540: " <> milestoneSubject.url)
   business 4 "Caveat: a GitHub issue can be edited, so the link alone pins nothing."
-  business 4 "The vote is therefore on a curated ILLUSTRATIVE revision, demo-only."
-  business 4 "Caveat: no claim that #540 was submitted, accepted, paid or certified."
-  debug "[STEP 4] review is advisory: issue text is not an immutable pin; the hard-coded agenda pin gates approval"
-  phase 4 "ADVISORY REVIEW"
-  application <- submit state.member $ exerciseCmd state.rule ApplyRule with
-    subject = milestoneSubject; reviewer = state.member
-  action 4 (who state.member <> " exercises EffectiveRule.ApplyRule on " <> cid state.rule
-    <> " (subject milestone)") ("RuleApplication " <> cid application)
-  Some review <- queryContractId state.member application
-  assert (review.draft.ruleRef == state.proposedRuleRef && null review.findings)
-  business 4 "RuleApplication records the approved rule reference only; interpretation is off-ledger."
-  business 4 "Caveat: Java findings are ADVISORY. They neither block nor permit anything."
-  now <- getTime
-  let closesAt = now `addRelTime` seconds state.windowSeconds
+  business 4 "blocked_pin: delivery commit, issue digest and vote-comment evidence are unavailable."
+  business 4 "No illustrative metadata may authorize an executable milestone approval."
   phase 4 "SAFETY CHECK: UNPINNED SUBJECT"
-  business 4 "What controls the outcome is the agenda pin: only an exact revision may be voted on."
-  expectedRefusal 4 "Expected: a vote on the bare editable issue link must be refused."
-  refused <- trySubmit state.member $ exerciseCmd state.governor ProposeAgenda with
-    proposer = state.member; roundId = runId <> ":unpinned-milestone"
-    agenda = Milestone milestoneSubject; baseVersion = 0; closesAt
-  case refused of
-    Left err -> do
-      rejected 4 (who state.member <> " exercises AgendaGovernor.ProposeAgenda (round " <> runId
-        <> ":unpinned-milestone, unpinned milestone subject)") (show err)
-      debug "[STEP 4] BLOCKED as expected: unpinned milestone approval; reason unverified by code"
-      expectedRefusal 4 "Actual: REJECTED. Reason unverified by code (shared with the window check)."
-    Right _ -> abort "unpinned milestone accepted"
-  debug "[STEP 4] only the curated illustrative revision matches the agenda pin; findings do not gate this vote"
-  phase 4 "PROPOSAL"
-  business 4 "Java Intake opens only the curated illustrative revision; it has a fresh ledger-derived window."
-  business 4 "The unpinned refusal above is not treated as proof of its rejection reason."
-  (proposal,closesAt) <- requestIntake state runId "milestone-540" (runId <> ":illustrative-milestone") (Milestone illustrativeMilestone)
-  action 4 "Java Intake as opener exercises IntakeRequest.OpenAgenda; ledger bridge proposes curated milestone"
-    ("AgendaProposal " <> cid proposal)
-  proposedAt <- getTime
-  debug ("[TIMING] milestone proposal accepted " <> show proposedAt)
-  phase 4 "VOTING"
-  business 4 "Ballots issued to all 7."
-  business 4 "Expected Reviewer finding: BLOCKED (no immutable evidence). Expected, not observed."
-  let voters = coreQuorum quorumSize state.core
-      rights = presentedRights voters state.credentials
-  assert (length voters == quorumSize && length rights == quorumSize)
-  ballots <- inviteBallotsFor 4 state.opener proposal
-  votingEvidence 4 witnesses "After ballots issued, before any cast"
-  voted <- castYesBy 4 state.opener voters ballots
-    "accept curated illustrative revision of milestone #540"
-  castAt <- getTime
-  debug ("[TIMING] milestone last cast " <> show castAt)
-  debug ("[STEP 4] expected tally " <> show quorumSize <> " Yes / 0 No / 0 abstained / "
-    <> show absentSize <> " absent")
-  votingEvidence 4 witnesses "After casting"
-  business 4 (show quorumSize <> " YES, 0 NO, " <> show absentSize <> " ABSENT.")
-  business 4 "The uncomfortable part: the members approve despite unproven findings."
-  business 4 "Advisory findings have no veto. Members remain accountable for their decision."
-  waitUntilClosed closesAt
-  sleep (seconds 3)
-  phase 4 "RESOLUTION"
-  business 4 "Window closed. Counting now."
-  Resolution verdict [execution] <- submit state.opener $ exerciseCmd state.governor ResolveAgenda with
-    proposalCid = proposal; ballotCids = voted; rights
-  action 4 (who state.opener <> " exercises AgendaGovernor.ResolveAgenda (" <> show (length voted)
-    <> " ballots, " <> show (length rights) <> " credentials)")
-    (show verdict <> "; execution " <> cid execution)
-  assert (verdict == Count.Decided Yes)
-  decision 4 ("APPROVED - " <> show quorumSize <> " YES, 0 NO, " <> show absentSize
-    <> " ABSENT. Quorum " <> show quorumSize <> "/" <> show quorumSize <> "; majority "
-    <> show quorumSize <> "/" <> show quorumSize <> ".")
-  decision 4 "The findings did not change the outcome either way; the members did."
-  resolutionEvidence 4 witnesses "After RESOLUTION"
+  expectedRefusal 4 "Missing delivery evidence is recorded as blocked_pin; no executable approval."
+  (proposal,_) <- requestIntake state runId "milestone-540" (runId <> ":blocked-milestone") (Milestone illustrativeMilestone)
+  Some opened <- queryContractId state.opener proposal
+  actions <- query @AgendaAction state.opener
+  let [(_,bound)] = [(cid,a) | (cid,a) <- actions, toInterfaceContractId cid == opened.actionCid]
+  assert (case bound.sourceSnapshot of Some copied -> not (executablePin copied.pin); None -> False)
   phase 4 "EXECUTION"
-  result <- submit state.opener $ exerciseCmd execution Executable_Execute with
-    actors = [state.opener]; targetCids = Map.empty; extraArgs = extra
-  let [raw] = result.created
-  action 4 (who state.opener <> " exercises Executable_Execute on " <> cid execution)
-    ("ApprovedMilestone " <> cid raw)
-  Some approved <- queryContractId state.member (coerceContractId raw : ContractId ApprovedMilestone)
-  assert (approved.milestone == illustrativeMilestone)
-  debug ("[STEP 4] Decided Yes; illustrative ApprovedMilestone recorded " <> show raw)
-  outcomeLine 4 "ApprovedMilestone recorded for the ILLUSTRATIVE revision."
-  outcomeLine 4 "Caveat: not a statement that #540 was delivered, certified or paid."
+  outcomeLine 4 "blocked_pin: no ApprovedMilestone or executable approval created."
+  submit state.opener $ archiveCmd proposal
   advance anchorCid state 4
-  debug "[STEP 4] signed DemoAnchor advanced to step 4"
-  outcomeEvidence 4 witnesses "After EXECUTION"
-  finalState 4 witnesses
-    ("the illustrative milestone revision was ACCEPTED by " <> show quorumSize
-      <> " core YES / " <> show absentSize
-      <> " ABSENT despite 2 of 3 advisory findings being unproven; findings advise, the pin constrains, members decide.")
-  pure "step 4 complete"
+  finalState 4 witnesses "Milestone #540 is blocked_pin; delivery evidence remains missing, not approved."
+  pure "step 4 complete (blocked_pin)"
 
 -- Step 5 runs the real Splice allocation choice on wall-clock time, with no
 -- setTime. Feasibility rests on splice-amulet-0.1.22 validAmuletConfig only
@@ -1392,6 +1322,7 @@ credentialRefusals = credentialRefusalsWith waitUntilClosed
 credentialRefusalsWith : (Time -> Script ()) -> Text -> Script Text
 credentialRefusalsWith closeWindow runId = do
   (_,state) <- findAnchorAtLeast runId 1
+  (blockedSource,blockedSubject) <- fixtureSource state.opener False
   stepHeading 6 "OPTIONAL 2: CREDENTIAL BOUNDARIES"
   phase 6 "INDEPENDENT FIXTURE (BOOTSTRAP SUFFICIENT)"
   business 6 "Wrong consortium reaches validation; foreign issuer hits lookup privacy."
@@ -1436,9 +1367,9 @@ credentialRefusalsWith closeWindow runId = do
   action 6 (who voter <> " exercises VotingRightInvitation.AcceptDirect on " <> cid wrongInvite
     <> " (consortium wrong-consortium)") ("DirectVotingRight " <> cid wrongRight)
   let closes1 = now0 `addRelTime` seconds state.windowSeconds
-  p1 <- submit state.member $ exerciseCmd state.governor ProposeAgenda with
+  p1 <- submit (actAs state.member <> readAs state.opener) $ exerciseCmd state.governor ProposeAgenda with
     proposer = state.member; roundId = runId <> ":blocked-foreign"
-    agenda = Grant proposalSubject; baseVersion = 0; closesAt = closes1
+    agenda = Grant blockedSubject; baseVersion = 0; source = Some blockedSource; closesAt = closes1
   action 6 (who state.member <> " exercises AgendaGovernor.ProposeAgenda (round " <> runId
     <> ":blocked-foreign)") ("AgendaProposal " <> cid p1)
   b1 <- inviteBallotsFor 6 state.opener p1
@@ -1500,6 +1431,7 @@ noQuorum = noQuorumWith waitUntilClosed
 noQuorumWith : (Time -> Script ()) -> Text -> Script Text
 noQuorumWith closeWindow runId = do
   (_,state) <- findAnchorAtLeast runId 1
+  (blockedSource,blockedSubject) <- fixtureSource state.opener False
   stepHeading 6 "OPTIONAL 3: NO QUORUM"
   let witnesses = [state.opener, state.member]
       shortVoters = coreQuorum belowQuorumSize state.core
@@ -1518,9 +1450,9 @@ noQuorumWith closeWindow runId = do
   -- ResolveAgenda refuses with "voting still open".
   now2 <- getTime
   let closes2 = now2 `addRelTime` seconds state.windowSeconds
-  p2 <- submit state.member $ exerciseCmd state.governor ProposeAgenda with
+  p2 <- submit (actAs state.member <> readAs state.opener) $ exerciseCmd state.governor ProposeAgenda with
     proposer = state.member; roundId = runId <> ":blocked-quorum"
-    agenda = Grant proposalSubject; baseVersion = 0; closesAt = closes2
+    agenda = Grant blockedSubject; baseVersion = 0; source = Some blockedSource; closesAt = closes2
   action 6 (who state.member <> " exercises AgendaGovernor.ProposeAgenda (round " <> runId
     <> ":blocked-quorum)") ("AgendaProposal " <> cid p2)
   b2 <- inviteBallotsFor 6 state.opener p2
@@ -1558,6 +1490,7 @@ noQuorumWith closeWindow runId = do
 doubleVote : Text -> Script Text
 doubleVote runId = do
   (_,state) <- findAnchorAtLeast runId 1
+  (blockedSource,blockedSubject) <- fixtureSource state.opener False
   stepHeading 6 "OPTIONAL 4: DOUBLE VOTE"
   let witnesses = [state.opener, state.member]
   debug "[STEP 6] case 3: double vote on an already-consumed ballot"
@@ -1566,9 +1499,9 @@ doubleVote runId = do
   expectedRefusal 6 "Expected: one member, one vote. A spent ballot cannot be reused."
   now3 <- getTime
   let closes3 = now3 `addRelTime` seconds state.windowSeconds
-  p3 <- submit state.member $ exerciseCmd state.governor ProposeAgenda with
+  p3 <- submit (actAs state.member <> readAs state.opener) $ exerciseCmd state.governor ProposeAgenda with
     proposer = state.member; roundId = runId <> ":blocked-double"
-    agenda = Grant proposalSubject; baseVersion = 0; closesAt = closes3
+    agenda = Grant blockedSubject; baseVersion = 0; source = Some blockedSource; closesAt = closes3
   action 6 (who state.member <> " exercises AgendaGovernor.ProposeAgenda (round " <> runId
     <> ":blocked-double)") ("AgendaProposal " <> cid p3)
   b3 <- inviteBallotsFor 6 state.opener p3
@@ -1607,12 +1540,13 @@ doubleVote runId = do
 outsiderRefusals : Text -> Script Text
 outsiderRefusals runId = do
   (_,state) <- findAnchorAtLeast runId 1
+  (blockedSource,blockedSubject) <- fixtureSource state.opener False
   stepHeading 6 "OPTIONAL 5: OUTSIDER BOUNDARIES"
   let witnesses = [state.opener, state.member]
   now3 <- getTime
-  p3 <- submit state.member $ exerciseCmd state.governor ProposeAgenda with
+  p3 <- submit (actAs state.member <> readAs state.opener) $ exerciseCmd state.governor ProposeAgenda with
     proposer = state.member; roundId = runId <> ":blocked-outsider-ballot"
-    agenda = Grant proposalSubject; baseVersion = 0
+    agenda = Grant blockedSubject; baseVersion = 0; source = Some blockedSource
     closesAt = now3 `addRelTime` seconds state.windowSeconds
   b3 <- inviteBallotsFor 6 state.opener p3
   debug "[STEP 6] case 4: non-member attempts to take part"
@@ -1623,7 +1557,7 @@ outsiderRefusals runId = do
   expectedRefusal 6 "Expected 1: a non-member must not put an item on this agenda."
   stranger <- trySubmit outsider $ exerciseCmd state.governor ProposeAgenda with
     proposer = outsider; roundId = runId <> ":blocked-nonmember"
-    agenda = Grant proposalSubject; baseVersion = 0
+    agenda = Grant blockedSubject; baseVersion = 0; source = Some blockedSource
     closesAt = now3 `addRelTime` seconds state.windowSeconds
   case stranger of
     Left err -> do
@@ -1659,7 +1593,7 @@ outsiderRefusals runId = do
   -- Prove the refusal left the ballot usable: its real voter still can cast.
   unauthorized <- trySubmit (actAs outsider <> readAs state.opener) $ exerciseCmd state.governor ProposeAgenda with
     proposer = outsider; roundId = runId <> ":blocked-unauthorized-proposer"
-    agenda = Grant proposalSubject; baseVersion = 0
+    agenda = Grant blockedSubject; baseVersion = 0; source = Some blockedSource
     closesAt = now3 `addRelTime` seconds state.windowSeconds
   case unauthorized of
     Left err -> do

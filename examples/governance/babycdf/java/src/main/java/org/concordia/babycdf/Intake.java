@@ -12,9 +12,8 @@ public final class Intake {
                           String sourceKey, long windowSeconds, long baseVersion) {
         public Request {
             if (cid == null || cid.isBlank() || opener == null || opener.isBlank()
-                    || runId == null || runId.isBlank() || ! ((runId + ":" + sourceKey).equals(roundId)
-                        || (runId + ("proposal-184".equals(sourceKey) ? ":grant" : ":illustrative-milestone")).equals(roundId))
-                    || IntakeSources.sources().stream().noneMatch(s -> s.sourceKey().equals(sourceKey))
+                    || runId == null || runId.isBlank() || roundId == null || roundId.isBlank()
+                    || sourceKey == null || sourceKey.isBlank()
                     || windowSeconds < 1 || windowSeconds > 86400 || baseVersion < 0)
                 throw new IllegalArgumentException("BLOCKED: invalid intake request");
         }
@@ -23,6 +22,11 @@ public final class Intake {
         List<Request> requests() throws IOException;
         boolean proof(Request request, IntakePlan plan) throws IOException;
         void submit(Request request, IntakePlan plan) throws IOException;
+        default IntakePlan plan(Request request,Bytes bytes) throws IOException {
+            var source=IntakeSources.sources().stream().filter(s->s.sourceKey().equals(request.sourceKey())).findFirst().orElseThrow();
+            return source.agendaConstructor()==IntakeSource.AgendaConstructor.Grant
+                    ?new IntakePlan(source,request.roundId(),bytes.fetch(source)):new IntakePlan(source,request.roundId());
+        }
     }
     static final class PreTransmission extends IOException {
         PreTransmission(String message, Throwable cause) { super(message, cause); }
@@ -41,9 +45,7 @@ public final class Intake {
         if (requests.isEmpty()) return "idle";
         if (requests.size() != 1) throw new IOException("BLOCKED: exactly one intake request required");
         Request r = requests.getFirst();
-        var source = IntakeSources.sources().stream().filter(s -> s.sourceKey().equals(r.sourceKey())).findFirst().orElseThrow();
-        var plan = source.agendaConstructor() == IntakeSource.AgendaConstructor.Grant
-                ? new IntakePlan(source, r.roundId(), bytes.fetch(source)) : new IntakePlan(source, r.roundId());
+        var plan = ledger.plan(r,bytes);
         if (ledger.proof(r, plan)) { uncertain=false; return "reconciled " + plan.commandId(); }
         if (uncertain) throw new IOException("BLOCKED: uncertain submission without ledger proof; no resubmission");
         // Ledger bridge computes closesAt from Daml getTime in the transaction.

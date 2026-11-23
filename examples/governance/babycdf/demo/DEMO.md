@@ -361,7 +361,15 @@ Votes on the compile-time pinned proposal subject and logs the pinned blob SHA
 separately. Three core Yes votes, with four members absent, produce an
 `ApprovedGrantProposal`.
 
-### Step 4: advisory findings versus the agenda pin
+### Step 4: missing delivery pin is blocked
+
+S1b supersedes the historical illustrative approval described below: current
+step4 records `blocked_pin` for #540 because delivery commit/issue digest/vote
+comment evidence is missing. No executable approval or ApprovedMilestone is
+created. Step3 uses a credential-bound immutable copy and the real PR184 head/file
+blob pin. See [source agenda contract](../SOURCE-AGENDAS.md).
+
+#### Historical pre-S1b behavior (not current acceptance)
 
 Prints every clause finding and asserts the exact pair:
 

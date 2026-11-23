@@ -133,8 +133,11 @@ REPO_REL="examples/governance/babycdf/demo/daml/Cap/Examples/BabyCdf/Live.daml"
 # v13 changes only the read-only catalogue count template to the impl credential.
 # Voting, agenda creation, authority, and narration remain v12 semantics (S1b deferred).
 # v14 renames the emitted read-only catalogue label; no governance semantics change.
-SPEC_VERSION='quorum-of-three-core-v14-credential-evidence-label'
-SPEC_DIGEST='03c1316d4d9a5f548a884435289838a82f886e16c54431896a853095dade21c4'
+# v15 credential-bound source agendas copy immutable snapshots/pins and durable
+# round receipts. Step4 missing delivery is blocked_pin, never illustrative approval.
+# Architecture, RuleRef, seven-member electorate and counting formula stay unchanged.
+SPEC_VERSION='quorum-of-three-core-v15-source-bound-blocked-pin'
+SPEC_DIGEST='934844c634f4276136b016d5be9c2d8374d2df7ab1a377176641b16112a5c411'
 
 for required in "$LIVE" "$SELECTOR" "$RULE"; do
   if [ ! -f "$required" ]; then

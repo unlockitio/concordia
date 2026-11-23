@@ -1,0 +1,96 @@
+-- SPDX-License-Identifier: Apache-2.0
+module Cap.Examples.BabyCdf.SourceAgendaTest where
+import Prelude hiding (Action)
+import Daml.Script
+import DA.Assert
+import DA.Time
+import qualified DA.Set as Set
+import qualified DA.Text as Text
+import qualified DA.Map as Map
+import qualified Cap.Examples.BabyCdf.SourceObservationCredential as S
+import Cap.Examples.BabyCdf.SourceAgenda
+import Cap.Examples.BabyCdf.SourceAgendaFixtures
+import Cap.Examples.BabyCdf.RuleVote
+import Cap.Governance.ActionV1 (Action)
+import Canton.Network.Credentials.V1
+
+credentialBoundRounds : Script ()
+credentialBoundRounds = script do
+  opener <- allocateParty "snapshot-opener"
+  other <- allocateParty "foreign-opener"
+  members <- mapA allocateParty ["a","b","c","d","e","f","g"]
+  let (member :: _) = members
+  governor <- submit opener $ createCmd (AgendaGovernor opener "snapshots" (Set.fromList (take 5 members)) (Set.fromList (drop 5 members)))
+  (request,subject) <- fixtureSource opener False
+  now <- getTime
+  let propose roundId source agenda = exerciseCmd governor ProposeAgenda with
+        proposer = opener; roundId; source = Some source; agenda; baseVersion = 0; closesAt = addRelTime now (hours 1)
+  first <- submit opener $ propose "original" request (Grant subject)
+  Some copied <- queryContractId member first
+  let Some snapshot = copied.sourceSnapshot
+  snapshot.fingerprint === request.expectedFingerprint
+  snapshot.version === request.expectedVersion
+  hidden <- queryContractId member request.credentialCid
+  hidden === None
+  visible <- queryContractId opener first
+  visible === Some copied -- read-only opener Reviewer visibility needs no credential fetch.
+  Some originalSource <- queryContractId opener request.credentialCid
+  let revisedObservation = originalSource.observation with title = "source revised after opening"
+  revisionFactory <- submit opener $ createCmd (S.SourceObservationFactory opener S.repository revisedObservation)
+  _ <- submit opener $ exerciseCmd (toInterfaceContractId @CredentialRegistryFactory revisionFactory)
+    (CredentialRegistryFactory_Issue (S.credentialOf opener S.repository revisedObservation 2 (Some originalSource.fingerprint)) (S.registrationOf opener revisedObservation))
+  Some unchangedAfterRevision <- queryContractId member first
+  unchangedAfterRevision === copied
+  sources <- query @S.SourceObservationCredential opener
+  let [(revisedCid,_)] = [(cid,s) | (cid,s) <- sources, s.observation.number == 184]
+  submit opener $ archiveCmd revisedCid
+  Some unchanged <- queryContractId member first
+  unchanged === copied
+  -- Receipt still prevents reuse after both visible proposal and linked action archive.
+  submit opener $ archiveCmd first
+  submit opener $ archiveCmd (fromInterfaceContractId @AgendaAction @Action copied.actionCid)
+  (newRequest,newSubject) <- fixtureSource opener False
+  submitMustFail opener $ propose "original" newRequest (Grant newSubject)
+  second <- submit opener $ propose "amendment" (newRequest with previousRound = Some "original") (Grant newSubject)
+  Some amended <- queryContractId member second
+  let Some secondSnapshot = amended.sourceSnapshot
+  secondSnapshot.originalProposal === 184
+  secondSnapshot.previousRound === Some "original"
+  submitMustFail opener $ propose "wrong-fingerprint" (newRequest with expectedFingerprint = Text.sha256 "wrong") (Grant newSubject)
+  submitMustFail opener $ propose "wrong-version" (newRequest with expectedVersion = 2) (Grant newSubject)
+  submitMustFail opener $ propose "wrong-url" newRequest (Grant (newSubject with url = "https://invalid.example"))
+  submitMustFail opener $ propose "wrong-kind" newRequest (Milestone (newSubject with kind = "milestone"))
+  submitMustFail opener $ propose "missing-pin" (newRequest with pin = ProposalPin "" []) (Grant newSubject)
+  submitMustFail opener $ propose "wrong-original" (newRequest with originalProposal = 999) (Grant newSubject)
+  submitMustFail opener $ propose "wrong-previous" (newRequest with previousRound = Some "unknown") (Grant newSubject)
+  (foreign,foreignSubject) <- fixtureSource other False
+  submitMustFail (actAs opener <> readAs other) $ propose "wrong-issuer" foreign (Grant foreignSubject)
+  submitMustFail opener $ propose "archived-cid" request (Grant subject)
+  (milestone,milestoneSubject) <- fixtureSource opener True
+  blocked <- submit opener $ propose "milestone-blocked" milestone (Milestone milestoneSubject)
+  Some blockedValue <- queryContractId member blocked
+  let Some blockedSnapshot = blockedValue.sourceSnapshot
+  assert (not (executablePin blockedSnapshot.pin))
+  -- Synthetic complete delivery pin tests generic acceptance, not real #540 delivery.
+  let delivery = DeliveryPin "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" blockedSnapshot.observation.bodySha256 123 now
+  delivered <- submit opener $ propose "synthetic-delivery" (milestone with pin = delivery; previousRound = Some "milestone-blocked") (Milestone milestoneSubject)
+  Some deliveredValue <- queryContractId member delivered
+  let Some deliverySnapshot = deliveredValue.sourceSnapshot
+  assert (executablePin deliverySnapshot.pin)
+  Some milestoneSource <- queryContractId opener milestone.credentialCid
+  let anotherObservation = milestoneSource.observation with number = 541; sourceUrl = "https://github.com/canton-foundation/canton-dev-fund/issues/541"
+  anotherCid <- submit opener $ createCmd (S.SourceObservationCredential opener S.repository anotherObservation (S.contentDigest anotherObservation) 1 None)
+  let anotherRequest = milestone with credentialCid = anotherCid; expectedFingerprint = S.contentDigest anotherObservation; previousRound = Some "synthetic-delivery"
+      anotherSubject = milestoneSubject with url = anotherObservation.sourceUrl; contentVersion = S.contentDigest anotherObservation
+  submitMustFail opener $ propose "another-milestone" anotherRequest (Milestone anotherSubject)
+  submitMustFail opener $ propose "milestone-no-previous" milestone (Milestone milestoneSubject)
+  submitMustFail opener $ propose "milestone-cross-kind" (milestone with previousRound = Some "amendment") (Milestone milestoneSubject)
+  submitMustFail opener $ propose "milestone-old-head" (milestone with previousRound = Some "milestone-blocked") (Milestone milestoneSubject)
+  submitMustFail opener $ propose "bad-delivery-digest" (milestone with previousRound = Some "synthetic-delivery"; pin = DeliveryPin "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" (Text.sha256 "different") 123 now) (Milestone milestoneSubject)
+  submitMustFail opener $ propose "bad-delivery-time" (milestone with previousRound = Some "synthetic-delivery"; pin = DeliveryPin "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" blockedSnapshot.observation.bodySha256 123 (addRelTime now (seconds (-1)))) (Milestone milestoneSubject)
+  _ <- submit opener $ propose "amendment-branch" (newRequest with previousRound = Some "original") (Grant newSubject)
+  receipts <- query @AgendaRoundReceipt opener
+  let [(receiptCid,_)] = [(cid,r) | (cid,r) <- receipts, r.roundId == "original"]
+  submit opener $ archiveCmd receiptCid
+  _ <- submit opener $ propose "original" newRequest (Grant newSubject)
+  pure ()

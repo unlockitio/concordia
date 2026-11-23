@@ -12,6 +12,19 @@ public final class IntakePlan {
     private final String roundId;
     private final String commandId;
     private final IntakeSource.Evidence evidence;
+    private com.daml.ledger.api.v2.ValueOuterClass.Value boundAgenda;
+    private com.daml.ledger.api.v2.ValueOuterClass.Value boundSource;
+    static IntakePlan bound(IntakeSource source,String roundId,com.daml.ledger.api.v2.ValueOuterClass.Value agenda,
+                            com.daml.ledger.api.v2.ValueOuterClass.Value credential) {
+        var plan=new IntakePlan(source,roundId,true);
+        plan.boundAgenda=agenda;plan.boundSource=credential;return plan;
+    }
+    private IntakePlan(IntakeSource source,String roundId,boolean bound) {
+        this.source=source;this.roundId=roundId;this.evidence=IntakeSource.Evidence.CURATED_UNVERIFIED;
+        this.commandId="babycdf-intake-"+digest("SHA-256",("source-agenda/v1|"+source.sourceKey()+"|"+roundId).getBytes(StandardCharsets.UTF_8));
+    }
+    com.daml.ledger.api.v2.ValueOuterClass.Value boundAgenda() {return boundAgenda;}
+    com.daml.ledger.api.v2.ValueOuterClass.Value boundSource() {return boundSource;}
 
     /**
      * Unverified planning. A grant is refused here: only bytes can verify a grant, so this

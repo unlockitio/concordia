@@ -47,13 +47,13 @@ for name in ('staleRuleChange', 'credentialRefusalsWith', 'noQuorumWith', 'doubl
         errors.append(name + ': optional round must not advance main anchor')
 if not re.search(r'for n in 2 3 4 5; do', all_block.group(0)) or 'for n in 2 3 4 5 6' in all_block.group(0):
     errors.append('all must finish at step 5')
-for name, source, suffix in [('proposalVote', 'proposal-184', ':grant'), ('milestoneVote', 'milestone-540', ':illustrative-milestone')]:
+for name, source, suffix in [('proposalVote', 'proposal-184', ':grant'), ('milestoneVote', 'milestone-540', ':blocked-milestone')]:
     text = body(name)
     if not re.search(r'requestIntake state runId "' + source + r'" \(runId <> "' + suffix + r'"\)', text):
         errors.append(name + ': missing Java Intake request with preserved round ID')
     if 'proposal <- submit' in text:
         errors.append(name + ': successful proposal must not bypass Java Intake')
-if 'awaitIntake state.opener roundId agenda 120' not in body('requestIntake'):
+if 'awaitIntake state.opener roundId boundAgenda 120' not in body('requestIntake'):
     errors.append('Intake wait must remain bounded')
 catalogue = body('sourceCatalogueCounts')
 for required in ('query @Cap.Examples.BabyCdf.SourceCatalogue.SourceObservationCredential opener',

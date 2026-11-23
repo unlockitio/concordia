@@ -1,0 +1,45 @@
+-- SPDX-License-Identifier: Apache-2.0
+module Cap.Examples.BabyCdf.AgendaConsistencyTest where
+import Prelude hiding (Action)
+import Daml.Script
+import DA.Time
+import DA.Assert
+import qualified DA.Map as Map
+import qualified DA.Set as Set
+import qualified DA.Text as Text
+import Cap.Core.Types
+import Cap.Governance.ActionV1
+import Cap.Governance.ExecutableV1
+import Splice.Api.Token.MetadataV1
+import Cap.Examples.BabyCdf.RuleVote
+import Cap.Examples.BabyCdf.SourceAgenda
+import Cap.Examples.BabyCdf.SourceAgendaFixtures
+import qualified Cap.Examples.BabyCdf.SourceObservationCredential as S
+
+executionBoundaries : Script ()
+executionBoundaries = script do
+  opener <- allocateParty "consistency-opener"
+  (request,subject) <- fixtureSource opener False
+  Some source <- queryContractId opener request.credentialCid
+  now <- getTime
+  let copied = SourceAgendaSnapshot request.credentialCid opener source.observation source.fingerprint source.version source.previousDigest
+        source.observation.bodySha256 request.pin "boundary" 184 None
+      core = ExecutionCore (Set.singleton opener) (Map.fromList [(EA_Execute,[[opener]])]) now now None emptyMetadata
+      extra = ExtraArgs emptyChoiceContext emptyMetadata
+      wrong = [Grant (subject with url = "wrong"),Grant (subject with contentVersion = Text.sha256 "wrong"),
+               Milestone (subject with kind = "milestone")]
+  _ <- mapA (\agenda -> do
+    assert (not (agendaSnapshotConsistent opener agenda (Some copied)))
+    submitMustFail opener $ createCmd (AgendaAction opener Set.empty agenda 0 (Some copied))
+    execution <- submit opener $ createCmd (AgendaExecution opener Set.empty agenda 0 (Some copied) core Map.empty (Some (AV_Bool True)))
+    submitMustFail opener $ exerciseCmd (toInterfaceContractId @Executable execution) (Executable_Execute [opener] Map.empty extra)
+    pure ()) wrong
+  let badPin = copied with pin = DeliveryPin "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" copied.evidenceDigest 1 now
+  submitMustFail opener $ createCmd (AgendaAction opener Set.empty (Grant subject) 0 (Some badPin))
+  submitMustFail opener $ createCmd (ApprovedGrantProposal opener Set.empty (subject with url = "wrong") copied)
+  good <- submit opener $ createCmd (AgendaAction opener Set.empty (Grant subject) 0 (Some copied))
+  authorized <- submit opener $ exerciseCmd (toInterfaceContractId @Action good)
+    (Action_AuthorizeExecution [opener] core (Some (AV_Bool True)) Map.empty extra)
+  let [execution] = authorized.executionCids
+  result <- submit opener $ exerciseCmd execution (Executable_Execute [opener] Map.empty extra)
+  length result.created === 1

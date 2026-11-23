@@ -28,8 +28,8 @@ class IntakeSourcesTest {
                 + "\" \"" + IntakeSources.MILESTONE.contentVersion() + "\"",
                 declaration(daml, "illustrativeMilestone"));
         // The catalogue must track the subject validAgenda actually accepts.
-        assertTrue(daml.contains("validAgenda (Grant subject) = subject == proposalSubject"));
-        assertTrue(daml.contains("validAgenda (Milestone subject) = subject == illustrativeMilestone"));
+        assertTrue(daml.contains("validAgenda (Grant subject) = validGithubSubject \"proposal\" subject"));
+        assertTrue(daml.contains("validAgenda (Milestone subject) = validGithubSubject \"milestone\" subject"));
         assertEquals(2, IntakeSources.curated().sources().size());
         assertEquals(IntakeSource.AgendaConstructor.Grant, IntakeSources.GRANT.agendaConstructor());
         assertEquals(IntakeSource.AgendaConstructor.Milestone, IntakeSources.MILESTONE.agendaConstructor());

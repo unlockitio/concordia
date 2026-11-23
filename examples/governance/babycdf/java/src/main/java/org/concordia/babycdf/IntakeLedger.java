@@ -142,8 +142,111 @@ public final class IntakeLedger implements Intake.Transport, AutoCloseable {
         }
         return result;
     }
+    public IntakePlan plan(Intake.Request request,Intake.Bytes bytes) throws IOException {
+        var rows=active(demo,TRIGGER,"IntakeRequest").stream().filter(e->e.getContractId().equals(request.cid())).toList();
+        if(rows.size()!=1) throw new IOException("BLOCKED: exact source-bound request unavailable");
+        var record=rows.getFirst().getCreateArguments();
+        var agenda=field(record,"agenda");var source=field(record,"source");
+        if(!agenda.hasVariant() || !agenda.getVariant().getValue().hasRecord() || !source.hasRecord())
+            throw new IOException("BLOCKED: source-bound request schema required");
+        var constructor=agenda.getVariant().getConstructor();
+        if(!java.util.Set.of("Grant","Milestone").contains(constructor)) throw new IOException("BLOCKED: unsupported source agenda");
+        var subject=agenda.getVariant().getValue().getRecord();
+        var binding=source.getRecord();
+        if(!field(binding,"credentialCid").hasContractId() || number(binding,"expectedVersion")<1
+                || !text(binding,"expectedFingerprint").matches("[0-9a-f]{64}")) throw new IOException("BLOCKED: invalid source credential binding");
+        var selected=new IntakeSource(request.sourceKey(),IntakeSource.AgendaConstructor.valueOf(constructor),text(subject,"kind"),
+                text(subject,"url"),text(subject,"contentVersion"),IntakeSource.Evidence.CURATED_UNVERIFIED);
+        if(!selected.contentVersion().equals(text(binding,"expectedFingerprint"))) throw new IOException("BLOCKED: subject fingerprint mismatch");
+        return IntakePlan.bound(selected,request.roundId(),agenda,source);
+    }
     public boolean proof(Intake.Request request, IntakePlan plan) throws IOException {
-        return proof(request,plan,active(impl,RULE,"AgendaProposal"),active(impl,RULE,"AgendaAction"));
+        if(plan.boundSource()==null) return proof(request,plan,active(impl,RULE,"AgendaProposal"),active(impl,RULE,"AgendaAction"));
+        var receipts=active(impl,RULE,"AgendaRoundReceipt").stream()
+                .filter(e->request.roundId().equals(safeText(e.getCreateArguments(),"roundId"))).toList();
+        if(receipts.isEmpty()) return false;
+        if(receipts.size()!=1) throw new IOException("BLOCKED: duplicate durable round receipt");
+        var receipt=receipts.getFirst();var r=receipt.getCreateArguments();
+        if(!receipt.getSignatoriesList().equals(List.of(party)) || !party.equals(field(r,"opener").getParty())
+                || !party.equals(field(r,"proposer").getParty()) || number(r,"baseVersion")!=request.baseVersion()
+                || !sameValue(field(r,"agenda"),plan.boundAgenda())) throw new IOException("BLOCKED: durable round receipt mismatch");
+        var copied=field(r,"sourceSnapshot");
+        if(!copied.hasOptional() || !copied.getOptional().hasValue()) throw new IOException("BLOCKED: copied source missing");
+        verifySnapshot(copied.getOptional().getValue().getRecord(),plan);
+        if(!party.equals(field(copied.getOptional().getValue().getRecord(),"opener").getParty()))
+            throw new IOException("BLOCKED: copied source opener mismatch");
+        String action=field(r,"actionCid").getContractId();
+        if(action.isBlank()) throw new IOException("BLOCKED: receipt missing linked action identity");
+        // Receipt retains immutable round identity after archival. A missing action
+        // is not accepted as execution proof: retained transaction evidence is required.
+        var actions=active(impl,RULE,"AgendaAction");
+        var linked=actions.stream().filter(e->e.getContractId().equals(action)).toList();
+        if(linked.size()>1) throw new IOException("BLOCKED: duplicate linked action");
+        if(linked.isEmpty()) linked=historicalAction(action);
+        if(linked.size()!=1) throw new IOException("BLOCKED: linked action unavailable; historical transaction proof required");
+        if(!linked.isEmpty() && (!linked.getFirst().getSignatoriesList().equals(List.of(party))
+                || !party.equals(field(linked.getFirst().getCreateArguments(),"opener").getParty())
+                || number(linked.getFirst().getCreateArguments(),"baseVersion")!=request.baseVersion()
+                || !sameValue(field(linked.getFirst().getCreateArguments(),"agenda"),field(r,"agenda"))
+                || !sameValue(field(linked.getFirst().getCreateArguments(),"sourceSnapshot"),copied)))
+            throw new IOException("BLOCKED: linked action mismatch");
+        return true;
+    }
+    private List<EventOuterClass.CreatedEvent> historicalAction(String action) throws IOException {
+        if(channel==null) return List.of(); // Test seam never opens a channel.
+        try {
+            long end=StateServiceGrpc.newBlockingStub(channel).withDeadlineAfter(15,TimeUnit.SECONDS)
+                .getLedgerEnd(StateServiceOuterClass.GetLedgerEndRequest.getDefaultInstance()).getOffset();
+            var filter=TransactionFilterOuterClass.Filters.newBuilder().addCumulative(TransactionFilterOuterClass.CumulativeFilter.newBuilder()
+                .setTemplateFilter(TransactionFilterOuterClass.TemplateFilter.newBuilder().setTemplateId(filterId(RULE,"AgendaAction"))));
+            var format=TransactionFilterOuterClass.TransactionFormat.newBuilder().setTransactionShape(TransactionFilterOuterClass.TransactionShape.TRANSACTION_SHAPE_LEDGER_EFFECTS)
+                .setEventFormat(TransactionFilterOuterClass.EventFormat.newBuilder().putFiltersByParty(party,filter.build()).setVerbose(true));
+            var updates=UpdateServiceGrpc.newBlockingStub(channel).withDeadlineAfter(15,TimeUnit.SECONDS).getUpdates(
+                UpdateServiceOuterClass.GetUpdatesRequest.newBuilder().setBeginExclusive(0).setEndInclusive(end)
+                .setUpdateFormat(TransactionFilterOuterClass.UpdateFormat.newBuilder().setIncludeTransactions(format)).build());
+            var found=new ArrayList<EventOuterClass.CreatedEvent>();int count=0,bytes=0;
+            while(updates.hasNext()) {var update=updates.next();bytes+=update.getSerializedSize();
+                if(++count>10000 || bytes>20_000_000) throw new IOException("BLOCKED: historical action proof exceeds bound");
+                if(update.hasTransaction()) for(var event:update.getTransaction().getEventsList())
+                    if(event.hasCreated() && event.getCreated().getContractId().equals(action)) {
+                        verifyActiveEvent(event.getCreated(),id(impl,RULE,"AgendaAction"),party);found.add(event.getCreated());
+                    }
+            }
+            return found;
+        } catch(io.grpc.StatusRuntimeException unavailable) {throw new IOException("BLOCKED: historical action evidence unavailable; no retry");}
+    }
+    private static String safeText(ValueOuterClass.Record r,String name) {try{return text(r,name);}catch(IOException e){return "";}}
+    private static boolean sameValue(ValueOuterClass.Value a,ValueOuterClass.Value b) {
+        return normalize(a).equals(normalize(b));
+    }
+    private static ValueOuterClass.Value normalize(ValueOuterClass.Value value) {
+        var b=value.toBuilder();
+        if(value.hasRecord()) {var r=value.getRecord().toBuilder().clearRecordId().clearFields();
+            for(var f:value.getRecord().getFieldsList())r.addFields(f.toBuilder().setValue(normalize(f.getValue())));b.setRecord(r);}
+        else if(value.hasVariant())b.setVariant(value.getVariant().toBuilder().clearVariantId().setValue(normalize(value.getVariant().getValue())));
+        else if(value.hasEnum())b.setEnum(value.getEnum().toBuilder().clearEnumId());
+        else if(value.hasOptional() && value.getOptional().hasValue())b.setOptional(value.getOptional().toBuilder().setValue(normalize(value.getOptional().getValue())));
+        else if(value.hasList()) {var l=value.getList().toBuilder().clearElements();for(var v:value.getList().getElementsList())l.addElements(normalize(v));b.setList(l);}
+        return b.build();
+    }
+    private static void verifySnapshot(ValueOuterClass.Record snapshot,IntakePlan plan) throws IOException {
+        var source=plan.boundSource().getRecord();
+        var observed=field(snapshot,"observation");
+        var previous=field(snapshot,"previousDigest");
+        if(!previous.hasOptional()) throw new IOException("BLOCKED: copied lineage shape mismatch");
+        String prior=previous.getOptional().hasValue()?previous.getOptional().getValue().getText():null;
+        if(!SourceCatalogueDigest.digest(observed.getRecord(),number(snapshot,"version"),prior).equals(text(snapshot,"fingerprint")))
+            throw new IOException("BLOCKED: copied fingerprint mismatch");
+        if(!observed.hasRecord() || !field(snapshot,"opener").hasParty()
+                || !text(snapshot,"evidenceDigest").equals(text(observed.getRecord(),"bodySha256"))
+                || !text(observed.getRecord(),"sourceUrl").equals(plan.source().url())) throw new IOException("BLOCKED: copied observation mismatch");
+        if(!field(snapshot,"sourceCid").getContractId().equals(field(source,"credentialCid").getContractId())
+                || !text(snapshot,"fingerprint").equals(text(source,"expectedFingerprint"))
+                || number(snapshot,"version")!=number(source,"expectedVersion")
+                || !sameValue(field(snapshot,"pin"),field(source,"pin"))
+                || number(snapshot,"originalProposal")!=number(source,"originalProposal")
+                || !sameValue(field(snapshot,"previousRound"),field(source,"previousRound"))
+                || !text(snapshot,"roundId").equals(plan.roundId())) throw new IOException("BLOCKED: copied source pin mismatch");
     }
     static boolean proof(Intake.Request request,IntakePlan plan,List<EventOuterClass.CreatedEvent> proposals,
                          List<EventOuterClass.CreatedEvent> actions) throws IOException {
@@ -195,6 +298,8 @@ public final class IntakeLedger implements Intake.Transport, AutoCloseable {
                 .addCommands(CommandsOuterClass.Command.newBuilder().setExercise(exercise))).build();
     }
     public void submit(Intake.Request r,IntakePlan plan) throws IOException {
+        // Production plans come exclusively from signed source-bound requests;
+        // legacy plans remain a bounded test/old-journal compatibility seam.
         // Verify governor's opener, not the member-only SandboxBallots authorization path.
         var governors=active(impl,RULE,"AgendaGovernor").stream().filter(g->g.getContractId().equals(governor)).toList();
         if(!party.equals(r.opener()) || !plan.roundId().equals(r.roundId()) || !plan.source().sourceKey().equals(r.sourceKey()))
@@ -209,7 +314,8 @@ public final class IntakeLedger implements Intake.Transport, AutoCloseable {
         try {
             if(retryRejected) {
                 retryRejected=false;
-                if(proof(r,plan)) throw new IOException("BLOCKED: round already exists; reconcile instead of retry");
+                if(plan.boundSource()!=null ? proof(r,plan) : proof(r,plan,active(impl,RULE,"AgendaProposal"),active(impl,RULE,"AgendaAction")))
+                    throw new IOException("BLOCKED: round already exists; reconcile instead of retry");
                 if(!java.util.Arrays.equals(readMarker(journal.resolve(attempt+".intent")),intent))
                     throw new IOException("BLOCKED: retry payload changed");
                 String outcome=new String(readMarker(journal.resolve(attempt+".rejected")),java.nio.charset.StandardCharsets.US_ASCII);

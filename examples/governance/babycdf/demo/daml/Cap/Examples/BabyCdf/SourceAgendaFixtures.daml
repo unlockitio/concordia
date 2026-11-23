@@ -1,0 +1,47 @@
+-- SPDX-License-Identifier: Apache-2.0
+module Cap.Examples.BabyCdf.SourceAgendaFixtures where
+import Daml.Script
+import qualified DA.Text as Text
+import qualified Cap.Examples.BabyCdf.SourceObservationCredential as S
+import Cap.Examples.BabyCdf.SourceAgenda
+import Cap.Examples.BabyCdf.RuleVote
+
+proposalPin : EvidencePin
+proposalPin = ProposalPin "c6964dc9545f4046d6f4e4c1cb81cfd01fd6b521" [FilePin "proposals/concordia.md" proposalBlob]
+
+-- Explicit local demo assertion; no claim that this synthetic source observation
+-- was fetched from GitHub. Proposal file pin is real; milestone delivery is absent.
+fixtureSource : Party -> Bool -> Script (SourceAgendaRequest,GithubSubject)
+fixtureSource opener milestone = do
+  now <- getTime
+  let number = if milestone then 540 else 184
+      kind = if milestone then S.SourceMilestone else S.SourceProposal
+      url = "https://github.com/" <> S.repository <> (if milestone then "/issues/" else "/pull/") <> show number
+      observation = S.Observation number kind url "Explicit demo source assertion" (Text.sha256 "demo observation evidence")
+        S.SourceOpen now now S.ObservedUnverified (if milestone then Some 184 else None) (if milestone then "demo parent #184" else "")
+      fingerprint = S.contentDigest observation
+  rows <- query @S.SourceObservationCredential opener
+  cid <- case [(cid,s) | (cid,s) <- rows, s.observation.number == number] of
+    [(cid,_)] -> pure cid
+    [] -> submit opener $ createCmd (S.SourceObservationCredential opener S.repository observation fingerprint 1 None)
+    _ -> abort "duplicate source fixture"
+  Some stored <- queryContractId opener cid
+  let request = SourceAgendaRequest cid stored.fingerprint stored.version
+        (if milestone then BlockedPin "blocked_pin: delivery commit and vote evidence unavailable" else proposalPin) 184 None
+      subject = GithubSubject (if milestone then "milestone" else "proposal") stored.observation.sourceUrl stored.fingerprint
+  pure (request,subject)
+
+sourceForAgenda : Party -> Agenda -> Script (Agenda,Optional SourceAgendaRequest)
+sourceForAgenda opener agenda = case agenda of
+  Architecture _ -> pure (agenda,None)
+  Grant _ -> do
+    (request,subject) <- fixtureSource opener False
+    pure (Grant subject,Some request)
+  Milestone _ -> do
+    (request,subject) <- fixtureSource opener True
+    heads <- query @SourceRoundHead opener
+    let previous = case [h.latest | (_,h) <- heads, h.number == 540] of
+          [] -> None
+          [latest] -> Some latest
+          _ -> error "duplicate milestone head"
+    pure (Milestone subject,Some (request with previousRound = previous))

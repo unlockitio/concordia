@@ -2,9 +2,9 @@ module Cap.Examples.BabyCdf.Intake where
 
 import DA.Time
 import Cap.Examples.BabyCdf.RuleVote
+import Cap.Examples.BabyCdf.SourceAgenda
 
--- Demo-owned trigger only. Creation does not open a voting round; Java Intake
--- verifies the selected source bytes before exercising ProposeAgenda as opener.
+-- Signed, explicit source-bound input. No curated source selector grants authority.
 template IntakeRequest
   with
     opener : Party
@@ -13,13 +13,13 @@ template IntakeRequest
     sourceKey : Text
     windowSeconds : Int
     baseVersion : Int
+    agenda : Agenda
+    source : SourceAgendaRequest
   where
     signatory opener
-    observer opener
-    ensure runId /= "" && (roundId == runId <> ":" <> sourceKey
-      || roundId == runId <> (if sourceKey == "proposal-184" then ":grant" else ":illustrative-milestone"))
-      && sourceKey `elem` ["proposal-184", "milestone-540"]
+    ensure runId /= "" && roundId /= "" && sourceKey /= ""
       && windowSeconds > 0 && windowSeconds <= 86400 && baseVersion >= 0
+      && validAgenda agenda
 
     choice OpenAgenda : ContractId AgendaProposal
       with governorCid : ContractId AgendaGovernor
@@ -28,12 +28,6 @@ template IntakeRequest
         governor <- fetch governorCid
         assertMsg "intake governor opener mismatch" (governor.opener == opener)
         now <- getTime
-        let agenda = if sourceKey == "proposal-184"
-              then Grant proposalSubject
-              else Milestone illustrativeMilestone
         exercise governorCid ProposeAgenda with
-          proposer = opener
-          roundId
-          agenda
-          baseVersion
+          proposer = opener; roundId; agenda; baseVersion; source = Some source
           closesAt = addRelTime now (seconds windowSeconds)
