@@ -74,6 +74,7 @@ reset_env() {
   rm -rf "${WORK:?}/bin" "${WORK:?}/demo"
   mkdir -p "$WORK/bin" "$WORK/demo/compose/state"
   cp "$LEDGER" "$WORK/demo/ledger.sh"
+  cp "$HERE/http-acs-pages.py" "$WORK/demo/http-acs-pages.py"
   chmod 755 "$WORK/demo/ledger.sh"
   cat >"$WORK/demo/compose/state/bootstrap.json" <<'JSON'
 {"opener":"opener-1::1220aa","member":"member-a::1220aa","governor":"00gov","registry":"00reg","rule":"00rule","userName":"babycdf-agent","step":1}

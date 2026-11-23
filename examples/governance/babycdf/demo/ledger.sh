@@ -397,6 +397,17 @@ GRPC_NORM="$GRPC_VAL"'
 # is an integer; the filter lives under eventFormat/event_format (the HTTP
 # `filter` field is rejected alongside it, and in gRPC 3.5.11 `filter` and
 # `verbose` are reserved/removed on these requests).
+http_acs_pages() {
+  http_post_allowed /v2/state/active-contracts-page || refuse 'ACS page query not allowed'
+  _acs_output=$(scratch)
+  if ! python3 "$HERE/http-acs-pages.py" "$API" >"$_acs_output"; then
+    rm -f "$_acs_output"
+    die 'Incomplete HTTP ACS pagination; no inventory published'
+  fi
+  cat "$_acs_output"
+  rm -f "$_acs_output"
+}
+
 acs_party() {
   if [ "$TRANSPORT" = grpc ]; then
     jq -n --argjson end "$END" --arg party "$1" \
@@ -408,7 +419,7 @@ acs_party() {
     jq -n --argjson end "$END" --arg party "$1" \
       '{activeAtOffset: $end,
         eventFormat: { filtersByParty: { ($party): { cumulative: [ { identifierFilter: { WildcardFilter: { value: {} } } } ] } }, verbose: true } }' |
-      http_post /v2/state/active-contracts |
+      http_acs_pages |
       jq -r "$HTTP_NORM"'[ .[].contractEntry.JsActiveContract.createdEvent | norm ]'
   fi
 }
@@ -431,7 +442,7 @@ acs_template() {
     jq -n --argjson end "$END" --arg tpl "$1" \
       '{activeAtOffset: $end,
         eventFormat: { filtersForAnyParty: { cumulative: [ { identifierFilter: { TemplateFilter: { value: { templateId: $tpl } } } } ] }, verbose: true } }' |
-      http_post /v2/state/active-contracts |
+      http_acs_pages |
       jq -r "$HTTP_NORM"'[ .[].contractEntry.JsActiveContract.createdEvent | norm ]'
   fi
 }
