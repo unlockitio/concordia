@@ -134,7 +134,7 @@ bootstrap input = do
     ("VotingRightFactory " <> cid factory)
   phase 1 "CREDENTIALS"
   business 1 "Each member receives one personal voting credential, valid 12 hours."
-  business 1 "Two holding routes shown: 1 direct, 6 via registry. Same weight: 1 vote each."
+  business 1 "All seven use the voting-right factory and registry. Same weight: 1 vote each."
   now <- getTime
   credentials <- forA (Set.toList members) $ \voter -> do
     invitation <- submit contract.opener $ createCmd VotingRightInvitation with
@@ -142,18 +142,11 @@ bootstrap input = do
       member = voter; expiresAt = now `addRelTime` hours 12
     action 1 (who contract.opener <> " creates VotingRightInvitation for "
       <> who voter <> " (expires in 12h)") ("VotingRightInvitation " <> cid invitation)
-    if voter == member then do
-      accepted <- submit voter $ exerciseCmd invitation AcceptDirect
-      business 1 (name voter <> ": credential accepted (direct).")
-      action 1 (who voter <> " exercises VotingRightInvitation.AcceptDirect on " <> cid invitation)
-        ("DirectVotingRight " <> cid accepted)
-      pure (voter, DirectRight accepted)
-    else do
-      accepted <- submit voter $ exerciseCmd invitation AcceptRegistered with factory = toInterfaceContractId factory
-      business 1 (name voter <> ": credential accepted (registry).")
-      action 1 (who voter <> " exercises VotingRightInvitation.AcceptRegistered on " <> cid invitation
-        <> " (via factory " <> cid factory <> ")") ("RegisteredVotingRight " <> cid accepted)
-      pure (voter, RegisteredRight accepted)
+    accepted <- submit voter $ exerciseCmd invitation AcceptRegistered with factory = toInterfaceContractId factory
+    business 1 (name voter <> ": credential accepted (registry).")
+    action 1 (who voter <> " exercises VotingRightInvitation.AcceptRegistered on " <> cid invitation
+      <> " (via factory " <> cid factory <> ")") ("RegisteredVotingRight " <> cid accepted)
+    pure (voter, RegisteredRight accepted)
   evidenceLine 1 ("[SETUP-SUMMARY] CREDENTIALS: " <> show (length credentials) <> " invitations accepted; direct " <> show (length [() | (_,DirectRight _) <- credentials]) <> "; registered " <> show (length [() | (_,RegisteredRight _) <- credentials]) <> "; validity 12h; 1 vote each.")
   debug "[STEP 1] direct and registered unit voting credentials issued to seven members"
   business 1 "All 7 credentialed, 1 vote each."
@@ -191,7 +184,7 @@ bootstrap input = do
   createUser (User intakeUserId (Some contract.opener)) intakeRequired
   intakeActual <- listUserRights intakeUserId
   assert (length intakeActual == length intakeRequired && all (`elem` intakeActual) intakeRequired)
-  evidenceLine 1 "[SETUP-SUMMARY] ACCESS: Reviewer CanReadAs opener; Intake CanActAs opener; opener has no member vote."
+  evidenceLine 1 "[SETUP-SUMMARY] ACCESS: Reviewer user: CanReadAs opener; Intake user: CanActAs opener; members retain their own cast authority (unauthenticated sandbox)."
   outcomeLine 1 "Provisioned opener-only reader and separate Intake user; Intake submission is not implemented here."
   let state = LiveState with
         member; opener = contract.opener; governor

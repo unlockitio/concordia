@@ -206,6 +206,26 @@ def presentable(payload):
     return text.strip()
 
 
+HEADING_TITLE_WIDTH = 48
+
+def heading(title):
+    return '########## ' + title.center(max(HEADING_TITLE_WIDTH, len(title))) + ' ##########'
+
+def layout_text(text):
+    import re
+    # Decode a literal separator only at an otherwise complete heading boundary.
+    match = re.fullmatch(r'(?:\\\\n|\n)?#+[ ]+([^\r\n#]+?)[ ]+#+', text)
+    return heading(match.group(1).strip()) if match else text
+
+def setup_line(text):
+    import re
+    title, separator, body = text.partition(': ')
+    if separator and title in ('SANDBOX','COMMITTEE','CREDENTIALS','RULEBOOK','ACCESS','SETUP','INITIAL PENDING'):
+        if title == 'COMMITTEE':
+            body = re.sub(r'\[([^\[\]\r\n]*)\]', lambda m: m.group(1).replace('"',''), body)
+        return heading('LEDGER USERS' if title == 'ACCESS' else title) + '\n' + body
+    return text
+
 def render(line, verbose):
     """One input line -> the line to print, or None to drop it."""
     literal = strip_wrapper(line)
@@ -225,7 +245,7 @@ def render(line, verbose):
     for part in payload.split("\n"):
         shown = presentable(part)
         if shown:
-            out.append(shown)
+            out.append(layout_text(shown))
     return "\n".join(out) if out else None
 
 
@@ -240,7 +260,7 @@ def known_setup_narration(payload):
         '[STEP 1][BUSINESS] Majority (of votes cast): one option needs at least half.',
         '[STEP 1][BUSINESS] Steps 2-4 run the realistic case: 3 core YES, 4 ABSENT. Quorum met exactly.',
         '[STEP 1][BUSINESS] Each member receives one personal voting credential, valid 12 hours.',
-        '[STEP 1][BUSINESS] Two holding routes shown: 1 direct, 6 via registry. Same weight: 1 vote each.',
+        '[STEP 1][BUSINESS] All seven use the voting-right factory and registry. Same weight: 1 vote each.',
         '[STEP 1][BUSINESS] All 7 credentialed, 1 vote each.',
         '[STEP 1][BUSINESS] Credentials are re-checked when a result is counted, not only when issued.',
         '[STEP 1][BUSINESS] architecture-review v1 is now in force.',
@@ -256,7 +276,7 @@ def known_setup_narration(payload):
     import re
     patterns = (
         r'\[STEP 1\]\[PHASE\] \n################ STEP 1: SETUP AND CREDENTIALS ################',
-        r'\[STEP 1\]\[PHASE\] \n########## (?:INITIAL STATE|SANDBOX NOTICE|COMMITTEE|CREDENTIALS|RULE BOOK|AGENT RIGHTS|LEDGER EVIDENCE|FINAL STATE) ##########',
+        r'\[STEP 1\]\[PHASE\] (?:\\n|\n)########## (?:INITIAL STATE|SANDBOX NOTICE|COMMITTEE|CREDENTIALS|RULE BOOK|AGENT RIGHTS|LEDGER EVIDENCE|FINAL STATE) ##########',
         r'\[STEP 1\]\[BUSINESS\] [^\r\n:]+: credential accepted \((?:direct|registry)\)\.',
         r'\[STEP 1\]\[EVIDENCE\] Participant before setup: parties known [0-9]+, ledger users [0-9]+ \[participant-level counts, not a contract query\]',
         r'\[STEP 1\]\[EVIDENCE\] Parties known: [0-9]+; ledger users: [0-9]+',
@@ -289,10 +309,10 @@ def main():
                 if payload is not None:
                     _, _, setup_text = split_tags(payload)
                     if setup_text.startswith("[SETUP-SUMMARY] "):
-                        print(setup_text[len("[SETUP-SUMMARY] "):], flush=True)
+                        print(setup_line(setup_text[len("[SETUP-SUMMARY] "):]), flush=True)
                         continue
                     elif payload.startswith("[SETUP-SUMMARY] "):
-                        print(payload[len("[SETUP-SUMMARY] "):], flush=True)
+                        print(setup_line(payload[len("[SETUP-SUMMARY] "):]), flush=True)
                         continue
                     elif payload in (
                         "[STEP 1] allocating synthetic parties and governor; sandbox only",
@@ -316,7 +336,8 @@ def main():
                 line)
             jvm_plain_info = re.match(
                 r"^INFO +com\.digitalasset\.[A-Za-z0-9_.$]+(?: +-| +:)", line)
-            if args.hide_sdk_info and (sdk_info or jvm_info or jvm_plain_info):
+            known_shutdown = re.fullmatch(r'.* INFO (?:io\.netty\.channel\.epoll\.Epoll|org\.apache\.pekko\.actor\.CoordinatedShutdown|akka\.actor\.CoordinatedShutdown) - (?:Running CoordinatedShutdown with reason \[ActorSystemTerminateReason\]|.*Epoll.*)', line)
+            if args.hide_sdk_info and (sdk_info or jvm_info or jvm_plain_info or known_shutdown):
                 continue
             shown = render(line, args.verbose)
             if shown is not None:

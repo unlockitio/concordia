@@ -292,7 +292,7 @@ turnout from the one the narration claims.
 
 ### Step 1, `up`: synthetic setup
 
-Issues seven unit voting credentials, five direct and two registered, creates
+Issues seven unit voting credentials, seven registered through VotingRightFactory, creates
 the `AgendaGovernor`, and activates `EffectiveRule` v1 as an **opener-created
 sandbox seed: v1 is unvoted, created directly by the opener, and is not a voted
 or Foundation rule**. The first voted rule in the journey is v2, in step 2. The dedicated `babycdf-agent`

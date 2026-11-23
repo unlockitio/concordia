@@ -49,11 +49,11 @@ class DebugWrapper(unittest.TestCase):
 
     def test_phase_heading_keeps_its_hashes_and_blank_line(self):
         line = r'[DA.Internal.Prelude:557]: \"[STEP 2][PHASE] \n########## PROPOSAL ##########\"'
-        self.assertEqual(render(line), "########## PROPOSAL ##########")
+        self.assertEqual(render(line), "########## " + "PROPOSAL".center(48) + " ##########")
 
     def test_step_banner_is_rendered(self):
         line = r'[DA.Internal.Prelude:557]: \"[STEP 2][PHASE] \n################ STEP 2: RULE GOVERNANCE ################\"'
-        self.assertEqual(render(line), "################ STEP 2: RULE GOVERNANCE ################")
+        self.assertEqual(render(line), "########## " + "STEP 2: RULE GOVERNANCE".center(48) + " ##########")
 
     def test_other_source_locations_are_handled(self):
         line = r'[Cap.Examples.BabyCdf.Live:123]: \"[STEP 1][BUSINESS] Electorate: 7 members.\"'
@@ -100,7 +100,7 @@ class Multiline(unittest.TestCase):
     def test_embedded_newline_becomes_separate_lines(self):
         line = r'[DA.Internal.Prelude:557]: \"[STEP 1][PHASE] \n########## COMMITTEE ##########\nElectorate: 7\"'
         self.assertEqual(
-            render(line), "########## COMMITTEE ##########\nElectorate: 7"
+            render(line), "########## " + "COMMITTEE".center(48) + " ##########\nElectorate: 7"
         )
 
     def test_blank_segments_are_dropped_not_printed_as_empty_noise(self):
@@ -260,8 +260,8 @@ class EndToEnd(unittest.TestCase):
         out = result.stdout
         self.assertNotIn("[DA.", out)
         self.assertNotIn('\\"', out)
-        self.assertIn("################ STEP 2: RULE GOVERNANCE ################", out)
-        self.assertIn("########## PROPOSAL ##########", out)
+        self.assertIn("########## " + "STEP 2: RULE GOVERNANCE".center(48) + " ##########", out)
+        self.assertIn("########## " + "PROPOSAL".center(48) + " ##########", out)
         self.assertIn("Rule architecture-review: v1 -> v2.", out)
         self.assertIn("VoteRecord active: 7 (3 YES, 0 NO, 4 ABSENT)", out)
         self.assertIn("APPROVED - 3 YES, 0 NO, 4 ABSENT.", out)

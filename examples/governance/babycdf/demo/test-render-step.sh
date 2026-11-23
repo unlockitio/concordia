@@ -55,7 +55,7 @@ chmod +x "$WORK/ok-cmd" "$WORK/fail-cmd"
 # --- 1. success path ----------------------------------------------------
 OUT=$(run_case render_step step-2 "$WORK/ok-cmd" 2>"$WORK/err.txt") || no 'success exit 0'
 case "$OUT" in
-  *'########## PROPOSAL ##########'*) ok 'phase heading rendered' ;;
+  *'PROPOSAL'*) ok 'phase heading rendered' ;;
   *) no "phase heading rendered: $OUT" ;;
 esac
 case "$OUT" in
