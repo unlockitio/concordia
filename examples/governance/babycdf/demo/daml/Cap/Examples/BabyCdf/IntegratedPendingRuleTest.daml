@@ -1,0 +1,31 @@
+module Cap.Examples.BabyCdf.IntegratedPendingRuleTest where
+import Daml.Script
+import DA.Assert
+import DA.Time
+import qualified DA.Map as Map
+import qualified DA.Set as Set
+import Cap.Examples.BabyCdf.RuleVote
+import Cap.Examples.BabyCdf.SourceAgendaFixtures
+import Cap.Examples.BabyCdf.Live
+
+sourcePendingAcrossExistingStep2 : Script ()
+sourcePendingAcrossExistingStep2 = script do
+ let runId = "integrated-source-pending"
+ state <- bootstrap (BootstrapInput runId 5 ruleRefV1 ruleRefV2)
+ (source,subject) <- fixtureSource state.opener False
+ now <- getTime
+ proposal <- submit state.opener $ exerciseCmd state.governor ProposeAgenda with
+   proposer = state.opener; roundId = runId <> ":source"; agenda = Grant subject
+   baseVersion = 0; closesAt = addRelTime now (seconds 120); source = Some source
+ Some before <- queryContractId state.opener proposal
+ assert (before.sourceSnapshot /= None)
+ -- Existing step2 retains its own Architecture ballots and member controllers.
+ _ <- ruleVoteWith setTime runId
+ Some after <- queryContractId state.opener proposal
+ after === before
+ (_,advanced) <- findAnchorAtLeast runId 2
+ Some selected <- queryContractId state.opener advanced.rule
+ selected.draft.version === 2
+ ballots <- query @AgendaBallot state.opener
+ assert (null [b | (_,b) <- ballots, b.roundId == before.roundId])
+ pure ()

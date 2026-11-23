@@ -137,8 +137,8 @@ flags_case() {
       esac ;;
   esac
   case "$args" in
-    *"--offline-pr184-file /state/proposal-blob.txt"*) ;;
-    *) echo "FAIL: $name lost its pinned offline evidence: $args"; exit 1 ;;
+    *"--integrated-agenda"*) ;;
+    *) echo "FAIL: $name lost its exact integrated agenda mode: $args"; exit 1 ;;
   esac
   printf '%s flags ok: %s\n' "$name" "$args"
 }

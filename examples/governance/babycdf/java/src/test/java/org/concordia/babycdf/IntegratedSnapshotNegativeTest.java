@@ -1,0 +1,12 @@
+package org.concordia.babycdf;
+import org.junit.jupiter.api.Test;import com.daml.ledger.api.v2.*;import java.util.*;import java.time.*;import static org.junit.jupiter.api.Assertions.*;import static org.concordia.babycdf.SourceCatalogueCodec.*;
+class IntegratedSnapshotNegativeTest {
+ @Test void unknownMilestoneIsInconclusiveWithoutFetchAndNoFallback()throws Exception {
+  Instant now=Instant.parse("2026-11-23T00:00:00Z");var o=new SourceObservation(540,SourceObservation.Kind.MILESTONE,"https://github.com/"+ConcordiaDemoScope.REPO+"/issues/540","Concordia",SourceObservation.hash("body"),"open",now,now,184L,"explicit parent",false,SourceObservation.hash("body"),false);var observation=observation(o);String fingerprint=SourceCatalogueDigest.digest(observation.getRecord());var none=ValueOuterClass.Value.newBuilder().setOptional(ValueOuterClass.Optional.getDefaultInstance()).build();var party=ValueOuterClass.Value.newBuilder().setParty("opener").build();
+  var pin=ValueOuterClass.Value.newBuilder().setVariant(ValueOuterClass.Variant.newBuilder().setConstructor("BlockedPin").setValue(record("reason",text("delivery unknown")))).build();
+  var snapshot=record("sourceCid",ValueOuterClass.Value.newBuilder().setContractId("credential").build(),"opener",party,"observation",observation,"fingerprint",text(fingerprint),"version",integer(1),"previousDigest",none,"evidenceDigest",text(o.bodySha256()),"pin",pin,"roundId",text("540"),"originalProposal",integer(184),"previousRound",none);
+  var optional=ValueOuterClass.Value.newBuilder().setOptional(ValueOuterClass.Optional.newBuilder().setValue(snapshot)).build();var event=EventOuterClass.CreatedEvent.newBuilder().setContractId("agenda").addSignatories("opener").addWitnessParties("opener").setCreateArguments(record("opener",party,"roundId",text("540"),"subject",record("url",text(o.url()),"body",text(fingerprint)),"sourceSnapshot",optional).getRecord()).build();
+  var gateway=new Reviewer.LedgerRuleGateway(){public List<Reviewer.EffectiveRule> activeRules(){return List.of(new Reviewer.EffectiveRule("rule","architecture-review",1,List.of(new Advisory.Clause("a","b","c","d","e"))));}public List<EventOuterClass.CreatedEvent> agendaEvents(){return List.of(event);}};
+  var result=new AgendaFollowingReview(path->{throw new AssertionError("unknown milestone must not fetch/fallback");}).cycle(gateway);assertEquals("INCONCLUSIVE",result.path("reviews").get(0).path("status").asText());
+ }
+}

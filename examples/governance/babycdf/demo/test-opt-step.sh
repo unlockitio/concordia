@@ -127,10 +127,10 @@ fi
 # Main step 3 needs step-2.json, which exists; it must still run even though
 # the optional round has already run.
 CODE=0; run_h run_step 3 >"$WORK/main3.out" 2>&1 || CODE=$?
-if [ "$CODE" -eq 0 ]; then ok 'main step 3 still runs after the optional round'
-else no "main step 3 still runs after the optional round (exit $CODE)"; fi
-if grep -q 'proposalVote' "$WORK/dpm-calls.txt"; then ok 'main step 3 invokes its own script'
-else no 'main step 3 invokes its own script'; fi
+if [ "$CODE" -eq 2 ] && [ ! -e "$STATE/step-3.attempted" ]; then ok 'retired main step 3 refuses before mutation'
+else no "retired main step 3 must refuse (exit $CODE)"; fi
+if grep -q 'proposalVote' "$WORK/dpm-calls.txt"; then no 'retired source step must not invoke proposalVote'
+else ok 'retired source step invokes no source voting script'; fi
 
 # --- 5. once per network -----------------------------------------------
 CODE=0; run_h run_opt_step 1 >"$WORK/again.out" 2>&1 || CODE=$?
@@ -208,9 +208,9 @@ for order in '2' '3' '4' '5' '5 3 2 4'; do
   build_harness
   for n in $order; do
     CODE=0; run_h run_opt_step "$n" >"$WORK/optional-$n.out" 2>&1 || CODE=$?
-    if [ "$CODE" -eq 0 ] && [ -f "$STATE/opt-step-$n.json" ] && [ -f "$WORK/raw/opt-step-$n.log" ]; then
-      ok "optional $n runs independently in order [$order]"
-    else no "optional $n runs independently in order [$order] (exit $CODE)"; fi
+    if [ "$CODE" -eq 2 ] && [ ! -f "$STATE/opt-step-$n.json" ] && [ ! -f "$STATE/opt-step-$n.attempted" ] && [ ! -s "$WORK/dpm-calls.txt" ]; then
+      ok "retired source optional $n refuses before mutation in order [$order]"
+    else no "retired source optional $n must not submit (exit $CODE)"; fi
     [ ! -e "$STATE/step-2.json" ] && ok 'optional does not advance main markers' || no 'optional advanced main markers'
   done
   CODE=0; run_h run_step 6 >"$WORK/retired.out" 2>&1 || CODE=$?
@@ -220,3 +220,9 @@ done
 
 printf '\npassed %s, failed %s\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1
+
+# Integrated source polling is not another optional voting step.
+grep -q -- 'Intake --integrated-demo' "$HERE/compose/agents/entrypoint.sh"
+if grep -q -- 'GitVoteBallot\|--mirror-ballots\|--scripted-ballots' "$HERE/compose/agents/entrypoint.sh"; then
+  echo 'FAIL: integrated launcher must not submit source ballots'; exit 1
+fi

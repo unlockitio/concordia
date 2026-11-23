@@ -163,6 +163,21 @@ public final class Intake {
         return factory.open(port,opener,demoPackage,user,sourceJournal(journal));
     }
     public static void main(String[] args) throws Exception {
+        if(args.length==10 && args[0].equals("--integrated-demo")) {
+            int port=Integer.parseInt(args[1]);String party=args[2],impl=args[3],demo=args[4],governor=args[5],user=args[6];Path journal=Path.of(args[7]);
+            int attempts=Integer.parseInt(args[8]);long interval=Long.parseLong(args[9]);if(attempts<1||attempts>86400||interval<1000||interval>60000)throw new IllegalArgumentException("bounded integrated polling required");
+            if(!discoveryMode(System.getenv()).equals("live"))throw new IllegalArgumentException("integrated demo requires live discovery; use explicit legacy offline CLI for fixtures");
+            var pages=liveSourcePages();var collector=SourceEvidenceCollector.configured(System.getenv(),java.time.Clock.systemUTC());
+            try(var sources=new SourceCatalogueLedger(port,party,impl,demo,user,sourceJournal(journal));var opener=new SourceOpenerLedger(port,party,impl,demo,governor,user,journal);var queue=new SourceOpenerQueue(journal,opener);var executor=java.util.concurrent.Executors.newSingleThreadExecutor()) {
+                var sweep=new SourceSweepScheduler(new JavaSourceIngestion(sources,pages,System.out::println),System::nanoTime,sourceInterval(System.getenv()));var automatic=new SourceOpenerScheduler(collector,opener,queue,java.time.Clock.systemUTC());
+                java.util.concurrent.Future<SourceSweepScheduler.TickOutcome> worker=null;
+                for(int i=0;i<attempts;i++){
+                    if(worker==null||worker.isDone()) {if(worker!=null)try{worker.get();}catch(java.util.concurrent.ExecutionException failure){System.err.println("Catalogue paused: "+failure.getCause().getMessage());}worker=executor.submit(sweep::tick);}
+                    try{System.out.println(automatic.automaticCycle(null));}catch(IOException|IllegalArgumentException blocked){System.err.println("Automatic source rounds paused: invalid or unavailable source evidence");}if(i+1<attempts)Thread.sleep(interval);
+                }
+            }
+            return;
+        }
         if((args.length==9||args.length==11) && args[0].equals("--automatic-source")) {
             // Explicit production evidence+credential+queue pipeline; old demo CLI stays unchanged.
             int port=Integer.parseInt(args[1]);String party=args[2],impl=args[3],demo=args[4],governor=args[5],user=args[6];

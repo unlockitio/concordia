@@ -45,8 +45,11 @@ for name in ('staleRuleChange', 'credentialRefusalsWith', 'noQuorumWith', 'doubl
     opt = body(name)
     if re.search(r'\badvance\b|archiveCmd.*anchor|createCmd DemoAnchor', opt):
         errors.append(name + ': optional round must not advance main anchor')
-if not re.search(r'for n in 2 3 4 5; do', all_block.group(0)) or 'for n in 2 3 4 5 6' in all_block.group(0):
-    errors.append('all must finish at step 5')
+if 'run_step 2' not in all_block.group(0) or 'exit $?' not in all_block.group(0):
+    errors.append('integrated all must stop after Architecture step 2')
+for retired in ('3|4|5)', '2|3|4|5)'):
+    if retired not in runner:
+        errors.append('source ballot entrypoints must refuse before mutation')
 for name, source, suffix in [('proposalVote', 'proposal-184', ':grant'), ('milestoneVote', 'milestone-540', ':blocked-milestone')]:
     text = body(name)
     if not re.search(r'requestIntake state runId "' + source + r'" \(runId <> "' + suffix + r'"\)', text):

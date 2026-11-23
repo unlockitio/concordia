@@ -694,7 +694,10 @@ roundName roundId =
 -- Only a daml-prim Text crosses the JSON boundary. State/CIDs are fetched
 -- from a unique signed anchor on this participant, never coerced from JSON.
 ruleVote : Text -> Script Text
-ruleVote runId = do
+ruleVote = ruleVoteWith waitUntilClosed
+
+ruleVoteWith : (Time -> Script ()) -> Text -> Script Text
+ruleVoteWith closeWindow runId = do
   parties <- listKnownParties
   anchors <- concat <$> forA parties (\p -> query @DemoAnchor p.party)
   let unique = [(cid, anchor) | (cid, anchor) <- anchors, anchor.demoRunId == runId]
@@ -755,7 +758,7 @@ ruleVote runId = do
   votingEvidence 2 witnesses "After casting"
   business 2 ("Tally: " <> show quorumSize <> " YES, 0 NO, " <> show absentSize
     <> " ABSENT. Nothing is decided until the window closes.")
-  waitUntilClosed closesAt
+  closeWindow closesAt
   sleep (seconds 3)
   resolving <- getTime
   debug ("[TIMING] resolve " <> show resolving)

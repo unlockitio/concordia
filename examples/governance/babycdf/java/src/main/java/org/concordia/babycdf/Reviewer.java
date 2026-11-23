@@ -45,6 +45,7 @@ public final class Reviewer {
 
         /** Visible, still-active agendas. Read-only; the default is "discovered none". */
         default List<OpenAgenda> openAgendas() throws Exception { return List.of(); }
+        default List<EventOuterClass.CreatedEvent> agendaEvents() throws Exception { return List.of(); }
     }
 
     public static final class BlockedLedgerGateway implements LedgerRuleGateway {
@@ -138,6 +139,14 @@ public final class Reviewer {
             }
         }
 
+        public List<EventOuterClass.CreatedEvent> agendaEvents() throws IOException {
+            var channel=NettyChannelBuilder.forAddress("127.0.0.1",port).usePlaintext().maxInboundMessageSize(20_000_000).build();
+            try {var state=StateServiceGrpc.newBlockingStub(channel).withDeadlineAfter(15,java.util.concurrent.TimeUnit.SECONDS);long offset=state.getLedgerEnd(StateServiceOuterClass.GetLedgerEndRequest.getDefaultInstance()).getOffset();
+                var request=StateServiceOuterClass.GetActiveContractsRequest.newBuilder().setActiveAtOffset(offset).setEventFormat(TransactionFilterOuterClass.EventFormat.newBuilder().putFiltersByParty(party,agendaFilter()).setVerbose(true)).build();
+                var responses=state.getActiveContracts(request);var result=new ArrayList<EventOuterClass.CreatedEvent>();int count=0,bytes=0;
+                while(responses.hasNext()){var response=responses.next();bytes+=response.getSerializedSize();if(++count>10000||bytes>20_000_000||response.hasIncompleteAssigned()||response.hasIncompleteUnassigned())throw new IOException("incomplete/bounded agenda ACS");if(!response.hasActiveContract())continue;var event=response.getActiveContract().getCreatedEvent();IntakeLedger.verifyActiveEvent(event,IntakeLedger.id(packageId,MODULE,"AgendaProposal"),party);if(!event.getSignatoriesList().equals(List.of(party)))throw new IOException("foreign agenda opener");result.add(event);}return List.copyOf(result);
+            }catch(io.grpc.StatusRuntimeException failed){throw new IOException("agenda ACS unavailable");}finally{channel.shutdownNow();}
+        }
         static TransactionFilterOuterClass.Filters agendaFilter() {
             return TransactionFilterOuterClass.Filters.newBuilder()
                     .addCumulative(TransactionFilterOuterClass.CumulativeFilter.newBuilder()
@@ -417,9 +426,11 @@ public final class Reviewer {
         LedgerRuleGateway gateway = new BlockedLedgerGateway();
         long interval = 0;
         java.nio.file.Path offlineFile = null,offlineRepository=null,stateFile=null;
+        boolean integratedAgenda=false;
         boolean demoMode = false, verbose = AgentFlags.verboseFromEnvironment();
         for (int i = 0; i < args.length; i++) {
-            if ("--interval".equals(args[i]) && i + 1 < args.length)
+            if("--integrated-agenda".equals(args[i]))integratedAgenda=true;
+            else if ("--interval".equals(args[i]) && i + 1 < args.length)
                 interval = AgentPolling.intervalMillis(args[++i]);
             else if ("--offline-pr184-file".equals(args[i]) && i + 1 < args.length)
                 offlineFile = java.nio.file.Path.of(args[++i]);
@@ -435,6 +446,15 @@ public final class Reviewer {
             } else throw new IllegalArgumentException("usage: Reviewer [--interval seconds] [--offline-pr184-file path] [--local-sandbox port party package-id] [--demo] [--verbose|--json]");
         }
         final LedgerRuleGateway ledger = gateway;
+        if(integratedAgenda){
+            if(offlineFile!=null||offlineRepository!=null)throw new IllegalArgumentException("integrated agenda cannot use legacy offline fallback");
+            var evidenceApi=new Advisory.GitHub();evidenceApi.logMode("Reviewer",System.err);var integratedLog=new DemoLog("Reviewer",demoMode,verbose,System.err);integratedLog.banner();
+            try(var supplemental=SupplementalAssessment.runtime("Reviewer",System.err)){
+             var following=new AgendaFollowingReview(evidenceApi,supplemental);var last=new String[]{""};var outputState=new IntegratedReviewOutput(stateFile);
+             AgentPolling.run(interval,()->{try{var result=following.cycle(ledger);String output=Advisory.JSON.writeValueAsString(result);if(!output.equals(last[0])){outputState.publish(result,published->{if(!"IDLE".equals(published.path("status").asText()))System.err.println("Evaluated rule v"+published.path("rule_version").asInt()+" "+published.path("rule_document_sha256").asText());if(integratedLog.enabled()){ReviewerNarration.report(integratedLog,published);if(integratedLog.verbose())System.out.println(output);}else System.out.println(output);if(System.out.checkError()||System.err.checkError())throw new IOException("integrated review output failed");});last[0]=output;}}catch(Exception blocked){String category="Integrated review blocked: invalid or unavailable immutable evidence";if(!category.equals(last[0])){System.err.println(category);last[0]=category;}}},Thread::sleep);
+            }
+            return;
+        }
         if(offlineFile!=null&&offlineRepository!=null)throw new IllegalArgumentException("choose one offline source");
         final Advisory.Api evidence = offlineFile!=null?new OfflineFile(offlineFile):offlineRepository!=null?new Advisory.OfflinePr184(offlineRepository):new Advisory.GitHub();
         final java.nio.file.Path previewPath=stateFile;

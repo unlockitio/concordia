@@ -158,6 +158,7 @@ agent_log_summary() {
 }
 
 run_step() {
+  case "$1" in 3|4|5) echo 'Integrated source rounds are automatic and unvoted; scripted source steps are retired. Nothing was run.' >&2; return 2;; esac
   # Raw logs live under the gitignored build root, never in the repository.
   if [ -z "$RAW_DIR" ]; then
     babycdf_build_root "$HERE/.." || return 2
@@ -208,6 +209,7 @@ run_step() {
 #     log cannot collide with `step-1` or the bootstrap log.
 #   * `all` ignores them entirely.
 run_opt_step() {
+  case "$1" in 2|3|4|5) echo 'Optional source ballot fixtures are retired in integrated mode. Nothing was run.' >&2; return 2;; esac
   if [ -z "$RAW_DIR" ]; then
     babycdf_build_root "$HERE/.." || return 2
     RAW_DIR="$BABYCDF_BUILD_ROOT/demo-logs"
@@ -385,6 +387,9 @@ PY
   step) run_step "${2:-}" ;;
   opt-step) run_opt_step "${2:-}" ;;
   all)
+    echo 'Integrated demo: only the explicit Architecture rule vote runs; source agendas remain unvoted.' >&2
+    run_step 2
+    exit $?
     # A fresh network is required: bootstrap must exist and no later step may
     # have run or been attempted, so `all` can never resume a partial journey.
     if [ ! -f "$STATE/bootstrap.json" ]; then

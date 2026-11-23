@@ -136,8 +136,8 @@ REPO_REL="examples/governance/babycdf/demo/daml/Cap/Examples/BabyCdf/Live.daml"
 # v15 credential-bound source agendas copy immutable snapshots/pins and durable
 # round receipts. Step4 missing delivery is blocked_pin, never illustrative approval.
 # Architecture, RuleRef, seven-member electorate and counting formula stay unchanged.
-SPEC_VERSION='quorum-of-three-core-v15-source-bound-blocked-pin'
-SPEC_DIGEST='934844c634f4276136b016d5be9c2d8374d2df7ab1a377176641b16112a5c411'
+SPEC_VERSION='quorum-of-three-core-v16-injectable-rule-window'
+SPEC_DIGEST='e6b518ace22082b6167889528491e2fb9e28c71e19395bbe44288e868f397ede'
 
 for required in "$LIVE" "$SELECTOR" "$RULE"; do
   if [ ! -f "$required" ]; then
@@ -430,7 +430,7 @@ def check_quorum_numbers(live_path, selector_path, rule_path):
     # the shared selector, never from ballot order.
     if "coreQuorum" not in selector or "coreQuorum : Int -> [Party] -> [Party]" not in selector:
         failures.append("LiveVote.daml must define the shared coreQuorum selector")
-    for step in ("ruleVote", "proposalVote", "milestoneVote"):
+    for step in ("ruleVoteWith closeWindow", "proposalVote", "milestoneVote"):
         if not re.search(r"(?s)^%s runId = do.*?coreQuorum quorumSize state\.core" % step, live, re.M):
             failures.append("%s must select its voters with coreQuorum quorumSize state.core" % step)
     if "coreQuorum belowQuorumSize state.core" not in live:
@@ -520,7 +520,7 @@ def check_quorum_numbers(live_path, selector_path, rule_path):
     # Single round per main step: step 2 must open exactly one agenda. The
     # interleaved second round that used to live there is now optional
     # round 1, reached only through `run-demo.sh opt-step 1`.
-    rule_step = re.search(r'(?s)^ruleVote runId = do.*?^findAnchor', live, re.M)
+    rule_step = re.search(r'(?s)^ruleVoteWith closeWindow runId = do.*?^findAnchor', live, re.M)
     if rule_step is None:
         failures.append("could not isolate ruleVote for the single-round check")
     else:

@@ -45,9 +45,9 @@ case "${AGENT_EVIDENCE_MODE:-}" in
   *) fail 'AGENT_EVIDENCE_MODE must be empty or offline' ;;
 esac
 # File auth selects live evidence; offline is an explicit fallback.
-EVIDENCE_FLAGS='--offline-pr184-file /state/proposal-blob.txt'
-if [ -n "${INTAKE_GITHUB_TOKEN_FILE:-}" ] && [ "${AGENT_EVIDENCE_MODE:-live}" != offline ]; then
-  EVIDENCE_FLAGS=''
+EVIDENCE_FLAGS='--integrated-agenda'
+if [ "${AGENT_EVIDENCE_MODE:-}" = offline ]; then
+  EVIDENCE_FLAGS='--offline-pr184-file /state/proposal-blob.txt'
 fi
 # Shared Canton namespace uses internal port 6865, not host readback port.
 case "${1:-}" in
@@ -58,7 +58,7 @@ case "${1:-}" in
     case "$user" in *-intake) ;; *) fail 'Intake requires dedicated intake user';; esac
     JOURNAL=${INTAKE_JOURNAL:-/journal}
     [ -d "$JOURNAL" ] && [ ! -L "$JOURNAL" ] && [ -w "$JOURNAL" ] || fail 'existing writable Intake journal required'
-    exec java -Djava.util.logging.config.file=/app/classes/logging.properties -cp '/app/classes:/app/lib/*' org.concordia.babycdf.Intake --offline-fixture /state/proposal-blob.txt 6865 "$party" "$package" "$demo_package" "$governor" "$user" "$JOURNAL" --poll "${INTAKE_POLL_ATTEMPTS:-86400}" "${INTAKE_POLL_MILLIS:-1000}" ;;
+    exec java -Djava.util.logging.config.file=/app/classes/logging.properties -cp '/app/classes:/app/lib/*' org.concordia.babycdf.Intake --integrated-demo 6865 "$party" "$package" "$demo_package" "$governor" "$user" "$JOURNAL" "${INTAKE_POLL_ATTEMPTS:-86400}" "${INTAKE_POLL_MILLIS:-1000}" ;;
   reviewer)
     # shellcheck disable=SC2086  # DEMO_FLAGS is a script-controlled literal word list
     exec java -Djava.util.logging.config.file=/app/classes/logging.properties -cp '/app/classes:/app/lib/*' org.concordia.babycdf.Reviewer --local-sandbox 6865 "$party" "$package" $EVIDENCE_FLAGS --interval "$INTERVAL" $DEMO_FLAGS ;;

@@ -11,7 +11,7 @@ import java.util.*;
 import java.util.concurrent.TimeUnit;
 import static org.concordia.babycdf.SourceCatalogueCodec.*;
 
-/** Explicit loopback catalogue writer. Not wired into any scheduler or agenda path. */
+/** Explicit loopback catalogue writer used by the integrated Intake sweep worker. */
 public final class SourceCatalogueLedger implements JavaSourceIngestion.Ledger, AutoCloseable {
     interface Rpc {
         long end() throws IOException;

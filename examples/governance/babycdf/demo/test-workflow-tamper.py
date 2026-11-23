@@ -72,3 +72,9 @@ for name, relative, old, new in [('baseline', '', '', '')] + cases:
     if not expected:
         raise AssertionError(result.stdout)
 print(f'{len(cases) + 1}/{len(cases) + 1} baseline and tamper cases passed; no live files mutated')
+
+# Launcher mode is a source lifecycle boundary, not an implicit offline fallback.
+integrated_entrypoint=(pathlib.Path(__file__).resolve().parent/'compose/agents/entrypoint.sh').read_text()
+assert 'Intake --integrated-demo' in integrated_entrypoint
+assert "EVIDENCE_FLAGS='--integrated-agenda'" in integrated_entrypoint
+assert 'AGENT_EVIDENCE_MODE:-}' in integrated_entrypoint

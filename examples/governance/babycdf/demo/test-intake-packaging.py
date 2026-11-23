@@ -38,7 +38,7 @@ class IntakePackaging(unittest.TestCase):
             self.assertEqual(0,result.returncode,result.stderr)
             args=result.stdout.splitlines()
             self.assertEqual('-Djava.util.logging.config.file=/app/classes/logging.properties',args[0])
-            self.assertEqual(['org.concordia.babycdf.Intake','--offline-fixture','/state/proposal-blob.txt','6865','opener','a'*64,'b'*64,'gov','babycdf-agent-intake',str(root/'journal'),'--poll','86400','1000'],args[3:])
+            self.assertEqual(['org.concordia.babycdf.Intake','--integrated-demo','6865','opener','a'*64,'b'*64,'gov','babycdf-agent-intake',str(root/'journal'),'86400','1000'],args[3:])
             self.assertNotIn('--retry-rejected',args)
             (root/'intake-demo-package').write_text('BAD\n')
             bad=subprocess.run(['sh',str(HERE/'compose/agents/entrypoint.sh'),'intake'],env=env,text=True,capture_output=True)
@@ -87,7 +87,7 @@ class IntakePackaging(unittest.TestCase):
             harness=root/'harness.sh'
             harness.write_text('set -eu\n'+function('run_step')+'\nRAW_DIR=x\nSTATE="$1/state"\nHERE="$2"\ncompose() { return 0; }\nrun_step 3\n')
             result=subprocess.run(['sh',str(harness),str(root),str(HERE)],text=True,capture_output=True)
-            self.assertEqual(2,result.returncode); self.assertIn('not running',result.stderr)
+            self.assertEqual(2,result.returncode); self.assertIn('scripted source steps are retired',result.stderr)
             self.assertFalse((root/'state/step-3.attempted').exists())
             # Invoke real compose helper against fake pinned path and stub docker.
             pinned=root/'compose/.cips/8e36c20e5106014efb8348f749d9535afbc48921/cn-credentials-standard/demo'
@@ -107,8 +107,8 @@ class IntakePackaging(unittest.TestCase):
             harness.write_text('set -eu\n'+runner[summary_start:summary_end]+'\n'+runner[start:end]+'\nRAW_DIR=x\nSTATE="$1"\nHERE="$2"\ncompose() { case "$*" in "ps --status running -q intake") echo running;; "logs --no-color intake") return 2;; *) exit 99;; esac; }\npython3() { echo package-gate-reached; return 2; }\nrun_step 3\n')
             result=subprocess.run(['sh',str(harness),str(root),str(HERE)],text=True,capture_output=True)
             self.assertEqual(2,result.returncode)
-            self.assertIn('summary unavailable (log_read_failed)',result.stdout)
-            self.assertIn('package-gate-reached',result.stdout)
+            self.assertIn('scripted source steps are retired',result.stderr)
+            self.assertNotIn('package-gate-reached',result.stdout)
             self.assertFalse((root/'step-3.attempted').exists())
     def test_live_mode_environment_is_inherited_by_java(self):
         with tempfile.TemporaryDirectory() as tmp:

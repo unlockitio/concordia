@@ -98,3 +98,10 @@ with tempfile.TemporaryDirectory() as tmp:
     for variant in (model, fixture, budget_model, mode_model, authenticated, llm_model, combined):
         assert set(variant['services']) == {'canton','intake','reviewer'}
 print("Compose config names, Intake-only and LLM agent-only file secrets passed")
+
+# Integrated startup has exactly the existing two processes; source rounds add no voter.
+entrypoint=(Path(__file__).resolve().parent/'compose/agents/entrypoint.sh').read_text()
+assert 'Intake --integrated-demo' in entrypoint
+assert "EVIDENCE_FLAGS='--integrated-agenda'" in entrypoint
+assert 'Intake --offline-fixture' not in entrypoint
+assert set(model['services']) == {'canton','intake','reviewer'}
