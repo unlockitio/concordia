@@ -58,6 +58,11 @@ public final class SourceOpenerLedger implements SourceOpenerQueue.Ledger,AutoCl
   return new SourceOpenerQueue.Binding(b.repo(),b.number(),b.kind(),b.credentialCid(),b.version(),b.fingerprint(),b.evidenceDigest(),b.roundId(),b.eventAt(),b.sourceId(),b.pinJson(),"",Long.toString(verified.original()));
  }
  private IntakePlan plan(SourceOpenerQueue.Binding b)throws IOException {return IntakePlan.bound(new IntakeSource("source-"+b.number(),b.kind().equals("proposal")?IntakeSource.AgendaConstructor.Grant:IntakeSource.AgendaConstructor.Milestone,b.kind(),"https://github.com/"+b.repo()+(b.kind().equals("proposal")?"/pull/":"/issues/")+b.number(),b.fingerprint(),IntakeSource.Evidence.CURATED_UNVERIFIED),b.roundId(),agenda(b),source(b));}
+ public List<Long> demoInventory(String kind)throws IOException {
+  if(!Set.of("proposal","milestone").contains(kind))throw new IOException("invalid inventory kind");var selected=new TreeSet<Long>();var seen=new HashSet<Long>();var rows=rpc.active(CREDENTIAL,"SourceObservationCredential");long bytes=0;
+  for(var event:rows){bytes+=event.getSerializedSize();if(seen.size()>=10000||bytes>20_000_000)throw new IOException("bounded opener ACS unavailable");var credential=CanonicalSourceCredential.decode(event,party);var o=credential.observation();if(!seen.add(o.number()))throw new IntegrationStageFailure(IntegrationStageFailure.Stage.credential_decode);if(o.kind()==(kind.equals("proposal")?SourceObservation.Kind.PROPOSAL:SourceObservation.Kind.MILESTONE)&&ConcordiaDemoScope.candidate(ConcordiaDemoScope.REPO,o.kind(),o.number()))selected.add(o.number());}
+  if(selected.size()>50)throw new IntegrationStageFailure(IntegrationStageFailure.Stage.inventory_scope_limit);return List.copyOf(selected);
+ }
  public List<Long> inventory(String kind)throws IOException {
   var numbers=new TreeSet<Long>();for(var e:rpc.active(CREDENTIAL,"SourceObservationCredential")){var o=CanonicalSourceCredential.decode(e,party).observation();if(o.kind()==(kind.equals("proposal")?SourceObservation.Kind.PROPOSAL:SourceObservation.Kind.MILESTONE))numbers.add(o.number());}
   if(numbers.size()>50)throw new IOException("automatic inventory batch bound; reconcile inventory partition");return List.copyOf(numbers);

@@ -169,7 +169,7 @@ public final class Intake {
             if(!discoveryMode(System.getenv()).equals("live"))throw new IllegalArgumentException("integrated demo requires live discovery; use explicit legacy offline CLI for fixtures");
             var pages=liveSourcePages();var collector=SourceEvidenceCollector.configured(System.getenv(),java.time.Clock.systemUTC());
             try(var sources=new SourceCatalogueLedger(port,party,impl,demo,user,sourceJournal(journal));var opener=new SourceOpenerLedger(port,party,impl,demo,governor,user,journal);var queue=new SourceOpenerQueue(journal,opener);var executor=java.util.concurrent.Executors.newSingleThreadExecutor()) {
-                var sweep=new SourceSweepScheduler(new JavaSourceIngestion(sources,pages,System.out::println),System::nanoTime,sourceInterval(System.getenv()));var automatic=new SourceOpenerScheduler(collector,opener,queue,java.time.Clock.systemUTC());
+                var sweep=new SourceSweepScheduler(new JavaSourceIngestion(sources,pages,System.out::println),System::nanoTime,sourceInterval(System.getenv()));var automatic=new SourceOpenerScheduler(collector,opener,queue,java.time.Clock.systemUTC(),SourceOpenerScheduler.callerScope(args[0]));
                 java.util.concurrent.Future<SourceSweepScheduler.TickOutcome> worker=null;
                 var automaticLog=new IntakeLogState();
                 for(int i=0;i<attempts;i++){
@@ -186,7 +186,7 @@ public final class Intake {
             var collector=SourceEvidenceCollector.configured(System.getenv(),java.time.Clock.systemUTC());
             try(var opener=new SourceOpenerLedger(port,party,impl,demo,governor,user,journal)) {
                 try(var queue=new SourceOpenerQueue(journal,opener)) {
-                    var scheduler=new SourceOpenerScheduler(collector,opener,queue,java.time.Clock.systemUTC());
+                    var scheduler=new SourceOpenerScheduler(collector,opener,queue,java.time.Clock.systemUTC(),SourceOpenerScheduler.callerScope(args[0]));
                     int attempts=args.length==11?Integer.parseInt(args[9]):1;long interval=args.length==11?Long.parseLong(args[10]):30000;
                     if(attempts<1||attempts>10000||interval<30000||interval>3600000)throw new IllegalArgumentException("bounded automatic polling required");
                     for(int i=0;i<attempts;i++){System.out.println(scheduler.automaticCycle(amendmentManifest));if(i+1<attempts)Thread.sleep(interval);}

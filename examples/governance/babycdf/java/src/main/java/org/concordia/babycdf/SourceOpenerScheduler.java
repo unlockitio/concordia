@@ -4,10 +4,14 @@ import java.time.*;import java.util.*;import java.io.IOException;
 /** Bounded continuous inventory scheduler, separate from ballots/reviewer/journey. */
 public final class SourceOpenerScheduler {
  private final SourceEvidenceCollector collector;private final SourceOpenerLedger ledger;private final SourceOpenerQueue queue;private final Clock clock;
- public SourceOpenerScheduler(SourceEvidenceCollector collector,SourceOpenerLedger ledger,SourceOpenerQueue queue,Clock clock){this.collector=collector;this.ledger=ledger;this.queue=queue;this.clock=clock;}
+ public enum Scope { GENERIC,STATIC_DEMO }
+ private final Scope scope;
+ public SourceOpenerScheduler(SourceEvidenceCollector collector,SourceOpenerLedger ledger,SourceOpenerQueue queue,Clock clock){this(collector,ledger,queue,clock,Scope.GENERIC);}
+ public SourceOpenerScheduler(SourceEvidenceCollector collector,SourceOpenerLedger ledger,SourceOpenerQueue queue,Clock clock,Scope scope){this.collector=collector;this.ledger=ledger;this.queue=queue;this.clock=clock;this.scope=Objects.requireNonNull(scope);}
+ static Scope callerScope(String command){return switch(command){case "--integrated-demo"->Scope.STATIC_DEMO;case "--automatic-source"->Scope.GENERIC;default->throw new IllegalArgumentException("unknown automatic caller");};}
  public String automaticCycle(java.nio.file.Path manifest)throws IOException {
   for(var c:queue.commitments().entrySet())ledger.restoreCommitment(c.getKey(),c.getValue());
-  var proposals=ledger.inventory("proposal");var milestones=ledger.inventory("milestone");var pins=new HashMap<Long,SourceEvidence.Proposal>();
+  var proposals=scope==Scope.STATIC_DEMO?ledger.demoInventory("proposal"):ledger.inventory("proposal");var milestones=scope==Scope.STATIC_DEMO?ledger.demoInventory("milestone"):ledger.inventory("milestone");var pins=new HashMap<Long,SourceEvidence.Proposal>();
   var ready=new HashMap<Long,SourceEvidenceCollector.Ready>();
   for(long number:proposals){var result=collector.readyProposal(number,clock.instant());var batch=collector.lastProposalBatch(number);if(batch!=null)queue.retainEvidence(batch);if(result.isPresent()){var r=result.get();ready.put(number,r);var json=new com.fasterxml.jackson.databind.ObjectMapper().readTree(r.pinJson());var files=new ArrayList<SourceEvidence.FilePin>();for(var f:json.get(1))files.add(new SourceEvidence.FilePin(f.get(0).asText(),f.get(1).asText(),f.get(2).asText(),f.get(3).asText()));pins.put(number,new SourceEvidence.Proposal(number,json.get(0).asText(),files,true,"ready"));}}
   List<VerifiedAmendment> amendments=List.of();
@@ -15,11 +19,11 @@ public final class SourceOpenerScheduler {
    // Source IDs must be collector-observed comment IDs; arbitrary manifest IDs cannot self-authorize.
    var sourceIds=new HashSet<Long>();for(long number:proposals)sourceIds.addAll(collector.observedSourceIds(number));amendments=VerifiedAmendment.parse(bytes,pins,sourceIds);}
   var scopeJson=new com.fasterxml.jackson.databind.ObjectMapper();
-  ready.entrySet().removeIf(e->{try{return !ConcordiaDemoScope.proposal(e.getKey(),SourceEvidenceCollector.REPO,scopeJson.readTree(e.getValue().pinJson()));}catch(IOException invalid){return true;}});
+  if(scope==Scope.STATIC_DEMO)ready.entrySet().removeIf(e->{try{return !ConcordiaDemoScope.proposal(e.getKey(),SourceEvidenceCollector.REPO,scopeJson.readTree(e.getValue().pinJson()));}catch(IOException invalid){return true;}});
   var amended=amendments.stream().map(VerifiedAmendment::amending).collect(java.util.stream.Collectors.toSet());
   for(var amendment:amendments){if(!ready.containsKey(amendment.amending()))continue;var capability=collector.readyAmendment(amendment,clock.instant());var batch=collector.lastProposalBatch(amendment.amending());if(batch!=null)queue.retainEvidence(batch);if(capability.isPresent()){var binding=ledger.bindAmendment(capability.get(),amendment);queue.commitAmendment(binding.roundId(),ledger.commitment(binding.roundId()));queue.enqueue(capability.get(),binding);}}
   for(var r:ready.values())if(!amended.contains(r.number()))queue.enqueue(r,ledger.bind(r));
-  for(long number:milestones){var collection=collector.collectMilestones(number,clock.instant());queue.retainEvidence(collection.batch());ledger.retainMilestoneEvidence(collection.batch());for(var capability:collection.ready()){var binding=ledger.bind(capability);if(ConcordiaDemoScope.milestone(binding.repo(),Long.parseLong(binding.amendmentOriginal())))queue.enqueue(capability,binding);}}
+  for(long number:milestones){var collection=collector.collectMilestones(number,clock.instant());queue.retainEvidence(collection.batch());ledger.retainMilestoneEvidence(collection.batch());for(var capability:collection.ready()){var binding=ledger.bind(capability);if(scope==Scope.GENERIC||ConcordiaDemoScope.milestone(binding.repo(),Long.parseLong(binding.amendmentOriginal())))queue.enqueue(capability,binding);}}
   return queue.tick();
  }
  public String cycleAmendments(List<VerifiedAmendment> inventory)throws IOException {
