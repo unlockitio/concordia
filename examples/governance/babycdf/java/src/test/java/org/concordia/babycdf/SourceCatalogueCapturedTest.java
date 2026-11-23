@@ -59,7 +59,7 @@ class SourceCatalogueCapturedTest {
  }
  @Test void actualVerboseTransactionAndHistoricalPrestateProveExactBatch()throws Exception {
   var c=capture();assertEquals(92,c.begin());assertEquals(93,c.transaction().getOffset());assertEquals(52,c.transaction().getEventsCount());
-  assertTrue(attest(c,c.transaction()).isPresent());
+  assertThrows(IOException.class,()->attest(c,c.transaction()),"legacy raw-body capture must not be reinterpreted as v2");
  }
  @Test void alteredChoiceArgumentStillFails()throws Exception {
   var c=capture();var tx=c.transaction().toBuilder();var event=tx.getEvents(0).toBuilder();var exercise=event.getExercised().toBuilder();
@@ -67,7 +67,7 @@ class SourceCatalogueCapturedTest {
   for(int i=0;i<record.getFieldsCount();i++)if(record.getFields(i).getLabel().equals("nextToken"))
    record.setFields(i,record.getFields(i).toBuilder().setValue(SourceCatalogueCodec.text("tampered")));
   exercise.setChoiceArgument(ValueOuterClass.Value.newBuilder().setRecord(record));tx.setEvents(0,event.setExercised(exercise));
-  assertTrue(attest(c,tx.build()).isEmpty());
+  assertThrows(IOException.class,()->attest(c,tx.build()));
  }
  @Test void omittedPreviousDigestCannotProveRevision()throws Exception {
   var c=capture();var tx=c.transaction().toBuilder();var event=tx.getEvents(1).toBuilder();var created=event.getCreated().toBuilder();

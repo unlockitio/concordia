@@ -8,7 +8,9 @@ import java.util.function.Consumer;
 /** Ledger-authoritative, one atomic batch per cycle. No agenda operations. */
 public final class JavaSourceIngestion {
     public record Checkpoint(String cid,long generation,String token,boolean inProgress) { }
-    public record Stored(SourceObservation observation,long version) { }
+    public record Stored(SourceObservation observation,long version,String fingerprint) {
+        public Stored(SourceObservation observation,long version) { this(observation,version,observation.fingerprint()); }
+    }
     public record Page(List<SourceObservation> items,String nextToken,boolean complete) {
         public Page {
             items=List.copyOf(items);
@@ -75,7 +77,7 @@ public final class JavaSourceIngestion {
         StringBuilder identity=new StringBuilder(checkpoint.cid()).append('|').append(checkpoint.generation())
                 .append('|').append(page.nextToken()).append('|').append(page.complete());
         page.items().forEach(o->identity.append('|').append(o.fingerprint()));
-        Batch batch=new Batch(checkpoint,page,"babycdf-source-"+SourceObservation.hash(identity.toString()));
+        Batch batch=new Batch(checkpoint,page,"babycdf-source-v2-"+SourceObservation.hash(identity.toString()));
         // Catch a competing writer before submit; a ledger consuming choice remains the final concurrency guard.
         if(!ledger.checkpoint().equals(checkpoint)) throw new IOException("stale source checkpoint; reread next cycle");
         uncertain=batch;

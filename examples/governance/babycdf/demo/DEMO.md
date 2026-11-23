@@ -12,12 +12,12 @@ OpenAgenda bridge per step 3/4; Reviewer have CanReadAs opener only.
 The unauthenticated sandbox API is not an enforced security boundary. Main `all`
 ends at step 5; optional rounds 1–5 remain separate. Intake defaults to bounded
 token-authenticated GitHub pagination (first provision the explicit file secret:
-[GITHUB-TOKEN.md](GITHUB-TOKEN.md)) and SourceItem catalogue ingestion in a separate
+[GITHUB-TOKEN.md](GITHUB-TOKEN.md)) and SourceObservationCredential catalogue ingestion in a separate
 worker; agenda polling continues independently. Source attempts default to 30
 seconds, configurable with `INTAKE_SOURCE_INTERVAL_MILLIS` (30000..3600000).
 Only explicit `INTAKE_DISCOVERY_MODE=fixture` selects synthetic offline inventory
 and starts no source worker. No synthetic fallback or extra voting topics exist.
-Mutation lines follow transaction proof. Steps 3/4 separately query SourceItem
+Mutation lines follow transaction proof. Steps 3/4 separately query SourceObservationCredential
 active contracts as opener before opening their curated agenda: total, distinct
 (opener, repository, number) keys, SourceProposal and SourceMilestone counts.
 Zero is valid; sync completeness is unknown, and voting does not wait for a sweep.

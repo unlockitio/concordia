@@ -36,7 +36,7 @@ cases = [
      '  pure (length items, Set.size keys, proposals, milestones)',
      '  pure (300, 300, 200, 100)'),
     ('catalogue-query-removed', live,
-     '  rows <- query @Cap.Examples.BabyCdf.SourceCatalogue.SourceItem opener',
+     '  rows <- query @Cap.Examples.BabyCdf.SourceCatalogue.SourceObservationCredential opener',
      '  let rows = []'),
     ('weakened-count', rule, 'atLeastPresent 3', 'atLeastPresent 2'),
     ('reader-member-read', live, 'let required = [CanReadAs contract.opener]',

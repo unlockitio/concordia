@@ -87,7 +87,7 @@
       }
     },
     {
-      "name": "SourceItem",
+      "name": "SourceObservationCredential",
       "request": {
         "method": "POST",
         "header": [
@@ -99,7 +99,7 @@
         "url": "{{baseUrl}}/v2/state/active-contracts",
         "body": {
           "mode": "raw",
-          "raw": "{\n  \"activeAtOffset\": {{offset}},\n  \"eventFormat\": {\n    \"filtersForAnyParty\": {\n      \"cumulative\": [\n        {\n          \"identifierFilter\": {\n            \"TemplateFilter\": {\n              \"value\": {\n                \"templateId\": \"#cap-example-babycdf-demo:Cap.Examples.BabyCdf.SourceCatalogue:SourceItem\"\n              }\n            }\n          }\n        }\n      ]\n    },\n    \"verbose\": true\n  }\n}",
+          "raw": "{\n  \"activeAtOffset\": {{offset}},\n  \"eventFormat\": {\n    \"filtersForAnyParty\": {\n      \"cumulative\": [\n        {\n          \"identifierFilter\": {\n            \"TemplateFilter\": {\n              \"value\": {\n                \"templateId\": \"#cap-example-babycdf:Cap.Examples.BabyCdf.SourceObservationCredential:SourceObservationCredential\"\n              }\n            }\n          }\n        }\n      ]\n    },\n    \"verbose\": true\n  }\n}",
           "options": {
             "raw": {
               "language": "json"

@@ -12,13 +12,14 @@ import java.io.IOException;
 class SourceCatalogueLedgerTest {
     @TempDir Path directory;
     static final String PKG="a".repeat(64), PARTY="opener";
-    static ValueOuterClass.Identifier id(String entity) {return IntakeLedger.id(PKG,MODULE,entity);}
+    static ValueOuterClass.Identifier id(String entity) {return IntakeLedger.id(PKG,
+            entity.equals("SourceObservationCredential")?"Cap.Examples.BabyCdf.SourceObservationCredential":MODULE,entity);}
     static EventOuterClass.CreatedEvent created(String cid,String entity,ValueOuterClass.Record record) {
         return EventOuterClass.CreatedEvent.newBuilder().setContractId(cid).setTemplateId(id(entity))
                 .setCreateArguments(record).addSignatories(PARTY).addWitnessParties(PARTY).build();
     }
     static ValueOuterClass.Record checkpoint(long gen,String token,boolean progress,long full,String fingerprint,long high) {
-        return record("opener",ValueOuterClass.Value.newBuilder().setParty(PARTY).build(),"repo",text(REPOSITORY),
+        return record("opener",ValueOuterClass.Value.newBuilder().setParty(PARTY).build(),"repo",text(REPOSITORY),"schema",text(SourceObservationCanonical.SCHEME),
                 "highWater",integer(high),"generation",integer(gen),"phase",constructor("FullSweep"),"pageToken",text(token),
                 "inProgress",bool(progress),"completedFullGeneration",integer(full),"overlapsSinceFull",integer(0),
                 "scanFingerprint",text(fingerprint)).getRecord();
@@ -32,8 +33,10 @@ class SourceCatalogueLedgerTest {
         public Iterator<StateServiceOuterClass.GetActiveContractsResponse> active(StateServiceOuterClass.GetActiveContractsRequest r) {
             assertTrue(r.getActiveAtOffset()<=offset);assertTrue(r.getEventFormat().getFiltersByPartyMap().containsKey(PARTY));
             for(var f:r.getEventFormat().getFiltersByPartyOrThrow(PARTY).getCumulativeList()) {
-                assertEquals(IntakeLedger.DEMO_PACKAGE_NAME,f.getTemplateFilter().getTemplateId().getPackageId());
-                assertEquals(MODULE,f.getTemplateFilter().getTemplateId().getModuleName());
+                assertEquals(f.getTemplateFilter().getTemplateId().getEntityName().equals("SourceObservationCredential")
+                        ?IntakeLedger.IMPL_PACKAGE_NAME:IntakeLedger.DEMO_PACKAGE_NAME,f.getTemplateFilter().getTemplateId().getPackageId());
+                assertEquals(f.getTemplateFilter().getTemplateId().getEntityName().equals("SourceObservationCredential")
+                        ?"Cap.Examples.BabyCdf.SourceObservationCredential":MODULE,f.getTemplateFilter().getTemplateId().getModuleName());
             }
             var rows=r.getActiveAtOffset()==offset?active:snapshots.get(r.getActiveAtOffset());
             if(rows==null) throw new IllegalStateException("snapshot absent");
@@ -44,7 +47,8 @@ class SourceCatalogueLedgerTest {
         public Iterator<UpdateServiceOuterClass.GetUpdatesResponse> updates(UpdateServiceOuterClass.GetUpdatesRequest r) {
             updateCalls++;assertTrue(r.hasEndInclusive());
             for(var f:r.getUpdateFormat().getIncludeTransactions().getEventFormat().getFiltersByPartyOrThrow(PARTY).getCumulativeList())
-                assertEquals(IntakeLedger.DEMO_PACKAGE_NAME,f.getTemplateFilter().getTemplateId().getPackageId());
+                assertEquals(f.getTemplateFilter().getTemplateId().getEntityName().equals("SourceObservationCredential")
+                        ?IntakeLedger.IMPL_PACKAGE_NAME:IntakeLedger.DEMO_PACKAGE_NAME,f.getTemplateFilter().getTemplateId().getPackageId());
             return history.stream().filter(t->t.getOffset()>r.getBeginExclusive() && t.getOffset()<=r.getEndInclusive())
                     .map(t->UpdateServiceOuterClass.GetUpdatesResponse.newBuilder().setTransaction(t).build()).iterator();
         }
@@ -71,7 +75,7 @@ class SourceCatalogueLedgerTest {
                 for(var o:observations) {
                     String digest=SourceCatalogueDigest.digest(o.getRecord());digests.add(SourceCatalogueDigest.text(digest));
                     high=Math.max(high,IntakeLedger.number(o.getRecord(),"number"));
-                    var item=created("item-"+high,"SourceItem",record("opener",ValueOuterClass.Value.newBuilder().setParty(PARTY).build(),
+                    var item=created("item-"+high,"SourceObservationCredential",record("opener",ValueOuterClass.Value.newBuilder().setParty(PARTY).build(),
                             "repo",text(REPOSITORY),"observation",o,"fingerprint",text(digest),"version",integer(1),
                             "previousDigest",ValueOuterClass.Value.newBuilder().setOptional(ValueOuterClass.Optional.getDefaultInstance()).build()).getRecord());
                     active.add(item);tx.addEvents(EventOuterClass.Event.newBuilder().setCreated(item));
@@ -112,7 +116,7 @@ class SourceCatalogueLedgerTest {
     @Test void lostResponseProofAndRestartNeverSendsTwice() throws Exception {
         var server=new Server();var ledger=adapter(server);var cp=ledger.checkpoint();server.lose=true;
         var batch=new JavaSourceIngestion.Batch(cp,new JavaSourceIngestion.Page(List.of(SourceCatalogueCodecTest.sample()),"next",false),
-                "babycdf-source-"+"b".repeat(64));
+                "babycdf-source-v2-"+"b".repeat(64));
         assertThrows(IOException.class,()->ledger.commit(batch));assertTrue(ledger.proof(batch).isPresent());
         var restarted=adapter(server);assertThrows(IOException.class,()->restarted.commit(batch));assertEquals(2,server.sends);
         assertTrue(restarted.proof(batch).isPresent());
@@ -121,7 +125,7 @@ class SourceCatalogueLedgerTest {
     @Test void authoritativePrestateMismatchAndWorkflowForgeryCannotProve() throws Exception {
         var server=new Server();var ledger=adapter(server);var cp=ledger.checkpoint();
         var batch=new JavaSourceIngestion.Batch(cp,new JavaSourceIngestion.Page(List.of(SourceCatalogueCodecTest.sample()),"",true),
-                "babycdf-source-"+"d".repeat(64));
+                "babycdf-source-v2-"+"d".repeat(64));
         ledger.commit(batch);
         server.history.set(1,server.history.get(1).toBuilder().setWorkflowId("forged-not-prestate").build());
         assertTrue(ledger.proof(batch).isPresent());
@@ -133,31 +137,32 @@ class SourceCatalogueLedgerTest {
         var ledger=adapter(server);
         assertThrows(IOException.class,()->ledger.items(Set.of(7L)));
         var batch=new JavaSourceIngestion.Batch(new JavaSourceIngestion.Checkpoint("initial",0,"",false),
-                new JavaSourceIngestion.Page(List.of(),"",true),"babycdf-source-"+"e".repeat(64));
+                new JavaSourceIngestion.Page(List.of(),"",true),"babycdf-source-v2-"+"e".repeat(64));
         assertThrows(JavaSourceIngestion.PreTransmission.class,()->ledger.commit(batch));assertEquals(0,server.sends);
     }
     @Test void oversizedIntentHasNoMarkerOrRpc() throws Exception {
         var server=new Server();var ledger=adapter(server);var cp=ledger.checkpoint();var sample=SourceCatalogueCodecTest.sample();
         var observations=new ArrayList<SourceObservation>();
         for(int i=1;i<=50;i++) observations.add(new SourceObservation(i,SourceObservation.Kind.PROPOSAL,
-                "https://github.com/canton-foundation/canton-dev-fund/pull/"+i,"Title","界".repeat(32768),"open",
+                "https://github.com/canton-foundation/canton-dev-fund/pull/"+i,"Title",SourceObservation.hash("界".repeat(32768)),"open",
                 sample.updatedAt(),sample.observedAt(),null,"",false,SourceObservation.hash("x"),false));
-        String command="babycdf-source-"+"f".repeat(64);
-        assertThrows(JavaSourceIngestion.PreTransmission.class,()->ledger.commit(new JavaSourceIngestion.Batch(cp,
-                new JavaSourceIngestion.Page(observations,"",true),command)));
-        assertEquals(1,server.sends);assertFalse(java.nio.file.Files.exists(directory.resolve(command+".intent")));
+        String command="babycdf-source-v2-"+"f".repeat(64);
+        ledger.commit(new JavaSourceIngestion.Batch(cp,new JavaSourceIngestion.Page(observations,"",true),command));
+        assertEquals(2,server.sends);
+        assertTrue(server.last.getSerializedSize()<100000);
+        assertFalse(new String(java.nio.file.Files.readAllBytes(directory.resolve(command+".intent")),java.nio.charset.StandardCharsets.UTF_8).contains("界"));
     }
     @Test void confirmedRestartSkipsHistoryButReceiptNeverProvesEffects() throws Exception {
         var server=new Server();var ledger=adapter(server);var cp=ledger.checkpoint();
         var batch=new JavaSourceIngestion.Batch(cp,new JavaSourceIngestion.Page(List.of(SourceCatalogueCodecTest.sample()),"",true),
-                "babycdf-source-"+"1".repeat(64));
+                "babycdf-source-v2-"+"1".repeat(64));
         ledger.commit(batch);assertTrue(ledger.proof(batch).isPresent());int calls=server.updateCalls;
         assertEquals(1,adapter(server).checkpoint().generation());assertEquals(calls,server.updateCalls);
         server.history.clear();assertTrue(adapter(server).proof(batch).isEmpty());
     }
     @Test void malformedAndSymlinkReceiptsFailClosed() throws Exception {
         var server=new Server();var ledger=adapter(server);var cp=ledger.checkpoint();
-        String command="babycdf-source-"+"2".repeat(64);
+        String command="babycdf-source-v2-"+"2".repeat(64);
         var batch=new JavaSourceIngestion.Batch(cp,new JavaSourceIngestion.Page(List.of(),"",true),command);
         ledger.commit(batch);var path=directory.resolve(command+".receipt");
         java.nio.file.Files.writeString(path,"CONFIRMED|wrong|3|update");
@@ -169,7 +174,7 @@ class SourceCatalogueLedgerTest {
     @Test void postCheckpointEveryFieldMutationCannotProve() throws Exception {
         var server=new Server();var ledger=adapter(server);var cp=ledger.checkpoint();
         var batch=new JavaSourceIngestion.Batch(cp,new JavaSourceIngestion.Page(List.of(SourceCatalogueCodecTest.sample()),"",true),
-                "babycdf-source-"+"3".repeat(64));
+                "babycdf-source-v2-"+"3".repeat(64));
         ledger.commit(batch);var original=server.history.get(1);
         int checkpointIndex=-1;
         for(int i=0;i<original.getEventsCount();i++) if(original.getEvents(i).hasCreated()
@@ -193,14 +198,14 @@ class SourceCatalogueLedgerTest {
             return super.submit(r);
         }};
         var ledger=adapter(server);var cp=ledger.checkpoint();
-        var batch=new JavaSourceIngestion.Batch(cp,new JavaSourceIngestion.Page(List.of(),"",true),"babycdf-source-"+"4".repeat(64));
+        var batch=new JavaSourceIngestion.Batch(cp,new JavaSourceIngestion.Page(List.of(),"",true),"babycdf-source-v2-"+"4".repeat(64));
         assertThrows(IOException.class,()->ledger.commit(batch));assertTrue(ledger.proof(batch).isEmpty());
         assertThrows(IOException.class,()->adapter(server).checkpoint());assertEquals(2,server.sends);
     }
     @Test void missingUnexpectedAndWrongVersionEffectsCannotProve() throws Exception {
         var server=new Server();var ledger=adapter(server);var cp=ledger.checkpoint();
         var batch=new JavaSourceIngestion.Batch(cp,new JavaSourceIngestion.Page(List.of(SourceCatalogueCodecTest.sample()),"",true),
-                "babycdf-source-"+"5".repeat(64));ledger.commit(batch);var tx=server.history.get(1);
+                "babycdf-source-v2-"+"5".repeat(64));ledger.commit(batch);var tx=server.history.get(1);
         var item=tx.getEvents(0).getCreated();
         server.history.set(1,tx.toBuilder().removeEvents(0).build());assertTrue(ledger.proof(batch).isEmpty());
         server.history.set(1,tx.toBuilder().addEvents(tx.getEvents(0)).build());
@@ -213,7 +218,7 @@ class SourceCatalogueLedgerTest {
     }
     @Test void transactionActorPackageAndArgumentsMismatchCannotProve() throws Exception {
         var server=new Server();var ledger=adapter(server);var cp=ledger.checkpoint();
-        var batch=new JavaSourceIngestion.Batch(cp,new JavaSourceIngestion.Page(List.of(),"",true),"babycdf-source-"+"6".repeat(64));
+        var batch=new JavaSourceIngestion.Batch(cp,new JavaSourceIngestion.Page(List.of(),"",true),"babycdf-source-v2-"+"6".repeat(64));
         ledger.commit(batch);var tx=server.history.get(1);int index=tx.getEventsCount()-1;var exercise=tx.getEvents(index).getExercised();
         for(var wrong:List.of(exercise.toBuilder().clearActingParties().addActingParties("other").build(),
                 exercise.toBuilder().setTemplateId(IntakeLedger.id("b".repeat(64),MODULE,"SourceCheckpoint")).build(),
@@ -226,7 +231,7 @@ class SourceCatalogueLedgerTest {
     @Test void staleReplicaNeverSubmitsAndPrunedHistoryFailsChecked() throws Exception {
         var server=new Server();var first=adapter(server);var second=adapter(server);var cp=first.checkpoint();
         assertEquals(cp,second.checkpoint());
-        var batch=new JavaSourceIngestion.Batch(cp,new JavaSourceIngestion.Page(List.of(),"",true),"babycdf-source-"+"7".repeat(64));
+        var batch=new JavaSourceIngestion.Batch(cp,new JavaSourceIngestion.Page(List.of(),"",true),"babycdf-source-v2-"+"7".repeat(64));
         first.commit(batch);
         assertThrows(JavaSourceIngestion.PreTransmission.class,()->second.commit(batch));assertEquals(2,server.sends);
         server.snapshots.clear();
@@ -237,7 +242,7 @@ class SourceCatalogueLedgerTest {
     @Test void rejectedBatchDoesNotAdvanceAndRestartDoesNotReplay() throws Exception {
         var server=new Server();var ledger=adapter(server);var cp=ledger.checkpoint();server.reject=true;
         var batch=new JavaSourceIngestion.Batch(cp,new JavaSourceIngestion.Page(List.of(SourceCatalogueCodecTest.sample()),"",true),
-                "babycdf-source-"+"c".repeat(64));
+                "babycdf-source-v2-"+"c".repeat(64));
         assertThrows(IOException.class,()->ledger.commit(batch));assertThrows(IOException.class,ledger::checkpoint);
         assertEquals("initial",server.active.getFirst().getContractId());assertTrue(ledger.items(Set.of(7L)).isEmpty());
         assertThrows(IOException.class,()->adapter(server).commit(batch));assertEquals(2,server.sends);assertTrue(ledger.proof(batch).isEmpty());

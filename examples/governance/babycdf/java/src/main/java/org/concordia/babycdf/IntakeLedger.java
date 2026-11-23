@@ -57,7 +57,7 @@ public final class IntakeLedger implements Intake.Transport, AutoCloseable {
     }
     /** Source adapter uses the same exclusive durability primitive, not intake retry policy. */
     static void recordSourceMarker(java.nio.file.Path journal,String name,byte[] payload) throws IOException {
-        if(!name.matches("babycdf-source-[0-9a-f]{64}[.](intent|receipt)"))
+        if(!name.matches("babycdf-source-v2-[0-9a-f]{64}[.](intent|receipt)"))
             throw new IOException("BLOCKED: invalid source journal marker");
         persist(journal,name,payload);
     }

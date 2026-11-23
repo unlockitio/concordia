@@ -20,6 +20,15 @@ public final class SourceCatalogueLedger implements JavaSourceIngestion.Ledger, 
         Iterator<UpdateServiceOuterClass.GetUpdatesResponse> updates(UpdateServiceOuterClass.GetUpdatesRequest request) throws IOException;
     }
     private final String party,pkg,user;
+    private String credentialPackage;
+    public SourceCatalogueLedger(int port,String opener,String implPackage,String demoPackage,String user,Path journal) {
+        this(opener,demoPackage,user,journal,connectExplicit(port,implPackage));
+        credentialPackage=implPackage;
+    }
+    private static ManagedChannel connectExplicit(int port,String implPackage) {
+        if(implPackage==null || !implPackage.matches("[0-9a-f]{64}")) throw new IllegalArgumentException("explicit credential package required");
+        return connect(port);
+    }
     private final Path journal;
     private final Rpc rpc;
     private final ManagedChannel channel;
@@ -27,9 +36,6 @@ public final class SourceCatalogueLedger implements JavaSourceIngestion.Ledger, 
     record State(String cid,ValueOuterClass.Record record,long high,long generation,String phase,String token,
                  boolean progress,long full,long overlaps,String fingerprint) {
         JavaSourceIngestion.Checkpoint checkpoint() {return new JavaSourceIngestion.Checkpoint(cid,generation,token,progress);}
-    }
-    public SourceCatalogueLedger(int port,String opener,String demoPackage,String user,Path journal) {
-        this(opener,demoPackage,user,journal,connect(port));
     }
     private static ManagedChannel connect(int port) {
         if(port<1 || port>65535) throw new IllegalArgumentException("invalid catalogue port");
@@ -52,19 +58,22 @@ public final class SourceCatalogueLedger implements JavaSourceIngestion.Ledger, 
         if(party==null || party.isBlank() || party.chars().anyMatch(Character::isWhitespace)
                 || pkg==null || !pkg.matches("[0-9a-f]{64}") || user==null || user.isBlank())
             throw new IllegalArgumentException("explicit catalogue opener/package/user required");
-        this.party=party;this.pkg=pkg;this.user=user;this.journal=IntakeLedger.validateJournal(journal);
+        this.party=party;this.pkg=pkg;this.credentialPackage=pkg;this.user=user;this.journal=IntakeLedger.validateJournal(journal);
         this.rpc=Objects.requireNonNull(rpc);this.channel=channel;
     }
-    private ValueOuterClass.Identifier id(String entity) {return IntakeLedger.id(pkg,MODULE,entity);}
+    private ValueOuterClass.Identifier id(String entity) {
+        return IntakeLedger.id(entity.equals("SourceObservationCredential")?credentialPackage:pkg,
+                entity.equals("SourceObservationCredential")?"Cap.Examples.BabyCdf.SourceObservationCredential":MODULE,entity);
+    }
     private TransactionFilterOuterClass.EventFormat format(String... entities) {
         var filter=TransactionFilterOuterClass.Filters.newBuilder();
         for(String name:entities) filter.addCumulative(
                 TransactionFilterOuterClass.CumulativeFilter.newBuilder().setTemplateFilter(
-                        TransactionFilterOuterClass.TemplateFilter.newBuilder().setTemplateId(IntakeLedger.id(IntakeLedger.DEMO_PACKAGE_NAME,MODULE,name))));
+                        TransactionFilterOuterClass.TemplateFilter.newBuilder().setTemplateId(IntakeLedger.id(name.equals("SourceObservationCredential")?IntakeLedger.IMPL_PACKAGE_NAME:IntakeLedger.DEMO_PACKAGE_NAME, name.equals("SourceObservationCredential")?"Cap.Examples.BabyCdf.SourceObservationCredential":MODULE,name))));
         return TransactionFilterOuterClass.EventFormat.newBuilder().putFiltersByParty(party,filter.build()).setVerbose(true).build();
     }
     private TransactionFilterOuterClass.TransactionFormat transactions() {
-        return TransactionFilterOuterClass.TransactionFormat.newBuilder().setEventFormat(format("SourceCheckpoint","SourceItem"))
+        return TransactionFilterOuterClass.TransactionFormat.newBuilder().setEventFormat(format("SourceCheckpoint","SourceObservationCredential"))
                 .setTransactionShape(TransactionFilterOuterClass.TransactionShape.TRANSACTION_SHAPE_LEDGER_EFFECTS).build();
     }
     private void identity(EventOuterClass.CreatedEvent event,String entity) throws IOException {
@@ -97,8 +106,9 @@ public final class SourceCatalogueLedger implements JavaSourceIngestion.Ledger, 
     private State state(EventOuterClass.CreatedEvent event) throws IOException {
         identity(event,"SourceCheckpoint");
         var r=event.getCreateArguments();
-        fields(r,Set.of("opener","repo","highWater","generation","phase","pageToken","inProgress",
+        fields(r,Set.of("opener","repo","schema","highWater","generation","phase","pageToken","inProgress",
                 "completedFullGeneration","overlapsSinceFull","scanFingerprint"));
+        if(!IntakeLedger.text(r,"schema").equals(SourceObservationCanonical.SCHEME)) throw new IOException("legacy source checkpoint requires explicit migration");
         long high=IntakeLedger.number(r,"highWater"),gen=IntakeLedger.number(r,"generation"),full=IntakeLedger.number(r,"completedFullGeneration"),
                 overlaps=IntakeLedger.number(r,"overlapsSinceFull");
         String phase=constructor(IntakeLedger.field(r,"phase")),token=IntakeLedger.text(r,"pageToken"),fingerprint=IntakeLedger.text(r,"scanFingerprint");
@@ -135,11 +145,15 @@ public final class SourceCatalogueLedger implements JavaSourceIngestion.Ledger, 
         try {return rpc.end();} catch(io.grpc.StatusRuntimeException e) {throw new IOException("catalogue ledger end unavailable");}
     }
     private Path marker(String command,String suffix) throws IOException {
-        if(!command.matches("babycdf-source-[0-9a-f]{64}")) throw new IOException("invalid catalogue command identity");
+        if(!command.matches("babycdf-source-v2-[0-9a-f]{64}")) throw new IOException("invalid catalogue command identity");
         return journal.resolve(command+suffix);
     }
     private void reconcilePending() throws IOException {
-        try(var paths=Files.newDirectoryStream(journal,"babycdf-source-*.intent")) {
+        try(var legacy=Files.newDirectoryStream(journal,"babycdf-source-*.intent")) {
+            for(Path path:legacy) if(!path.getFileName().toString().startsWith("babycdf-source-v2-"))
+                throw new IOException("legacy source intent requires explicit reconciliation; no replay");
+        }
+        try(var paths=Files.newDirectoryStream(journal,"babycdf-source-v2-*.intent")) {
             int count=0;
             for(Path path:paths) {
                 if(++count>10000) throw new IOException("source journal reconciliation bound exceeded");
@@ -148,7 +162,18 @@ public final class SourceCatalogueLedger implements JavaSourceIngestion.Ledger, 
                 var request=CommandServiceOuterClass.SubmitAndWaitForTransactionRequest.parseFrom(Arrays.copyOfRange(bytes,8,bytes.length));
                 var commands=request.getCommands();
                 if(commands.getCommandsCount()!=1) throw new IOException("invalid source intent command count");
-                if(commands.getCommands(0).hasCreate()) continue;
+                if(!path.getFileName().toString().equals(commands.getCommandId()+".intent")) throw new IOException("source intent filename mismatch");
+                if(commands.getCommands(0).hasCreate()) {
+                    var create=commands.getCommands(0).getCreate();
+                    if(!create.getTemplateId().equals(id("SourceCheckpoint"))
+                            || !IntakeLedger.text(create.getCreateArguments(),"schema").equals(SourceObservationCanonical.SCHEME))
+                        throw new IOException("legacy source creation schema; no replay");
+                    continue;
+                }
+                var pending=commands.getCommands(0).getExercise();
+                if(!pending.getTemplateId().equals(id("SourceCheckpoint")) || !pending.getChoice().equals("CommitBatch"))
+                    throw new IOException("unsupported source intent command schema");
+                canonicalArgument(pending.getChoiceArgument()); // Validate v2 even when a terminal receipt exists.
                 Path receipt=marker(commands.getCommandId(),".receipt");
                 if(Files.exists(receipt,LinkOption.NOFOLLOW_LINKS)) {
                     String terminal=new String(IntakeLedger.readMarker(receipt),StandardCharsets.US_ASCII);
@@ -175,8 +200,8 @@ public final class SourceCatalogueLedger implements JavaSourceIngestion.Ledger, 
         reconcilePending();
         try {
             var found=checkpoint(active(end(),"SourceCheckpoint")); if(found.isPresent()) return found.get().checkpoint();
-            String command="babycdf-source-"+SourceObservation.hash("create|"+pkg+"|"+party+"|"+REPOSITORY);
-            var initial=record("opener",ValueOuterClass.Value.newBuilder().setParty(party).build(),"repo",text(REPOSITORY),
+            String command="babycdf-source-v2-"+SourceObservation.hash("create|"+pkg+"|"+party+"|"+REPOSITORY);
+            var initial=record("opener",ValueOuterClass.Value.newBuilder().setParty(party).build(),"repo",text(REPOSITORY),"schema",text(SourceObservationCanonical.SCHEME),
                     "highWater",integer(0),"generation",integer(0),"phase",constructor("FullSweep"),"pageToken",text(""),
                     "inProgress",bool(false),"completedFullGeneration",integer(0),"overlapsSinceFull",integer(0),"scanFingerprint",text(""));
             var create=CommandsOuterClass.Command.newBuilder().setCreate(CommandsOuterClass.CreateCommand.newBuilder()
@@ -203,8 +228,8 @@ public final class SourceCatalogueLedger implements JavaSourceIngestion.Ledger, 
     }
     private Map<Long,JavaSourceIngestion.Stored> stored(List<EventOuterClass.CreatedEvent> rows) throws IOException {
         var result=new HashMap<Long,JavaSourceIngestion.Stored>();
-        for(var event:rows) if(event.getTemplateId().equals(id("SourceItem"))) {
-            identity(event,"SourceItem");var r=event.getCreateArguments();
+        for(var event:rows) if(event.getTemplateId().equals(id("SourceObservationCredential"))) {
+            identity(event,"SourceObservationCredential");var r=event.getCreateArguments();
             // Canton 3.4+ normal form omits trailing Optional None fields.
             // Only this declared trailing optional may be synthesized; all other fields stay mandatory.
             if(r.getFieldsList().stream().noneMatch(f->f.getLabel().equals("previousDigest")))
@@ -216,18 +241,18 @@ public final class SourceCatalogueLedger implements JavaSourceIngestion.Ledger, 
             var observation=observation(value.getRecord());long version=IntakeLedger.number(r,"version");
             var previous=IntakeLedger.field(r,"previousDigest");
             if(version<1 || !previous.hasOptional() || (version==1)==previous.getOptional().hasValue()
-                    || !SourceCatalogueDigest.digest(value.getRecord()).equals(IntakeLedger.text(r,"fingerprint")))
+                    || !SourceCatalogueDigest.digest(value.getRecord(),version,previous.getOptional().hasValue()?text(previous.getOptional().getValue()):null).equals(IntakeLedger.text(r,"fingerprint")))
                 throw new IOException("source item content/version mismatch");
             if(previous.getOptional().hasValue() && !text(previous.getOptional().getValue()).matches("[0-9a-f]{64}"))
                 throw new IOException("invalid previous source digest");
-            if(result.put(observation.number(),new JavaSourceIngestion.Stored(observation,version))!=null)
+            if(result.put(observation.number(),new JavaSourceIngestion.Stored(observation,version,IntakeLedger.text(r,"fingerprint")))!=null)
                 throw new IOException("duplicate source number key");
         }
         return result;
     }
     public Map<Long,JavaSourceIngestion.Stored> items(Set<Long> numbers) throws IOException {
         if(numbers.size()>50) throw new IOException("source lookup exceeds batch bound");
-        var all=stored(active(end(),"SourceItem"));all.keySet().retainAll(numbers);return Map.copyOf(all);
+        var all=stored(active(end(),"SourceObservationCredential"));all.keySet().retainAll(numbers);return Map.copyOf(all);
     }
     private CommandServiceOuterClass.SubmitAndWaitForTransactionRequest batchRequest(JavaSourceIngestion.Batch batch,State before) throws IOException {
         String phase=before.progress?before.phase:"FullSweep"; // Full sweeps are always valid; no hidden overlap cursor policy.
@@ -389,7 +414,7 @@ public final class SourceCatalogueLedger implements JavaSourceIngestion.Ledger, 
                 || (complete && phase.equals("FullSweep") && (state.full!=generation || state.overlaps!=0))) return Optional.empty();
         // Verify created item effects from this transaction, never current ACS (items may since be overwritten).
         var effects=stored(creates);
-        var preItemsRows=active(proofBegin,"SourceItem");
+        var preItemsRows=active(proofBegin,"SourceObservationCredential");
         var preItems=stored(preItemsRows);
         int required=0;
         for(var observation:observations) {
@@ -402,13 +427,15 @@ public final class SourceCatalogueLedger implements JavaSourceIngestion.Ledger, 
             }
             required++;
             if(effect==null || !effect.observation().equals(observation)
-                    || effect.version()!=(old==null?1:old.version()+1)) return Optional.empty();
+                    || effect.version()!=(old==null?1:old.version()+1)
+                    || !effect.fingerprint().equals(SourceCatalogueDigest.digest(observation(observation).getRecord(),
+                        old==null?1:old.version()+1,old==null?null:old.fingerprint()))) return Optional.empty();
             if(old!=null) {
-                var created=creates.stream().filter(e->e.getTemplateId().equals(id("SourceItem")))
+                var created=creates.stream().filter(e->e.getTemplateId().equals(id("SourceObservationCredential")))
                         .filter(e->{try{return observation(IntakeLedger.field(e.getCreateArguments(),"observation").getRecord()).number()==observation.number();}
                             catch(IOException failure){return false;}}).findFirst().orElseThrow();
                 var previous=IntakeLedger.field(created.getCreateArguments(),"previousDigest");
-                String digest=SourceCatalogueDigest.digest(observation(old.observation()).getRecord());
+                String digest=old.fingerprint();
                 if(!previous.hasOptional() || !previous.getOptional().hasValue()
                         || !text(previous.getOptional().getValue()).equals(digest)) return Optional.empty();
             }

@@ -19,15 +19,15 @@ class SourceCatalogueDigestTest {
     }
     @Test void digestIsNotJavaFingerprintAndExcludesReceiptTime() throws Exception {
         var o=SourceCatalogueCodecTest.sample();
-        var later=new SourceObservation(o.number(),o.kind(),o.url(),o.title(),o.body(),o.state(),o.updatedAt(),
+        var later=new SourceObservation(o.number(),o.kind(),o.url(),o.title(),o.bodySha256(),o.state(),o.updatedAt(),
                 o.observedAt().plusSeconds(5),o.parentPR(),o.linkEvidence(),o.merged(),o.observedDigest(),o.truncated());
         var digest=SourceCatalogueDigest.digest(SourceCatalogueCodec.observation(o).getRecord());
-        assertNotEquals(o.fingerprint(),digest);
+        assertEquals(o.fingerprint(),digest);
         assertEquals(digest,SourceCatalogueDigest.digest(SourceCatalogueCodec.observation(later).getRecord()));
     }
     @Test void receiptNamespaceAndSymlinkRemainFailClosed() throws Exception {
         journal=journal.toRealPath();
-        String command="babycdf-source-"+"b".repeat(64);
+        String command="babycdf-source-v2-"+"b".repeat(64);
         IntakeLedger.recordSourceMarker(journal,command+".receipt",new byte[]{9});
         assertThrows(IOException.class,()->IntakeLedger.recordSourceMarker(journal,command+".receipt",new byte[]{9}));
         assertThrows(IOException.class,()->IntakeLedger.recordSourceMarker(journal,command.toUpperCase()+".receipt",new byte[]{9}));
@@ -37,7 +37,7 @@ class SourceCatalogueDigestTest {
     }
     @Test void sourceJournalIsExclusiveAndDoesNotBroadenIntakeNamespace() throws Exception {
         journal=journal.toRealPath();
-        String command="babycdf-source-"+"a".repeat(64);
+        String command="babycdf-source-v2-"+"a".repeat(64);
         IntakeLedger.recordSourceMarker(journal,command+".intent",new byte[]{1,2,3});
         assertArrayEquals(new byte[]{1,2,3},Files.readAllBytes(journal.resolve(command+".intent")));
         assertThrows(IOException.class,()->IntakeLedger.recordSourceMarker(journal,command+".intent",new byte[]{4}));

@@ -17,20 +17,20 @@ class SourceCatalogueWireTest {
     static ValueOuterClass.RecordField f(String name,ValueOuterClass.Value v) {
         return ValueOuterClass.RecordField.newBuilder().setLabel(name).setValue(v).build();
     }
-    static final String META="babycdf-source-metadata-v1:[\"title convention: parent #3\",false,\""
+    static final String META="babycdf-source-v2-metadata-v1:[\"title convention: parent #3\",false,\""
             +SourceObservation.hash("full raw body")+"\",true]";
     static ValueOuterClass.Record wire() {
         return ValueOuterClass.Record.newBuilder().addFields(f("number",n(7)))
                 .addFields(f("kind",e("SourceMilestone")))
                 .addFields(f("sourceUrl",s("https://github.com/canton-foundation/canton-dev-fund/issues/7")))
-                .addFields(f("title",s("Milestone"))).addFields(f("body",s("raw\nbody")))
+                .addFields(f("title",s("Milestone"))).addFields(f("bodySha256",s(SourceObservation.hash("raw\nbody"))))
                 .addFields(f("state",e("SourceClosed")))
                 .addFields(f("updatedAt",ValueOuterClass.Value.newBuilder().setTimestamp(1767225600123456L).build()))
                 .addFields(f("observedAt",ValueOuterClass.Value.newBuilder().setTimestamp(1767312000000000L).build()))
                 .addFields(f("verification",e("ObservedUnverified")))
                 .addFields(f("parentPR",ValueOuterClass.Value.newBuilder().setOptional(
                         ValueOuterClass.Optional.newBuilder().setValue(n(3))).build()))
-                .addFields(f("linkEvidence",s(META))).build();
+                .addFields(f("linkEvidence",s("title convention: parent #3"))).build();
     }
     static ValueOuterClass.Record replace(String label,ValueOuterClass.Value value) {
         var r=wire().toBuilder();
@@ -65,15 +65,12 @@ class SourceCatalogueWireTest {
         rejects(replace("parentPR",ValueOuterClass.Value.newBuilder().setOptional(
                 ValueOuterClass.Optional.newBuilder().setValue(s("SECRET_SENTINEL"))).build()));
     }
-    @Test void metadataMustBeTypedCanonicalAndEntireInput() {
-        for(String bad:List.of("SECRET_SENTINEL", "babycdf-source-metadata-v1:[]",
-                "babycdf-source-metadata-v1:[\"SECRET_SENTINEL\",false,\"x\"]",
-                "babycdf-source-metadata-v1:[1,false,\"x\",true]",
-                "babycdf-source-metadata-v1:[\"x\",\"false\",\"x\",true]",
-                "babycdf-source-metadata-v1:[\"x\",false,1,true]",
-                "babycdf-source-metadata-v1:[\"x\",false,\"x\",\"true\"]",
-                META+" {}",META+" SECRET_SENTINEL",META+" ",META.replace("false", " false")))
-            rejects(replace("linkEvidence",s(bad)));
+    @Test void legacyBodySchemaFailsClosed() {
+        var legacy=wire().toBuilder();
+        for(int i=0;i<legacy.getFieldsCount();i++) if(legacy.getFields(i).getLabel().equals("bodySha256"))
+            legacy.setFields(i,f("body",s("SECRET_SENTINEL")));
+        rejects(legacy.build());
+        rejects(replace("bodySha256",s("SECRET_SENTINEL")));
     }
     @Test void timeBoundsAndUnicode() throws Exception {
         for(Instant instant:List.of(Instant.parse("0001-01-01T00:00:00Z"),
@@ -86,15 +83,8 @@ class SourceCatalogueWireTest {
         rejects(replace("title",s("SECRET_SENTINEL\udc00")));
         assertEquals("pair 😀",SourceCatalogueCodec.observation(replace("title",s("pair 😀"))).title());
     }
-    @Test void metadataBoundIsExact() throws Exception {
-        var o=SourceCatalogueCodecTest.sample();
-        int overhead=SourceCatalogueCodec.metadata(o).length()-o.linkEvidence().length();
-        var exact=new SourceObservation(o.number(),o.kind(),o.url(),o.title(),o.body(),o.state(),o.updatedAt(),o.observedAt(),
-                o.parentPR(),"x".repeat(4096-overhead),o.merged(),o.observedDigest(),o.truncated());
-        assertEquals(4096,SourceCatalogueCodec.metadata(exact).length());
-        assertEquals(exact,SourceCatalogueCodec.observation(SourceCatalogueCodec.observation(exact).getRecord()));
-        var excess=new SourceObservation(o.number(),o.kind(),o.url(),o.title(),o.body(),o.state(),o.updatedAt(),o.observedAt(),
-                o.parentPR(),exact.linkEvidence()+"x",o.merged(),o.observedDigest(),o.truncated());
-        assertThrows(IOException.class,()->SourceCatalogueCodec.observation(excess));
+    @Test void evidenceBoundIsExact() throws Exception {
+        assertEquals(4096,SourceCatalogueCodec.observation(replace("linkEvidence",s("x".repeat(4096)))).linkEvidence().length());
+        rejects(replace("linkEvidence",s("x".repeat(4097))));
     }
 }

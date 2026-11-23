@@ -4,6 +4,7 @@ module Cap.Examples.BabyCdf.SourceCatalogueGolden where
 import Daml.Script
 import DA.Time
 import DA.Date
+import qualified DA.Text as Text
 import Cap.Examples.BabyCdf.SourceCatalogue
 
 -- Executed by the pinned SDK; Java expectations must come from this output.
@@ -14,7 +15,7 @@ goldenVectors = script do
         kind = SourceMilestone
         sourceUrl = "https://github.com/canton-foundation/canton-dev-fund/issues/7"
         title = "café2 😀3"
-        body = "line\n\t\"\\\SOH4"
+        bodySha256 = Text.sha256 "line\n\t\"\\\SOH4"
         state = SourceClosed
         updatedAt = time (date 2026 Jan 1) 0 0 0
         observedAt = time (date 2026 Jan 2) 0 0 0
@@ -26,7 +27,7 @@ goldenVectors = script do
       v3 = base with parentPR = Some 3; updatedAt = addRelTime base.updatedAt (microseconds 123456)
       vectors = [base, v1, v2, v3]
   _ <- mapA (\o -> do
-    debug (show ((o.number,o.kind,o.sourceUrl,o.title,o.body),
+    debug (show ((o.number,o.kind,o.sourceUrl,o.title,o.bodySha256),
       (o.state,o.updatedAt,o.verification,o.parentPR,o.linkEvidence)))
     debug (contentDigest o)) vectors
   pure (map contentDigest vectors)

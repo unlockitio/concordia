@@ -1012,7 +1012,7 @@ requestIntake state runId sourceKey roundId agenda = do
 -- Active opener-visible candidate observations, not a remote snapshot or authority.
 sourceCatalogueCounts : Party -> Script (Int, Int, Int, Int)
 sourceCatalogueCounts opener = do
-  rows <- query @Cap.Examples.BabyCdf.SourceCatalogue.SourceItem opener
+  rows <- query @Cap.Examples.BabyCdf.SourceCatalogue.SourceObservationCredential opener
   let items = [item | (_, item) <- rows, item.opener == opener]
   let keys = Set.fromList [(item.opener, item.repo, item.observation.number) | item <- items]
   let proposals = length [item | item <- items, item.observation.kind == Cap.Examples.BabyCdf.SourceCatalogue.SourceProposal]
@@ -1022,7 +1022,7 @@ sourceCatalogueCounts opener = do
 sourceCatalogueEvidence : Party -> Script ()
 sourceCatalogueEvidence opener = do
   (active, keys, proposals, milestones) <- sourceCatalogueCounts opener
-  debug ("[EVIDENCE] SourceItem active contracts=" <> show active
+  debug ("[EVIDENCE] SourceObservationCredential active contracts=" <> show active
     <> "; distinct keys=" <> show keys
     <> "; SourceProposal=" <> show proposals <> "; SourceMilestone=" <> show milestones)
   debug "[EVIDENCE] Active now; visible to opener only; distinct (opener, repository, number) keys. Zero is valid while ingestion may still be running. Sync completeness unknown."

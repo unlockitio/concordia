@@ -69,17 +69,17 @@ final class SourceCatalogueCodec {
         return encoded;
     }
     static ValueOuterClass.Value observation(SourceObservation observation) throws IOException {
-        for(String s:List.of(observation.url(),observation.title(),observation.body(),observation.linkEvidence())) validText(s);
+        for(String s:List.of(observation.url(),observation.title(),observation.bodySha256(),observation.linkEvidence())) validText(s);
         var optional=ValueOuterClass.Optional.newBuilder();
         if(observation.parentPR()!=null) optional.setValue(integer(observation.parentPR()));
         return record("number",integer(observation.number()),
                 "kind",constructor(observation.kind()==SourceObservation.Kind.PROPOSAL?"SourceProposal":"SourceMilestone"),
-                "sourceUrl",text(observation.url()),"title",text(observation.title()),"body",text(observation.body()),
+                "sourceUrl",text(observation.url()),"title",text(observation.title()),"bodySha256",text(observation.bodySha256()),
                 "state",constructor(observation.state().equals("open")?"SourceOpen":"SourceClosed"),
                 "updatedAt",timestamp(observation.updatedAt()),"observedAt",timestamp(observation.observedAt()),
                 "verification",constructor("ObservedUnverified"),
                 "parentPR",ValueOuterClass.Value.newBuilder().setOptional(optional).build(),
-                "linkEvidence",text(metadata(observation)));
+                "linkEvidence",text(observation.linkEvidence()));
     }
     static Map<String,ValueOuterClass.Value> fields(ValueOuterClass.Record record, Set<String> expected) throws IOException {
         var fields=new HashMap<String,ValueOuterClass.Value>();
@@ -111,7 +111,11 @@ final class SourceCatalogueCodec {
         return instant;
     }
     static SourceObservation observation(ValueOuterClass.Record record) throws IOException {
-        var f=fields(record,Set.of("number","kind","sourceUrl","title","body","state","updatedAt","observedAt",
+        try { return decodeObservation(record); }
+        catch(IOException | RuntimeException invalid) { throw new IOException("invalid v2 source observation record"); }
+    }
+    private static SourceObservation decodeObservation(ValueOuterClass.Record record) throws IOException {
+        var f=fields(record,Set.of("number","kind","sourceUrl","title","bodySha256","state","updatedAt","observedAt",
                 "verification","parentPR","linkEvidence"));
         if(!constructor(f.get("verification")).equals("ObservedUnverified"))
             throw new IOException("unsupported source verification; never infer remote verification");
@@ -128,20 +132,10 @@ final class SourceCatalogueCodec {
         if(!parent.hasOptional()) throw new IOException("expected optional parent");
         Long parentNumber=parent.getOptional().hasValue()?integer(parent.getOptional().getValue()):null;
         String evidence=text(f.get("linkEvidence"));
-        if(!evidence.startsWith(PREFIX) || evidence.length()>4096) throw new IOException("source metadata unavailable");
         try {
-            var metadata=JSON.readTree(evidence.substring(PREFIX.length()));
-            if(!metadata.isArray() || metadata.size()!=4 || !metadata.get(0).isTextual()
-                    || !metadata.get(1).isBoolean() || !metadata.get(2).isTextual() || !metadata.get(3).isBoolean())
-                throw new IOException("malformed source metadata");
-            var decoded = new SourceObservation(integer(f.get("number")),kind,text(f.get("sourceUrl")),text(f.get("title")),
-                    text(f.get("body")),state,timestamp(f.get("updatedAt")),timestamp(f.get("observedAt")),parentNumber,
-                    metadata.get(0).textValue(),metadata.get(1).booleanValue(),metadata.get(2).textValue(),metadata.get(3).booleanValue());
-            validText(decoded.linkEvidence());
-            if (!metadata(decoded).equals(evidence)) throw new IOException("noncanonical source metadata");
-            return decoded;
-        } catch(IllegalArgumentException | com.fasterxml.jackson.core.JsonProcessingException e) {
-            throw new IOException("invalid ledger source observation");
-        }
+            return new SourceObservation(integer(f.get("number")),kind,text(f.get("sourceUrl")),text(f.get("title")),
+                    text(f.get("bodySha256")),state,timestamp(f.get("updatedAt")),timestamp(f.get("observedAt")),parentNumber,
+                    evidence,false,text(f.get("bodySha256")),false);
+        } catch(IllegalArgumentException e) { throw new IOException("invalid ledger source observation"); }
     }
 }

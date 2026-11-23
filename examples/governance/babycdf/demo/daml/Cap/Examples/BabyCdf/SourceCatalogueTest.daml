@@ -19,13 +19,13 @@ fails expected actor commands = do
     Right _ -> abort "expected rejection"
 
 initial : Party -> SourceCheckpoint
-initial opener = SourceCheckpoint opener repository 0 0 FullSweep "" False 0 0 ""
+initial opener = SourceCheckpoint opener repository "babycdf-source-observation/v2" 0 0 FullSweep "" False 0 0 ""
 
 sample : Time -> Int -> SourceKind -> Observation
 sample now number kind = Observation with
   number; kind; sourceUrl = "https://github.com/" <> repository <>
     (if kind == SourceProposal then "/pull/" else "/issues/") <> show number
-  title = "Actual observed title"; body = "Actual observed body"
+  title = "Actual observed title"; bodySha256 = Text.sha256 "Actual observed body"
   state = SourceOpen; updatedAt = now; observedAt = now
   verification = ObservedUnverified; parentPR = None; linkEvidence = ""
 
@@ -44,11 +44,11 @@ catalogueVotingCounts = script do
   sourceCatalogueCounts opener >>= (=== (3,3,2,1))
   sourceCatalogueCounts outsider >>= (=== (0,0,0,0))
   sourceCatalogueEvidence opener
-  rows <- query @SourceItem opener
+  rows <- query @SourceObservationCredential opener
   _ <- submit opener $ exerciseCmd partial CommitBatch with
     items = map (\o -> o with observedAt = addRelTime now (seconds 1)) observations
     scanPhase = FullSweep; nextToken = ""; complete = True
-  replay <- query @SourceItem opener
+  replay <- query @SourceObservationCredential opener
   replay === rows
   sourceCatalogueCounts opener >>= (=== (3,3,2,1))
   agendas <- query @AgendaProposal opener
@@ -74,7 +74,7 @@ catalogueLifecycle = script do
   progress.highWater === 540
   progress.completedFullGeneration === 0
   progress.inProgress === True
-  rows <- query @SourceItem opener
+  rows <- query @SourceObservationCredential opener
   length rows === 2
   assert (all (\(_,x) -> x.version == 1 && x.previousDigest == None
     && x.opener == opener && x.repo == repository
@@ -83,16 +83,16 @@ catalogueLifecycle = script do
   storedMilestone.observation === milestone
   fails "NotVisible" outsider $ exerciseCmd partial CommitBatch with
     items = []; scanPhase = FullSweep; nextToken = ""; complete = True
-  hidden <- query @SourceItem outsider
+  hidden <- query @SourceObservationCredential outsider
   hidden === []
   replay <- submit opener $ exerciseCmd partial CommitBatch with
     items = [pr,milestone]; scanPhase = FullSweep; nextToken = ""; complete = True
-  replayRows <- query @SourceItem opener
+  replayRows <- query @SourceObservationCredential opener
   map fst replayRows === map fst rows
-  let edited = pr with title = "Edited older proposal"; body = "Changed body"
+  let edited = pr with title = "Edited older proposal"; bodySha256 = Text.sha256 "Changed body"
   updated <- submit opener $ exerciseCmd replay CommitBatch with
     items = [edited]; scanPhase = OverlapSweep; nextToken = ""; complete = True
-  editedRows <- query @SourceItem opener
+  editedRows <- query @SourceObservationCredential opener
   let [(_,oldEdit)] = filter (\(_,x) -> x.observation.number == 184) editedRows
   oldEdit.version === 2
   oldEdit.previousDigest === Some (contentDigest pr)
@@ -101,20 +101,20 @@ catalogueLifecycle = script do
   -- Stale checkpoint cannot create even its first item: entire transaction fails.
   fails "NotActive" opener $ exerciseCmd replay CommitBatch with
     items = [sample now 999 SourceProposal]; scanPhase = FullSweep; nextToken = ""; complete = True
-  afterStale <- query @SourceItem opener
+  afterStale <- query @SourceObservationCredential opener
   afterStale === editedRows
   fails "duplicate batch number" opener $ exerciseCmd updated CommitBatch with
     items = [edited,edited]; scanPhase = FullSweep; nextToken = ""; complete = True
   let collision = (sample now 184 SourceMilestone)
   fails "source kind is immutable" opener $ exerciseCmd updated CommitBatch with
     items = [sample now 998 SourceProposal,collision]; scanPhase = FullSweep; nextToken = ""; complete = True
-  afterCollision <- query @SourceItem opener
+  afterCollision <- query @SourceObservationCredential opener
   afterCollision === editedRows
   closed <- submit opener $ exerciseCmd updated CommitBatch with
     items = [edited with state = SourceClosed]; scanPhase = FullSweep; nextToken = ""; complete = True
   reopened <- submit opener $ exerciseCmd closed CommitBatch with
     items = [edited]; scanPhase = FullSweep; nextToken = ""; complete = True
-  finalRows <- query @SourceItem opener
+  finalRows <- query @SourceObservationCredential opener
   let [(_,finalPR)] = filter (\(_,x) -> x.observation.number == 184) finalRows
   finalPR.version === 4
   finalPR.observation.state === SourceOpen
@@ -158,7 +158,7 @@ observationBounds = script do
   cp <- submit opener $ createCmd (initial opener)
   let bad = [ pr with title = ""
             , pr with title = huge 513
-            , pr with body = huge 32769
+            , pr with bodySha256 = huge 63
             , pr with sourceUrl = huge 513
             , pr with linkEvidence = huge 4097
             , pr with sourceUrl = "https://github.com/" <> repository <> "/issues/184"
@@ -178,11 +178,11 @@ observationBounds = script do
   -- Repo whitelist is a separate checkpoint invariant, not a malformed URL.
   fails "Template precondition violated" opener $ createCmd ((initial opener) with repo = "other/repo")
   -- Exact inclusive maxima remain valid and a full 50-item batch is accepted.
-  let boundary = pr with title = huge 512; body = huge 32768; linkEvidence = huge 4096
+  let boundary = pr with title = huge 512; bodySha256 = Text.sha256 (huge 32768); linkEvidence = huge 4096
   _ <- submit opener $ exerciseCmd cp CommitBatch with
     items = boundary :: map (\n -> sample now n SourceProposal) [1..49]
     scanPhase = FullSweep; nextToken = ""; complete = True
-  rows <- query @SourceItem opener
+  rows <- query @SourceObservationCredential opener
   length rows === 50
 
 revisionGuards : Script ()
@@ -197,17 +197,17 @@ revisionGuards = script do
     items = [old]; scanPhase = FullSweep; nextToken = ""; complete = True
   c2 <- submit opener $ exerciseCmd c1 CommitBatch with
     items = [current]; scanPhase = FullSweep; nextToken = ""; complete = True
-  [(cid,stored)] <- query @SourceItem opener
-  fails "source content unchanged" opener $ exerciseCmd cid ReviseSourceItem with next = current
+  [(cid,stored)] <- query @SourceObservationCredential opener
   -- Updated time is current; observed time alone regresses, while still >= updated.
   let earlierReceipt = current with title = "receipt regression"; observedAt = now
-  fails "source observation time regressed" opener $
-    exerciseCmd cid ReviseSourceItem with next = earlierReceipt
+  fails "source observed time regressed" opener $
+    exerciseCmd c2 CommitBatch with
+      items = [earlierReceipt]; scanPhase = FullSweep; nextToken = ""; complete = True
   -- Receipt stays current, isolating the updated-time guard.
   let stale = old with observedAt = later
   fails "source updated time regressed" opener $ exerciseCmd c2 CommitBatch with
     items = [stale]; scanPhase = FullSweep; nextToken = ""; complete = True
-  [(sameCid,same)] <- query @SourceItem opener
+  [(sameCid,same)] <- query @SourceObservationCredential opener
   sameCid === cid
   same === stored
   Some progress <- queryContractId opener c2

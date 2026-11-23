@@ -17,13 +17,13 @@ class SourceCatalogueAcceptanceTest {
     static EventOuterClass.CreatedEvent item(String cid,SourceObservation o,long version,String previous) throws Exception {
         var optional=ValueOuterClass.Optional.newBuilder();if(previous!=null) optional.setValue(text(previous));
         var value=observation(o);
-        return created(cid,"SourceItem",record("opener",ValueOuterClass.Value.newBuilder().setParty(PARTY).build(),
-                "repo",text(REPOSITORY),"observation",value,"fingerprint",text(SourceCatalogueDigest.digest(value.getRecord())),
+        return created(cid,"SourceObservationCredential",record("opener",ValueOuterClass.Value.newBuilder().setParty(PARTY).build(),
+                "repo",text(REPOSITORY),"observation",value,"fingerprint",text(SourceCatalogueDigest.digest(value.getRecord(),version,previous)),
                 "version",integer(version),"previousDigest",ValueOuterClass.Value.newBuilder().setOptional(optional).build()).getRecord());
     }
     static SourceObservation changed(SourceObservation o) {
-        return new SourceObservation(o.number(),o.kind(),o.url(),o.title(),"independent revised body",o.state(),
-                o.updatedAt().plusSeconds(1),o.observedAt(),o.parentPR(),o.linkEvidence(),o.merged(),SourceObservation.hash("revised"),o.truncated());
+        return new SourceObservation(o.number(),o.kind(),o.url(),o.title(),SourceObservation.hash("independent revised body"),o.state(),
+                o.updatedAt().plusSeconds(1),o.observedAt(),o.parentPR(),o.linkEvidence(),o.merged(),SourceObservation.hash("independent revised body"),o.truncated());
     }
     @Test void createIntentCanResumeButLostReplyReadbackNeverResends() throws Exception {
         var s=new Server(){boolean first=true;public TransactionOuterClass.Transaction submit(CommandServiceOuterClass.SubmitAndWaitForTransactionRequest r) throws IOException {
@@ -39,7 +39,7 @@ class SourceCatalogueAcceptanceTest {
         var engine=new JavaSourceIngestion(ledger,c->new JavaSourceIngestion.Page(List.of(),"",true),x->{});
         assertThrows(JavaSourceIngestion.PreTransmission.class,engine::cycle);assertEquals(1,s.sends);
         ledger.intentWriter=IntakeLedger::recordSourceMarker;engine.cycle();assertEquals(2,s.sends);
-        var cp=ledger.checkpoint();String command="babycdf-source-"+"c".repeat(64);
+        var cp=ledger.checkpoint();String command="babycdf-source-v2-"+"c".repeat(64);
         ledger.intentWriter=(p,n,b)->{Files.write(p.resolve(n),new byte[]{1});throw new IOException("partial write");};
         var failure=assertThrows(IOException.class,()->ledger.commit(new JavaSourceIngestion.Batch(cp,
                 new JavaSourceIngestion.Page(List.of(),"",true),command)));
@@ -47,10 +47,10 @@ class SourceCatalogueAcceptanceTest {
     }
     @Test void independentVersionThreeToFourAndWrongPreviousDigest() throws Exception {
         var s=new Server();var ledger=adapter(s);var cp=ledger.checkpoint();var old=SourceCatalogueCodecTest.sample();
-        String oldDigest=SourceCatalogueDigest.digest(observation(old).getRecord());
+        String oldDigest=SourceCatalogueDigest.digest(observation(old).getRecord(),3,"0".repeat(64));
         var prior=item("old-item",old,3,"0".repeat(64));s.active.add(prior);
         var next=changed(old);var batch=new JavaSourceIngestion.Batch(cp,new JavaSourceIngestion.Page(List.of(next),"",true),
-                "babycdf-source-"+"8".repeat(64));ledger.commit(batch);
+                "babycdf-source-v2-"+"8".repeat(64));ledger.commit(batch);
         var tx=s.history.get(1);var updated=item("new-item",next,4,oldDigest);
         s.history.set(1,tx.toBuilder().setEvents(0,EventOuterClass.Event.newBuilder().setCreated(updated)).build());
         assertTrue(ledger.proof(batch).isPresent());
@@ -66,7 +66,7 @@ class SourceCatalogueAcceptanceTest {
     @Test void unchangedRaceHasNoCreatedItemAndStillProves() throws Exception {
         var s=new Server();var ledger=adapter(s);var cp=ledger.checkpoint();var o=SourceCatalogueCodecTest.sample();
         s.active.add(item("existing",o,3,"0".repeat(64)));
-        var batch=new JavaSourceIngestion.Batch(cp,new JavaSourceIngestion.Page(List.of(o),"",true),"babycdf-source-"+"9".repeat(64));
+        var batch=new JavaSourceIngestion.Batch(cp,new JavaSourceIngestion.Page(List.of(o),"",true),"babycdf-source-v2-"+"9".repeat(64));
         ledger.commit(batch);
         assertTrue(ledger.proof(batch).isEmpty(),"unchanged observation must not create an item");
         s.history.set(1,s.history.get(1).toBuilder().removeEvents(0).build());
@@ -74,7 +74,7 @@ class SourceCatalogueAcceptanceTest {
     }
     @Test void newItemVersionTwoWithValidShapeCannotProve() throws Exception {
         var s=new Server();var ledger=adapter(s);var cp=ledger.checkpoint();var o=SourceCatalogueCodecTest.sample();
-        var batch=new JavaSourceIngestion.Batch(cp,new JavaSourceIngestion.Page(List.of(o),"",true),"babycdf-source-"+"d".repeat(64));
+        var batch=new JavaSourceIngestion.Batch(cp,new JavaSourceIngestion.Page(List.of(o),"",true),"babycdf-source-v2-"+"d".repeat(64));
         ledger.commit(batch);var tx=s.history.get(1);
         var wrong=item("new",o,2,"0".repeat(64));
         s.history.set(1,tx.toBuilder().setEvents(0,EventOuterClass.Event.newBuilder().setCreated(wrong)).build());
@@ -89,7 +89,7 @@ class SourceCatalogueAcceptanceTest {
         assertEquals("winner-cid",one.checkpoint().cid());assertEquals(one.checkpoint(),two.checkpoint());assertEquals(1,s.sends);
     }
     @Test void receiptCorruptionTableCannotSkipOrProve() throws Exception {
-        var s=new Server();var ledger=adapter(s);var cp=ledger.checkpoint();String command="babycdf-source-"+"a".repeat(64);
+        var s=new Server();var ledger=adapter(s);var cp=ledger.checkpoint();String command="babycdf-source-v2-"+"a".repeat(64);
         var batch=new JavaSourceIngestion.Batch(cp,new JavaSourceIngestion.Page(List.of(),"",true),command);
         ledger.commit(batch);assertTrue(ledger.proof(batch).isPresent());var path=directory.resolve(command+".receipt");
         String good=Files.readString(path),binding=good.split("[|]")[1];

@@ -5,9 +5,9 @@ import com.daml.ledger.api.v2.ValueOuterClass;
 import java.io.IOException;
 import java.util.Set;
 
-/** Daml Show mapping cross-checked against SDK 3.5.11 SourceCatalogueGolden vectors.
- * A matching digest establishes content integrity only, never transaction execution proof.
- * Distinct from the Java canonical observation fingerprint.
+/** Canonical v2 credential digest cross-checked against SDK 3.5.11 vectors.
+ * A matching digest establishes integrity only, never transaction execution proof.
+ * text() is retained solely for the separate legacy-shaped scan digest.
  */
 final class SourceCatalogueDigest {
     private SourceCatalogueDigest() { }
@@ -25,16 +25,22 @@ final class SourceCatalogueDigest {
         }
         return out.append('"').toString();
     }
-    static String digest(ValueOuterClass.Record observation) throws IOException {
-        var f=SourceCatalogueCodec.fields(observation,Set.of("number","kind","sourceUrl","title","body","state",
+    static String digest(ValueOuterClass.Record observation) throws IOException { return digest(observation,1,null); }
+    static String digest(ValueOuterClass.Record observation,long version,String previous) throws IOException {
+        var f=SourceCatalogueCodec.fields(observation,Set.of("number","kind","sourceUrl","title","bodySha256","state",
                 "updatedAt","observedAt","verification","parentPR","linkEvidence"));
         var parent=f.get("parentPR"); if(!parent.hasOptional()) throw new IOException("invalid digest parent");
-        String optional=parent.getOptional().hasValue()?"Some "+SourceCatalogueCodec.integer(parent.getOptional().getValue()):"None";
-        String preimage="(("+SourceCatalogueCodec.integer(f.get("number"))+","+SourceCatalogueCodec.constructor(f.get("kind"))+","
-                +text(SourceCatalogueCodec.text(f.get("sourceUrl")))+","+text(SourceCatalogueCodec.text(f.get("title")))+","
-                +text(SourceCatalogueCodec.text(f.get("body")))+"),("+SourceCatalogueCodec.constructor(f.get("state"))+","
-                +SourceCatalogueCodec.timestamp(f.get("updatedAt"))+","+SourceCatalogueCodec.constructor(f.get("verification"))+","
-                +optional+","+text(SourceCatalogueCodec.text(f.get("linkEvidence")))+"))";
-        return SourceObservation.hash(preimage);
+        try {
+            return SourceObservation.hash(SourceObservationCanonical.serialize(SourceCatalogueCodec.REPOSITORY,
+                SourceCatalogueCodec.integer(f.get("number")),
+                SourceCatalogueCodec.constructor(f.get("kind")).equals("SourceProposal")?"proposal":"milestone",
+                SourceCatalogueCodec.text(f.get("title")),SourceCatalogueCodec.text(f.get("sourceUrl")),
+                SourceCatalogueCodec.text(f.get("bodySha256")),
+                SourceCatalogueCodec.constructor(f.get("state")).equals("SourceOpen")?"open":"closed",
+                SourceCatalogueCodec.timestamp(f.get("updatedAt")),parent.getOptional().hasValue()?SourceCatalogueCodec.integer(parent.getOptional().getValue()):null,
+                SourceCatalogueCodec.text(f.get("linkEvidence")),
+                SourceCatalogueCodec.constructor(f.get("verification")).equals("ObservedUnverified")?"observed_unverified":"content_digest_checked",
+                version,previous));
+        } catch(IllegalArgumentException invalid) {throw new IOException("invalid v2 source digest");}
     }
 }

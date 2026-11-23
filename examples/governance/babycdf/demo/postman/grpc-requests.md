@@ -29,7 +29,7 @@ Template-filtered request (replace OFFSET):
 ```json
 {"active_at_offset":0,"event_format":{"filters_for_any_party":{"cumulative":[{"template_filter":{"template_id":{"package_id":"#cap-example-babycdf","module_name":"Cap.Examples.BabyCdf.RuleVote","entity_name":"EffectiveRule"}}}]} ,"verbose":true}}
 ```
-For catalogue templates use package `#cap-example-babycdf-demo`, module `Cap.Examples.BabyCdf.SourceCatalogue`, entity `SourceItem` or `SourceCheckpoint`. Other implementation entities: AgendaProposal, AgendaBallot, ApprovedGrantProposal, ApprovedMilestone.
+For source credentials use package `#cap-example-babycdf`, module `Cap.Examples.BabyCdf.SourceObservationCredential`, entity `SourceObservationCredential`. Checkpoints remain in package `#cap-example-babycdf-demo`, module `Cap.Examples.BabyCdf.SourceCatalogue`, entity `SourceCheckpoint`. Other implementation entities: AgendaProposal, AgendaBallot, ApprovedGrantProposal, ApprovedMilestone.
 
 - `com.daml.ledger.api.v2.UpdateService/GetUpdates` (replace PARTY and end_inclusive with the captured OFFSET):
 ```json

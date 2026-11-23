@@ -1,0 +1,38 @@
+-- SPDX-License-Identifier: Apache-2.0
+module Cap.Examples.BabyCdf.SourceIssuerTrustTest where
+import Daml.Script
+import DA.Assert
+import DA.Date
+import DA.Time
+import DA.NonEmpty (NonEmpty(..), toList)
+import Canton.Network.Credentials.V1
+import Cap.Examples.BabyCdf.SourceObservationCredential
+import Cap.Examples.BabyCdf.SourceCredentialTest (sample)
+
+issuerAssertionAndFactoryLineage : Script ()
+issuerAssertionAndFactoryLineage = script do
+  opener <- allocateParty "direct-issuer"
+  let o = sample (time (date 2026 Jan 2) 0 0 0)
+      assertedPrevious = "0000000000000000000000000000000000000000000000000000000000000000"
+      direct = SourceObservationCredential opener repository o
+        (fingerprintOf repository o 2 (Some assertedPrevious)) 2 (Some assertedPrevious)
+  -- No predecessor exists: direct creation is an authorized issuer assertion.
+  cid <- submit opener $ createCmd direct
+  Some registered <- queryInterfaceContractId @RegisteredCredential opener (toInterfaceContractId @RegisteredCredential cid)
+  registered.registryAdmin === opener
+  Some view <- queryInterfaceContractId @Credential opener (toInterfaceContractId @Credential cid)
+  assert (sourceCredentialValid view)
+  sourceSignatories view === [opener]
+  toList view.anchorers === [opener]
+  view.holders === []
+  let changedKind = o with kind = SourceMilestone
+                           sourceUrl = "https://github.com/canton-foundation/canton-dev-fund/issues/184"
+  factory <- submit opener $ createCmd (SourceObservationFactory opener repository changedKind)
+  submitMustFail opener $ exerciseCmd (toInterfaceContractId @CredentialRegistryFactory factory)
+    (CredentialRegistryFactory_Issue (credentialOf opener repository changedKind 3 (Some direct.fingerprint)) (registrationOf opener changedKind))
+  Some stillActive <- queryContractId opener cid
+  stillActive === direct
+  -- Default template Archive remains available to its signatories.
+  submit opener $ archiveCmd cid
+  absent <- queryContractId opener cid
+  absent === None

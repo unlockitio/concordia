@@ -28,12 +28,12 @@ class SourceCatalogueHundredsTest {
                 }
                 boolean complete=IntakeLedger.field(args,"complete").getBool();
                 String scan=SourceObservation.hash("("+SourceCatalogueDigest.text(progress?IntakeLedger.text(record,"scanFingerprint"):"")+",["+String.join(",",digests)+"])");
-                var priorItems=new ArrayList<>(active.stream().filter(e->e.getTemplateId().getEntityName().equals("SourceItem")).toList());
+                var priorItems=new ArrayList<>(active.stream().filter(e->e.getTemplateId().getEntityName().equals("SourceObservationCredential")).toList());
                 var tx=super.submit(request);
                 var corrected=tx.toBuilder();
                 for(int i=0;i<tx.getEventsCount();i++) {
                     var event=tx.getEvents(i);
-                    if(!event.hasCreated() || !event.getCreated().getTemplateId().getEntityName().equals("SourceItem"))continue;
+                    if(!event.hasCreated() || !event.getCreated().getTemplateId().getEntityName().equals("SourceObservationCredential"))continue;
                     var created=event.getCreated();
                     var observation=SourceCatalogueCodec.observation(IntakeLedger.field(created.getCreateArguments(),"observation").getRecord());
                     for(var prior:priorItems) {
@@ -42,7 +42,7 @@ class SourceCatalogueHundredsTest {
                         com.daml.ledger.api.v2.EventOuterClass.CreatedEvent revised;
                         try { revised=SourceCatalogueAcceptanceTest.item("revised-"+observation.number(),observation,
                                 IntakeLedger.number(prior.getCreateArguments(),"version")+1,
-                                SourceCatalogueDigest.digest(SourceCatalogueCodec.observation(previous).getRecord())); }
+                                IntakeLedger.text(prior.getCreateArguments(),"fingerprint")); }
                         catch(Exception failure){throw new java.io.IOException(failure);}
                         active.remove(created);active.remove(prior);active.add(revised);
                         corrected.setEvents(i,event.toBuilder().setCreated(revised));
@@ -99,7 +99,7 @@ class SourceCatalogueHundredsTest {
             assertTrue(logs.contains("Proposal #1 added"));assertTrue(logs.contains("Milestone #300 added"));
         }
         assertEquals(List.of("pulls:1","pulls:2","pulls:3","issues:1","issues:2","issues:3"),requests);
-        var snapshot=server.active.stream().filter(e->e.getTemplateId().getEntityName().equals("SourceItem"))
+        var snapshot=server.active.stream().filter(e->e.getTemplateId().getEntityName().equals("SourceObservationCredential"))
                 .collect(java.util.stream.Collectors.toMap(e->e.getContractId(),e->e.getCreateArguments()));
         int previousSends=server.sends;
         try(var restarted=new SourceCatalogueLedger("opener","a".repeat(64),"user",path,server)) {
@@ -108,7 +108,7 @@ class SourceCatalogueHundredsTest {
             var engine=new JavaSourceIngestion(restarted,pages,logs::add);
             for(int i=0;i<6;i++)engine.cycle();
             assertEquals(300,logs.size(),"unchanged full sweep must not invent added/updated labels");
-            assertEquals(snapshot,server.active.stream().filter(e->e.getTemplateId().getEntityName().equals("SourceItem"))
+            assertEquals(snapshot,server.active.stream().filter(e->e.getTemplateId().getEntityName().equals("SourceObservationCredential"))
                     .collect(java.util.stream.Collectors.toMap(e->e.getContractId(),e->e.getCreateArguments())),
                     "unchanged sweep must preserve every SourceItem CID and version");
             editOld.set(true);
@@ -116,9 +116,9 @@ class SourceCatalogueHundredsTest {
             assertEquals(301,logs.size());assertEquals("Proposal #1 updated",logs.getLast());
             var revised=restarted.items(Set.of(1L)).get(1L);
             assertEquals(2,revised.version());
-            assertEquals("Revised old proposal evidence",revised.observation().body());
+            assertEquals(SourceObservation.hash("Revised old proposal evidence"),revised.observation().bodySha256());
             assertEquals(java.time.Instant.parse("2026-01-02T00:00:00Z"),revised.observation().updatedAt());
-            var finalItems=server.active.stream().filter(e->e.getTemplateId().getEntityName().equals("SourceItem")).toList();
+            var finalItems=server.active.stream().filter(e->e.getTemplateId().getEntityName().equals("SourceObservationCredential")).toList();
             assertEquals(300,finalItems.size());
             assertEquals(299,finalItems.stream().filter(e->snapshot.containsKey(e.getContractId())
                     && snapshot.get(e.getContractId()).equals(e.getCreateArguments())).count(),

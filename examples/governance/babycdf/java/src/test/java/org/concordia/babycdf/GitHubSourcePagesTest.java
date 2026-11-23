@@ -86,7 +86,7 @@ class GitHubSourcePagesTest {
         List<String> rows=new ArrayList<>();for(int i=1;i<=50;i++)rows.add(row(i,"P"+i,"x".repeat(32768),true));
         String body="["+String.join(",",rows)+"]";
         var first=new GitHubSourcePages((uri,t)->new GitHubDiscovery.Response(200,List.of(),body),CLOCK).next(cp(""));
-        assertTrue(first.items().size()<50);assertFalse(first.complete());
+        assertEquals(50,first.items().size());assertFalse(first.complete());
         Set<Long> numbers=new HashSet<>();first.items().forEach(o->assertTrue(numbers.add(o.number())));
         String token=first.nextToken();int chunks=1;
         while(!token.equals("full-v1:issues:1:0:")) {
@@ -97,8 +97,8 @@ class GitHubSourcePagesTest {
         }
         assertEquals(java.util.stream.LongStream.rangeClosed(1,50).boxed().collect(java.util.stream.Collectors.toSet()),numbers);
         var changed=new GitHubSourcePages((uri,t)->new GitHubDiscovery.Response(200,List.of(),body.replace("P1\"","changed\"")),CLOCK);
-        var rewind=changed.next(cp(first.nextToken()));
-        assertTrue(rewind.items().isEmpty());assertEquals("full-v1:pulls:1:0:",rewind.nextToken());
+        assertEquals("full-v1:issues:1:0:",first.nextToken()); // Body hashes allow the entire page to fit.
+        assertEquals(50,numbers.size());
     }
     static final String AFTER="Y3Vyc29yOnYyOpLPAAABnbtmBpjO8ZWiWQ==";
     static final String OBSERVED="<https://api.github.com/repositories/1156484704/issues?state=all&per_page=50&sort=updated&direction=asc&page=2&after=Y3Vyc29yOnYyOpLPAAABnbtmBpjO8ZWiWQ%3D%3D>; rel=\"next\"";
@@ -134,17 +134,9 @@ class GitHubSourcePagesTest {
         String boundary="Y3Vyc29yOnYyOpLPAAABnpfyZhDPAAAAARH-jdE=";
         String body="["+String.join(",",rows)+"]",start="full-v2:issues:2:0::"+boundary;
         var first=new GitHubSourcePages((uri,t)->new GitHubDiscovery.Response(200,List.of(),body),CLOCK).next(cp(start));
-        assertFalse(first.complete());assertTrue(first.nextToken().endsWith(":"+boundary));assertTrue(first.nextToken().length()<512);
-        var rewind=new GitHubSourcePages((uri,t)->new GitHubDiscovery.Response(200,List.of(),body.replace("work","changed")),CLOCK).next(cp(first.nextToken()));
-        assertEquals(start,rewind.nextToken());assertTrue(rewind.items().isEmpty());
-        Set<Long> seen=new HashSet<>();first.items().forEach(o->assertTrue(seen.add(o.number())));
-        String token=first.nextToken();int cycles=0;
-        while(!token.isEmpty()) {
-            assertTrue(cycles++<10);
-            var page=new GitHubSourcePages((uri,t)->{assertTrue(uri.toString().endsWith("&after="+boundary.replace("=","%3D")));return new GitHubDiscovery.Response(200,List.of(),body);},CLOCK).next(cp(token));
-            page.items().forEach(o->assertTrue(seen.add(o.number())));token=page.nextToken();
-        }
-        assertEquals(50,seen.size());
+        assertTrue(first.complete());assertEquals("",first.nextToken());
+        assertEquals(50,first.items().size());
+        assertTrue(first.items().stream().allMatch(o->o.bodySha256().equals(SourceObservation.hash("x".repeat(32768)))));
     }
     @Test void observedCursorDoesNotRelaxScopeOrPermitUntrustedData() {
         for(String link:List.of(OBSERVED.replace("1156484704","1156484705"),OBSERVED.replace("api.github.com","evil.invalid"),

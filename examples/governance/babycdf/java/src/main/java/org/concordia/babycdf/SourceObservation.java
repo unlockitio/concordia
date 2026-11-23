@@ -10,7 +10,7 @@ import java.util.HexFormat;
 import java.util.regex.Pattern;
 
 /** Public, unverified source evidence. Never an agenda authorization. */
-public record SourceObservation(long number, Kind kind, String url, String title, String body,
+public record SourceObservation(long number, Kind kind, String url, String title, String bodySha256,
         String state, Instant updatedAt, Instant observedAt, Long parentPR, String linkEvidence,
         boolean merged, String observedDigest, boolean truncated) {
     public enum Kind { PROPOSAL, MILESTONE }
@@ -18,7 +18,7 @@ public record SourceObservation(long number, Kind kind, String url, String title
     private static final Pattern MILESTONE=Pattern.compile("^.+ #([1-9][0-9]*) - Milestone [0-9]+: .+$");
     public SourceObservation {
         if(number<1 || kind==null || !url.equals(WEB+(kind==Kind.PROPOSAL?"pull/":"issues/")+number)
-                || title.isEmpty() || title.length()>512 || body.length()>32768 || linkEvidence.length()>4096
+                || title.isEmpty() || title.length()>512 || !bodySha256.matches("[0-9a-f]{64}") || linkEvidence.length()>4096
                 || !java.util.Set.of("open","closed").contains(state) || updatedAt==null || observedAt==null
                 || updatedAt.isAfter(observedAt) || (parentPR!=null && (parentPR<1 || parentPR==number || kind!=Kind.MILESTONE))
                 || !observedDigest.matches("[0-9a-f]{64}")) throw new IllegalArgumentException("invalid source observation");
@@ -51,34 +51,23 @@ public record SourceObservation(long number, Kind kind, String url, String title
                     merged=true;
                 }
             }
-            // Hash the full observed field bytes before model truncation; not JSON property order.
-            StringBuilder canonical=new StringBuilder();
-            for(Object field:new Object[]{n.longValue(),url,title,body,state,updated,parent,evidence,merged}) {
-                String value=String.valueOf(field); canonical.append(value.length()).append(':').append(value);
-            }
-            String digest=hash(canonical.toString());
-            boolean truncated=body.length()>32768 || evidence.length()>4096;
+            // Raw body exists only within this discovery frame; retain its byte hash only.
+            SourceObservationCanonical.quote(body); // Reject unpaired surrogates before UTF-8 encoding.
+            if(evidence.length()>4096) throw new IllegalArgumentException();
+            String digest=hash(body);
             return new SourceObservation(n.longValue(),pulls?Kind.PROPOSAL:Kind.MILESTONE,url,title,
-                    bounded(body,32768),state,updated,observedAt,parent,bounded(evidence,4096),merged,digest,truncated);
-        } catch(RuntimeException e) { throw new IOException("invalid source record; page not committed",e); }
+                    hash(body),state,updated,observedAt,parent,evidence,false,digest,false);
+        } catch(RuntimeException e) { throw new IOException("invalid source record; page not committed"); }
     }
     private static String text(JsonNode row,String key) {
         var v=row.get(key); if(v==null || !v.isTextual()) throw new IllegalArgumentException(); return v.textValue();
     }
-    private static String bounded(String value,int max) {
-        if(value.length()<=max) return value;
-        String suffix="\n[TRUNCATED; full bounded response record SHA-256 recorded separately]";
-        int end=max-suffix.length();
-        if(Character.isHighSurrogate(value.charAt(end-1))) end--;
-        return value.substring(0,end)+suffix;
-    }
-    /** Length-prefixed canonical fields; receipt time is deliberately excluded. Not the Daml digest. */
-    public String fingerprint() {
-        var b=new StringBuilder();
-        for(Object field:new Object[]{number,kind,url,title,body,state,updatedAt,parentPR,linkEvidence,merged,observedDigest,truncated}) {
-            String s=String.valueOf(field); b.append(s.length()).append(':').append(s);
-        }
-        return hash(b.toString());
+    /** Content comparison at initial lineage; receipt time is never content. */
+    public String fingerprint() { return fingerprint(1,null); }
+    public String fingerprint(long version,String previousDigest) {
+        return hash(SourceObservationCanonical.serialize(SourceCatalogueCodec.REPOSITORY,number,
+                kind==Kind.PROPOSAL?"proposal":"milestone",title,url,bodySha256,state,updatedAt,
+                parentPR,linkEvidence,"observed_unverified",version,previousDigest));
     }
     static String hash(String text) {
         try { return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(text.getBytes(StandardCharsets.UTF_8))); }

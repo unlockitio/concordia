@@ -1,78 +1,13 @@
 -- SPDX-License-Identifier: Apache-2.0
-module Cap.Examples.BabyCdf.SourceCatalogue where
+module Cap.Examples.BabyCdf.SourceCatalogue
+  (module Cap.Examples.BabyCdf.SourceObservationCredential, ScanPhase(..), SourceCheckpoint(..), CommitBatch(..)) where
+
+import Cap.Examples.BabyCdf.SourceObservationCredential
 
 import qualified DA.Text as Text
 import qualified DA.Set as Set
 
--- Candidate observations, not governance subjects. GitHub issues and PRs share
--- a number namespace, so kind is deliberately NOT part of the ledger key.
-data SourceKind = SourceProposal | SourceMilestone deriving (Eq, Show)
-data SourceState = SourceOpen | SourceClosed deriving (Eq, Show)
-data Verification = ObservedUnverified | ContentDigestChecked deriving (Eq, Show)
 data ScanPhase = FullSweep | OverlapSweep deriving (Eq, Show)
-data Observation = Observation with
-    number : Int
-    kind : SourceKind
-    sourceUrl : Text
-    title : Text
-    body : Text
-    state : SourceState
-    updatedAt : Time
-    observedAt : Time
-    verification : Verification
-    parentPR : Optional Int
-    linkEvidence : Text
-  deriving (Eq, Show)
-
-repository : Text
-repository = "canton-foundation/canton-dev-fund"
-
--- Structural serialization is unambiguous and includes every governed field.
--- Observation time is deliberately not content: replay does not bump a version.
-contentDigest : Observation -> Text
-contentDigest o = Text.sha256 (show ((o.number, o.kind, o.sourceUrl, o.title, o.body),
-  (o.state, o.updatedAt, o.verification, o.parentPR, o.linkEvidence)))
-
-validObservation : Observation -> Bool
-validObservation o = o.number > 0 && Text.length o.title > 0
-  && Text.length o.title <= 512 && Text.length o.body <= 32768
-  && Text.length o.sourceUrl <= 512 && Text.length o.linkEvidence <= 4096
-  && o.sourceUrl == "https://github.com/" <> repository <>
-     (if o.kind == SourceProposal then "/pull/" else "/issues/") <> show o.number
-  && o.updatedAt <= o.observedAt
-  && case o.parentPR of
-       None -> True
-       Some n -> o.kind == SourceMilestone && n > 0 && n /= o.number
-          && o.linkEvidence /= ""
-
-template SourceItem
-  with
-    opener : Party
-    repo : Text
-    observation : Observation
-    fingerprint : Text
-    version : Int
-    previousDigest : Optional Text
-  where
-    signatory opener
-    observer opener
-    ensure repo == repository && validObservation observation
-      && fingerprint == contentDigest observation && version > 0
-      && (if version == 1 then previousDigest == None else previousDigest /= None)
-    key (opener, repo, observation.number) : (Party, Text, Int)
-    maintainer key._1
-
-    choice ReviseSourceItem : ContractId SourceItem
-      with next : Observation
-      controller opener
-      do
-        assertMsg "source kind is immutable" (next.kind == observation.kind)
-        assertMsg "source number is immutable" (next.number == observation.number)
-        assertMsg "source observation time regressed" (next.observedAt >= observation.observedAt)
-        assertMsg "source updated time regressed" (next.updatedAt >= observation.updatedAt)
-        assertMsg "source content unchanged" (contentDigest next /= fingerprint)
-        create this with observation = next; fingerprint = contentDigest next
-                         version = version + 1; previousDigest = Some fingerprint
 
 -- Full sweeps are mandatory initially and after at most three overlap sweeps.
 -- Tokens are opaque, bounded adapter observations, not proof of remote coverage.
@@ -81,6 +16,7 @@ template SourceCheckpoint
   with
     opener : Party
     repo : Text
+    schema : Text
     highWater : Int
     generation : Int
     phase : ScanPhase
@@ -92,7 +28,7 @@ template SourceCheckpoint
   where
     signatory opener
     observer opener
-    ensure repo == repository && highWater >= 0 && generation >= 0
+    ensure schema == "babycdf-source-observation/v2" && repo == repository && highWater >= 0 && generation >= 0
       && completedFullGeneration >= 0 && completedFullGeneration <= generation
       && overlapsSinceFull >= 0 && overlapsSinceFull <= 3
       && Text.length pageToken <= 512 && Text.length scanFingerprint <= 64
@@ -115,19 +51,7 @@ template SourceCheckpoint
         assertMsg "cannot change phase during scan" (not inProgress || scanPhase == phase)
         assertMsg "full sweep required" (scanPhase == FullSweep
           || (completedFullGeneration > 0 && overlapsSinceFull < 3))
-        _ <- mapA (\o -> do
-          existing <- lookupByKey @SourceItem (opener, repo, o.number)
-          case existing of
-            None -> do
-              _ <- create SourceItem with opener; repo; observation = o
-                                          fingerprint = contentDigest o; version = 1; previousDigest = None
-              pure ()
-            Some cid -> do
-              old <- fetch cid
-              assertMsg "source kind is immutable" (old.observation.kind == o.kind)
-              if old.fingerprint == contentDigest o then pure () else do
-                _ <- exercise cid ReviseSourceItem with next = o
-                pure ()) items
+        _ <- mapA (issueObservation opener repo) items
         let nextGeneration = if inProgress then generation else generation + 1
         create this with
           highWater = foldl max highWater (map (.number) items)

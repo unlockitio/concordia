@@ -54,7 +54,7 @@ class JavaSourceIngestionTest {
     }
     static SourceObservation changed(SourceObservation o,long number,SourceObservation.Kind kind,String body,Instant updated,Instant receipt) {
         return new SourceObservation(number,kind,"https://github.com/canton-foundation/canton-dev-fund/"+(kind==SourceObservation.Kind.PROPOSAL?"pull/":"issues/")+number,
-                o.title(),body,o.state(),updated,receipt,null,"",false,SourceObservation.hash(body),false);
+                o.title(),SourceObservation.hash(body),o.state(),updated,receipt,null,"",false,SourceObservation.hash(body),false);
     }
     @Test void mixedBatchOnlyWritesChangedAndNewInSortedOrder() throws Exception {
         var ledger=new Ledger(); var logs=new ArrayList<String>(); var o=observation();
@@ -129,7 +129,7 @@ class JavaSourceIngestionTest {
                     mismatch==2?new JavaSourceIngestion.Page(List.of(changed(o,184,o.kind(),"wrong",o.updatedAt(),o.observedAt())),"next",false):expectedPage;
             StringBuilder identity=new StringBuilder(before.cid()).append('|').append(before.generation()).append('|').append("next").append('|').append(false);
             identity.append('|').append(o.fingerprint());
-            ledger.proven=new JavaSourceIngestion.Batch(wrongBefore,wrongPage,mismatch==3?"wrong":"babycdf-source-"+SourceObservation.hash(identity.toString()));
+            ledger.proven=new JavaSourceIngestion.Batch(wrongBefore,wrongPage,mismatch==3?"wrong":"babycdf-source-v2-"+SourceObservation.hash(identity.toString()));
             var engine=new JavaSourceIngestion(ledger,c->expectedPage,logs::add);
             assertThrows(IOException.class,engine::cycle); assertTrue(logs.isEmpty()); assertEquals(1,ledger.calls);
         }
@@ -149,8 +149,8 @@ class JavaSourceIngestionTest {
         var discovery=new GitHubDiscovery((uri,timeout)->new GitHubDiscovery.Response(200,List.of(),
                 uri.getPath().endsWith("pulls")?"["+row+"]":"[]"),GitHubDiscovery.Limits.defaults(),clock,System::nanoTime);
         var report=discovery.discoverSources(); assertTrue(report.complete());
-        assertEquals(1,report.observations().size()); assertTrue(report.observations().getFirst().merged());
-        assertEquals("Evidence",report.observations().getFirst().body());
+        assertEquals(1,report.observations().size()); assertFalse(report.observations().getFirst().merged());
+        assertEquals(SourceObservation.hash("Evidence"),report.observations().getFirst().bodySha256());
         var bad=new GitHubDiscovery((uri,timeout)->new GitHubDiscovery.Response(200,List.of(),
                 "[{\"number\":184,\"title\":\"missing required fields\"}]"),GitHubDiscovery.Limits.defaults(),clock,System::nanoTime);
         assertFalse(bad.discoverSources().complete()); assertTrue(bad.discoverSources().observations().isEmpty());
@@ -162,8 +162,9 @@ class JavaSourceIngestionTest {
                 .put("html_url","https://github.com/canton-foundation/canton-dev-fund/pull/184")
                 .put("updated_at","2026-01-01T00:00:00Z").putNull("merged_at");
         var observation=SourceObservation.parse(row,true,Instant.parse("2026-01-02T00:00:00Z"));
-        assertTrue(observation.truncated()); assertTrue(observation.body().contains("TRUNCATED"));
-        assertTrue(observation.body().length()<=32768);
+        assertFalse(observation.truncated());
+        assertEquals(SourceObservation.hash("x".repeat(40000)),observation.bodySha256());
+        assertFalse(observation.toString().contains("x".repeat(100)));
         var reordered=mapper.createObjectNode();
         var names=new ArrayList<String>(); row.fieldNames().forEachRemaining(names::add); Collections.reverse(names);
         names.forEach(n->reordered.set(n,row.get(n)));
@@ -172,7 +173,7 @@ class JavaSourceIngestionTest {
     @Test void requiredFieldsAndReceiptIndependentFingerprint() throws Exception {
         assertThrows(IOException.class,()->SourceObservation.parse(new ObjectMapper().readTree("{\"number\":1,\"title\":\"x\"}"),true,Instant.now()));
         var o=observation();
-        var later=new SourceObservation(o.number(),o.kind(),o.url(),o.title(),o.body(),o.state(),o.updatedAt(),
+        var later=new SourceObservation(o.number(),o.kind(),o.url(),o.title(),o.bodySha256(),o.state(),o.updatedAt(),
                 o.observedAt().plusSeconds(10),o.parentPR(),o.linkEvidence(),o.merged(),o.observedDigest(),o.truncated());
         assertEquals(o.fingerprint(),later.fingerprint());
     }

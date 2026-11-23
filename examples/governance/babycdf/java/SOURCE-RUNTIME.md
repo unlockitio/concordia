@@ -4,12 +4,12 @@
 
 - unset or `live`: token-authenticated GitHub source pages (explicit
   `INTAKE_GITHUB_TOKEN_FILE` required) committed through `JavaSourceIngestion`
-  and `SourceCatalogueLedger`, using the existing demo package argument and opener.
-- `fixture`: explicit offline advisory inventory only; no production SourceItems.
+  and `SourceCatalogueLedger`, using explicit impl and demo package arguments and opener.
+- `fixture`: explicit offline advisory inventory only; no production SourceObservationCredentials.
 
 The existing CLI `--offline-fixture grant-file ...` concerns the curated grant
 verification bytes, **not** source discovery mode. It remains for compatibility.
-Offline invocations must also set `INTAKE_DISCOVERY_MODE=fixture`. SourceItems are
+Offline invocations must also set `INTAKE_DISCOVERY_MODE=fixture`. SourceObservationCredentials are
 unverified candidate evidence, never additional voting topics or agenda authority.
 No LLM calls or actAs rights were added.
 
@@ -20,6 +20,28 @@ source interval is at least thirty seconds, including ordinary failures; HTTP
 403/429 can delay or suspend attempts as described below. This is not a strict
 aggregate 30-second bound on ledger proof reads (existing bounded 15-second RPCs
 remain).
+
+## Source credential trust contract (S1a)
+
+The opener is the issuer and trust anchor. Credential signatories are derived
+from the generated view's anchorers plus holders (sole opener anchorer, no
+holders). Template invariants explicitly require the Party issuer among unique
+anchorers, unique holders, required VerifiableCredential/BabyCDFSourceObservation
+and kind subtype types, and exactly one subject. The pinned CIP structural
+helpers are applied; this is an issuer assertion, not independent GitHub proof.
+
+Factory-issued revisions enforce predecessor lineage against the fetched active
+key. Direct opener creation is intentionally permitted: even a version greater
+than one with a well-formed previous digest need not have a real predecessor.
+The registered view is NOT proof of factory issuance or ledger-verified lineage.
+Default Archive is available to signatories. Future S1b must verify fingerprint
+and version against the copied pin; it must not treat either as lineage proof.
+
+Raw body text is excluded from durable catalogue command payloads, contracts,
+journals and logs. Transient HTTP/JSON discovery parsing necessarily holds body
+text until raw UTF-8 hashing; separate Reviewer evidence fixtures and HTTP input
+are not durable catalogue observations. SourceItem references in immutable legacy
+captures and rejection tests are intentional legacy evidence, not current schema.
 
 ## Explicit credential configuration
 
@@ -97,8 +119,11 @@ This slice does **not** solve the adapter's whole-ACS lookup (20MB/10000 respons
 or journal exhaustion at 10000 intents. No automatic rotation/deletion occurs.
 There is no server-side business-key filter in GetActiveContracts. A reconciled
 key-to-CID index and validated rotation design require a separate change before
-unbounded live acceptance. Body size affects the catalogue limit: do not claim
-600 maximum-size source bodies fit. Compose now defaults to live ingestion;
+unbounded live acceptance. Source bodies are transient discovery input only; durable observations carry raw
+UTF-8 body SHA-256 hashes, not body text. HTTP response bounds still apply.
+Credential fingerprints use canonical schema v2 and bind revision lineage;
+legacy checkpoints/intents require reviewed reconciliation and fail closed.
+No credential-bound agenda behavior is introduced in S1a. Compose now defaults to live ingestion;
 ledger-derived stage counts, runner narration and full deck alignment remain
 separate acceptance work. Existing log-tail client counts are not ledger counts.
 Do not run the live mode as an acceptance demonstration until those are reviewed.

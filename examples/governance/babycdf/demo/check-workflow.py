@@ -56,7 +56,7 @@ for name, source, suffix in [('proposalVote', 'proposal-184', ':grant'), ('miles
 if 'awaitIntake state.opener roundId agenda 120' not in body('requestIntake'):
     errors.append('Intake wait must remain bounded')
 catalogue = body('sourceCatalogueCounts')
-for required in ('query @Cap.Examples.BabyCdf.SourceCatalogue.SourceItem opener',
+for required in ('query @Cap.Examples.BabyCdf.SourceCatalogue.SourceObservationCredential opener',
                  'item.opener == opener', 'Set.fromList', 'item.observation.number',
                  'SourceProposal', 'SourceMilestone',
                  'pure (length items, Set.size keys, proposals, milestones)'):

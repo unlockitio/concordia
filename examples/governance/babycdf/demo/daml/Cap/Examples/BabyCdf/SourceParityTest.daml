@@ -1,0 +1,23 @@
+-- SPDX-License-Identifier: Apache-2.0
+module Cap.Examples.BabyCdf.SourceParityTest where
+import Daml.Script
+import DA.Assert
+import DA.Date
+import DA.Time
+import qualified DA.Text as Text
+import Cap.Examples.BabyCdf.SourceObservationCredential
+
+allControlsAndTimeBoundaries : Script ()
+allControlsAndTimeBoundaries = script do
+  let escapes = ["\\u0000","\\u0001","\\u0002","\\u0003","\\u0004","\\u0005","\\u0006","\\u0007",
+        "\\b","\\t","\\n","\\u000b","\\f","\\r","\\u000e","\\u000f",
+        "\\u0010","\\u0011","\\u0012","\\u0013","\\u0014","\\u0015","\\u0016","\\u0017",
+        "\\u0018","\\u0019","\\u001a","\\u001b","\\u001c","\\u001d","\\u001e","\\u001f"]
+  _ <- mapA (\(n,e) -> jsonText (Text.fromCodePoints [n]) === "\"" <> e <> "\"") (zip [0..31] escapes)
+  _ <- mapA (\(input,expected) -> jsonText input === expected)
+    [("\"","\"\\\"\""),("\\","\"\\\\\""),("😀","\"😀\""),("é","\"é\""),("é","\"é\"")]
+  _ <- mapA (\(t,expected) -> canonicalTime t === expected)
+    [(time (date 1 Jan 1) 0 0 0,"0001-01-01T00:00:00.000000Z"),
+     (addRelTime (time (date 1969 Dec 31) 23 59 59) (microseconds 999999),"1969-12-31T23:59:59.999999Z"),
+     (addRelTime (time (date 9999 Dec 31) 23 59 59) (microseconds 999999),"9999-12-31T23:59:59.999999Z")]
+  pure ()

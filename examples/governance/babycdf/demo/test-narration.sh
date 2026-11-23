@@ -130,8 +130,11 @@ REPO_REL="examples/governance/babycdf/demo/daml/Cap/Examples/BabyCdf/Live.daml"
 # v11 receives both RuleRefs through bootstrap script input and carries the
 # proposed reference in the signed anchor. Rule text hashes are runtime data.
 # v12 queries the active rule for reference-only narration; no clause text.
-SPEC_VERSION='quorum-of-three-core-v12-reference-only-narration'
-SPEC_DIGEST='41a80a8cf2663494b7283d6b7a22b49364d15a91d91f64d7b55dbe9ed582956e'
+# v13 changes only the read-only catalogue count template to the impl credential.
+# Voting, agenda creation, authority, and narration remain v12 semantics (S1b deferred).
+# v14 renames the emitted read-only catalogue label; no governance semantics change.
+SPEC_VERSION='quorum-of-three-core-v14-credential-evidence-label'
+SPEC_DIGEST='03c1316d4d9a5f548a884435289838a82f886e16c54431896a853095dade21c4'
 
 for required in "$LIVE" "$SELECTOR" "$RULE"; do
   if [ ! -f "$required" ]; then

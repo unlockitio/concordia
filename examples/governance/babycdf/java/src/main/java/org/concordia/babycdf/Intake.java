@@ -180,7 +180,8 @@ public final class Intake {
                 else System.out.println(intake.step());
             } else {
                 try(var sources=openSources(discoveryMode,Integer.parseInt(args[2]),args[3],args[5],args[7],
-                        Path.of(args[8]),SourceCatalogueLedger::new)) {
+                        Path.of(args[8]),(port,opener,demoPackage,user,journal) ->
+                            new SourceCatalogueLedger(port,opener,args[4],demoPackage,user,journal))) {
                     var scheduler=new SourceSweepScheduler(new JavaSourceIngestion(sources,pages,System.out::println),System::nanoTime,sourceInterval);
                     pollWithSources(intake,scheduler,polling?Integer.parseInt(args[10]):1,polling?Long.parseLong(args[11]):1000,Thread::sleep,System.out::println);
                 }

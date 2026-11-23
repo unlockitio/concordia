@@ -13,17 +13,17 @@ import java.time.Instant;
 class SourceCatalogueGoldenTest {
     @Test void actualDamlContentDigestVectors() throws Exception {
         String[] times={"00Z","00.100Z","00.123Z","00.123456Z"};
-        String[] hashes={"03b8ff8786ac7c340830fd9a6c3c104228792389b228a6f293c4dd0553839777",
-            "ec1cc6135b58eec7cceee8399a5dafc2283201c085b5eb309b8fb498b91a0e38",
-            "d2e34e1aa5798039db3a23182dde86141342d1527b891b644719bbeb6292add1",
-            "d0f507803952a3a4f9a3ae6302a851994020635821ce7a6dfd52d3afcbbbce5c"};
+        String[] hashes={"c154d7becd32a7243f409bda364b08e121bb818407104a5a6471477a9f707b36",
+            "7d36763731d3e2879fc49a85c6b8d39b53f07408c1755c928ce43188de2d8808",
+            "a725b9414a0a3041b5fdac0f46c2fa112bbb13b8d5da48c1140e09905140a8fb",
+            "4d8cbb70d15ab7eafd33f8279ad9defb8fe618eda9c8d7096d00d69bea5b760a"};
         for(int i=0;i<4;i++) {
             var r=SourceCatalogueWireTest.wire().toBuilder();
             for(int j=0;j<r.getFieldsCount();j++) {
                 var field=r.getFields(j); var value=field.getValue();
                 switch(field.getLabel()) {
                     case "title" -> value=SourceCatalogueWireTest.s("café2 😀3");
-                    case "body" -> value=SourceCatalogueWireTest.s("line\n\t\"\\\u00014");
+                    case "bodySha256" -> value=SourceCatalogueWireTest.s(SourceObservation.hash("line\n\t\"\\\u00014"));
                     case "linkEvidence" -> value=SourceCatalogueWireTest.s("evidence");
                     case "updatedAt" -> value=SourceCatalogueCodec.timestamp(Instant.parse("2026-01-01T00:00:"+times[i]));
                     case "parentPR" -> { if(i==0) value=ValueOuterClass.Value.newBuilder()
@@ -38,7 +38,8 @@ class SourceCatalogueGoldenTest {
         var original=SourceCatalogueWireTest.wire(); String digest=SourceCatalogueDigest.digest(original);
         for(int i=0;i<original.getFieldsCount();i++) {
             var field=original.getFields(i); var value=field.getValue();
-            if(value.hasText()) value=SourceCatalogueWireTest.s(value.getText()+"x");
+            if(field.getLabel().equals("bodySha256")) value=SourceCatalogueWireTest.s("0".repeat(64));
+            else if(value.hasText()) value=SourceCatalogueWireTest.s(value.getText()+"x");
             else if(value.hasInt64()) value=SourceCatalogueWireTest.n(value.getInt64()+1);
             else if(value.hasTimestamp()) value=ValueOuterClass.Value.newBuilder().setTimestamp(value.getTimestamp()+1).build();
             else if(value.hasOptional()) value=ValueOuterClass.Value.newBuilder().setOptional(ValueOuterClass.Optional.getDefaultInstance()).build();
