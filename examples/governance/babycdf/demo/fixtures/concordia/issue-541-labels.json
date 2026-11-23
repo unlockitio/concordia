@@ -1,0 +1,30 @@
+{
+  "data": [
+    {
+      "archived_at": null,
+      "archived_by": null,
+      "color": "ededed",
+      "default": false,
+      "description": null,
+      "id": 10815158307,
+      "name": "gitvote",
+      "node_id": "LA_kwDORO6OYM8AAAAChKI4Iw",
+      "url": "https://api.github.com/repos/canton-foundation/canton-dev-fund/labels/gitvote"
+    },
+    {
+      "archived_at": null,
+      "archived_by": null,
+      "color": "ededed",
+      "default": false,
+      "description": null,
+      "id": 10815158318,
+      "name": "gitvote/open",
+      "node_id": "LA_kwDORO6OYM8AAAAChKI4Lg",
+      "url": "https://api.github.com/repos/canton-foundation/canton-dev-fund/labels/gitvote/open"
+    }
+  ],
+  "etag": "W/\"fc6fb9ea1d3b4db72bbc9cbe61935e7e9183b175ad89f883db6b955045a368c2\"",
+  "link": "",
+  "retrieved_at": "2026-11-23T02:13:26.140688+00:00",
+  "source": "https://api.github.com/repos/canton-foundation/canton-dev-fund/issues/541/labels?per_page=100"
+}

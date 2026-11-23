@@ -1,0 +1,19 @@
+{
+  "data": [
+    {
+      "additions": 360,
+      "blob_url": "https://github.com/canton-foundation/canton-dev-fund/blob/c6964dc9545f4046d6f4e4c1cb81cfd01fd6b521/proposals%2Fconcordia.md",
+      "changes": 360,
+      "contents_url": "https://api.github.com/repos/canton-foundation/canton-dev-fund/contents/proposals%2Fconcordia.md?ref=c6964dc9545f4046d6f4e4c1cb81cfd01fd6b521",
+      "deletions": 0,
+      "filename": "proposals/concordia.md",
+      "raw_url": "https://github.com/canton-foundation/canton-dev-fund/raw/c6964dc9545f4046d6f4e4c1cb81cfd01fd6b521/proposals%2Fconcordia.md",
+      "sha": "f591787a772848e4537aba5d8ba02be1764647da",
+      "status": "added"
+    }
+  ],
+  "etag": "W/\"21841c2b32ffac2d55fb4a3a232e72b82c50ec6e35044fe1b4e5c446f9d4e56e\"",
+  "link": "",
+  "retrieved_at": "2026-11-23T02:13:11.060365+00:00",
+  "source": "https://api.github.com/repos/canton-foundation/canton-dev-fund/pulls/184/files?per_page=100"
+}

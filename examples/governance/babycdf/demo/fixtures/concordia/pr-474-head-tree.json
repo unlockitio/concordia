@@ -1,0 +1,426 @@
+{
+  "data": {
+    "sha": "69cbea9301abc1b28394faa07b793b6d2c013632",
+    "tree": [
+      {
+        "mode": "100644",
+        "path": ".DS_Store",
+        "sha": "71c0b0ef979fcb191162f5f48740ba0b19b45638",
+        "size": 6148,
+        "type": "blob",
+        "url": "https://api.github.com/repos/canton-foundation/canton-dev-fund/git/blobs/71c0b0ef979fcb191162f5f48740ba0b19b45638"
+      },
+      {
+        "mode": "040000",
+        "path": ".github",
+        "sha": "03ab6665d8625b86b1948c693e1792033b9b2d1d",
+        "type": "tree",
+        "url": "https://api.github.com/repos/canton-foundation/canton-dev-fund/git/trees/03ab6665d8625b86b1948c693e1792033b9b2d1d"
+      },
+      {
+        "mode": "100644",
+        "path": ".github/.gitvote.yml",
+        "sha": "9dffad5e7497f0ea6c7bbba3e1d7ec22a3577c6d",
+        "size": 1241,
+        "type": "blob",
+        "url": "https://api.github.com/repos/canton-foundation/canton-dev-fund/git/blobs/9dffad5e7497f0ea6c7bbba3e1d7ec22a3577c6d"
+      },
+      {
+        "mode": "100644",
+        "path": ".github/CODEOWNERS",
+        "sha": "c0842644ec85b6385268a50a8d3d4dfb7b02e1a2",
+        "size": 28,
+        "type": "blob",
+        "url": "https://api.github.com/repos/canton-foundation/canton-dev-fund/git/blobs/c0842644ec85b6385268a50a8d3d4dfb7b02e1a2"
+      },
+      {
+        "mode": "100644",
+        "path": ".github/pull_request_template.md",
+        "sha": "cb86548ea50eb344df35de689cc51476d22701dd",
+        "size": 545,
+        "type": "blob",
+        "url": "https://api.github.com/repos/canton-foundation/canton-dev-fund/git/blobs/cb86548ea50eb344df35de689cc51476d22701dd"
+      },
+      {
+        "mode": "040000",
+        "path": ".github/workflows",
+        "sha": "12cb478a7775da28a1196120b97b7136fc62d1d8",
+        "type": "tree",
+        "url": "https://api.github.com/repos/canton-foundation/canton-dev-fund/git/trees/12cb478a7775da28a1196120b97b7136fc62d1d8"
+      },
+      {
+        "mode": "100644",
+        "path": ".github/workflows/aipricheck.yml",
+        "sha": "b6552327b9ed2e0a58e650addd33c9fb7acc212f",
+        "size": 7579,
+        "type": "blob",
+        "url": "https://api.github.com/repos/canton-foundation/canton-dev-fund/git/blobs/b6552327b9ed2e0a58e650addd33c9fb7acc212f"
+      },
+      {
+        "mode": "100644",
+        "path": ".github/workflows/champion-check.yml",
+        "sha": "1e997739cf8847ef90b04c7d43a1d0c50c9fcb57",
+        "size": 8567,
+        "type": "blob",
+        "url": "https://api.github.com/repos/canton-foundation/canton-dev-fund/git/blobs/1e997739cf8847ef90b04c7d43a1d0c50c9fcb57"
+      },
+      {
+        "mode": "100644",
+        "path": ".github/workflows/milestone-tracker.yml",
+        "sha": "7b7797953908376350d3fda27e242c6a4f0daf68",
+        "size": 7616,
+        "type": "blob",
+        "url": "https://api.github.com/repos/canton-foundation/canton-dev-fund/git/blobs/7b7797953908376350d3fda27e242c6a4f0daf68"
+      },
+      {
+        "mode": "100644",
+        "path": ".github/workflows/sig-label-check.yml",
+        "sha": "d79cfff78f6fde242eb331d5975c79823c59adf9",
+        "size": 4428,
+        "type": "blob",
+        "url": "https://api.github.com/repos/canton-foundation/canton-dev-fund/git/blobs/d79cfff78f6fde242eb331d5975c79823c59adf9"
+      },
+      {
+        "mode": "100644",
+        "path": "Development Fund Proposal Review Process.md",
+        "sha": "7217b4d0d8792ef9dfc8463fbc761acfe0f2a3bd",
+        "size": 6186,
+        "type": "blob",
+        "url": "https://api.github.com/repos/canton-foundation/canton-dev-fund/git/blobs/7217b4d0d8792ef9dfc8463fbc761acfe0f2a3bd"
+      },
+      {
+        "mode": "100644",
+        "path": "LICENSE",
+        "sha": "1625c1793607996fcfc46420e8aa2f3d2b7efd1e",
+        "size": 7047,
+        "type": "blob",
+        "url": "https://api.github.com/repos/canton-foundation/canton-dev-fund/git/blobs/1625c1793607996fcfc46420e8aa2f3d2b7efd1e"
+      },
+      {
+        "mode": "100644",
+        "path": "README.md",
+        "sha": "a04bd9e36333b9ff99aece6fcd17b69c5d9bb927",
+        "size": 6208,
+        "type": "blob",
+        "url": "https://api.github.com/repos/canton-foundation/canton-dev-fund/git/blobs/a04bd9e36333b9ff99aece6fcd17b69c5d9bb927"
+      },
+      {
+        "mode": "040000",
+        "path": "proposals",
+        "sha": "88daf58a80436e096ba25a843734ac0ba2a76f23",
+        "type": "tree",
+        "url": "https://api.github.com/repos/canton-foundation/canton-dev-fund/git/trees/88daf58a80436e096ba25a843734ac0ba2a76f23"
+      },
+      {
+        "mode": "100644",
+        "path": "proposals/ 2026-04-DA-scalability_performance_robustness.md",
+        "sha": "7ff5d1cb0f7b211bbb090fc6e006f3459ddefe50",
+        "size": 12483,
+        "type": "blob",
+        "url": "https://api.github.com/repos/canton-foundation/canton-dev-fund/git/blobs/7ff5d1cb0f7b211bbb090fc6e006f3459ddefe50"
+      },
+      {
+        "mode": "100644",
+        "path": "proposals/2026-02-Cayvox Labs-PartyLayer-Wallet-SDK.md",
+        "sha": "a663a5578e8db3d31ef084cdc3fa9a0fcd0a0716",
+        "size": 42600,
+        "type": "blob",
+        "url": "https://api.github.com/repos/canton-foundation/canton-dev-fund/git/blobs/a663a5578e8db3d31ef084cdc3fa9a0fcd0a0716"
+      },
+      {
+        "mode": "100644",
+        "path": "proposals/2026-02-DA-ISS-based-BFT.md",
+        "sha": "7a32a466ae4856db8123583282880e98145bfea7",
+        "size": 81417,
+        "type": "blob",
+        "url": "https://api.github.com/repos/canton-foundation/canton-dev-fund/git/blobs/7a32a466ae4856db8123583282880e98145bfea7"
+      },
+      {
+        "mode": "100644",
+        "path": "proposals/2026-02-DA-Traffic-Based-App-Rewards.md",
+        "sha": "72d16e974a8c50fb2a8801b2e9aa4bbb5971c6e2",
+        "size": 25396,
+        "type": "blob",
+        "url": "https://api.github.com/repos/canton-foundation/canton-dev-fund/git/blobs/72d16e974a8c50fb2a8801b2e9aa4bbb5971c6e2"
+      },
+      {
+        "mode": "100644",
+        "path": "proposals/2026-02-Obsidian-daml-training-proposal-v4.md",
+        "sha": "10250841dd55946e2456263ef4c814e9827448c5",
+        "size": 39188,
+        "type": "blob",
+        "url": "https://api.github.com/repos/canton-foundation/canton-dev-fund/git/blobs/10250841dd55946e2456263ef4c814e9827448c5"
+      },
+      {
+        "mode": "100644",
+        "path": "proposals/2026-02-Zenith-Technology-and-ecosystem-development-for-a-multi-VM-capable-Canton.md",
+        "sha": "29842887a652ce37ad422dd39dd10ec29012d84f",
+        "size": 17265,
+        "type": "blob",
+        "url": "https://api.github.com/repos/canton-foundation/canton-dev-fund/git/blobs/29842887a652ce37ad422dd39dd10ec29012d84f"
+      },
+      {
+        "mode": "100644",
+        "path": "proposals/2026-03 -DA-ProposalContractKeys.md",
+        "sha": "e29aa165bb49fc03b18728b7f1d9fe1b00e793d2",
+        "size": 17393,
+        "type": "blob",
+        "url": "https://api.github.com/repos/canton-foundation/canton-dev-fund/git/blobs/e29aa165bb49fc03b18728b7f1d9fe1b00e793d2"
+      },
+      {
+        "mode": "100644",
+        "path": "proposals/2026-03-CCTools-cctools.md",
+        "sha": "841838bb88673d900f1e0fd90314625f8aa0f0f3",
+        "size": 23812,
+        "type": "blob",
+        "url": "https://api.github.com/repos/canton-foundation/canton-dev-fund/git/blobs/841838bb88673d900f1e0fd90314625f8aa0f0f3"
+      },
+      {
+        "mode": "100644",
+        "path": "proposals/2026-03-Certora-daml_package_analyzer_proposal .md",
+        "sha": "7e57bf2eb50af84e6ac7ef6452779656d3284b4e",
+        "size": 42821,
+        "type": "blob",
+        "url": "https://api.github.com/repos/canton-foundation/canton-dev-fund/git/blobs/7e57bf2eb50af84e6ac7ef6452779656d3284b4e"
+      },
+      {
+        "mode": "100644",
+        "path": "proposals/2026-03-Certora-json_image.png",
+        "sha": "f9ddcbf72f664783045e8c11eb8e835282b1e011",
+        "size": 175465,
+        "type": "blob",
+        "url": "https://api.github.com/repos/canton-foundation/canton-dev-fund/git/blobs/f9ddcbf72f664783045e8c11eb8e835282b1e011"
+      },
+      {
+        "mode": "100644",
+        "path": "proposals/2026-03-Certora-mermaid-diagram.png",
+        "sha": "0b40c5fc4cf4ab438f6cb38e8897a9b6ddb69461",
+        "size": 33625,
+        "type": "blob",
+        "url": "https://api.github.com/repos/canton-foundation/canton-dev-fund/git/blobs/0b40c5fc4cf4ab438f6cb38e8897a9b6ddb69461"
+      },
+      {
+        "mode": "100644",
+        "path": "proposals/2026-03-DA-Canton-Network-dapp-sdk-and-tooling.md",
+        "sha": "7cea6e522efa1af74d2af875042c84e8eef5c163",
+        "size": 61525,
+        "type": "blob",
+        "url": "https://api.github.com/repos/canton-foundation/canton-dev-fund/git/blobs/7cea6e522efa1af74d2af875042c84e8eef5c163"
+      },
+      {
+        "mode": "100644",
+        "path": "proposals/2026-03-DA-Logical-Synchronizer-Upgrades.md",
+        "sha": "4ae12ca914760ad9152e14945fb55384d5050dab",
+        "size": 11704,
+        "type": "blob",
+        "url": "https://api.github.com/repos/canton-foundation/canton-dev-fund/git/blobs/4ae12ca914760ad9152e14945fb55384d5050dab"
+      },
+      {
+        "mode": "100644",
+        "path": "proposals/2026-03-DA-OSS-validator-indexer-pqs.md",
+        "sha": "bc6e4cc34636f26379dc5b4e59e568299e045d62",
+        "size": 11786,
+        "type": "blob",
+        "url": "https://api.github.com/repos/canton-foundation/canton-dev-fund/git/blobs/bc6e4cc34636f26379dc5b4e59e568299e045d62"
+      },
+      {
+        "mode": "100644",
+        "path": "proposals/2026-03-DA-canton-oss-maintenance.md",
+        "sha": "ef7c5c6687bf8c8b1b3cb8e70e98f6ba154371dc",
+        "size": 6584,
+        "type": "blob",
+        "url": "https://api.github.com/repos/canton-foundation/canton-dev-fund/git/blobs/ef7c5c6687bf8c8b1b3cb8e70e98f6ba154371dc"
+      },
+      {
+        "mode": "100644",
+        "path": "proposals/2026-03-DA-daml-open-source.md",
+        "sha": "2cc39d9ff7989cb8d8213e821d1f825c67e652f6",
+        "size": 7851,
+        "type": "blob",
+        "url": "https://api.github.com/repos/canton-foundation/canton-dev-fund/git/blobs/2cc39d9ff7989cb8d8213e821d1f825c67e652f6"
+      },
+      {
+        "mode": "100644",
+        "path": "proposals/2026-03-DA-proposal-open-source-reference-wallet.md",
+        "sha": "d4863c04c1dea8c894a7e6f8ccbe76daab37631a",
+        "size": 17771,
+        "type": "blob",
+        "url": "https://api.github.com/repos/canton-foundation/canton-dev-fund/git/blobs/d4863c04c1dea8c894a7e6f8ccbe76daab37631a"
+      },
+      {
+        "mode": "100644",
+        "path": "proposals/2026-03-DA-splice-oss-maintenance.md",
+        "sha": "6c136b235862eccb85983bcd3d07aef948724ace",
+        "size": 7059,
+        "type": "blob",
+        "url": "https://api.github.com/repos/canton-foundation/canton-dev-fund/git/blobs/6c136b235862eccb85983bcd3d07aef948724ace"
+      },
+      {
+        "mode": "100644",
+        "path": "proposals/2026-03-DA-splice-wallet-kernel-open-source.md",
+        "sha": "ddabbad7612a01244e2a3bd7173be997f5f752b2",
+        "size": 7322,
+        "type": "blob",
+        "url": "https://api.github.com/repos/canton-foundation/canton-dev-fund/git/blobs/ddabbad7612a01244e2a3bd7173be997f5f752b2"
+      },
+      {
+        "mode": "100644",
+        "path": "proposals/2026-03-DA-token-standard-v2.md",
+        "sha": "bef1b1aae2485c30345cd2c0dee0270489c00092",
+        "size": 17363,
+        "type": "blob",
+        "url": "https://api.github.com/repos/canton-foundation/canton-dev-fund/git/blobs/bef1b1aae2485c30345cd2c0dee0270489c00092"
+      },
+      {
+        "mode": "100644",
+        "path": "proposals/2026-03-Deepthi-canton-payment-streams.md",
+        "sha": "4f6e1b1ea173c2da1061dca3c953ca66b4203c97",
+        "size": 26296,
+        "type": "blob",
+        "url": "https://api.github.com/repos/canton-foundation/canton-dev-fund/git/blobs/4f6e1b1ea173c2da1061dca3c953ca66b4203c97"
+      },
+      {
+        "mode": "100644",
+        "path": "proposals/2026-03-FTP-x402-protocol-integration.md",
+        "sha": "8e3a81ffbd233d73189a1d90e32c3511989c3be9",
+        "size": 15842,
+        "type": "blob",
+        "url": "https://api.github.com/repos/canton-foundation/canton-dev-fund/git/blobs/8e3a81ffbd233d73189a1d90e32c3511989c3be9"
+      },
+      {
+        "mode": "100644",
+        "path": "proposals/2026-03-Noders LLC-go-sdks.md",
+        "sha": "96aad5b9dc4ddc2de86561d2c7ceab733a76687d",
+        "size": 25813,
+        "type": "blob",
+        "url": "https://api.github.com/repos/canton-foundation/canton-dev-fund/git/blobs/96aad5b9dc4ddc2de86561d2c7ceab733a76687d"
+      },
+      {
+        "mode": "100644",
+        "path": "proposals/2026-03-Peaceful Studio-csharp-dotnet-sdk.md",
+        "sha": "091bee21357e27285da997c2e6b0c7b08afff989",
+        "size": 114895,
+        "type": "blob",
+        "url": "https://api.github.com/repos/canton-foundation/canton-dev-fund/git/blobs/091bee21357e27285da997c2e6b0c7b08afff989"
+      },
+      {
+        "mode": "100644",
+        "path": "proposals/2026-03-Srikanth-reference-implementation-of-settlement-pattern-and-reference-dex-implementation.md",
+        "sha": "429b8c11c2ba37f07a9d6065551921c7b7eed03d",
+        "size": 24222,
+        "type": "blob",
+        "url": "https://api.github.com/repos/canton-foundation/canton-dev-fund/git/blobs/429b8c11c2ba37f07a9d6065551921c7b7eed03d"
+      },
+      {
+        "mode": "100644",
+        "path": "proposals/2026-04-Avro-SV_Governance_dApp.md",
+        "sha": "4788592153815a7b4a39423d21246d1d1b524d4c",
+        "size": 18967,
+        "type": "blob",
+        "url": "https://api.github.com/repos/canton-foundation/canton-dev-fund/git/blobs/4788592153815a7b4a39423d21246d1d1b524d4c"
+      },
+      {
+        "mode": "100644",
+        "path": "proposals/2026-04-Obsidian-CIP-0105.md",
+        "sha": "8e8e5998dcf5840d5662c725807f6f2a1f15652e",
+        "size": 29495,
+        "type": "blob",
+        "url": "https://api.github.com/repos/canton-foundation/canton-dev-fund/git/blobs/8e8e5998dcf5840d5662c725807f6f2a1f15652e"
+      },
+      {
+        "mode": "100644",
+        "path": "proposals/2026-04-Obsidian-DAML Training - Scope Rationale and Proposal Update v2.md",
+        "sha": "3a6de93661ff60dcc1106af5ac5142c0c927fa17",
+        "size": 2846,
+        "type": "blob",
+        "url": "https://api.github.com/repos/canton-foundation/canton-dev-fund/git/blobs/3a6de93661ff60dcc1106af5ac5142c0c927fa17"
+      },
+      {
+        "mode": "100644",
+        "path": "proposals/2026-04-OpenZeppelin-canton-ecosystem-stack.md",
+        "sha": "3cc7df852013ce3dc216dfdfa37041ebd2ba8e56",
+        "size": 54790,
+        "type": "blob",
+        "url": "https://api.github.com/repos/canton-foundation/canton-dev-fund/git/blobs/3cc7df852013ce3dc216dfdfa37041ebd2ba8e56"
+      },
+      {
+        "mode": "100644",
+        "path": "proposals/2026-04-Unlockit-concordia.md",
+        "sha": "ff998a7e2530f8d146b7e5e541d81974f6ec0a8d",
+        "size": 28167,
+        "type": "blob",
+        "url": "https://api.github.com/repos/canton-foundation/canton-dev-fund/git/blobs/ff998a7e2530f8d146b7e5e541d81974f6ec0a8d"
+      },
+      {
+        "mode": "100644",
+        "path": "proposals/2026-05-BitDynamics-devkit-mock-overview.png",
+        "sha": "e29fa7e8d4b0f039b832813838521c5df77c5f5f",
+        "size": 673220,
+        "type": "blob",
+        "url": "https://api.github.com/repos/canton-foundation/canton-dev-fund/git/blobs/e29fa7e8d4b0f039b832813838521c5df77c5f5f"
+      },
+      {
+        "mode": "100644",
+        "path": "proposals/2026-05-BitDynamics-devkit-mock-token-faucet.png",
+        "sha": "e3ef693864d8ce745b7d65e8543fd5997e21dc66",
+        "size": 399240,
+        "type": "blob",
+        "url": "https://api.github.com/repos/canton-foundation/canton-dev-fund/git/blobs/e3ef693864d8ce745b7d65e8543fd5997e21dc66"
+      },
+      {
+        "mode": "100644",
+        "path": "proposals/2026-05-BitDynamics-devkit.md",
+        "sha": "39e799ad50fd74bbaac10bd747c15644f9851a5a",
+        "size": 44649,
+        "type": "blob",
+        "url": "https://api.github.com/repos/canton-foundation/canton-dev-fund/git/blobs/39e799ad50fd74bbaac10bd747c15644f9851a5a"
+      },
+      {
+        "mode": "100644",
+        "path": "proposals/2026-05-BitSafe-decentralization-manager.md",
+        "sha": "4e6ea54590b1da72035b5c0e9493e5da270a76c7",
+        "size": 26644,
+        "type": "blob",
+        "url": "https://api.github.com/repos/canton-foundation/canton-dev-fund/git/blobs/4e6ea54590b1da72035b5c0e9493e5da270a76c7"
+      },
+      {
+        "mode": "100644",
+        "path": "proposals/2026-05-Denex-denex-localnet.md",
+        "sha": "0056bef5f3905e037797b7948c8406de79ba7cea",
+        "size": 24647,
+        "type": "blob",
+        "url": "https://api.github.com/repos/canton-foundation/canton-dev-fund/git/blobs/0056bef5f3905e037797b7948c8406de79ba7cea"
+      },
+      {
+        "mode": "100644",
+        "path": "proposals/2026-05-Kaiko-data-standard.md",
+        "sha": "54499921b1f13dd4a15410063e4e1b0fc17a285a",
+        "size": 26636,
+        "type": "blob",
+        "url": "https://api.github.com/repos/canton-foundation/canton-dev-fund/git/blobs/54499921b1f13dd4a15410063e4e1b0fc17a285a"
+      },
+      {
+        "mode": "100644",
+        "path": "proposals/_template.md",
+        "sha": "ac35329fe43bbfd43373908b36f7f167fbc4b9ac",
+        "size": 4486,
+        "type": "blob",
+        "url": "https://api.github.com/repos/canton-foundation/canton-dev-fund/git/blobs/ac35329fe43bbfd43373908b36f7f167fbc4b9ac"
+      },
+      {
+        "mode": "100644",
+        "path": "sig-directory.md",
+        "sha": "727797dbd0b6b4272edb59f632795b39a339f022",
+        "size": 9612,
+        "type": "blob",
+        "url": "https://api.github.com/repos/canton-foundation/canton-dev-fund/git/blobs/727797dbd0b6b4272edb59f632795b39a339f022"
+      }
+    ],
+    "truncated": false,
+    "url": "https://api.github.com/repos/canton-foundation/canton-dev-fund/git/trees/69cbea9301abc1b28394faa07b793b6d2c013632"
+  },
+  "etag": "W/\"bdc0e0f8ed28745edcf665f89ab1df67309c0e009fcfaced941896b6b9fbfdab\"",
+  "link": "",
+  "retrieved_at": "2026-11-23T02:13:14.626106+00:00",
+  "source": "https://api.github.com/repos/canton-foundation/canton-dev-fund/git/trees/69cbea9301abc1b28394faa07b793b6d2c013632?recursive=1"
+}

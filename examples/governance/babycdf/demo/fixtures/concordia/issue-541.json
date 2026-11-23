@@ -1,0 +1,103 @@
+{
+  "data": {
+    "active_lock_reason": null,
+    "assignee": null,
+    "assignees": [],
+    "author_association": "COLLABORATOR",
+    "body": "### Milestone 4: Auctions Module Expansion\r\n- **Estimated Delivery:** Month 4\r\n- **Focus:** Expand `cap-auctions` to the bounded first-release auction set\r\n- **Deliverables / Value Metrics:**\r\n  - sealed-bid first-price and second-price auction support\r\n  - Dutch auction implementation\r\n  - multi-unit auction implementation\r\n  - Daml script and sandbox integration tests for supported auction formats\r\n\r\nMilestone | Description | Payment\r\n-- | -- | --\r\nMilestone 4 | Auctions Module Expansion | 100,000 CC upon committee acceptance\r\n\r\n_Originally posted by @pedrodneves in https://github.com/canton-foundation/canton-dev-fund/issues/184#issuecomment-4979716211_\r\n            ",
+    "closed_at": null,
+    "closed_by": null,
+    "comments": 3,
+    "comments_url": "https://api.github.com/repos/canton-foundation/canton-dev-fund/issues/541/comments",
+    "created_at": "2026-07-15T10:53:29Z",
+    "events_url": "https://api.github.com/repos/canton-foundation/canton-dev-fund/issues/541/events",
+    "html_url": "https://github.com/canton-foundation/canton-dev-fund/issues/541",
+    "id": 4891776208,
+    "issue_dependencies_summary": {
+      "blocked_by": 0,
+      "blocking": 0,
+      "total_blocked_by": 0,
+      "total_blocking": 0
+    },
+    "issue_field_values": [],
+    "labels": [
+      {
+        "archived_at": null,
+        "archived_by": null,
+        "color": "ededed",
+        "default": false,
+        "description": null,
+        "id": 10815158307,
+        "name": "gitvote",
+        "node_id": "LA_kwDORO6OYM8AAAAChKI4Iw",
+        "url": "https://api.github.com/repos/canton-foundation/canton-dev-fund/labels/gitvote"
+      },
+      {
+        "archived_at": null,
+        "archived_by": null,
+        "color": "ededed",
+        "default": false,
+        "description": null,
+        "id": 10815158318,
+        "name": "gitvote/open",
+        "node_id": "LA_kwDORO6OYM8AAAAChKI4Lg",
+        "url": "https://api.github.com/repos/canton-foundation/canton-dev-fund/labels/gitvote/open"
+      }
+    ],
+    "labels_url": "https://api.github.com/repos/canton-foundation/canton-dev-fund/issues/541/labels{/name}",
+    "locked": false,
+    "milestone": null,
+    "node_id": "I_kwDORO6OYM8AAAABI5KU0A",
+    "number": 541,
+    "performed_via_github_app": null,
+    "pinned_comment": null,
+    "reactions": {
+      "+1": 0,
+      "-1": 0,
+      "confused": 0,
+      "eyes": 0,
+      "heart": 0,
+      "hooray": 0,
+      "laugh": 0,
+      "rocket": 0,
+      "total_count": 0,
+      "url": "https://api.github.com/repos/canton-foundation/canton-dev-fund/issues/541/reactions"
+    },
+    "repository_url": "https://api.github.com/repos/canton-foundation/canton-dev-fund",
+    "state": "open",
+    "state_reason": null,
+    "sub_issues_summary": {
+      "completed": 0,
+      "percent_completed": 0,
+      "total": 0
+    },
+    "timeline_url": "https://api.github.com/repos/canton-foundation/canton-dev-fund/issues/541/timeline",
+    "title": "Concordia #184 - Milestone 4: Auctions Module Expansion",
+    "type": null,
+    "updated_at": "2026-11-20T19:20:45Z",
+    "url": "https://api.github.com/repos/canton-foundation/canton-dev-fund/issues/541",
+    "user": {
+      "events_url": "https://api.github.com/users/pedrodneves/events{/privacy}",
+      "followers_url": "https://api.github.com/users/pedrodneves/followers",
+      "following_url": "https://api.github.com/users/pedrodneves/following{/other_user}",
+      "gists_url": "https://api.github.com/users/pedrodneves/gists{/gist_id}",
+      "html_url": "https://github.com/pedrodneves",
+      "id": 256817585,
+      "login": "pedrodneves",
+      "node_id": "U_kgDOD065sQ",
+      "organizations_url": "https://api.github.com/users/pedrodneves/orgs",
+      "received_events_url": "https://api.github.com/users/pedrodneves/received_events",
+      "repos_url": "https://api.github.com/users/pedrodneves/repos",
+      "site_admin": false,
+      "starred_url": "https://api.github.com/users/pedrodneves/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/pedrodneves/subscriptions",
+      "type": "User",
+      "url": "https://api.github.com/users/pedrodneves",
+      "user_view_type": "public"
+    }
+  },
+  "etag": "W/\"496f968d0f5c54f71c172219395ef8fb079b9fb39be929c22d0e29130c3ee26e\"",
+  "link": "",
+  "retrieved_at": "2026-11-23T02:13:24.546249+00:00",
+  "source": "https://api.github.com/repos/canton-foundation/canton-dev-fund/issues/541"
+}

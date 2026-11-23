@@ -1,5 +1,29 @@
 # Source-bound agendas (S1b)
 
+## S2 evidence boundary
+
+R2: explicit fullSHA-only delivery (matching proof key), no backdated reachable
+branch fallback. PR head is uncached-reread coherent and the complete changed set
+is pinned. Edited commands never establish definitive outcomes/pins. App interval
+correlation is inferred evidence, not explicit vote identity; ambiguity is unresolved.
+Authors/logins are evidence, not authorization. Strict parsed amendment manifest
+creates VerifiedAmendment only after exact repo/sourceID/original+amending pin checks;
+real manifest remains empty and475 is not assigned an invented amendment link.
+
+Java SourceEvidenceCollector composes bounded cached source reads, pure evidence
+checks and canonical manifest output. Trusted app/source correlation emits failed,
+passed, open or unresolved; edits/conflicts and trigger-time history gaps fail closed.
+Amendments require explicit checked-manifest declarations, never titles. Corrections
+append against the validated previous-entry digest on the same round identity.
+Java SourceEvidence enriches source identities/pins without opening agendas or
+adding S3 queue authority. Proposal files carry canonical paths/statuses/blob IDs
+and full head; removed file membership fails closed pending explicit base proof.
+Milestone rounds are command comment identities; historical issue text, delivery
+reachability or result correlation gaps remain blocked/unresolved, not fabricated.
+A captured current head or edited body cannot establish trigger-time evidence.
+Public sanitized captures and request-budget receipt live under
+`demo/fixtures/concordia`; no fixture is claimed as ledger/factory provenance.
+
 Source grant/milestone agendas require an explicit SourceObservationCredential CID,
 expected fingerprint/version and evidence pin. The opener-controlled Intake bridge
 checks governor.opener; the proposer-controlled governor supplies opener authority.

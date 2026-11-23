@@ -1,0 +1,19 @@
+{
+  "data": [
+    {
+      "additions": 10,
+      "blob_url": "https://github.com/canton-foundation/canton-dev-fund/blob/2be89962b49aba706dd4066a84ed001cb7fd9c00/proposals%2F2026-04-Unlockit-concordia.md",
+      "changes": 18,
+      "contents_url": "https://api.github.com/repos/canton-foundation/canton-dev-fund/contents/proposals%2F2026-04-Unlockit-concordia.md?ref=2be89962b49aba706dd4066a84ed001cb7fd9c00",
+      "deletions": 8,
+      "filename": "proposals/2026-04-Unlockit-concordia.md",
+      "raw_url": "https://github.com/canton-foundation/canton-dev-fund/raw/2be89962b49aba706dd4066a84ed001cb7fd9c00/proposals%2F2026-04-Unlockit-concordia.md",
+      "sha": "ff998a7e2530f8d146b7e5e541d81974f6ec0a8d",
+      "status": "modified"
+    }
+  ],
+  "etag": "W/\"200a873e048413d25d5bb1a4d80b2eba74cf109c6d1aca7371ec9d1734669dcf\"",
+  "link": "",
+  "retrieved_at": "2026-11-23T02:13:12.542328+00:00",
+  "source": "https://api.github.com/repos/canton-foundation/canton-dev-fund/pulls/473/files?per_page=100"
+}

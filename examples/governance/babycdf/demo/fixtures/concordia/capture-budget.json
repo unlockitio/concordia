@@ -1,0 +1,289 @@
+{
+  "budget_remaining": 13,
+  "requests": [
+    {
+      "pagination_gap": false,
+      "path": "/pulls/184",
+      "remaining": 59,
+      "status": 200
+    },
+    {
+      "pagination_gap": false,
+      "path": "/pulls/184/files?per_page=100",
+      "remaining": 58,
+      "status": 200
+    },
+    {
+      "pagination_gap": false,
+      "path": "/git/trees/c6964dc9545f4046d6f4e4c1cb81cfd01fd6b521?recursive=1",
+      "remaining": 57,
+      "status": 200
+    },
+    {
+      "pagination_gap": false,
+      "path": "/pulls/473",
+      "remaining": 56,
+      "status": 200
+    },
+    {
+      "pagination_gap": false,
+      "path": "/pulls/473/files?per_page=100",
+      "remaining": 55,
+      "status": 200
+    },
+    {
+      "pagination_gap": false,
+      "path": "/git/trees/2be89962b49aba706dd4066a84ed001cb7fd9c00?recursive=1",
+      "remaining": 54,
+      "status": 200
+    },
+    {
+      "pagination_gap": false,
+      "path": "/pulls/474",
+      "remaining": 53,
+      "status": 200
+    },
+    {
+      "pagination_gap": false,
+      "path": "/pulls/474/files?per_page=100",
+      "remaining": 52,
+      "status": 200
+    },
+    {
+      "pagination_gap": false,
+      "path": "/git/trees/69cbea9301abc1b28394faa07b793b6d2c013632?recursive=1",
+      "remaining": 51,
+      "status": 200
+    },
+    {
+      "pagination_gap": false,
+      "path": "/pulls/475",
+      "remaining": 50,
+      "status": 200
+    },
+    {
+      "pagination_gap": false,
+      "path": "/pulls/475/files?per_page=100",
+      "remaining": 49,
+      "status": 200
+    },
+    {
+      "pagination_gap": false,
+      "path": "/git/trees/c44e6ecd0c35cd1a9dc0ec22181f97674fff9fbd?recursive=1",
+      "remaining": 48,
+      "status": 200
+    },
+    {
+      "pagination_gap": false,
+      "path": "/pulls/1028",
+      "remaining": 47,
+      "status": 200
+    },
+    {
+      "pagination_gap": false,
+      "path": "/pulls/1028/files?per_page=100",
+      "remaining": 46,
+      "status": 200
+    },
+    {
+      "pagination_gap": false,
+      "path": "/git/trees/dcd50dbbf3c94874ca3240d0337c2321749aa170?recursive=1",
+      "remaining": 45,
+      "status": 200
+    },
+    {
+      "pagination_gap": false,
+      "path": "/issues/538",
+      "remaining": 44,
+      "status": 200
+    },
+    {
+      "pagination_gap": false,
+      "path": "/issues/538/comments?per_page=100",
+      "remaining": 43,
+      "status": 200
+    },
+    {
+      "pagination_gap": false,
+      "path": "/issues/538/events?per_page=100",
+      "remaining": 42,
+      "status": 200
+    },
+    {
+      "pagination_gap": false,
+      "path": "/issues/538/labels?per_page=100",
+      "remaining": 41,
+      "status": 200
+    },
+    {
+      "pagination_gap": false,
+      "path": "/issues/539",
+      "remaining": 40,
+      "status": 200
+    },
+    {
+      "pagination_gap": false,
+      "path": "/issues/539/comments?per_page=100",
+      "remaining": 39,
+      "status": 200
+    },
+    {
+      "pagination_gap": false,
+      "path": "/issues/539/events?per_page=100",
+      "remaining": 38,
+      "status": 200
+    },
+    {
+      "pagination_gap": false,
+      "path": "/issues/539/labels?per_page=100",
+      "remaining": 37,
+      "status": 200
+    },
+    {
+      "pagination_gap": false,
+      "path": "/issues/540",
+      "remaining": 36,
+      "status": 200
+    },
+    {
+      "pagination_gap": false,
+      "path": "/issues/540/comments?per_page=100",
+      "remaining": 35,
+      "status": 200
+    },
+    {
+      "pagination_gap": false,
+      "path": "/issues/540/events?per_page=100",
+      "remaining": 34,
+      "status": 200
+    },
+    {
+      "pagination_gap": false,
+      "path": "/issues/540/labels?per_page=100",
+      "remaining": 33,
+      "status": 200
+    },
+    {
+      "pagination_gap": false,
+      "path": "/issues/541",
+      "remaining": 32,
+      "status": 200
+    },
+    {
+      "pagination_gap": false,
+      "path": "/issues/541/comments?per_page=100",
+      "remaining": 31,
+      "status": 200
+    },
+    {
+      "pagination_gap": false,
+      "path": "/issues/541/events?per_page=100",
+      "remaining": 30,
+      "status": 200
+    },
+    {
+      "pagination_gap": false,
+      "path": "/issues/541/labels?per_page=100",
+      "remaining": 29,
+      "status": 200
+    },
+    {
+      "pagination_gap": false,
+      "path": "/issues/542",
+      "remaining": 28,
+      "status": 200
+    },
+    {
+      "pagination_gap": false,
+      "path": "/issues/542/comments?per_page=100",
+      "remaining": 27,
+      "status": 200
+    },
+    {
+      "pagination_gap": false,
+      "path": "/issues/542/events?per_page=100",
+      "remaining": 26,
+      "status": 200
+    },
+    {
+      "pagination_gap": false,
+      "path": "/issues/542/labels?per_page=100",
+      "remaining": 25,
+      "status": 200
+    },
+    {
+      "pagination_gap": false,
+      "path": "/issues/543",
+      "remaining": 24,
+      "status": 200
+    },
+    {
+      "pagination_gap": false,
+      "path": "/issues/543/comments?per_page=100",
+      "remaining": 23,
+      "status": 200
+    },
+    {
+      "pagination_gap": false,
+      "path": "/issues/543/events?per_page=100",
+      "remaining": 22,
+      "status": 200
+    },
+    {
+      "pagination_gap": false,
+      "path": "/issues/543/labels?per_page=100",
+      "remaining": 21,
+      "status": 200
+    },
+    {
+      "pagination_gap": false,
+      "path": "/issues/544",
+      "remaining": 20,
+      "status": 200
+    },
+    {
+      "pagination_gap": false,
+      "path": "/issues/544/comments?per_page=100",
+      "remaining": 19,
+      "status": 200
+    },
+    {
+      "pagination_gap": false,
+      "path": "/issues/544/events?per_page=100",
+      "remaining": 18,
+      "status": 200
+    },
+    {
+      "pagination_gap": false,
+      "path": "/issues/544/labels?per_page=100",
+      "remaining": 17,
+      "status": 200
+    },
+    {
+      "pagination_gap": false,
+      "path": "/issues/545",
+      "remaining": 16,
+      "status": 200
+    },
+    {
+      "pagination_gap": false,
+      "path": "/issues/545/comments?per_page=100",
+      "remaining": 15,
+      "status": 200
+    },
+    {
+      "pagination_gap": false,
+      "path": "/issues/545/events?per_page=100",
+      "remaining": 14,
+      "status": 200
+    },
+    {
+      "pagination_gap": false,
+      "path": "/issues/545/labels?per_page=100",
+      "remaining": 13,
+      "status": 200
+    }
+  ],
+  "requests_attempted": 47,
+  "server_remaining": 13
+}

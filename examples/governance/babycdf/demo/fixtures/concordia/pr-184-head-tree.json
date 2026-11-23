@@ -1,0 +1,67 @@
+{
+  "data": {
+    "sha": "c6964dc9545f4046d6f4e4c1cb81cfd01fd6b521",
+    "tree": [
+      {
+        "mode": "040000",
+        "path": ".github",
+        "sha": "942ccbab29cf9ff0de23bbbb6b8e6cbd9e56356c",
+        "type": "tree",
+        "url": "https://api.github.com/repos/canton-foundation/canton-dev-fund/git/trees/942ccbab29cf9ff0de23bbbb6b8e6cbd9e56356c"
+      },
+      {
+        "mode": "100644",
+        "path": ".github/CODEOWNERS",
+        "sha": "c0842644ec85b6385268a50a8d3d4dfb7b02e1a2",
+        "size": 28,
+        "type": "blob",
+        "url": "https://api.github.com/repos/canton-foundation/canton-dev-fund/git/blobs/c0842644ec85b6385268a50a8d3d4dfb7b02e1a2"
+      },
+      {
+        "mode": "100644",
+        "path": ".github/pull_request_template.md",
+        "sha": "cb86548ea50eb344df35de689cc51476d22701dd",
+        "size": 545,
+        "type": "blob",
+        "url": "https://api.github.com/repos/canton-foundation/canton-dev-fund/git/blobs/cb86548ea50eb344df35de689cc51476d22701dd"
+      },
+      {
+        "mode": "100644",
+        "path": "README.md",
+        "sha": "b81b51f4781464012247b199d1180bbfa64f26f7",
+        "size": 5763,
+        "type": "blob",
+        "url": "https://api.github.com/repos/canton-foundation/canton-dev-fund/git/blobs/b81b51f4781464012247b199d1180bbfa64f26f7"
+      },
+      {
+        "mode": "040000",
+        "path": "proposals",
+        "sha": "34e20cd59888a6806577a73d122333f0cf304dc6",
+        "type": "tree",
+        "url": "https://api.github.com/repos/canton-foundation/canton-dev-fund/git/trees/34e20cd59888a6806577a73d122333f0cf304dc6"
+      },
+      {
+        "mode": "100644",
+        "path": "proposals/_template.md",
+        "sha": "bc2fa68123b6e2918301b261305e04bd75d77a20",
+        "size": 2708,
+        "type": "blob",
+        "url": "https://api.github.com/repos/canton-foundation/canton-dev-fund/git/blobs/bc2fa68123b6e2918301b261305e04bd75d77a20"
+      },
+      {
+        "mode": "100644",
+        "path": "proposals/concordia.md",
+        "sha": "f591787a772848e4537aba5d8ba02be1764647da",
+        "size": 28024,
+        "type": "blob",
+        "url": "https://api.github.com/repos/canton-foundation/canton-dev-fund/git/blobs/f591787a772848e4537aba5d8ba02be1764647da"
+      }
+    ],
+    "truncated": false,
+    "url": "https://api.github.com/repos/canton-foundation/canton-dev-fund/git/trees/c6964dc9545f4046d6f4e4c1cb81cfd01fd6b521"
+  },
+  "etag": "W/\"c24a8c98b6f2c42add408e4f7e8f46c6b8e68e0381d11a5bbd837e8227dd4654\"",
+  "link": "",
+  "retrieved_at": "2026-11-23T02:13:11.408133+00:00",
+  "source": "https://api.github.com/repos/canton-foundation/canton-dev-fund/git/trees/c6964dc9545f4046d6f4e4c1cb81cfd01fd6b521?recursive=1"
+}

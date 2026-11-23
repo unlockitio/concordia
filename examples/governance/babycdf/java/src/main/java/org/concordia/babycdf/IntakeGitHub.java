@@ -77,6 +77,30 @@ final class IntakeGitHub {
             }
         };
     }
+    SourceEvidenceFetch.Transport evidenceTransport() {
+        HttpClient client=client();
+        return (uri,etag)->{
+            if(!uri.getPath().startsWith("/repos/canton-foundation/canton-dev-fund/"))throw new IOException("unsafe evidence target");
+            var request=HttpRequest.newBuilder(uri).timeout(Duration.ofSeconds(5)).header("Accept","application/vnd.github+json");
+            authorizeRead(request,uri);if(!etag.isEmpty())request.header("If-None-Match",etag);
+            try {
+                var response=client.send(request.GET().build(),HttpResponse.BodyHandlers.ofInputStream());
+                byte[] body;try(var input=response.body()){
+                    var executor=java.util.concurrent.Executors.newSingleThreadExecutor();
+                    try {var reading=executor.submit(()->input.readNBytes(2*1024*1024+1));
+                        try{body=reading.get(5,java.util.concurrent.TimeUnit.SECONDS);}
+                        catch(java.util.concurrent.TimeoutException timeout){input.close();reading.cancel(true);throw new IOException("evidence body deadline");}
+                        catch(java.util.concurrent.ExecutionException failed){throw new IOException("evidence body read failed");}
+                    } finally {executor.shutdownNow();}
+                }
+                if(body.length>2*1024*1024)throw new IOException("evidence response bound");
+                String next="";for(String link:response.headers().allValues("Link"))for(String part:link.split(","))
+                    if(part.contains("rel=\"next\"")){int a=part.indexOf('<'),b=part.indexOf('>');if(a>=0&&b>a)next=part.substring(a+1,b);}
+                return new SourceEvidenceFetch.Response(response.statusCode(),body,response.headers().firstValue("ETag").orElse(""),next,response.headers().map());
+            }catch(InterruptedException interrupted){Thread.currentThread().interrupt();throw new IOException("evidence transport interrupted");}
+            catch(IOException failure){throw new IOException("evidence transport failed");}
+        };
+    }
     private static boolean safeTarget(URI uri) {
         if(uri==null || !"https".equals(uri.getScheme()) || !"api.github.com".equals(uri.getRawAuthority())
                 || uri.getFragment()!=null || uri.getUserInfo()!=null || uri.toString().length()>4096)return false;

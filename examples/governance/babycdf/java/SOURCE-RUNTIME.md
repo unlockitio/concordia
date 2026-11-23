@@ -1,5 +1,66 @@
 # Source runtime slice (candidate; not live accepted)
 
+## S2 evidence enrichment (no S3 opener queue)
+
+R3: executable delivery requires combined complete issue/comments/events capture;
+partial enumeration never pins. VerifiedAmendment requires BOTH proposal statuses
+ready and complete valid nonempty pins, with strict duplicate-key JSON rejection.
+Uncached fresh reads share pages403/429 category/backoff. Command parsing is
+CommonMark-like for the tested cases, NOT a full CommonMark implementation.
+Fixture pattern scanning is defense-in-depth, NOT proof that no secret exists.
+
+R2 trust constraints: runtime PR collection confirms head with an UNCACHED final
+metadata read; any change blocks the entire pin. Pins include EVERY changed path,
+not just the eligibility-matching subset. Edited command history is always unknown:
+no definitive result or executable pin, even when today contains /vote. Command,
+body and result uncertainties are separate, authors recorded but authorization NOT
+established. GitVote interval correlation is inferred, not explicit provider linkage;
+ambiguous intervals/history gaps remain unresolved. Each entry records per-source
+retrieval times/statuses. Pure Capture/text APIs require trusted provenance and are
+not authoritative for partial/failed inputs.
+
+Strict concordia-amendments.json schema binds repository/evidenceID and original+
+amending numbers/pins; only parsed VerifiedAmendment has a private constructor.
+Real manifest is empty: no explicit evidence linking475 was captured; every unlinked
+eligible PR remains its own proposal round. check-fixtures.py sanitizes and validates
+ALL fixture JSON/hash coverage/public-login allowlist; no new public requests inR2.
+
+SourceEvidenceCollector composes paginated PR metadata/files/head-tree and
+issue/comments/events into deterministic manifest batches. Its configured runtime
+factory uses existing IntakeGitHub file-backed credentials; offline capture inputs
+exercise the identical pipeline. It emits explicit open/unresolved GitVote states,
+checks app login/type/numericID plus source URLs and unique creation/result interval,
+and rejects conflicting/edited app evidence. Historical unknowns remain blocked.
+Explicit amendment declarations require checked manifest digests and source IDs;
+append corrections validate superseded entry digests without changing round identity.
+Cache is process-local (256 entries/16MiB); partial resume is caller-carried, not an
+S3 durable queue. Header/body deadlines are each five seconds, response2MiB.
+
+SourceEvidence is a pure evidence model: proposal eligibility is ANY changed
+proposals/** or rfps/** path, not title/merged state. Eligible file pins are sorted
+path/status/blob records verified against the full head tree; removed files block
+pending explicit base-tree proof. Rename previous path remains explicit. No title
+inference establishes amendments. SourceEvidenceFetch offers bounded pages/request/
+time, ETag cache reuse, partial resume and existing GitHubFetchFailure/SourceHttpFailure
+rate-limit policy. Runtime transport is explicit IntakeGitHub.evidenceTransport;
+construction does not read any PAT until existing configured runtime provisioning.
+
+Milestone command identity is repository+issue+commentID. Standalone /vote outside
+quotes/fences creates a round; unambiguous label fallback only without command
+evidence. Edited/deleted history and trigger-time issue digest gaps remain explicit.
+Delivery requires an explicit full40hex SHA in an unedited preceding comment and
+matching proof SHA/key no later than trigger. ALL branch reachability/backdate
+fallback is disabled; current branch head is never substituted. Missing proof is
+blocked_pin. Provider results must correlate with trigger evidence; ambiguity or
+conflicting results remain unresolved. Merge/closed is never a vote outcome.
+
+Canonical manifest uses fixed array scheme, replay_as_of/retrieved timestamps and
+total UTC/type precedence/repository/number/numericID order. Corrections carry same
+roundID and supersedes identity rather than changing a historical round. Public
+fixtures under demo/fixtures/concordia record retrieval/budget/gaps and SHA256SUMS.
+47 anonymous requests used,13 of60 remain; no PAT was read. No ledger queue/opening
+or S3 policy is added by S2.
+
 `Intake.main` now selects source discovery with `INTAKE_DISCOVERY_MODE`:
 
 - unset or `live`: token-authenticated GitHub source pages (explicit
