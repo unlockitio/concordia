@@ -171,9 +171,10 @@ public final class Intake {
             try(var sources=new SourceCatalogueLedger(port,party,impl,demo,user,sourceJournal(journal));var opener=new SourceOpenerLedger(port,party,impl,demo,governor,user,journal);var queue=new SourceOpenerQueue(journal,opener);var executor=java.util.concurrent.Executors.newSingleThreadExecutor()) {
                 var sweep=new SourceSweepScheduler(new JavaSourceIngestion(sources,pages,System.out::println),System::nanoTime,sourceInterval(System.getenv()));var automatic=new SourceOpenerScheduler(collector,opener,queue,java.time.Clock.systemUTC());
                 java.util.concurrent.Future<SourceSweepScheduler.TickOutcome> worker=null;
+                var automaticLog=new IntakeLogState();
                 for(int i=0;i<attempts;i++){
                     if(worker==null||worker.isDone()) {if(worker!=null)try{worker.get();}catch(java.util.concurrent.ExecutionException failure){System.err.println("Catalogue paused: "+failure.getCause().getMessage());}worker=executor.submit(sweep::tick);}
-                    try{System.out.println(automatic.automaticCycle(null));}catch(IOException|IllegalArgumentException blocked){System.err.println("Automatic source rounds paused: invalid or unavailable source evidence");}if(i+1<attempts)Thread.sleep(interval);
+                    try{automaticLog.observed(automatic.automaticCycle(null),System.out::println);}catch(IOException blocked){automaticLog.paused(IntakeLogState.Pause.unavailable_evidence,System.err::println);}catch(IllegalArgumentException blocked){automaticLog.paused(IntakeLogState.Pause.malformed_evidence,System.err::println);}if(i+1<attempts)Thread.sleep(interval);
                 }
             }
             return;
