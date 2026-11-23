@@ -4,7 +4,7 @@ The HTTP party/template ACS paths use Canton 3.5.11's query-only
 POST `/v2/state/active-contracts-page`, with `maxPageSize: 200`. Every page retains
 the captured ledger end and identical event filter on the same participant.
 Opaque page tokens are transported verbatim as JSON strings and never decoded.
-Only an absent next token ends the scan; short and empty pages may continue.
+Only an absent or JSON-null next token ends the scan; short and empty pages may continue.
 
 The operation buffers a complete result before normalizing/publishing it. Invalid
 shape, offset mismatch, token repetition, incomplete reassignment, conflicting full

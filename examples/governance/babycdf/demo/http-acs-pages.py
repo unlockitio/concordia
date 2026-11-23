@@ -48,7 +48,7 @@ def collect(base,request,fetch,clock=time.monotonic):
         if len(rows)>MAX_CONTRACTS:raise ValueError('ACS contract bound')
         token=page.get('nextPageToken')
         if clock()>=deadline:raise ValueError('ACS total deadline')
-        if 'nextPageToken' not in page:return rows
+        if 'nextPageToken' not in page or token is None:return rows
         if not isinstance(token,str) or not token or len(token)>16384 or token in seen:raise ValueError('invalid/nonprogressing ACS token')
         seen.add(token)
     raise ValueError('ACS page bound')

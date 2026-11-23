@@ -35,6 +35,17 @@ class Pages(unittest.TestCase):
    self.assertEqual([15],timeouts)
   ticks=iter([0,119,119,119,121])
   with self.assertRaises(ValueError):p.collect('http://same',self.request(),lambda u,b,t:b'{"activeContracts":[],"activeAtOffset":"900"}',lambda:next(ticks))
+ def testAbsentAndNullOnlyTerminalWithStructural833Fixture(self):
+  for null_terminal in (False,True):
+   calls=[]
+   def fetch(u,b,t):
+    i=len(calls);calls.append(b);page={'activeAtOffset':900,'activeContracts':[{'contractEntry':{'JsActiveContract':{'createdEvent':{'contractId':'full-cid-'+str(i*100+n)}}}} for n in range(100 if i<8 else 33)]}
+    if i<8:page['nextPageToken']='opaque-'+str(i)
+    elif null_terminal:page['nextPageToken']=None
+    return json.dumps(page).encode()
+   self.assertEqual(833,len(p.collect('http://same',self.request(),fetch)));self.assertEqual(9,len(calls))
+  for token in ('',0,False,[],{}):
+   with self.assertRaises(ValueError):p.collect('http://same',self.request(),lambda u,b,t:json.dumps({'activeAtOffset':900,'activeContracts':[],'nextPageToken':token}).encode())
  def testDuplicateKeysRejected(self):
   with self.assertRaises(ValueError):p.collect('http://same',self.request(),lambda u,b,t:b'{"activeContracts":[],"activeAtOffset":"900","activeAtOffset":"900"}')
  def testErrorsOffsetsCycleBoundsNoPartialReturn(self):
