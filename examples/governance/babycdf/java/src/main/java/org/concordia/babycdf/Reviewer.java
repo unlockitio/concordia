@@ -46,6 +46,8 @@ public final class Reviewer {
         /** Visible, still-active agendas. Read-only; the default is "discovered none". */
         default List<OpenAgenda> openAgendas() throws Exception { return List.of(); }
         default List<EventOuterClass.CreatedEvent> agendaEvents() throws Exception { return List.of(); }
+        default List<EventOuterClass.CreatedEvent> registryEvents() throws Exception { return List.of(); }
+        default boolean registryBacked(){return false;}
     }
 
     public static final class BlockedLedgerGateway implements LedgerRuleGateway {
@@ -92,7 +94,7 @@ public final class Reviewer {
                     if (!response.hasActiveContract()) continue;
                     EventOuterClass.CreatedEvent event = response.getActiveContract().getCreatedEvent();
                     if (!event.hasTemplateId() || !id.equals(event.getTemplateId()) || !event.hasCreateArguments()
-                            || !event.getWitnessPartiesList().contains(party))
+                            || !event.getWitnessPartiesList().contains(party) || !event.getSignatoriesList().equals(List.of(party)))
                         throw new IOException("BLOCKED: unexpected or invisible EffectiveRule event");
                     rules.add(decode(event));
                 }
@@ -139,6 +141,12 @@ public final class Reviewer {
             }
         }
 
+        public boolean registryBacked(){return true;}
+        public List<EventOuterClass.CreatedEvent> registryEvents()throws IOException{return currentEvents("RuleRegistry");}
+        private List<EventOuterClass.CreatedEvent> currentEvents(String entity)throws IOException {
+            var channel=NettyChannelBuilder.forAddress("127.0.0.1",port).usePlaintext().maxInboundMessageSize(20_000_000).build();
+            try{var state=StateServiceGrpc.newBlockingStub(channel).withDeadlineAfter(15,java.util.concurrent.TimeUnit.SECONDS);long offset=state.getLedgerEnd(StateServiceOuterClass.GetLedgerEndRequest.getDefaultInstance()).getOffset();var filters=TransactionFilterOuterClass.Filters.newBuilder().addCumulative(TransactionFilterOuterClass.CumulativeFilter.newBuilder().setTemplateFilter(TransactionFilterOuterClass.TemplateFilter.newBuilder().setTemplateId(IntakeLedger.id("#cap-example-babycdf",MODULE,entity))));var stream=state.getActiveContracts(StateServiceOuterClass.GetActiveContractsRequest.newBuilder().setActiveAtOffset(offset).setEventFormat(TransactionFilterOuterClass.EventFormat.newBuilder().putFiltersByParty(party,filters.build()).setVerbose(true)).build());var out=new ArrayList<EventOuterClass.CreatedEvent>();int count=0,bytes=0;while(stream.hasNext()){var row=stream.next();bytes+=row.getSerializedSize();if(++count>10000||bytes>20_000_000||row.hasIncompleteAssigned()||row.hasIncompleteUnassigned())throw new IOException("rule_selection");if(!row.hasActiveContract())continue;var event=row.getActiveContract().getCreatedEvent();IntakeLedger.verifyActiveEvent(event,IntakeLedger.id(packageId,MODULE,entity),party);if(!event.getSignatoriesList().equals(List.of(party)))throw new IOException("rule_selection");out.add(event);}return List.copyOf(out);}catch(io.grpc.StatusRuntimeException unavailable){throw new IOException("rule_selection");}finally{channel.shutdownNow();}
+        }
         public List<EventOuterClass.CreatedEvent> agendaEvents() throws IOException {
             var channel=NettyChannelBuilder.forAddress("127.0.0.1",port).usePlaintext().maxInboundMessageSize(20_000_000).build();
             try {var state=StateServiceGrpc.newBlockingStub(channel).withDeadlineAfter(15,java.util.concurrent.TimeUnit.SECONDS);long offset=state.getLedgerEnd(StateServiceOuterClass.GetLedgerEndRequest.getDefaultInstance()).getOffset();
@@ -451,7 +459,7 @@ public final class Reviewer {
             var evidenceApi=new Advisory.GitHub();evidenceApi.logMode("Reviewer",System.err);var integratedLog=new DemoLog("Reviewer",demoMode,verbose,System.err);integratedLog.banner();
             try(var supplemental=SupplementalAssessment.runtime("Reviewer",System.err)){
              var following=new AgendaFollowingReview(evidenceApi,supplemental);var last=new String[]{""};var outputState=new IntegratedReviewOutput(stateFile);
-             AgentPolling.run(interval,()->{try{var result=following.cycle(ledger);String output=Advisory.JSON.writeValueAsString(result);if(!output.equals(last[0])){outputState.publish(result,published->{if(!"IDLE".equals(published.path("status").asText()))System.err.println("Evaluated rule v"+published.path("rule_version").asInt()+" "+published.path("rule_document_sha256").asText());if(integratedLog.enabled()){ReviewerNarration.report(integratedLog,published);if(integratedLog.verbose())System.out.println(output);}else System.out.println(output);if(System.out.checkError()||System.err.checkError())throw new IOException("integrated review output failed");});last[0]=output;}}catch(Exception blocked){String category="Integrated review blocked: invalid or unavailable immutable evidence";if(!category.equals(last[0])){System.err.println(category);last[0]=category;}}},Thread::sleep);
+             AgentPolling.run(interval,()->{try{var result=following.cycle(ledger);String output=Advisory.JSON.writeValueAsString(result);if(!output.equals(last[0])){outputState.publish(result,published->{if(!"IDLE".equals(published.path("status").asText()))System.err.println("Evaluated rule v"+published.path("rule_version").asInt()+" "+published.path("rule_document_sha256").asText());if(integratedLog.enabled()){ReviewerNarration.report(integratedLog,published);if(integratedLog.verbose())System.out.println(output);}else System.out.println(output);if(System.out.checkError()||System.err.checkError())throw new IOException("integrated review output failed");});last[0]=output;}}catch(Exception blocked){String category="Integrated review blocked: "+(blocked instanceof IntegrationStageFailure stage?stage.stage.name():"evidence_lookup");if(!category.equals(last[0])){System.err.println(category);last[0]=category;}}},Thread::sleep);
             }
             return;
         }

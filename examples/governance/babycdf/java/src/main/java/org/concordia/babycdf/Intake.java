@@ -174,7 +174,7 @@ public final class Intake {
                 var automaticLog=new IntakeLogState();
                 for(int i=0;i<attempts;i++){
                     if(worker==null||worker.isDone()) {if(worker!=null)try{worker.get();}catch(java.util.concurrent.ExecutionException failure){System.err.println("Catalogue paused: "+failure.getCause().getMessage());}worker=executor.submit(sweep::tick);}
-                    try{automaticLog.observed(automatic.automaticCycle(null),System.out::println);}catch(IOException blocked){automaticLog.paused(IntakeLogState.Pause.unavailable_evidence,System.err::println);}catch(IllegalArgumentException blocked){automaticLog.paused(IntakeLogState.Pause.malformed_evidence,System.err::println);}if(i+1<attempts)Thread.sleep(interval);
+                    try{automaticLog.observed(automatic.automaticCycle(null),System.out::println);}catch(IntegrationStageFailure blocked){automaticLog.paused(IntakeLogState.Pause.valueOf(blocked.stage.name()),System.err::println);}catch(IOException blocked){automaticLog.paused(IntakeLogState.Pause.unavailable_evidence,System.err::println);}catch(IllegalArgumentException blocked){automaticLog.paused(IntakeLogState.Pause.malformed_evidence,System.err::println);}if(i+1<attempts)Thread.sleep(interval);
                 }
             }
             return;

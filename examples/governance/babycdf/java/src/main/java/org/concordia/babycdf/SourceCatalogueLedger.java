@@ -230,21 +230,8 @@ public final class SourceCatalogueLedger implements JavaSourceIngestion.Ledger, 
         var result=new HashMap<Long,JavaSourceIngestion.Stored>();
         for(var event:rows) if(event.getTemplateId().equals(id("SourceObservationCredential"))) {
             identity(event,"SourceObservationCredential");var r=event.getCreateArguments();
-            // Canton 3.4+ normal form omits trailing Optional None fields.
-            // Only this declared trailing optional may be synthesized; all other fields stay mandatory.
-            if(r.getFieldsList().stream().noneMatch(f->f.getLabel().equals("previousDigest")))
-                r=r.toBuilder().addFields(ValueOuterClass.RecordField.newBuilder().setLabel("previousDigest")
-                        .setValue(ValueOuterClass.Value.newBuilder().setOptional(ValueOuterClass.Optional.getDefaultInstance()))).build();
-            fields(r,Set.of("opener","repo","observation","fingerprint","version","previousDigest"));
-            var value=IntakeLedger.field(r,"observation");
-            if(!value.hasRecord()) throw new IOException("invalid source observation record");
-            var observation=observation(value.getRecord());long version=IntakeLedger.number(r,"version");
-            var previous=IntakeLedger.field(r,"previousDigest");
-            if(version<1 || !previous.hasOptional() || (version==1)==previous.getOptional().hasValue()
-                    || !SourceCatalogueDigest.digest(value.getRecord(),version,previous.getOptional().hasValue()?text(previous.getOptional().getValue()):null).equals(IntakeLedger.text(r,"fingerprint")))
-                throw new IOException("source item content/version mismatch");
-            if(previous.getOptional().hasValue() && !text(previous.getOptional().getValue()).matches("[0-9a-f]{64}"))
-                throw new IOException("invalid previous source digest");
+            var decoded=CanonicalSourceCredential.decode(event,party);
+            var observation=decoded.observation();long version=decoded.version();
             if(result.put(observation.number(),new JavaSourceIngestion.Stored(observation,version,IntakeLedger.text(r,"fingerprint")))!=null)
                 throw new IOException("duplicate source number key");
         }

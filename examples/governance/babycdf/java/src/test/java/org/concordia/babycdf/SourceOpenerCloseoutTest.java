@@ -18,7 +18,7 @@ class SourceOpenerCloseoutTest {
   try(var ledger=new SourceOpenerLedger("opener",pkg,"gov","user",rpc,proof)){assertThrows(IOException.class,()->ledger.retainMilestoneEvidence(new SourceEvidenceCollector.Batch(List.of(),List.of(),Instant.EPOCH,Instant.EPOCH)));}
  }
  @Test void automaticInventoryComesFromCredentialAcs()throws Exception{
-  var sample=SourceCatalogueCodecTest.sample();var credential=EventOuterClass.CreatedEvent.newBuilder().setCreateArguments(record("observation",observation(sample)).getRecord()).build();String pkg="a".repeat(64);
+  var sample=SourceCatalogueCodecTest.sample();var credential=EventOuterClass.CreatedEvent.newBuilder().setContractId("credential").addSignatories("opener").setCreateArguments(record("opener",ValueOuterClass.Value.newBuilder().setParty("opener").build(),"repo",text(REPOSITORY),"observation",observation(sample),"version",integer(1),"fingerprint",text(SourceCatalogueDigest.digest(observation(sample).getRecord())),"previousDigest",SourceOpenerLedger.none()).getRecord()).build();String pkg="a".repeat(64);
   var rpc=new SourceOpenerLedger.Rpc(){public Instant now(){return Instant.EPOCH;}public List<EventOuterClass.CreatedEvent> active(String m,String e){return e.equals("SourceObservationCredential")?List.of(credential):List.of();}public void submit(CommandServiceOuterClass.SubmitAndWaitRequest r){fail();}};
   var proof=new IntakeLedger("opener",pkg,pkg,"gov","user",root.toRealPath(),r->{},(p,m,e)->List.of(),false);
   try(var ledger=new SourceOpenerLedger("opener",pkg,"gov","user",rpc,proof)){assertEquals(List.of(7L),ledger.inventory("milestone"));assertTrue(ledger.inventory("proposal").isEmpty());}

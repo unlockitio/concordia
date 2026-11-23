@@ -59,7 +59,7 @@ public final class SourceOpenerLedger implements SourceOpenerQueue.Ledger,AutoCl
  }
  private IntakePlan plan(SourceOpenerQueue.Binding b)throws IOException {return IntakePlan.bound(new IntakeSource("source-"+b.number(),b.kind().equals("proposal")?IntakeSource.AgendaConstructor.Grant:IntakeSource.AgendaConstructor.Milestone,b.kind(),"https://github.com/"+b.repo()+(b.kind().equals("proposal")?"/pull/":"/issues/")+b.number(),b.fingerprint(),IntakeSource.Evidence.CURATED_UNVERIFIED),b.roundId(),agenda(b),source(b));}
  public List<Long> inventory(String kind)throws IOException {
-  var numbers=new TreeSet<Long>();for(var e:rpc.active(CREDENTIAL,"SourceObservationCredential")){var o=SourceCatalogueCodec.observation(IntakeLedger.field(e.getCreateArguments(),"observation").getRecord());if(o.kind()==(kind.equals("proposal")?SourceObservation.Kind.PROPOSAL:SourceObservation.Kind.MILESTONE))numbers.add(o.number());}
+  var numbers=new TreeSet<Long>();for(var e:rpc.active(CREDENTIAL,"SourceObservationCredential")){var o=CanonicalSourceCredential.decode(e,party).observation();if(o.kind()==(kind.equals("proposal")?SourceObservation.Kind.PROPOSAL:SourceObservation.Kind.MILESTONE))numbers.add(o.number());}
   if(numbers.size()>50)throw new IOException("automatic inventory batch bound; reconcile inventory partition");return List.copyOf(numbers);
  }
  public void retainMilestoneEvidence(SourceEvidenceCollector.Batch batch)throws IOException {
