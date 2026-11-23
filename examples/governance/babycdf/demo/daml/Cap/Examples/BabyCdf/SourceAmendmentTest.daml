@@ -1,0 +1,36 @@
+module Cap.Examples.BabyCdf.SourceAmendmentTest where
+import Daml.Script
+import DA.Assert
+import DA.Time
+import qualified DA.Set as Set
+import qualified DA.Text as Text
+import qualified Cap.Examples.BabyCdf.SourceObservationCredential as S
+import Cap.Examples.BabyCdf.SourceAgenda
+import Cap.Examples.BabyCdf.SourceAgendaFixtures
+import Cap.Examples.BabyCdf.RuleVote
+
+crossPrAmendments : Script ()
+crossPrAmendments = script do
+ opener <- allocateParty "amendment-opener"
+ members <- mapA allocateParty ["a","b","c","d","e","f","g"]
+ governor <- submit opener $ createCmd (AgendaGovernor opener "amendments" (Set.fromList (take 5 members)) (Set.fromList (drop 5 members)))
+ (original,subject) <- fixtureSource opener False
+ now <- getTime
+ _ <- submit opener $ exerciseCmd governor ProposeAgenda with proposer = opener; roundId = "original"; agenda = Grant subject; baseVersion = 0; closesAt = addRelTime now (hours 1); source = Some original
+ Some originalSource <- queryContractId opener original.credentialCid
+ _ <- mapA (\number -> do
+   let o = originalSource.observation with number; sourceUrl = "https://github.com/" <> S.repository <> "/pull/" <> show number
+       fingerprint = S.contentDigest o
+   cid <- submit opener $ createCmd (S.SourceObservationCredential opener S.repository o fingerprint 1 None)
+   let source = SourceAgendaRequest cid fingerprint 1 proposalPin number None
+       relation = AmendmentRelation S.repository 184 number "original" proposalPin proposalPin (Text.sha256 "checked amendment manifest") number
+       agenda = Grant (GithubSubject "proposal" o.sourceUrl fingerprint)
+   _ <- mapA (\bad -> submitMustFail opener $ exerciseCmd governor ProposeAmendment with proposer = opener; roundId = "bad-" <> show number; agenda; baseVersion = 0; closesAt = addRelTime now (hours 1); source; relation = bad)
+     [(relation with repo = "wrong/repo"), (relation with originalNumber = number), (relation with originalRound = "missing"),
+      (relation with manifestDigest = ""), (relation with amendingNumber = 999),
+      (relation with originalPin = ProposalPin "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" [FilePin "wrong" "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"])]
+   _ <- submit opener $ exerciseCmd governor ProposeAmendment with proposer = opener; roundId = "amendment-" <> show number; agenda; baseVersion = 0; closesAt = addRelTime now (hours 1); source; relation
+   pure ()) [473,475]
+ rounds <- query @SourceAmendmentRound opener
+ length rounds === 2
+ pure ()

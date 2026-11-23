@@ -5,6 +5,10 @@ import java.util.*;
 import java.io.IOException;
 /** Only the exact parsed schema can produce this capability; titles are irrelevant. */
 public final class VerifiedAmendment {
+ private SourceEvidence.Proposal originalProposal;
+ public SourceEvidence.Proposal originalProposal(){return originalProposal;}
+ private String manifestDigest;
+ public String manifestDigest(){return manifestDigest;}
  private final String repo;private final long evidenceId,original,amending;private final String originalPin,amendingPin;
  private VerifiedAmendment(String repo,long evidenceId,long original,String originalPin,long amending,String amendingPin){this.repo=repo;this.evidenceId=evidenceId;this.original=original;this.originalPin=originalPin;this.amending=amending;this.amendingPin=amendingPin;}
  public String repo(){return repo;}public long evidenceId(){return evidenceId;}public long original(){return original;}public long amending(){return amending;}
@@ -21,7 +25,7 @@ public final class VerifiedAmendment {
     if(!repo.equals(SourceEvidenceCollector.REPO)||original==amending||!seen.add(id)||!acceptedSourceIds.contains(id)
       ||!text(entry,"declaration").equals("amends:"+original)||!proposals.containsKey(original)||!proposals.containsKey(amending)
       ||!validReady(proposals.get(original))||!validReady(proposals.get(amending))||!op.equals(pin(proposals.get(original)))||!ap.equals(pin(proposals.get(amending))))throw new IOException();
-    result.add(new VerifiedAmendment(repo,id,original,op,amending,ap));
+    var verified=new VerifiedAmendment(repo,id,original,op,amending,ap);verified.manifestDigest=SourceEvidence.digest(bytes);verified.originalProposal=proposals.get(original);result.add(verified);
    }return List.copyOf(result);
   }catch(Exception bad){throw new IOException("invalid checked amendment manifest");}
  }

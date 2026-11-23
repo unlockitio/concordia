@@ -614,6 +614,28 @@ template AgendaGovernor
             Architecture draft -> Reason with url = proposalSubject.url; body = draft.designText <> " proposal-blob:" <> proposalBlob
             Grant proposal -> Reason with url = proposal.url; body = proposal.contentVersion
             Milestone milestone -> Reason with url = milestone.url; body = milestone.contentVersion
+    nonconsuming choice ProposeAmendment : ContractId AgendaProposal
+      with proposer : Party; roundId : Text; agenda : Agenda; baseVersion : Int; closesAt : Time
+           source : SourceAgendaRequest
+           relation : AmendmentRelation
+      controller proposer
+      do
+        assertMsg "amendment manifest commitment missing" (Source.validDigest relation.manifestDigest && relation.evidenceId > 0)
+        assertMsg "amendment opener/repository/source mismatch" (relation.repo == Source.repository
+          && relation.amendingNumber /= relation.originalNumber && source.originalProposal == relation.amendingNumber
+          && source.previousRound == None && source.pin == relation.amendingPin)
+        credential <- fetch source.credentialCid
+        assertMsg "amendment source identity mismatch" (credential.opener == opener && credential.observation.kind == Source.SourceProposal
+          && credential.observation.number == relation.amendingNumber)
+        (_,original) <- fetchByKey @AgendaRoundReceipt (opener,relation.originalRound)
+        assertMsg "amendment original receipt mismatch" (original.opener == opener && case original.sourceSnapshot of
+          Some prior -> prior.observation.kind == Source.SourceProposal && prior.observation.number == relation.originalNumber
+            && prior.pin == relation.originalPin && prior.opener == opener
+          None -> False)
+        _ <- create SourceAmendmentRound with opener; roundId; relation
+        -- Ordinary creation still validates the AMENDING source, not relabelled original.
+        exercise self ProposeAgenda with proposer; roundId; agenda; baseVersion; closesAt; source = Some source
+
     nonconsuming choice ResolveAgenda : Resolution
       with proposalCid : ContractId AgendaProposal
            ballotCids : [ContractId AgendaBallot]

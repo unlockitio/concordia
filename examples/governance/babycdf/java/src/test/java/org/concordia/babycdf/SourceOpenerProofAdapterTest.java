@@ -1,0 +1,24 @@
+package org.concordia.babycdf;
+import org.junit.jupiter.api.Test;import org.junit.jupiter.api.io.TempDir;import com.daml.ledger.api.v2.*;
+import java.nio.file.*;import java.time.*;import java.util.*;import java.io.*;
+import static org.junit.jupiter.api.Assertions.*;import static org.concordia.babycdf.SourceCatalogueCodec.*;
+class SourceOpenerProofAdapterTest {
+ @TempDir Path root;
+ @Test void realReceiptActionProofAfterLostAckNeverResubmitsAndMissingConflictsBlock()throws Exception {
+  root=root.toRealPath();
+  String pkg="a".repeat(64),repo=SourceEvidenceCollector.REPO;Instant now=Instant.parse("2026-11-23T00:00:00Z");var ready=new SourceOpenerQueueTest().ready(1);
+  var observation=new SourceObservation(1,SourceObservation.Kind.PROPOSAL,"https://github.com/"+repo+"/pull/1","title",SourceObservation.hash(""),"open",now,now,null,"",false,SourceObservation.hash(""),false);var wire=observation(observation);String fingerprint=SourceCatalogueDigest.digest(wire.getRecord());
+  var binding=new SourceOpenerQueue.Binding(repo,1,"proposal","credential",1,fingerprint,observation.bodySha256(),ready.roundId(),ready.eventAt(),1,ready.pinJson(),"","");
+  var source=SourceOpenerLedger.source(binding);var snapshot=record("sourceCid",cid("credential"),"opener",party(),"observation",wire,"fingerprint",text(fingerprint),"version",integer(1),"previousDigest",SourceOpenerLedger.none(),"evidenceDigest",text(observation.bodySha256()),"pin",SourceOpenerLedger.pin(binding),"roundId",text(binding.roundId()),"originalProposal",integer(1),"previousRound",SourceOpenerLedger.none());
+  var receipt=event("receipt",record("opener",party(),"proposer",party(),"roundId",text(binding.roundId()),"baseVersion",integer(0),"agenda",SourceOpenerLedger.agenda(binding),"actionCid",cid("action"),"sourceSnapshot",some(snapshot)));
+  var action=event("action",record("opener",party(),"baseVersion",integer(0),"agenda",SourceOpenerLedger.agenda(binding),"sourceSnapshot",some(snapshot)));
+  var credential=event("credential",record("opener",party(),"repo",text(repo),"observation",wire,"version",integer(1),"fingerprint",text(fingerprint),"previousDigest",SourceOpenerLedger.none()));
+  var rows=new HashMap<String,List<EventOuterClass.CreatedEvent>>();rows.put("SourceObservationCredential",List.of(credential));rows.put("AgendaGovernor",List.of(event("gov",record("opener",party()))));var sends=new java.util.concurrent.atomic.AtomicInteger();
+  var rpc=new SourceOpenerLedger.Rpc(){public Instant now(){return now;}public List<EventOuterClass.CreatedEvent> active(String m,String e){return rows.getOrDefault(e,List.of());}public void submit(CommandServiceOuterClass.SubmitAndWaitRequest r)throws IOException{sends.incrementAndGet();rows.put("AgendaRoundReceipt",List.of(receipt));rows.put("AgendaAction",List.of(action));rows.put("AgendaProposal",List.of(event("proposal",record("roundId",text(binding.roundId())))));throw new IOException("lost ACK");}};
+  java.util.function.Supplier<IntakeLedger> proof=()->new IntakeLedger("opener",pkg,pkg,"gov","user",root.toAbsolutePath(),r->{},(p,m,e)->rows.getOrDefault(e,List.of()),false);
+  try(var ledger=new SourceOpenerLedger("opener",pkg,"gov","user",rpc,proof.get());var queue=new SourceOpenerQueue(root.toRealPath(),ledger)){queue.enqueue(ready,binding);assertThrows(IOException.class,queue::tick);assertEquals(SourceOpenerQueue.State.submission_uncertain,queue.snapshot().getFirst().state());}
+  var history=new ArrayList<EventOuterClass.CreatedEvent>();var recoveredProof=proof.get();recoveredProof.historicalActions(id->List.copyOf(history));
+  try(var ledger=new SourceOpenerLedger("opener",pkg,"gov","user",rpc,recoveredProof);var queue=new SourceOpenerQueue(root.toRealPath(),ledger)){assertEquals("proven-open",queue.tick());assertEquals(1,sends.get());rows.put("AgendaAction",List.of());history.add(action);assertEquals("proven-open",queue.tick());assertEquals(1,sends.get());history.clear();assertThrows(IOException.class,queue::tick);assertEquals(1,sends.get());history.add(action);history.add(action);assertThrows(IOException.class,queue::tick);assertEquals(1,sends.get());rows.put("AgendaAction",List.of(action,action));assertThrows(IOException.class,queue::tick);assertEquals(1,sends.get());}
+ }
+ static ValueOuterClass.Value party(){return ValueOuterClass.Value.newBuilder().setParty("opener").build();}static ValueOuterClass.Value cid(String s){return ValueOuterClass.Value.newBuilder().setContractId(s).build();}static ValueOuterClass.Value some(ValueOuterClass.Value v){return ValueOuterClass.Value.newBuilder().setOptional(ValueOuterClass.Optional.newBuilder().setValue(v)).build();}static EventOuterClass.CreatedEvent event(String id,ValueOuterClass.Value r){return EventOuterClass.CreatedEvent.newBuilder().setContractId(id).addSignatories("opener").setCreateArguments(r.getRecord()).build();}
+}

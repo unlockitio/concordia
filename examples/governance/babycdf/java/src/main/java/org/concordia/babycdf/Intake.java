@@ -163,6 +163,21 @@ public final class Intake {
         return factory.open(port,opener,demoPackage,user,sourceJournal(journal));
     }
     public static void main(String[] args) throws Exception {
+        if((args.length==9||args.length==11) && args[0].equals("--automatic-source")) {
+            // Explicit production evidence+credential+queue pipeline; old demo CLI stays unchanged.
+            int port=Integer.parseInt(args[1]);String party=args[2],impl=args[3],demo=args[4],governor=args[5],user=args[6];
+            Path journal=Path.of(args[7]);Path amendmentManifest=args[8].equals("-")?null:Path.of(args[8]);
+            var collector=SourceEvidenceCollector.configured(System.getenv(),java.time.Clock.systemUTC());
+            try(var opener=new SourceOpenerLedger(port,party,impl,demo,governor,user,journal)) {
+                try(var queue=new SourceOpenerQueue(journal,opener)) {
+                    var scheduler=new SourceOpenerScheduler(collector,opener,queue,java.time.Clock.systemUTC());
+                    int attempts=args.length==11?Integer.parseInt(args[9]):1;long interval=args.length==11?Long.parseLong(args[10]):30000;
+                    if(attempts<1||attempts>10000||interval<30000||interval>3600000)throw new IllegalArgumentException("bounded automatic polling required");
+                    for(int i=0;i<attempts;i++){System.out.println(scheduler.automaticCycle(amendmentManifest));if(i+1<attempts)Thread.sleep(interval);}
+                }
+            }
+            return;
+        }
         boolean polling=args.length==12 && args[9].equals("--poll");
         if ((!polling && args.length != 9 && !(args.length == 10 && args[9].equals("--retry-rejected"))) || !args[0].equals("--offline-fixture"))
             throw new IllegalArgumentException("usage: --offline-fixture grant-file port opener impl-package demo-package governor-cid user-id existing-journal-directory [--retry-rejected | --poll ATTEMPTS INTERVAL_MILLIS] (polling never enables rejected retry)");

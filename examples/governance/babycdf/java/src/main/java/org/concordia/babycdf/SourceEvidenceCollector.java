@@ -9,6 +9,47 @@ import java.util.regex.*;
 
 /** End-to-end read-only evidence collector. Never submits or opens an agenda. */
 public final class SourceEvidenceCollector {
+ /** Collector-issued executable evidence capability. Never Jackson-deserialized. */
+ public static final class Ready {
+  private final long number;private final String round,head,pin,bodyDigest;
+  private VerifiedAmendment amendment;
+  private String kind="proposal";private long sourceId;private String original="";
+  public String kind(){return kind;}public long sourceId(){return sourceId==0?number:sourceId;}public String original(){return original;}
+  private final Instant at;
+  private Ready(long number,String round,String head,String pin,String bodyDigest,Instant at){this.number=number;this.round=round;this.head=head;this.pin=pin;this.bodyDigest=bodyDigest;this.at=at;}
+  public long number(){return number;}public String roundId(){return round;}public String pinJson(){return pin;}public Instant eventAt(){return at;}
+  boolean matches(SourceOpenerQueue.Binding b){return b.repo().equals(REPO)&&b.number()==number&&b.kind().equals(kind)&&b.roundId().equals(round)&&b.pinJson().equals(pin)&&b.evidenceDigest().equals(bodyDigest)&&b.eventAt().equals(at)&&(kind.equals("milestone")?!b.amendmentOriginal().isEmpty():(amendment==null?b.amendmentOriginal().isEmpty():b.amendmentOriginal().equals(Long.toString(amendment.original()))));}
+ }
+ public record MilestoneCollection(Batch batch,List<Ready> ready){public MilestoneCollection{ready=List.copyOf(ready);}}
+ public List<Ready> readyMilestones(long number,Instant asOf)throws IOException {return collectMilestones(number,asOf).ready();}
+ public MilestoneCollection collectMilestones(long number,Instant asOf)throws IOException {
+  var issue=object("/issues/"+positive(number));var comments=array("/issues/"+number+"/comments?per_page=100");var events=array("/issues/"+number+"/events?per_page=100");
+  var proofs=new HashMap<String,SourceEvidence.CommitProof>();
+  for(var c:comments.data()){var matcher=Pattern.compile("(?<![a-zA-Z0-9])[0-9a-f]{40}(?![a-zA-Z0-9])").matcher(c.path("body").asText());
+   while(matcher.find()&&proofs.size()<10){String sha=matcher.group();if(proofs.containsKey(sha))continue;var commit=object("/commits/"+sha);if(commit.complete()&&commit.data().path("sha").asText().equals(sha))proofs.put(sha,new SourceEvidence.CommitProof(sha,time(commit.data().path("commit").path("committer"),"date"),false));}}
+  var batch=milestone(number,asOf,issue,comments,events,proofs,Map.of());var out=new ArrayList<Ready>();
+  for(var entry:batch.entries())if(batch.gaps().isEmpty()&&"pinned".equals(entry.payload().get("pin_status"))&&"observed_command".equals(entry.payload().get("trigger_status"))){
+   String pin;try{pin=json.writeValueAsString(List.of(entry.payload().get("delivery_commit"),entry.payload().get("issue_digest"),entry.numericId(),entry.at().toString()));}catch(Exception invalid){throw new IOException("invalid milestone pin");}
+   var ready=new Ready(number,entry.roundId(),"",pin,String.valueOf(entry.payload().get("issue_digest")),entry.at());ready.kind="milestone";ready.sourceId=entry.numericId();out.add(ready);
+  }return new MilestoneCollection(batch,out);
+ }
+ public Set<Long> observedSourceIds(long number)throws IOException {
+  var comments=array("/issues/"+positive(number)+"/comments?per_page=100");if(!comments.complete())throw new IOException("amendment source comments incomplete");var ids=new HashSet<Long>();for(var c:comments.data())if(commentSource(c,number)&&time(c,"created_at").equals(time(c,"updated_at"))&&c.path("body").asText().matches("(?s).*\\bamends:[1-9][0-9]*\\b.*"))ids.add(c.path("id").asLong());return Set.copyOf(ids);
+ }
+ public Optional<Ready> readyAmendment(VerifiedAmendment amendment,Instant asOf)throws IOException {
+  var ready=readyProposal(amendment.amending(),asOf);if(ready.isEmpty())return ready;
+  var pin=json.readTree(ready.get().pinJson());var files=new ArrayList<SourceEvidence.FilePin>();for(var f:pin.get(1))files.add(new SourceEvidence.FilePin(f.get(0).asText(),f.get(1).asText(),f.get(2).asText(),f.get(3).asText()));
+  if(!VerifiedAmendment.pin(new SourceEvidence.Proposal(amendment.amending(),pin.get(0).asText(),files,true,"ready")).equals(amendment.amendingPin()))throw new IOException("amendment current pin changed");
+  ready.get().amendment=amendment;return ready;
+ }
+ private final Map<Long,Batch> lastProposalBatches=new HashMap<>();
+ public Batch lastProposalBatch(long number){return lastProposalBatches.get(number);}
+ public Optional<Ready> readyProposal(long number,Instant asOf)throws IOException {
+  var batch=proposal(number,asOf);lastProposalBatches.put(number,batch);if(!batch.gaps().isEmpty()||batch.entries().size()!=1)return Optional.empty();
+  var entry=batch.entries().getFirst();if(!Boolean.TRUE.equals(entry.payload().get("eligible"))||!"ready".equals(entry.payload().get("pin_status")))return Optional.empty();
+  String pin;try{pin=json.writeValueAsString(List.of(entry.payload().get("head"),entry.payload().get("files")));}catch(Exception invalid){throw new IOException("invalid ready proposal pin");}
+  return Optional.of(new Ready(number,entry.roundId(),String.valueOf(entry.payload().get("head")),pin,String.valueOf(entry.payload().get("body_digest")),entry.at()));
+ }
  public static final String REPO="canton-foundation/canton-dev-fund";
  private static final String ROOT="https://api.github.com/repos/"+REPO;
  private final SourceEvidenceFetch fetch;
@@ -54,7 +95,7 @@ public final class SourceEvidenceCollector {
   if(!complete)gaps.add("incomplete metadata/files/head tree; no executable pin");
   Instant at=time(metadata.data(),"created_at");
   if(!at.isAfter(asOf)) {
-   var payload=new TreeMap<String,Object>();payload.put("eligible",proposal.eligible());payload.put("pin_status",proposal.status());payload.put("head",head);
+   var payload=new TreeMap<String,Object>();payload.put("body_digest",SourceObservation.hash(metadata.data().path("body").asText("")));payload.put("eligible",proposal.eligible());payload.put("pin_status",proposal.status());payload.put("head",head);
    payload.put("files",proposal.files().stream().map(f->List.of(f.path(),f.status(),f.blob(),f.previousPath())).toList());
    payload.put("vote_result","unresolved");payload.put("amendment","unproven");
    payload.put("provider_state",metadata.data().path("state").asText());payload.put("merged_is_vote",false);

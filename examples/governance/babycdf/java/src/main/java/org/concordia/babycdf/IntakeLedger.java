@@ -192,7 +192,11 @@ public final class IntakeLedger implements Intake.Transport, AutoCloseable {
             throw new IOException("BLOCKED: linked action mismatch");
         return true;
     }
+    @FunctionalInterface interface HistoricalActions {List<EventOuterClass.CreatedEvent> find(String action)throws IOException;}
+    private HistoricalActions historicalActions;
+    void historicalActions(HistoricalActions historical){this.historicalActions=java.util.Objects.requireNonNull(historical);}
     private List<EventOuterClass.CreatedEvent> historicalAction(String action) throws IOException {
+        if(historicalActions!=null)return historicalActions.find(action);
         if(channel==null) return List.of(); // Test seam never opens a channel.
         try {
             long end=StateServiceGrpc.newBlockingStub(channel).withDeadlineAfter(15,TimeUnit.SECONDS)

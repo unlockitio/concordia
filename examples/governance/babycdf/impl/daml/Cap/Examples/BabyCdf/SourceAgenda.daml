@@ -54,6 +54,36 @@ executablePin : EvidencePin -> Bool
 executablePin (BlockedPin _) = False
 executablePin _ = True
 
+-- Explicit issuer-asserted cross-PR relation. Manifest digest is a commitment,
+-- not independent verification; Java admits only S2 VerifiedAmendment capability.
+data AmendmentRelation = AmendmentRelation with
+    repo : Text
+    originalNumber : Int
+    amendingNumber : Int
+    originalRound : Text
+    originalPin : EvidencePin
+    amendingPin : EvidencePin
+    manifestDigest : Text
+    evidenceId : Int
+  deriving (Eq, Show)
+
+template SourceAmendmentAssertion
+  with opener : Party; relation : AmendmentRelation
+  where
+    signatory opener
+    ensure relation.repo == repository && relation.originalNumber > 0
+      && relation.amendingNumber > 0 && relation.originalNumber /= relation.amendingNumber
+      && relation.originalRound /= "" && validDigest relation.manifestDigest && relation.evidenceId > 0
+      && validPin SourceProposal relation.originalPin && executablePin relation.originalPin
+      && validPin SourceProposal relation.amendingPin && executablePin relation.amendingPin
+
+template SourceAmendmentRound
+  with opener : Party; roundId : Text; relation : AmendmentRelation
+  where
+    signatory opener
+    key (opener,roundId) : (Party,Text)
+    maintainer key._1
+
 data SourceAgendaRequest = SourceAgendaRequest with
     credentialCid : ContractId SourceObservationCredential
     expectedFingerprint : Text
