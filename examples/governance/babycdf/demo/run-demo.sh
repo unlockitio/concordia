@@ -347,7 +347,7 @@ def ref(version):
 Path(sys.argv[2]).write_text(json.dumps(dict(userName='babycdf-agent',windowSeconds=60,initialRuleRef=ref(1),proposedRuleRef=ref(2)))+'\n')
 PY
     printf '[INIT] network healthy; uploading DAR, allocating synthetic parties and verifying dedicated user rights\n'
-    DEMO_VERBOSE=1 DEMO_SETUP_FILTER=1 render_step step-1 \
+    DEMO_SETUP_FILTER=1 render_step step-1 \
       dpm script --dar "$HERE/.daml/dist/cap-example-babycdf-demo-0.1.0.dar" \
       --script-name Cap.Examples.BabyCdf.Live:bootstrap --input-file "$STATE/bootstrap-input.json" \
       --ledger-host 127.0.0.1 --ledger-port "$LEDGER_PORT" --wall-clock-time \

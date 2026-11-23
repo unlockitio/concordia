@@ -229,6 +229,43 @@ def render(line, verbose):
     return "\n".join(out) if out else None
 
 
+def known_setup_narration(payload):
+    """Whole known redundant records only. A tag never establishes safety."""
+    exact = {
+        '[STEP 1][BUSINESS] All parties, committees and rules here are invented for this sandbox.',
+        '[STEP 1][BUSINESS] No Canton Foundation authority. Nothing decided here binds anyone.',
+        '[STEP 1][BUSINESS] Electorate: 7 members - 5 permanent (core) + 2 alternates.',
+        '[STEP 1][BUSINESS] Alternates vote in their own name; they are not stand-ins.',
+        '[STEP 1][BUSINESS] Quorum (attendance): at least 3 of 7 must take part.',
+        '[STEP 1][BUSINESS] Majority (of votes cast): one option needs at least half.',
+        '[STEP 1][BUSINESS] Steps 2-4 run the realistic case: 3 core YES, 4 ABSENT. Quorum met exactly.',
+        '[STEP 1][BUSINESS] Each member receives one personal voting credential, valid 12 hours.',
+        '[STEP 1][BUSINESS] Two holding routes shown: 1 direct, 6 via registry. Same weight: 1 vote each.',
+        '[STEP 1][BUSINESS] All 7 credentialed, 1 vote each.',
+        '[STEP 1][BUSINESS] Credentials are re-checked when a result is counted, not only when issued.',
+        '[STEP 1][BUSINESS] architecture-review v1 is now in force.',
+        '[STEP 1][BUSINESS] Caveat: v1 is an UNVOTED seed placed by the organiser, not a Foundation rule.',
+        '[STEP 1][BUSINESS] The first rule actually voted on is v2, in step 2.',
+        '[STEP 1][BUSINESS] Watching agents get exactly 1 right: readAs organiser; no actAs.',
+        '[STEP 1][RESULT] Provisioned opener-only reader and separate Intake user; Intake submission is not implemented here.',
+        '[STEP 1][EVIDENCE] No demo scope allocated yet: no committee, no credentials, no rule book.',
+        "[STEP 1][EVIDENCE] This is a fresh-run statement only. If a previous run's parties are still present on this participant they are included in the counts above; contract-level INITIAL STATE begins at step 2.",
+    }
+    if payload in exact:
+        return True
+    import re
+    patterns = (
+        r'\[STEP 1\]\[PHASE\] \n################ STEP 1: SETUP AND CREDENTIALS ################',
+        r'\[STEP 1\]\[PHASE\] \n########## (?:INITIAL STATE|SANDBOX NOTICE|COMMITTEE|CREDENTIALS|RULE BOOK|AGENT RIGHTS|LEDGER EVIDENCE|FINAL STATE) ##########',
+        r'\[STEP 1\]\[BUSINESS\] [^\r\n:]+: credential accepted \((?:direct|registry)\)\.',
+        r'\[STEP 1\]\[EVIDENCE\] Participant before setup: parties known [0-9]+, ledger users [0-9]+ \[participant-level counts, not a contract query\]',
+        r'\[STEP 1\]\[EVIDENCE\] Parties known: [0-9]+; ledger users: [0-9]+',
+        r'\[STEP 1\]\[EVIDENCE\] VotingRights active: [0-9]+ \(direct [0-9]+, registered [0-9]+\)',
+        r'\[STEP 1\]\[EVIDENCE\] Resolver \(governor\) active: [0-9]+; RuleRegistry active: [0-9]+',
+        r'\[STEP 1\]\[EVIDENCE\] Agent read-only rights verified: [0-9]+ \(no actAs\)',
+    )
+    return any(re.fullmatch(pattern, payload) for pattern in patterns)
+
 def main():
     import re
     parser = argparse.ArgumentParser(add_help=True)
@@ -237,6 +274,8 @@ def main():
     parser.add_argument("--hide-sdk-info", action="store_true",
                         help="hide known SDK/JVM INFO lines only (raw log unchanged)")
     args = parser.parse_args()
+    import os
+    setup_summary = os.environ.get("DEMO_SETUP_FILTER") == "1" and not args.verbose and os.environ.get("VERBOSE", "0") != "1"
     raw = open(args.raw, "a", encoding="utf-8", errors="replace") if args.raw else None
     try:
         for line in sys.stdin:
@@ -244,6 +283,29 @@ def main():
             if raw:
                 raw.write(line + "\n")
                 raw.flush()
+            if setup_summary:
+                literal = strip_wrapper(line)
+                payload = decode_literal(literal) if literal is not None else None
+                if payload is not None:
+                    _, _, setup_text = split_tags(payload)
+                    if setup_text.startswith("[SETUP-SUMMARY] "):
+                        print(setup_text[len("[SETUP-SUMMARY] "):], flush=True)
+                        continue
+                    elif payload.startswith("[SETUP-SUMMARY] "):
+                        print(payload[len("[SETUP-SUMMARY] "):], flush=True)
+                        continue
+                    elif payload in (
+                        "[STEP 1] allocating synthetic parties and governor; sandbox only",
+                        "[STEP 1] direct and registered unit voting credentials issued to seven members",
+                        "[STEP 1] EffectiveRule v1 is a sandbox seed created by the opener, not a voted or Foundation rule",
+                    ):
+                        continue
+                    elif re.fullmatch(r'\[STEP 1\] dedicated user rights verified: \[CanReadAs [^\r\n\[\]]+\]', payload):
+                        continue
+                    elif known_setup_narration(payload):
+                        continue
+                    # Unknown tags and unclassified decoded SDK payloads follow
+                    # the ordinary renderer, including permission/assert warnings.
             # Suppress only explicitly INFO-labelled infrastructure lines.
             # Warnings, errors and unrecognised lines still pass through.
             sdk_info = re.match(

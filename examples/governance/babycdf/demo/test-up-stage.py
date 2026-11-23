@@ -49,7 +49,7 @@ r = run(['up_stage', 'blocked', 'Capture', 'touch', str(marker)], raw='blocked')
 check(r.returncode == 2 and not marker.exists(), 'capture refusal precedes command')
 r = run(['up_stage', 'verbose', 'Verbose stage', 'sh', '-c', 'echo full-output'], verbose='1')
 check(r.returncode == 0 and 'full-output' in r.stdout, 'VERBOSE=1 shows full output')
-check('DEMO_VERBOSE=1 DEMO_SETUP_FILTER=1 render_step step-1' in runner and '--script-name Cap.Examples.BabyCdf.Live:bootstrap' in runner, 'bootstrap uses step-1 renderer with full actions')
+check('DEMO_SETUP_FILTER=1 render_step step-1' in runner and '--script-name Cap.Examples.BabyCdf.Live:bootstrap' in runner, 'bootstrap uses compact step-1 renderer with full raw actions')
 script = work / 'setup.sh'
 script.write_text('echo "2026-11-19 13:32:00.81 [INFO]  [multi-package build] SDK startup"\necho \'[STEP 1][PHASE] ########## INITIAL STATE ##########\'\necho \'[STEP 1][ACTION] allocate party\'\necho \'[STEP 1][EVIDENCE] scoped query\'\necho \'[STEP 1][PHASE] ########## FINAL STATE ##########\'\n')
 env = dict(os.environ, DEMO_SETUP_FILTER='1', DEMO_VERBOSE='1', VERBOSE='0')

@@ -119,6 +119,8 @@ bootstrap input = do
   -- can precede a permanent member.
   let core = coreQuorum (Set.size contract.permanent) (Set.toList contract.permanent)
   assert (length core == 5)
+  evidenceLine 1 "[SETUP-SUMMARY] SANDBOX: synthetic committee and rules; no Foundation authority."
+  evidenceLine 1 ("[SETUP-SUMMARY] COMMITTEE: opener " <> name contract.opener <> "; core " <> show (map name (Set.toList contract.permanent)) <> "; alternates " <> show (map name (Set.toList contract.alternates)))
   forA_ (Set.toList (Set.union contract.permanent contract.alternates)) $ \party ->
     action 1 ("allocate party " <> who party) "allocated"
   action 1 ("allocate party " <> who contract.opener) "allocated (demo opener)"
@@ -152,6 +154,7 @@ bootstrap input = do
       action 1 (who voter <> " exercises VotingRightInvitation.AcceptRegistered on " <> cid invitation
         <> " (via factory " <> cid factory <> ")") ("RegisteredVotingRight " <> cid accepted)
       pure (voter, RegisteredRight accepted)
+  evidenceLine 1 ("[SETUP-SUMMARY] CREDENTIALS: " <> show (length credentials) <> " invitations accepted; direct " <> show (length [() | (_,DirectRight _) <- credentials]) <> "; registered " <> show (length [() | (_,RegisteredRight _) <- credentials]) <> "; validity 12h; 1 vote each.")
   debug "[STEP 1] direct and registered unit voting credentials issued to seven members"
   business 1 "All 7 credentialed, 1 vote each."
   business 1 "Credentials are re-checked when a result is counted, not only when issued."
@@ -169,6 +172,7 @@ bootstrap input = do
   business 1 "architecture-review v1 is now in force."
   business 1 "Caveat: v1 is an UNVOTED seed placed by the organiser, not a Foundation rule."
   business 1 "The first rule actually voted on is v2, in step 2."
+  evidenceLine 1 "[SETUP-SUMMARY] RULEBOOK: architecture-review v1 active; UNVOTED sandbox seed, not Foundation authority; step 2 is the first voted rule."
   userId <- validateUserId input.userName
   -- Every template queried by the readers is signed by the opener.
   -- These are provisioned user rights, not an authentication boundary on an
@@ -187,6 +191,7 @@ bootstrap input = do
   createUser (User intakeUserId (Some contract.opener)) intakeRequired
   intakeActual <- listUserRights intakeUserId
   assert (length intakeActual == length intakeRequired && all (`elem` intakeActual) intakeRequired)
+  evidenceLine 1 "[SETUP-SUMMARY] ACCESS: Reviewer CanReadAs opener; Intake CanActAs opener; opener has no member vote."
   outcomeLine 1 "Provisioned opener-only reader and separate Intake user; Intake submission is not implemented here."
   let state = LiveState with
         member; opener = contract.opener; governor
@@ -223,6 +228,8 @@ bootstrap input = do
     <> "; RuleRegistry active: " <> show (distinctCount registryRows))
   evidenceLine 1 ("Agent read-only rights verified: " <> show (length actual)
     <> " (no actAs)")
+  evidenceLine 1 ("[SETUP-SUMMARY] SETUP: governor " <> show e.resolvers <> "; registry " <> show (distinctCount registryRows) <> " ready.")
+  evidenceLine 1 ("[SETUP-SUMMARY] INITIAL PENDING: topics " <> show e.topics <> "; vote records " <> show e.records <> ".")
   finalState 1 witnesses
     "committee of 7 credentialed (5 direct-or-registered permanent + 2 alternates), governor created, architecture-review v1 seeded (unvoted), agent rights verified read-only."
   pure state
