@@ -101,14 +101,17 @@ public final class Advisory {
                 if(recent.size()<64&&!path.contains("/git/blobs/")&&parsed.toString().length()<=256*1024){recent.put(path,parsed);fetched.put(path,now);}
                 return parsed;
             }
+            ReviewDeadline.check();
             HttpRequest.Builder request = HttpRequest.newBuilder(URI.create("https://api.github.com/" + path))
-                    .timeout(Duration.ofSeconds(15)).header("Accept", "application/vnd.github+json")
+                    .timeout(Duration.ofNanos(Math.max(1,ReviewDeadline.remaining(Duration.ofSeconds(15).toNanos())))).header("Accept", "application/vnd.github+json")
                     .header("User-Agent", "concordia-babycdf-advisory-demo").GET();
             if(auth!=null) auth.authorizeRead(request,URI.create("https://api.github.com/"+path));
             HttpResponse<java.io.InputStream> response = client.send(request.build(), HttpResponse.BodyHandlers.ofInputStream());
             try(var input=response.body()) {
                 if(response.statusCode()!=200)throw errorResponse(response.statusCode(),response.headers(),input,Duration.ofSeconds(2));
-                byte[] bytes=readBounded(input,Duration.ofSeconds(15));
+                ReviewDeadline.check();
+                byte[] bytes=readBounded(input,Duration.ofNanos(Math.max(1,ReviewDeadline.remaining(Duration.ofSeconds(15).toNanos()))));
+                ReviewDeadline.check();
                 if(bytes.length>2*1024*1024) throw new GitHubFetchFailure(GitHubFetchFailure.Code.size);
                 JsonNode parsed;
                 try { parsed=JSON.readTree(bytes); } catch(IOException invalid){throw new GitHubFetchFailure(GitHubFetchFailure.Code.parse);}

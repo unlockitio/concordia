@@ -41,9 +41,10 @@ public final class LlmClient {
             Result result=assess(prompt);
             ruleMetadata=result.metadata();
             if(result instanceof Failed failure&&failure.httpStatus()!=null)System.err.println("LLM HTTP status="+failure.httpStatus()+" category="+failure.httpCategory());
+            if(ReviewDeadline.remaining(Long.MAX_VALUE)<=0)return new RuleVerdict.Output(RuleVerdict.failure("deadline_exceeded"),"");
             return result instanceof Success && ruleOutput!=null?ruleOutput:new RuleVerdict.Output(RuleVerdict.failure(
                     result instanceof Failed f?f.reason().name():"invalid_response"),"");
-        } finally { ruleMode=false; ruleIds=List.of(); ruleEvidence=""; }
+        } finally { ruleMode=false; ruleIds=List.of(); ruleEvidence=""; if(ReviewDeadline.remaining(Long.MAX_VALUE)<=0){ruleOutput=null;ruleMetadata=null;ruleResponseContent=null;} }
     }
     byte[] requestBody(String evidence) throws java.io.IOException {
         return JSON.writeValueAsBytes(Map.of("model",settings.model(),"max_tokens",2048,"temperature",0,
@@ -139,7 +140,8 @@ public final class LlmClient {
                 if (reply.status() != 200) return new Failed(Failure.HTTP_STATUS,null,metadata(correlation,calls,start,null,null),reply.status(),httpCategory(reply.status()));
                 // Parsing is byte/structure bounded and included in the same absolute deadline.
                 final int actualCalls = calls;
-                Future<Success> parsing = PARSERS.submit(() -> parse(reply.body(), correlation, actualCalls, start));
+                final boolean parsingRuleMode=ruleMode;final var parsingRuleIds=List.copyOf(ruleIds);final String parsingRuleEvidence=ruleEvidence;
+                Future<Success> parsing = PARSERS.submit(() -> parse(reply.body(), correlation, actualCalls, start,parsingRuleMode));
                 Success result;
                 try {
                     result = parsing.get(Math.max(1, remaining(start)), TimeUnit.NANOSECONDS);
@@ -147,6 +149,7 @@ public final class LlmClient {
                     parsing.cancel(true);
                 }
                 if (remaining(start) <= 0) return failed(Failure.TIMEOUT, null, correlation, calls, start);
+                if(parsingRuleMode){var root=JSON.readTree(reply.body());String content=text(root.path("choices").get(0).path("message").get("content"),65536);var parsed=RuleVerdict.parse(content,parsingRuleIds,parsingRuleEvidence);if(remaining(start)<=0)return failed(Failure.TIMEOUT,null,correlation,calls,start);ruleResponseContent=content;ruleOutput=parsed;ruleMetadata=result.metadata();}
                 return result;
             }
             return failed(Failure.HTTP_STATUS, null, correlation, calls, start);
@@ -171,7 +174,7 @@ public final class LlmClient {
         return failure;
     }
 
-    private Success parse(byte[] bytes, String id, int calls, long start) throws Exception {
+    private Success parse(byte[] bytes, String id, int calls, long start,boolean parsingRuleMode) throws Exception {
         JsonNode root = JSON.readTree(bytes);
         require(root != null && root.isObject() && !root.has("error"));
         JsonNode choices = root.path("choices");
@@ -182,12 +185,9 @@ public final class LlmClient {
         require("assistant".equals(message.path("role").asText()) && !message.hasNonNull("refusal")
                 && !message.has("tool_calls") && !message.has("function_call"));
         String content = text(message.get("content"), 65536);
-        if(ruleMode) {
-            ruleResponseContent=content;
-            ruleOutput=RuleVerdict.parse(content,ruleIds,ruleEvidence);
+        if(parsingRuleMode) {
             String returned=root.has("model")?text(root.get("model"),200):null;
-            ruleMetadata=metadata(id,calls,start,returned,null);
-            return new Success(new Assessment(Verdict.ABSTAIN,"rule_check",List.of()),ruleMetadata);
+            return new Success(new Assessment(Verdict.ABSTAIN,"rule_check",List.of()),metadata(id,calls,start,returned,null));
         }
         JsonNode value = JSON.readTree(content);
         require(value != null && value.isObject() && value.size() == 3
@@ -217,7 +217,7 @@ public final class LlmClient {
         return node.textValue();
     }
     private static void require(boolean condition) { if (!condition) throw new IllegalArgumentException("invalid_response"); }
-    private long remaining(long start) { return BUDGET - (clock.getAsLong() - start); }
+    private long remaining(long start) { return ReviewDeadline.remaining(BUDGET - (clock.getAsLong() - start)); }
     private Metadata metadata(String id, int calls, long start, String model, Usage usage) {
         return new Metadata(id, calls, Math.max(0, (clock.getAsLong() - start) / 1_000_000), model, usage);
     }

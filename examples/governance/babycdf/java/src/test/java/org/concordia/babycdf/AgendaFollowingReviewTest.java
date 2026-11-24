@@ -8,10 +8,45 @@ class AgendaFollowingReviewTest {
   var pin=ValueOuterClass.Value.newBuilder().setVariant(ValueOuterClass.Variant.newBuilder().setConstructor("ProposalPin").setValue(record("headCommit",text(head),"files",ValueOuterClass.Value.newBuilder().setList(ValueOuterClass.List.newBuilder().addElements(record("path",text("proposals/concordia-new.md"),"blob",text(blob)))).build()))).build();
   var snapshot=record("sourceCid",ValueOuterClass.Value.newBuilder().setContractId("credential").build(),"opener",party(),"observation",o,"fingerprint",text(fingerprint),"version",integer(1),"previousDigest",none(),"evidenceDigest",text(observation.bodySha256()),"pin",pin,"roundId",text("pending"),"originalProposal",integer(475),"previousRound",none());
   var event=EventOuterClass.CreatedEvent.newBuilder().setContractId("proposal").addSignatories("opener").addWitnessParties("opener").setCreateArguments(record("opener",party(),"roundId",text("pending"),"subject",record("url",text(observation.url()),"body",text(fingerprint)),"sourceSnapshot",some(snapshot)).getRecord()).build();
-  class Gateway implements Reviewer.LedgerRuleGateway {int version=1;boolean idle,ambiguous;public List<Reviewer.EffectiveRule> activeRules(){var r=new Reviewer.EffectiveRule("rule-"+version,"architecture-review",version,List.of(new Advisory.Clause("criterion","anchor",version==1?"absent":"hello immutable evidence","conflict","forbidden")),null,null);return ambiguous?List.of(r,r):List.of(r);}public List<EventOuterClass.CreatedEvent> agendaEvents(){return idle?List.of():List.of(event);}}
+  class Gateway implements Reviewer.LedgerRuleGateway {int version=1;boolean idle,ambiguous,multiple;public List<Reviewer.EffectiveRule> activeRules(){var r=new Reviewer.EffectiveRule("rule-"+version,"architecture-review",version,List.of(new Advisory.Clause("criterion","anchor",version==1?"absent":"hello immutable evidence","conflict","forbidden")),null,null);return ambiguous?List.of(r,r):List.of(r);}public List<EventOuterClass.CreatedEvent> agendaEvents(){return idle?List.of():multiple?List.of(event,event.toBuilder().setContractId("second").build(),event.toBuilder().setContractId("malformed").clearCreateArguments().build()):List.of(event);}}
   var gateway=new Gateway();var providerCalls=new java.util.concurrent.atomic.AtomicInteger();var settings=LlmSettings.fromEnvironment(Map.of("LLM_API_KEY","synthetic-offline"));byte[] reply=SupplementalAssessmentTest.response("{\"verdicts\":[{\"id\":\"criterion\",\"verdict\":\"PASS\",\"rationale\":\"supported\",\"quotes\":[\"hello immutable evidence\"]}]}");
   var supplemental=new SupplementalAssessment("Reviewer",settings,new LlmClient(settings,r->{providerCalls.incrementAndGet();return SupplementalAssessmentTest.reply(200,reply);},System::nanoTime,false),null,System.out);var following=new AgendaFollowingReview(api,supplemental);var first=following.cycle(gateway);assertEquals(1,first.path("rule_version").asInt());gateway.version=2;var second=following.cycle(gateway);assertEquals(2,second.path("rule_version").asInt());assertEquals(first.path("reviews").get(0).path("revision"),second.path("reviews").get(0).path("revision"));
-  following.cycle(gateway);assertEquals(2,providerCalls.get());gateway.ambiguous=true;assertThrows(java.io.IOException.class,()->following.cycle(gateway));gateway.idle=true;assertEquals("IDLE",following.cycle(gateway).path("status").asText());assertEquals(2,calls.get());assertEquals("pass",second.path("reviews").get(0).path("findings").get(0).path("status").asText());
+  following.cycle(gateway);assertEquals(2,providerCalls.get());gateway.multiple=true;var multi=following.cycle(gateway);assertEquals(3,multi.path("reviews").size());assertEquals(1,multi.path("errors").size());assertEquals("partial",multi.path("status").asText());assertEquals(IntegratedReviewOutput.identity(multi),IntegratedReviewOutput.identity(following.cycle(gateway)));gateway.multiple=false;gateway.ambiguous=true;assertThrows(java.io.IOException.class,()->following.cycle(gateway));gateway.idle=true;assertEquals("IDLE",following.cycle(gateway).path("status").asText());assertEquals(2,calls.get());assertEquals("pass",second.path("reviews").get(0).path("findings").get(0).path("status").asText());
+ }
+ @Test void sharedCycleDeadlineCapsProviderAndCancelsLateReply()throws Exception {
+  var clock=new java.util.concurrent.atomic.AtomicLong();var canceled=new java.util.concurrent.atomic.AtomicBoolean();var settings=LlmSettings.fromEnvironment(Map.of("LLM_API_KEY","synthetic-offline"));
+  var client=new LlmClient(settings,request->{assertTrue(request.timeout().orElseThrow().toNanos()<=java.time.Duration.ofSeconds(1).toNanos());clock.set(java.time.Duration.ofSeconds(60).toNanos());return new LlmClient.Exchange(){public java.util.concurrent.CompletableFuture<LlmClient.Reply> future(){return java.util.concurrent.CompletableFuture.completedFuture(new LlmClient.Reply(503,new byte[0]));}public void cancel(){canceled.set(true);}};},clock::get,true);
+  try(var deadline=new ReviewDeadline(clock::get)){clock.set(java.time.Duration.ofSeconds(59).toNanos());assertEquals(LlmClient.Failure.TIMEOUT,assertInstanceOf(LlmClient.Failed.class,client.assess("evidence")).reason());assertTrue(canceled.get());}
+ }
+ @Test void allRoundOutputDeduplicatesInMemoryAndAfterRestart()throws Exception {
+  var path=java.nio.file.Path.of("multi-round-review-test-"+java.util.UUID.randomUUID()+".json");
+  var result=Advisory.JSON.createObjectNode().put("status","evaluated");var rows=result.putArray("reviews");for(int i=0;i<3;i++)rows.addObject().put("round_id","round-"+i).put("evidence_identity","evidence-"+i).put("rule_version_evaluated",1);
+  var calls=new java.util.concurrent.atomic.AtomicInteger();var output=new IntegratedReviewOutput(path);
+  assertTrue(output.publish(result,r->calls.incrementAndGet()));assertFalse(output.publish(result,r->calls.incrementAndGet()));assertFalse(new IntegratedReviewOutput(path).publish(result,r->calls.incrementAndGet()));
+  for(var row:rows)((com.fasterxml.jackson.databind.node.ObjectNode)row).put("rule_version_evaluated",2);
+  assertTrue(new IntegratedReviewOutput(path).publish(result,r->calls.incrementAndGet()));assertFalse(new IntegratedReviewOutput(path).publish(result,r->calls.incrementAndGet()));assertEquals(2,calls.get());
+ }
+ @Test void deadlinePropagatesAndRejectsLateCompletion()throws Exception {
+  var clock=new java.util.concurrent.atomic.AtomicLong();
+  try(var deadline=new ReviewDeadline(clock::get)){
+   assertEquals(java.time.Duration.ofSeconds(15).toNanos(),ReviewDeadline.remaining(java.time.Duration.ofSeconds(15).toNanos()));
+   clock.set(java.time.Duration.ofSeconds(59).toNanos());assertEquals(java.time.Duration.ofSeconds(1).toNanos(),ReviewDeadline.remaining(java.time.Duration.ofSeconds(15).toNanos()));
+   try(var nested=new ReviewDeadline(clock::get)){assertEquals(java.time.Duration.ofSeconds(1).toNanos(),ReviewDeadline.remaining(java.time.Duration.ofSeconds(15).toNanos()));}
+   clock.set(java.time.Duration.ofSeconds(60).toNanos());assertThrows(java.io.IOException.class,ReviewDeadline::check);
+   clock.set(java.time.Duration.ofSeconds(61).toNanos());assertThrows(java.io.IOException.class,ReviewDeadline::check);
+  }
+  assertEquals(123,ReviewDeadline.remaining(123));
+ }
+ @Test void countBudgetReportsEveryPendingRound()throws Exception {
+  var events=new ArrayList<EventOuterClass.CreatedEvent>();for(int i=0;i<34;i++)events.add(EventOuterClass.CreatedEvent.newBuilder().setContractId(String.format("round-%02d",i)).build());
+  var gateway=new Reviewer.LedgerRuleGateway(){public List<Reviewer.EffectiveRule> activeRules(){return List.of();}public List<EventOuterClass.CreatedEvent> agendaEvents(){return events;}};
+  var result=new AgendaFollowingReview(path->{throw new AssertionError("malformed rounds must not fetch evidence");},null,()->0L).cycle(gateway);
+  assertEquals(34,result.path("reviews").size());assertEquals("partial",result.path("status").asText());for(int i=32;i<34;i++){assertEquals("UNEVALUATED_PENDING",result.path("reviews").get(i).path("status").asText());assertEquals("cycle_budget_exhausted",result.path("reviews").get(i).path("reason").asText());}
+ }
+ @Test void pendingReasonParticipatesInPersistentOutputIdentity()throws Exception {
+  var first=Advisory.JSON.createObjectNode().put("status","partial");first.putArray("reviews").addObject().put("round_id","pending").put("status","UNEVALUATED_PENDING").put("reason","cycle_budget_exhausted");
+  var second=first.deepCopy();((com.fasterxml.jackson.databind.node.ObjectNode)second.path("reviews").get(0)).put("reason","provider_budget_exhausted");
+  assertNotEquals(IntegratedReviewOutput.identity(first),IntegratedReviewOutput.identity(second));
  }
  static ValueOuterClass.Value party(){return ValueOuterClass.Value.newBuilder().setParty("opener").build();}static ValueOuterClass.Value none(){return ValueOuterClass.Value.newBuilder().setOptional(ValueOuterClass.Optional.getDefaultInstance()).build();}static ValueOuterClass.Value some(ValueOuterClass.Value v){return ValueOuterClass.Value.newBuilder().setOptional(ValueOuterClass.Optional.newBuilder().setValue(v)).build();}
 }

@@ -48,6 +48,10 @@ public final class Reviewer {
         default List<EventOuterClass.CreatedEvent> agendaEvents() throws Exception { return List.of(); }
         default List<EventOuterClass.CreatedEvent> registryEvents() throws Exception { return List.of(); }
         default boolean registryBacked(){return false;}
+        default LedgerRuleGateway cycleSnapshot()throws Exception {
+            var agendas=List.copyOf(agendaEvents());var rules=agendas.isEmpty()?List.<EffectiveRule>of():List.copyOf(activeRules());var registries=agendas.isEmpty()?List.<EventOuterClass.CreatedEvent>of():List.copyOf(registryEvents());boolean backed=registryBacked();
+            return new LedgerRuleGateway(){public List<EffectiveRule> activeRules(){return rules;}public List<EventOuterClass.CreatedEvent> agendaEvents(){return agendas;}public List<EventOuterClass.CreatedEvent> registryEvents(){return registries;}public boolean registryBacked(){return backed;}};
+        }
     }
 
     public static final class BlockedLedgerGateway implements LedgerRuleGateway {
@@ -62,7 +66,21 @@ public final class Reviewer {
         private final int port;
         private final String party;
         private final String packageId;
+        private Long cycleOffset;
+        interface SnapshotRpc {long ledgerEnd()throws IOException;List<EventOuterClass.CreatedEvent> events(long offset,String entity)throws IOException;}
+        private SnapshotRpc snapshotRpc;
+        LocalSandboxGateway(int port,String party,String packageId,SnapshotRpc rpc){this(port,party,packageId);this.snapshotRpc=java.util.Objects.requireNonNull(rpc);}
 
+        public synchronized LedgerRuleGateway cycleSnapshot()throws Exception {
+            if(snapshotRpc!=null){ReviewDeadline.check();long offset=snapshotRpc.ledgerEnd();var agendas=verifiedSnapshotEvents(offset,"AgendaProposal");var rules=new ArrayList<EffectiveRule>();for(var event:verifiedSnapshotEvents(offset,"EffectiveRule"))rules.add(decode(event));var registries=verifiedSnapshotEvents(offset,"RuleRegistry");ReviewDeadline.check();return new LedgerRuleGateway(){public List<EffectiveRule> activeRules(){return List.copyOf(rules);}public List<EventOuterClass.CreatedEvent> agendaEvents(){return agendas;}public List<EventOuterClass.CreatedEvent> registryEvents(){return registries;}public boolean registryBacked(){return true;}};}
+            var channel=NettyChannelBuilder.forAddress("127.0.0.1",port).usePlaintext().build();
+            try{ReviewDeadline.check();cycleOffset=StateServiceGrpc.newBlockingStub(channel).withDeadlineAfter(Math.max(1,ReviewDeadline.remaining(java.time.Duration.ofSeconds(15).toNanos())),java.util.concurrent.TimeUnit.NANOSECONDS).getLedgerEnd(StateServiceOuterClass.GetLedgerEndRequest.getDefaultInstance()).getOffset();return LedgerRuleGateway.super.cycleSnapshot();}
+            finally{cycleOffset=null;channel.shutdownNow();}
+        }
+
+        private List<EventOuterClass.CreatedEvent> verifiedSnapshotEvents(long offset,String entity)throws IOException {
+            ReviewDeadline.check();var events=List.copyOf(snapshotRpc.events(offset,entity));if(events.size()>10000)throw new IOException("bounded snapshot ACS");long bytes=0;for(var event:events){bytes+=event.getSerializedSize();if(bytes>20_000_000)throw new IOException("bounded snapshot ACS");IntakeLedger.verifyActiveEvent(event,IntakeLedger.id(packageId,MODULE,entity),party);if(!event.getSignatoriesList().equals(List.of(party)))throw new IOException("foreign snapshot opener");}ReviewDeadline.check();return events;
+        }
         public LocalSandboxGateway(int port, String party, String packageId) {
             if (port < 1 || port > 65535 || party == null || party.isBlank()
                     || packageId == null || !packageId.matches("[0-9a-f]{64}"))
@@ -76,13 +94,13 @@ public final class Reviewer {
             ManagedChannel channel = NettyChannelBuilder.forAddress("127.0.0.1", port).usePlaintext().build();
             try {
                 StateServiceGrpc.StateServiceBlockingStub state = StateServiceGrpc.newBlockingStub(channel)
-                        .withDeadlineAfter(15, java.util.concurrent.TimeUnit.SECONDS);
+                        .withDeadlineAfter(Math.max(1,ReviewDeadline.remaining(java.time.Duration.ofSeconds(15).toNanos())), java.util.concurrent.TimeUnit.NANOSECONDS);
                 ValueOuterClass.Identifier id = ValueOuterClass.Identifier.newBuilder()
                         .setPackageId(packageId).setModuleName(MODULE).setEntityName("EffectiveRule").build();
                 TransactionFilterOuterClass.Filters filters = ruleFilter();
                 TransactionFilterOuterClass.EventFormat format = TransactionFilterOuterClass.EventFormat.newBuilder()
                         .putFiltersByParty(party, filters).setVerbose(true).build();
-                long offset = state.getLedgerEnd(StateServiceOuterClass.GetLedgerEndRequest.getDefaultInstance()).getOffset();
+                long offset = cycleOffset!=null?cycleOffset:state.getLedgerEnd(StateServiceOuterClass.GetLedgerEndRequest.getDefaultInstance()).getOffset();
                 StateServiceOuterClass.GetActiveContractsRequest request = StateServiceOuterClass.GetActiveContractsRequest
                         .newBuilder().setActiveAtOffset(offset).setEventFormat(format).build();
                 List<EffectiveRule> rules = new ArrayList<>();
@@ -115,12 +133,12 @@ public final class Reviewer {
             ManagedChannel channel = NettyChannelBuilder.forAddress("127.0.0.1", port).usePlaintext().build();
             try {
                 StateServiceGrpc.StateServiceBlockingStub state = StateServiceGrpc.newBlockingStub(channel)
-                        .withDeadlineAfter(15, java.util.concurrent.TimeUnit.SECONDS);
+                        .withDeadlineAfter(Math.max(1,ReviewDeadline.remaining(java.time.Duration.ofSeconds(15).toNanos())), java.util.concurrent.TimeUnit.NANOSECONDS);
                 ValueOuterClass.Identifier id = ValueOuterClass.Identifier.newBuilder()
                         .setPackageId(packageId).setModuleName(MODULE).setEntityName("AgendaProposal").build();
                 TransactionFilterOuterClass.EventFormat format = TransactionFilterOuterClass.EventFormat.newBuilder()
                         .putFiltersByParty(party, agendaFilter()).setVerbose(true).build();
-                long offset = state.getLedgerEnd(StateServiceOuterClass.GetLedgerEndRequest.getDefaultInstance()).getOffset();
+                long offset = cycleOffset!=null?cycleOffset:state.getLedgerEnd(StateServiceOuterClass.GetLedgerEndRequest.getDefaultInstance()).getOffset();
                 StateServiceOuterClass.GetActiveContractsRequest request = StateServiceOuterClass.GetActiveContractsRequest
                         .newBuilder().setActiveAtOffset(offset).setEventFormat(format).build();
                 List<OpenAgenda> agendas = new ArrayList<>();
@@ -145,11 +163,11 @@ public final class Reviewer {
         public List<EventOuterClass.CreatedEvent> registryEvents()throws IOException{return currentEvents("RuleRegistry");}
         private List<EventOuterClass.CreatedEvent> currentEvents(String entity)throws IOException {
             var channel=NettyChannelBuilder.forAddress("127.0.0.1",port).usePlaintext().maxInboundMessageSize(20_000_000).build();
-            try{var state=StateServiceGrpc.newBlockingStub(channel).withDeadlineAfter(15,java.util.concurrent.TimeUnit.SECONDS);long offset=state.getLedgerEnd(StateServiceOuterClass.GetLedgerEndRequest.getDefaultInstance()).getOffset();var filters=TransactionFilterOuterClass.Filters.newBuilder().addCumulative(TransactionFilterOuterClass.CumulativeFilter.newBuilder().setTemplateFilter(TransactionFilterOuterClass.TemplateFilter.newBuilder().setTemplateId(IntakeLedger.id("#cap-example-babycdf",MODULE,entity))));var stream=state.getActiveContracts(StateServiceOuterClass.GetActiveContractsRequest.newBuilder().setActiveAtOffset(offset).setEventFormat(TransactionFilterOuterClass.EventFormat.newBuilder().putFiltersByParty(party,filters.build()).setVerbose(true)).build());var out=new ArrayList<EventOuterClass.CreatedEvent>();int count=0,bytes=0;while(stream.hasNext()){var row=stream.next();bytes+=row.getSerializedSize();if(++count>10000||bytes>20_000_000||row.hasIncompleteAssigned()||row.hasIncompleteUnassigned())throw new IOException("rule_selection");if(!row.hasActiveContract())continue;var event=row.getActiveContract().getCreatedEvent();IntakeLedger.verifyActiveEvent(event,IntakeLedger.id(packageId,MODULE,entity),party);if(!event.getSignatoriesList().equals(List.of(party)))throw new IOException("rule_selection");out.add(event);}return List.copyOf(out);}catch(io.grpc.StatusRuntimeException unavailable){throw new IOException("rule_selection");}finally{channel.shutdownNow();}
+            try{var state=StateServiceGrpc.newBlockingStub(channel).withDeadlineAfter(Math.max(1,ReviewDeadline.remaining(java.time.Duration.ofSeconds(15).toNanos())),java.util.concurrent.TimeUnit.NANOSECONDS);long offset=cycleOffset!=null?cycleOffset:state.getLedgerEnd(StateServiceOuterClass.GetLedgerEndRequest.getDefaultInstance()).getOffset();var filters=TransactionFilterOuterClass.Filters.newBuilder().addCumulative(TransactionFilterOuterClass.CumulativeFilter.newBuilder().setTemplateFilter(TransactionFilterOuterClass.TemplateFilter.newBuilder().setTemplateId(IntakeLedger.id("#cap-example-babycdf",MODULE,entity))));var stream=state.getActiveContracts(StateServiceOuterClass.GetActiveContractsRequest.newBuilder().setActiveAtOffset(offset).setEventFormat(TransactionFilterOuterClass.EventFormat.newBuilder().putFiltersByParty(party,filters.build()).setVerbose(true)).build());var out=new ArrayList<EventOuterClass.CreatedEvent>();int count=0,bytes=0;while(stream.hasNext()){var row=stream.next();bytes+=row.getSerializedSize();if(++count>10000||bytes>20_000_000||row.hasIncompleteAssigned()||row.hasIncompleteUnassigned())throw new IOException("rule_selection");if(!row.hasActiveContract())continue;var event=row.getActiveContract().getCreatedEvent();IntakeLedger.verifyActiveEvent(event,IntakeLedger.id(packageId,MODULE,entity),party);if(!event.getSignatoriesList().equals(List.of(party)))throw new IOException("rule_selection");out.add(event);}return List.copyOf(out);}catch(io.grpc.StatusRuntimeException unavailable){throw new IOException("rule_selection");}finally{channel.shutdownNow();}
         }
         public List<EventOuterClass.CreatedEvent> agendaEvents() throws IOException {
             var channel=NettyChannelBuilder.forAddress("127.0.0.1",port).usePlaintext().maxInboundMessageSize(20_000_000).build();
-            try {var state=StateServiceGrpc.newBlockingStub(channel).withDeadlineAfter(15,java.util.concurrent.TimeUnit.SECONDS);long offset=state.getLedgerEnd(StateServiceOuterClass.GetLedgerEndRequest.getDefaultInstance()).getOffset();
+            try {var state=StateServiceGrpc.newBlockingStub(channel).withDeadlineAfter(Math.max(1,ReviewDeadline.remaining(java.time.Duration.ofSeconds(15).toNanos())),java.util.concurrent.TimeUnit.NANOSECONDS);long offset=cycleOffset!=null?cycleOffset:state.getLedgerEnd(StateServiceOuterClass.GetLedgerEndRequest.getDefaultInstance()).getOffset();
                 var request=StateServiceOuterClass.GetActiveContractsRequest.newBuilder().setActiveAtOffset(offset).setEventFormat(TransactionFilterOuterClass.EventFormat.newBuilder().putFiltersByParty(party,agendaFilter()).setVerbose(true)).build();
                 var responses=state.getActiveContracts(request);var result=new ArrayList<EventOuterClass.CreatedEvent>();int count=0,bytes=0;
                 while(responses.hasNext()){var response=responses.next();bytes+=response.getSerializedSize();if(++count>10000||bytes>20_000_000||response.hasIncompleteAssigned()||response.hasIncompleteUnassigned())throw new IOException("incomplete/bounded agenda ACS");if(!response.hasActiveContract())continue;var event=response.getActiveContract().getCreatedEvent();IntakeLedger.verifyActiveEvent(event,IntakeLedger.id(packageId,MODULE,"AgendaProposal"),party);if(!event.getSignatoriesList().equals(List.of(party)))throw new IOException("foreign agenda opener");result.add(event);}return List.copyOf(result);
@@ -459,7 +477,7 @@ public final class Reviewer {
             var evidenceApi=new Advisory.GitHub();evidenceApi.logMode("Reviewer",System.err);var integratedLog=new DemoLog("Reviewer",demoMode,verbose,System.err);integratedLog.banner();
             try(var supplemental=SupplementalAssessment.runtime("Reviewer",System.err)){
              var following=new AgendaFollowingReview(evidenceApi,supplemental);var last=new String[]{""};var outputState=new IntegratedReviewOutput(stateFile);
-             AgentPolling.run(interval,()->{try{var result=following.cycle(ledger);String output=Advisory.JSON.writeValueAsString(result);if(!output.equals(last[0])){outputState.publish(result,published->{if(!"IDLE".equals(published.path("status").asText()))System.err.println("Evaluated rule v"+published.path("rule_version").asInt()+" "+published.path("rule_document_sha256").asText());if(integratedLog.enabled()){ReviewerNarration.report(integratedLog,published);if(integratedLog.verbose())System.out.println(output);}else System.out.println(output);if(System.out.checkError()||System.err.checkError())throw new IOException("integrated review output failed");});last[0]=output;}}catch(Exception blocked){String category="Integrated review blocked: "+(blocked instanceof IntegrationStageFailure stage?stage.stage.name():"evidence_lookup");if(!category.equals(last[0])){System.err.println(category);last[0]=category;}}},Thread::sleep);
+             AgentPolling.run(interval,()->{try{var result=following.cycle(ledger);String output=Advisory.JSON.writeValueAsString(result);if(!output.equals(last[0])){outputState.publish(result,published->{if(!"IDLE".equals(published.path("status").asText()))System.err.println("Evaluated rule v"+published.path("rule_version").asInt()+" "+published.path("rule_document_sha256").asText());if(integratedLog.enabled()){ReviewerNarration.report(integratedLog,published);if(integratedLog.verbose())System.out.println(output);}else System.out.println(output);if(System.out.checkError()||System.err.checkError())throw new IOException("integrated review output failed");});last[0]=output;}}catch(InterruptedException canceled){Thread.currentThread().interrupt();return;}catch(Exception blocked){if(Thread.currentThread().isInterrupted())return;String category="Integrated review blocked: "+(blocked instanceof IntegrationStageFailure stage?stage.stage.name():"evidence_lookup");if(!category.equals(last[0])){System.err.println(category);last[0]=category;}}},Thread::sleep);
             }
             return;
         }

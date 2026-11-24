@@ -49,7 +49,7 @@ final class RuleVerdictCache {
         if(root==null) {
             if(memory.containsKey(key)&&verify.test(memory.get(key))) return new Hit(memory.get(key),true);
             memory.remove(key);
-            Entry entry=evaluate.get(); (cacheable(entry)?memory:failures).put(key,entry); return new Hit(entry,false);
+            Entry entry=evaluate.get();ReviewDeadline.check(); (cacheable(entry)?memory:failures).put(key,entry); return new Hit(entry,false);
         }
         synchronized(LOCKS.computeIfAbsent(root.toAbsolutePath().normalize(),p->new Object())) {
             try {
@@ -73,13 +73,14 @@ final class RuleVerdictCache {
                 }
                 long count; try(var files=Files.list(root)) { count=files.filter(p->p.getFileName().toString().matches("[a-f0-9]{64}\\.json")).count(); }
                 if(count>=256&&!Files.exists(file,LinkOption.NOFOLLOW_LINKS)) throw new java.io.IOException("cache_full");
-                Entry entry=evaluate.get();
+                Entry entry=evaluate.get();ReviewDeadline.check();
                 if(!cacheable(entry)) { failures.put(key,entry); return new Hit(entry,false); }
                 Path temporary=null;
                 try {
                     byte[] bytes=RuleVerdict.JSON.writeValueAsBytes(entry);
                     if(bytes.length>131072) return new Hit(entry,false);
                     temporary=Files.createTempFile(root,"pending-",".json"); Files.write(temporary,bytes);
+                    ReviewDeadline.check();
                     Files.move(temporary,file,StandardCopyOption.ATOMIC_MOVE,StandardCopyOption.REPLACE_EXISTING);
                 } catch(java.io.IOException writeFailure) { /* The paid validated result remains usable. */ }
                 finally { if(temporary!=null) try { Files.deleteIfExists(temporary); } catch(java.io.IOException ignored) {} }
