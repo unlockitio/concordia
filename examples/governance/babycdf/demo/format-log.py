@@ -214,6 +214,10 @@ def heading(title):
 def layout_text(text):
     import re
     # Decode a literal separator only at an otherwise complete heading boundary.
+    if text.startswith('\\n') and '\n' not in text:
+        candidate = text[2:]
+        if re.fullmatch(r'#+ +[A-Z0-9][A-Z0-9 :_-]* +#+', candidate):
+            text = candidate
     match = re.fullmatch(r'(?:\\\\n|\n)?#+[ ]+([^\r\n#]+?)[ ]+#+', text)
     return heading(match.group(1).strip()) if match else text
 
@@ -231,7 +235,7 @@ def render(line, verbose):
     literal = strip_wrapper(line)
     if literal is None:
         # Not a debug line: a real error, a warning, runner output. Always keep.
-        return line
+        return layout_text(line)
     payload = decode_literal(literal)
     if payload is None:
         # Recognised wrapper but unrecognised literal: show it rather than
