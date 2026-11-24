@@ -19,3 +19,9 @@ people cast votes, or permanent appointments. Voting members and Alternates are
 narration terms. The separate Core Contributors Group is not established by this
 mapping. Ledger allocation hints, party IDs, authorizations, quorum calculations,
 and all seven factory-issued twelve-hour unit credentials remain unchanged.
+
+Future fresh bootstraps now allocate the seven exact handles as `PartyIdHint`
+values, retaining their explicit five-member/two-alternate role sets. Existing
+parties cannot be renamed; no migration or reset is performed by this change.
+Generated ledger namespaces/suffixes remain synthetic identifiers, not GitHub
+identity verification. Legacy retained logs still use the narrow display mapping.

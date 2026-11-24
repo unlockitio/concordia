@@ -1,0 +1,18 @@
+module Cap.Examples.BabyCdf.PartyHintTest where
+import Daml.Script
+import DA.Assert
+import qualified DA.Set as Set
+import Cap.Examples.BabyCdf.Live
+import Cap.Examples.BabyCdf.RuleVote
+
+actualHandleHints : Script ()
+actualHandleHints = script do
+ state <- bootstrap (BootstrapInput "handle-hints" 5 ruleRefV1 ruleRefV2)
+ Some governor <- queryContractId state.opener state.governor
+ Set.fromList (map name (Set.toList governor.permanent)) === Set.fromList ["jonathan-ieu","heslin-zenith","shaul-da","ali-abrar","EduardoFromTheFuture"]
+ Set.fromList (map name (Set.toList governor.alternates)) === Set.fromList ["Jatinp26","alexatdrw"]
+ length state.credentials === 7
+ length state.core === 5
+ assert (state.member `Set.member` governor.permanent)
+ assert (not (state.opener `Set.member` Set.union governor.permanent governor.alternates))
+ pure ()

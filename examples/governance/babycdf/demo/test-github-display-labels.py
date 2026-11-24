@@ -26,5 +26,12 @@ class Labels(unittest.TestCase):
    self.assertEqual(0,p.returncode,p.stderr);self.assertEqual(text,raw.read_text())
    for role,handle in fmt.DISPLAY_HANDLES.items():self.assertIn(handle,p.stdout);self.assertNotIn(role,p.stdout)
    self.assertIn('Voting members',p.stdout);self.assertIn('Alternates',p.stdout)
+ def testActualRetainedSdkCommitteeFixture(self):
+  text=(HERE/'test-fixtures/actual-committee-sdk.log').read_text()
+  with tempfile.TemporaryDirectory() as tmp:
+   raw=pathlib.Path(tmp)/'raw';p=subprocess.run(['python3',str(HERE/'format-log.py'),'--raw',str(raw),'--hide-sdk-info'],input=text,text=True,capture_output=True,env=dict(os.environ,DEMO_SETUP_FILTER='1'))
+   self.assertEqual(text,raw.read_text());self.assertEqual(0,p.returncode,p.stderr)
+   for role,handle in fmt.DISPLAY_HANDLES.items():self.assertIn(handle,p.stdout);self.assertNotIn(role,p.stdout)
+   self.assertIn('Voting members',p.stdout);self.assertIn('Alternates',p.stdout);self.assertNotIn('\\\\"',p.stdout)
  def testRoleTerms(self):self.assertEqual('; Voting members jonathan-ieu; Alternates Jatinp26',fmt.display_roles('; core member-a; alternates alternate-f'))
 if __name__=='__main__':unittest.main()

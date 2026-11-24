@@ -239,8 +239,12 @@ def setup_line(text):
     import re
     title, separator, body = text.partition(': ')
     if separator and title in ('SANDBOX','COMMITTEE','CREDENTIALS','RULEBOOK','ACCESS','SETUP','INITIAL PENDING'):
-        committee = re.fullmatch(r'opener [A-Za-z0-9_-]+; core \[(?:"?(?:member-[a-e]|alternate-[fg])"?[, ]*)+\]; alternates \[(?:"?(?:member-[a-e]|alternate-[fg])"?[, ]*)+\]', body)
-        mapped = display_roles(body) if title == 'COMMITTEE' and committee and '::' not in body else body
+        # Daml show-list quotes retain one nested escape layer in real SDK logs.
+        # Normalize only the exact quoted role-list syntax, never arbitrary text.
+        body_for_match = body.replace('\\"', '"') if '\n' not in body and '::' not in body else body
+        allowed_names = '|'.join(re.escape(n) for n in (*DISPLAY_HANDLES, *DISPLAY_HANDLES.values()))
+        committee = re.fullmatch(r'opener [A-Za-z0-9_-]+; core \[(?:"?(?:member-[a-e]|alternate-[fg]|jonathan-ieu|heslin-zenith|shaul-da|ali-abrar|EduardoFromTheFuture|Jatinp26|alexatdrw)"?[, ]*)+\]; alternates \[(?:"?(?:member-[a-e]|alternate-[fg]|jonathan-ieu|heslin-zenith|shaul-da|ali-abrar|EduardoFromTheFuture|Jatinp26|alexatdrw)"?[, ]*)+\]', body_for_match)
+        mapped = display_roles(body_for_match) if title == 'COMMITTEE' and committee and '::' not in body else body
         if title == 'COMMITTEE' and committee and '::' not in body:
             mapped = re.sub(r'\[([^\[\]\r\n]*)\]', lambda m: m.group(1).replace('"',''), mapped)
         return heading('LEDGER USERS' if title == 'ACCESS' else title) + '\n' + mapped

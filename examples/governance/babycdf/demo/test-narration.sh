@@ -136,8 +136,8 @@ REPO_REL="examples/governance/babycdf/demo/daml/Cap/Examples/BabyCdf/Live.daml"
 # v15 credential-bound source agendas copy immutable snapshots/pins and durable
 # round receipts. Step4 missing delivery is blocked_pin, never illustrative approval.
 # Architecture, RuleRef, seven-member electorate and counting formula stay unchanged.
-SPEC_VERSION='quorum-of-three-core-v17-all-seven-factory-registered'
-SPEC_DIGEST='97a339690c630da61ee58b191665b1dafadb78d77d3b5243293ffa44eb33f496'
+SPEC_VERSION='quorum-of-three-core-v18-explicit-handle-party-hints'
+SPEC_DIGEST='3a995336136194447999e13821cc2b1b08df6a4cdab8291949a9abe6f42b92c9'
 
 for required in "$LIVE" "$SELECTOR" "$RULE"; do
   if [ ! -f "$required" ]; then

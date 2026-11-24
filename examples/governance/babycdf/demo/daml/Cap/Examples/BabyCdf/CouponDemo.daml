@@ -18,13 +18,13 @@ import Cap.Examples.BabyCdf.RuleVoteDemo (capRuleAndSeparateApprovalsWithMilesto
 bootstrapAdvisoryGovernor : Script (Party, ContractId AgendaGovernor)
 bootstrapAdvisoryGovernor = do
   opener <- allocateParty "demo-opener"
-  a <- allocateParty "member-a"
-  b <- allocateParty "member-b"
-  c <- allocateParty "member-c"
-  d <- allocateParty "member-d"
-  e <- allocateParty "member-e"
-  f <- allocateParty "alternate-f"
-  g <- allocateParty "alternate-g"
+  a <- allocatePartyWithHint "jonathan-ieu" (PartyIdHint "jonathan-ieu")
+  b <- allocatePartyWithHint "heslin-zenith" (PartyIdHint "heslin-zenith")
+  c <- allocatePartyWithHint "shaul-da" (PartyIdHint "shaul-da")
+  d <- allocatePartyWithHint "ali-abrar" (PartyIdHint "ali-abrar")
+  e <- allocatePartyWithHint "EduardoFromTheFuture" (PartyIdHint "EduardoFromTheFuture")
+  f <- allocatePartyWithHint "Jatinp26" (PartyIdHint "Jatinp26")
+  g <- allocatePartyWithHint "alexatdrw" (PartyIdHint "alexatdrw")
   governor <- submit opener $ createCmd AgendaGovernor with
     opener; consortiumId = "demo-cdf"; permanent = Set.fromList [a,b,c,d,e]; alternates = Set.fromList [f,g]
   pure (a, governor)
