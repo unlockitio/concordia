@@ -6,7 +6,7 @@ import java.util.Map;
 /** Provider configuration; credentials deliberately have no public accessor or diagnostic form. */
 public final class LlmSettings {
     public static final String DEFAULT_BASE = "https://ai-gateway.unlockit.io/v1";
-    public static final String DEFAULT_MODEL = "claude/claude-sonnet-4-6";
+    public static final String DEFAULT_MODEL = "concordia-cdf";
     private final URI endpoint;
     private final String model;
     private final String key;

@@ -121,7 +121,7 @@ A configured invalid file fails closed; no fallback env key is used. Contents
 must be 1–4096 printable ASCII characters with at most one terminal LF.
 `LLM_API_KEY` and legacy environment resolution remain supported when no file is
 configured. Defaults remain `https://ai-gateway.unlockit.io/v1` and
-`claude/claude-sonnet-4-6`; override with `LLM_BASE_URL` and `LLM_MODEL`.
+`concordia-cdf`; override with `LLM_BASE_URL` and `LLM_MODEL`.
 
 From the repository root, after offline review and when explicitly authorized to
 operate the live stack, recreate **only** the two read-only agents:
