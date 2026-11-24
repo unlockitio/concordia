@@ -2,6 +2,7 @@ package org.concordia.babycdf;
 import java.util.function.Consumer;
 /** Presentation state only; never controls source attempts or queue transitions. */
 final class IntakeLogState {
+ void decodeFailed(CredentialDecodeFailure failure,Consumer<String> log){String state="credential_decode_"+failure.reason.name();if(!state.equals(last)){log.accept("Automatic source rounds paused: "+state);last=state;}}
  enum Pause { unavailable_evidence,malformed_evidence,credential_decode,rule_selection,evidence_lookup,inventory_scope_limit }
  private String last;
  void paused(Pause category,Consumer<String> log) {
