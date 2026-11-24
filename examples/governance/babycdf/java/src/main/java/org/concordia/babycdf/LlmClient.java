@@ -40,6 +40,7 @@ public final class LlmClient {
         try {
             Result result=assess(prompt);
             ruleMetadata=result.metadata();
+            if(result instanceof Failed failure&&failure.httpStatus()!=null)System.err.println("LLM HTTP status="+failure.httpStatus()+" category="+failure.httpCategory());
             return result instanceof Success && ruleOutput!=null?ruleOutput:new RuleVerdict.Output(RuleVerdict.failure(
                     result instanceof Failed f?f.reason().name():"invalid_response"),"");
         } finally { ruleMode=false; ruleIds=List.of(); ruleEvidence=""; }
@@ -67,7 +68,10 @@ public final class LlmClient {
     }
     public sealed interface Result permits Success, Failed { Metadata metadata(); }
     public record Success(Assessment assessment, Metadata metadata) implements Result {}
-    public record Failed(Failure reason, String disabledReason, Metadata metadata) implements Result {}
+    public record Failed(Failure reason, String disabledReason, Metadata metadata, Integer httpStatus, String httpCategory) implements Result {
+        public Failed(Failure reason,String disabledReason,Metadata metadata){this(reason,disabledReason,metadata,null,null);}
+    }
+    static String httpCategory(int status){return switch(status){case 401->"authentication";case 403->"authorization";case 404->"endpoint_or_model_not_found";case 429->"rate_limit";default->status>=500?"upstream_unavailable":"http_rejected";};}
     record Reply(int status, byte[] body) {
         @Override public String toString() { return "Reply[body=REDACTED]"; }
     }
@@ -132,7 +136,7 @@ public final class LlmClient {
                 if (reply.status() == 429 || reply.status() >= 500 && reply.status() <= 599) {
                     if (retry && attempt == 0) { active.cancel(); active = null; continue; } // At most one immediate retry, within the same deadline.
                 }
-                if (reply.status() != 200) return failed(Failure.HTTP_STATUS, null, correlation, calls, start);
+                if (reply.status() != 200) return new Failed(Failure.HTTP_STATUS,null,metadata(correlation,calls,start,null,null),reply.status(),httpCategory(reply.status()));
                 // Parsing is byte/structure bounded and included in the same absolute deadline.
                 final int actualCalls = calls;
                 Future<Success> parsing = PARSERS.submit(() -> parse(reply.body(), correlation, actualCalls, start));
