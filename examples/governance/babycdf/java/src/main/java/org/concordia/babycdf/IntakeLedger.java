@@ -160,11 +160,29 @@ public final class IntakeLedger implements Intake.Transport, AutoCloseable {
         if(!selected.contentVersion().equals(text(binding,"expectedFingerprint"))) throw new IOException("BLOCKED: subject fingerprint mismatch");
         return IntakePlan.bound(selected,request.roundId(),agenda,source);
     }
+    record VerifiedOperation(EventOuterClass.CreatedEvent receipt,EventOuterClass.CreatedEvent action) {}
+    void verifyActiveProposal(EventOuterClass.CreatedEvent proposal,VerifiedOperation operation,Intake.Request request,IntakePlan plan)throws IOException {
+        var args=proposal.getCreateArguments();var receipt=operation.receipt().getCreateArguments();
+        if(!proposal.getSignatoriesList().equals(List.of(party))
+            ||!party.equals(field(args,"opener").getParty())||!party.equals(field(args,"proposer").getParty())
+            ||!request.roundId().equals(text(args,"roundId"))
+            ||!operation.action().getContractId().equals(field(args,"actionCid").getContractId())
+            )throw new IOException("BLOCKED: active proposal operation mismatch");
+        var copied=field(args,"sourceSnapshot");
+        if(!copied.hasOptional()||!copied.getOptional().hasValue())throw new IOException("BLOCKED: active proposal source missing");
+        verifySnapshot(copied.getOptional().getValue().getRecord(),plan);
+        var expectedCopied=field(receipt,"sourceSnapshot");
+        if(!sameValue(ValueOuterClass.Value.newBuilder().setRecord(SourceSnapshotWire.expand(copied.getOptional().getValue().getRecord())).build(),ValueOuterClass.Value.newBuilder().setRecord(SourceSnapshotWire.expand(expectedCopied.getOptional().getValue().getRecord())).build()))throw new IOException("BLOCKED: active proposal copied source mismatch");
+    }
     public boolean proof(Intake.Request request, IntakePlan plan) throws IOException {
         if(plan.boundSource()==null) return proof(request,plan,active(impl,RULE,"AgendaProposal"),active(impl,RULE,"AgendaAction"));
+        return verifiedOperation(request,plan).isPresent();
+    }
+    java.util.Optional<VerifiedOperation> verifiedOperation(Intake.Request request,IntakePlan plan)throws IOException {
+        if(plan.boundSource()==null)throw new IOException("BLOCKED: source-bound operation required");
         var receipts=active(impl,RULE,"AgendaRoundReceipt").stream()
                 .filter(e->request.roundId().equals(safeText(e.getCreateArguments(),"roundId"))).toList();
-        if(receipts.isEmpty()) return false;
+        if(receipts.isEmpty()) return java.util.Optional.empty();
         if(receipts.size()!=1) throw new IOException("BLOCKED: duplicate durable round receipt");
         var receipt=receipts.getFirst();var r=receipt.getCreateArguments();
         if(!receipt.getSignatoriesList().equals(List.of(party)) || !party.equals(field(r,"opener").getParty())
@@ -190,7 +208,7 @@ public final class IntakeLedger implements Intake.Transport, AutoCloseable {
                 || !sameValue(field(linked.getFirst().getCreateArguments(),"agenda"),field(r,"agenda"))
                 || !sameValue(field(linked.getFirst().getCreateArguments(),"sourceSnapshot"),copied)))
             throw new IOException("BLOCKED: linked action mismatch");
-        return true;
+        return java.util.Optional.of(new VerifiedOperation(receipt,linked.getFirst()));
     }
     @FunctionalInterface interface HistoricalActions {List<EventOuterClass.CreatedEvent> find(String action)throws IOException;}
     private HistoricalActions historicalActions;

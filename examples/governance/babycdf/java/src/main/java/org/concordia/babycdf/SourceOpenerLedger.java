@@ -80,6 +80,9 @@ public final class SourceOpenerLedger implements SourceOpenerQueue.Ledger,AutoCl
   }
  }
  public Optional<SourceOpenerQueue.Proof> proof(SourceOpenerQueue.Binding b)throws IOException {
+   return proof(b,Optional.empty());
+  }
+  public Optional<SourceOpenerQueue.Proof> proof(SourceOpenerQueue.Binding b,Optional<java.time.Instant> expectedDeadline)throws IOException {
   var receipts=rpc.active(RULE,"AgendaRoundReceipt").stream().filter(e->b.roundId().equals(safe(e,"roundId"))).toList();if(receipts.size()>1)throw new IOException("duplicate opener receipt");
   if(receipts.isEmpty())return Optional.empty();
   if(b.kind().equals("proposal")&&!b.amendmentOriginal().isEmpty()) {
@@ -95,8 +98,24 @@ public final class SourceOpenerLedger implements SourceOpenerQueue.Ledger,AutoCl
    if(IntakeLedger.number(relation,"originalNumber")!=expected.original()||IntakeLedger.number(relation,"amendingNumber")!=expected.amending()||IntakeLedger.number(relation,"originalNumber")!=Long.parseLong(b.amendmentOriginal())||IntakeLedger.number(relation,"amendingNumber")!=b.number()||!IntakeLedger.text(relation,"repo").equals(b.repo()))throw new IOException("amendment durable identity mismatch");
   }
   var request=new Intake.Request("queue",party,"automatic",b.roundId(),"source-"+b.number(),120,0);
-  if(!proofLedger.proof(request,plan(b)))throw new IOException("receipt lacks linked action proof");
-  boolean active=rpc.active(RULE,"AgendaProposal").stream().anyMatch(e->b.roundId().equals(safe(e,"roundId")));
+  var operation=proofLedger.verifiedOperation(request,plan(b)).orElseThrow(()->new IOException("receipt lacks linked action proof"));
+  var activeProposals=rpc.active(RULE,"AgendaProposal").stream().filter(e->b.roundId().equals(safe(e,"roundId"))).toList();
+   if(activeProposals.size()>1)throw new IOException("duplicate active proposal for round");
+   boolean active=!activeProposals.isEmpty();
+   if(active){
+    var proposal=activeProposals.get(0);
+    proofLedger.verifyActiveProposal(proposal,operation,request,plan(b));
+    var subject=IntakeLedger.field(proposal.getCreateArguments(),"subject").getRecord();
+    String expectedUrl="https://github.com/"+b.repo()+(b.kind().equals("proposal")?"/pull/":"/issues/")+b.number();
+    if(!expectedUrl.equals(IntakeLedger.text(subject,"url"))||!b.fingerprint().equals(IntakeLedger.text(subject,"body")))throw new IOException("active proposal subject mismatch");
+    if(expectedDeadline.isEmpty())throw new IOException("active proposal deadline provenance unavailable");
+    var closesAt=IntakeLedger.field(proposal.getCreateArguments(),"closesAt");
+    if(!closesAt.hasTimestamp())throw new IOException("active proposal lacks authoritative deadline");
+    long micros=closesAt.getTimestamp();
+    var deadline=java.time.Instant.ofEpochSecond(Math.floorDiv(micros,1_000_000L),Math.floorMod(micros,1_000_000L)*1000L);
+    if(!deadline.equals(expectedDeadline.get()))throw new IOException("active proposal persisted deadline mismatch");
+    return Optional.of(new SourceOpenerQueue.Proof(b.roundId(),SourceOpenerQueue.digest(b),false,proposal.getContractId(),deadline.toString()));
+   }
   return Optional.of(new SourceOpenerQueue.Proof(b.roundId(),SourceOpenerQueue.digest(b),!active));
  }
  private static ValueOuterClass.Value normalized(ValueOuterClass.Value v){
@@ -128,8 +147,13 @@ public final class SourceOpenerLedger implements SourceOpenerQueue.Ledger,AutoCl
   if(rpc.active(RULE,"AgendaGovernor").stream().noneMatch(e->e.getContractId().equals(governor)&&party.equals(e.getSignatories(0))))throw new IOException("governor unavailable");
  }
  public void open(SourceOpenerQueue.Binding b,int seconds)throws IOException {
-  if(seconds!=120)throw new IOException("automatic window must be120");validate(b);
-  var args=record("proposer",ValueOuterClass.Value.newBuilder().setParty(party).build(),"roundId",text(b.roundId()),"agenda",agenda(b),"baseVersion",integer(0),"closesAt",timestamp(rpc.now().truncatedTo(java.time.temporal.ChronoUnit.MICROS).plusSeconds(seconds)),"source",ValueOuterClass.Value.newBuilder().setOptional(ValueOuterClass.Optional.newBuilder().setValue(source(b))).build());
+  if(seconds!=120)throw new IOException("automatic window must be120");
+   openAt(b,rpc.now().truncatedTo(java.time.temporal.ChronoUnit.MICROS).plusSeconds(seconds));
+  }
+  public void openAt(SourceOpenerQueue.Binding b,java.time.Instant deadline)throws IOException {
+   if(deadline==null||!deadline.equals(deadline.truncatedTo(java.time.temporal.ChronoUnit.MICROS))||!rpc.now().isBefore(deadline))throw new IOException("invalid/expired absolute voting deadline");
+   validate(b);
+  var args=record("proposer",ValueOuterClass.Value.newBuilder().setParty(party).build(),"roundId",text(b.roundId()),"agenda",agenda(b),"baseVersion",integer(0),"closesAt",timestamp(deadline),"source",ValueOuterClass.Value.newBuilder().setOptional(ValueOuterClass.Optional.newBuilder().setValue(source(b))).build());
   String choice="ProposeAgenda";
   if(b.kind().equals("proposal")&&!b.amendmentOriginal().isEmpty()) {
    var verified=amendments.get(b.roundId());if(verified==null)throw new IOException("verified amendment must be restored, never journal assertion");

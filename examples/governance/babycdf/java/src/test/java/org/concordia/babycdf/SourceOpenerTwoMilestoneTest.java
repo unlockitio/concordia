@@ -14,10 +14,11 @@ class SourceOpenerTwoMilestoneTest {
    public boolean anyActiveRound(){return !proofs.isEmpty()&&!completed;}
    public SourceOpenerQueue.Binding prepare(SourceOpenerQueue.Binding b){return new SourceOpenerQueue.Binding(b.repo(),b.number(),b.kind(),b.credentialCid(),b.version(),b.fingerprint(),b.evidenceDigest(),b.roundId(),b.eventAt(),b.sourceId(),b.pinJson(),latest,b.amendmentOriginal());}
    public void validate(SourceOpenerQueue.Binding b)throws IOException{if(!b.previousRound().equals(latest))throw new IOException("head race");}
+   public void openAt(SourceOpenerQueue.Binding b,Instant deadline){assertNotNull(deadline);open(b,0);}
    public void open(SourceOpenerQueue.Binding b,int seconds){sends++;assertEquals(latest,b.previousRound());latest=b.roundId();proofs.put(b.roundId(),new SourceOpenerQueue.Proof(b.roundId(),SourceOpenerQueue.digest(b),false));}
   }
   var ledger=new Ledger();java.util.function.Function<SourceEvidenceCollector.Ready,SourceOpenerQueue.Binding> bind=r->new SourceOpenerQueue.Binding(repo,540,"milestone","credential",1,"b".repeat(64),SourceObservation.hash("body"),r.roundId(),r.eventAt(),r.sourceId(),r.pinJson(),"","184");
-  try(var q=new SourceOpenerQueue(root.toRealPath(),ledger)){for(var r:ready)q.enqueue(r,bind.apply(r));assertEquals("opened",q.tick());assertEquals(1,ledger.sends);}
+  try(var q=new SourceOpenerQueue(root.toRealPath(),ledger)){for(var r:ready)q.enqueue(r,bind.apply(r));assertEquals("opened",q.tick());assertEquals(1,ledger.sends);assertEquals("proven-open",q.tick());assertEquals(1,ledger.sends);}
   ledger.completed=true;
   try(var q=new SourceOpenerQueue(root.toRealPath(),ledger)){for(var r:ready)q.enqueue(r,bind.apply(r));assertEquals("opened",q.tick());assertEquals(2,ledger.sends);assertEquals(ready.get(0).roundId(),q.snapshot().get(1).binding().previousRound());}
  }

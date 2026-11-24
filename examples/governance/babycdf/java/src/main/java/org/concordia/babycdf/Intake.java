@@ -167,8 +167,9 @@ public final class Intake {
             int port=Integer.parseInt(args[1]);String party=args[2],impl=args[3],demo=args[4],governor=args[5],user=args[6];Path journal=Path.of(args[7]);
             int attempts=Integer.parseInt(args[8]);long interval=Long.parseLong(args[9]);if(attempts<1||attempts>86400||interval<1000||interval>60000)throw new IllegalArgumentException("bounded integrated polling required");
             if(!discoveryMode(System.getenv()).equals("live"))throw new IllegalArgumentException("integrated demo requires live discovery; use explicit legacy offline CLI for fixtures");
-            var pages=liveSourcePages();var collector=SourceEvidenceCollector.configured(System.getenv(),java.time.Clock.systemUTC());
-            try(var sources=new SourceCatalogueLedger(port,party,impl,demo,user,sourceJournal(journal));var opener=new SourceOpenerLedger(port,party,impl,demo,governor,user,journal);var queue=new SourceOpenerQueue(journal,opener);var executor=java.util.concurrent.Executors.newSingleThreadExecutor()) {
+            var votingWindow=SourceOpenerQueue.votingWindow(System.getenv());
+             var pages=liveSourcePages();var collector=SourceEvidenceCollector.configured(System.getenv(),java.time.Clock.systemUTC());
+            try(var sources=new SourceCatalogueLedger(port,party,impl,demo,user,sourceJournal(journal));var opener=new SourceOpenerLedger(port,party,impl,demo,governor,user,journal);var queue=new SourceOpenerQueue(journal,opener,votingWindow,java.time.Clock.systemUTC());var executor=java.util.concurrent.Executors.newSingleThreadExecutor()) {
                 var sweep=new SourceSweepScheduler(new JavaSourceIngestion(sources,pages,System.out::println),System::nanoTime,sourceInterval(System.getenv()));var automatic=new SourceOpenerScheduler(collector,opener,queue,java.time.Clock.systemUTC(),SourceOpenerScheduler.callerScope(args[0]));
                 java.util.concurrent.Future<SourceSweepScheduler.TickOutcome> worker=null;
                 var automaticLog=new IntakeLogState();
@@ -183,9 +184,10 @@ public final class Intake {
             // Explicit production evidence+credential+queue pipeline; old demo CLI stays unchanged.
             int port=Integer.parseInt(args[1]);String party=args[2],impl=args[3],demo=args[4],governor=args[5],user=args[6];
             Path journal=Path.of(args[7]);Path amendmentManifest=args[8].equals("-")?null:Path.of(args[8]);
+             var votingWindow=SourceOpenerQueue.votingWindow(System.getenv());
             var collector=SourceEvidenceCollector.configured(System.getenv(),java.time.Clock.systemUTC());
             try(var opener=new SourceOpenerLedger(port,party,impl,demo,governor,user,journal)) {
-                try(var queue=new SourceOpenerQueue(journal,opener)) {
+                try(var queue=new SourceOpenerQueue(journal,opener,votingWindow,java.time.Clock.systemUTC())) {
                     var scheduler=new SourceOpenerScheduler(collector,opener,queue,java.time.Clock.systemUTC(),SourceOpenerScheduler.callerScope(args[0]));
                     int attempts=args.length==11?Integer.parseInt(args[9]):1;long interval=args.length==11?Long.parseLong(args[10]):30000;
                     if(attempts<1||attempts>10000||interval<30000||interval>3600000)throw new IllegalArgumentException("bounded automatic polling required");

@@ -54,10 +54,12 @@ for agent in ("reviewer", "intake"):
     assert model["services"][agent]["network_mode"] == "service:canton"
 assert model['services']['intake']['environment']['INTAKE_DISCOVERY_MODE'] == 'live'
 assert model['services']['intake']['environment']['INTAKE_SOURCE_INTERVAL_MILLIS'] == '30000'
-fixture_environment = dict(environment, INTAKE_DISCOVERY_MODE='fixture', INTAKE_SOURCE_INTERVAL_MILLIS='60000')
+assert model['services']['intake']['environment']['INTAKE_VOTING_WINDOW'] == '21d'
+fixture_environment = dict(environment, INTAKE_DISCOVERY_MODE='fixture', INTAKE_SOURCE_INTERVAL_MILLIS='60000', INTAKE_VOTING_WINDOW='2h')
 fixture = config(fixture_environment)
 assert fixture['services']['intake']['environment']['INTAKE_DISCOVERY_MODE'] == 'fixture'
 assert fixture['services']['intake']['environment']['INTAKE_SOURCE_INTERVAL_MILLIS'] == '60000'
+assert fixture['services']['intake']['environment']['INTAKE_VOTING_WINDOW'] == '2h'
 for agent in ('reviewer', 'intake'):
     service = model['services'][agent]
     assert service['read_only'] is True
