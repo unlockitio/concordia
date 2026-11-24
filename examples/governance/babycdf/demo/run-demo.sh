@@ -260,6 +260,8 @@ run_opt_step() {
 }
 case "${1:-help}" in
   up)
+    case "${BABYCDF_STARTUP_TIMEOUT:-600}" in ''|*[!0-9]*|0*|?????*) echo 'BABYCDF_STARTUP_TIMEOUT must be 180..1800 seconds' >&2; exit 2;; esac
+    [ "${BABYCDF_STARTUP_TIMEOUT:-600}" -ge 180 ] && [ "${BABYCDF_STARTUP_TIMEOUT:-600}" -le 1800 ] || { echo 'BABYCDF_STARTUP_TIMEOUT must be 180..1800 seconds' >&2; exit 2; }
     if [ "${BABYCDF_LLM_ENABLED:-0}" = 1 ] && [ -n "${LLM_API_KEY_FILE:-}" ]; then
       case "$LLM_API_KEY_FILE" in
         /*) ;;
@@ -334,7 +336,7 @@ case "${1:-help}" in
       dpm build --enable-multi-package=yes --multi-package-path "$STEP_MANIFEST")
     (cd "$STEP_MANIFEST" && up_stage demo-build 'Building BabyCDF demo DAR' env DAML_PACKAGE="$DEMO_DIR" \
       dpm build --enable-multi-package=yes --multi-package-path "$STEP_MANIFEST")
-    up_stage canton 'Starting Canton (wait for healthy)' compose up -d --build --wait --wait-timeout 180 canton
+    up_stage canton 'Starting Canton (wait for healthy)' compose up -d --build --wait --wait-timeout "${BABYCDF_STARTUP_TIMEOUT:-600}" canton
     mkdir -p "$STATE"
     NEXT=$(mktemp "$STATE/bootstrap-next-XXXXXXXX.json")
     python3 - "$HERE/../rules" "$STATE/bootstrap-input.json" <<'PY'

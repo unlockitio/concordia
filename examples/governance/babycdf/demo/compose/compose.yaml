@@ -2,6 +2,8 @@
 name: babycdf-live
 services:
   canton:
+    healthcheck:
+      start_period: ${BABYCDF_STARTUP_TIMEOUT:-600}s
     extends:
       file: .cips/8e36c20e5106014efb8348f749d9535afbc48921/cn-credentials-standard/demo/compose.yaml
       service: credential-canton
