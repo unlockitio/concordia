@@ -27,7 +27,7 @@ public final class SourceOpenerLedger implements SourceOpenerQueue.Ledger,AutoCl
      return out;
     }catch(io.grpc.StatusRuntimeException failure){throw new IOException("opener ACS unavailable");}
    }
-   public void submit(CommandServiceOuterClass.SubmitAndWaitRequest request)throws IOException {try{CommandServiceGrpc.newBlockingStub(channel).withDeadlineAfter(15,TimeUnit.SECONDS).submitAndWait(request);}catch(io.grpc.StatusRuntimeException failure){throw new IOException("opener submission uncertain; proof only");}}
+   public void submit(CommandServiceOuterClass.SubmitAndWaitRequest request)throws IOException {try{CommandServiceGrpc.newBlockingStub(channel).withDeadlineAfter(15,TimeUnit.SECONDS).submitAndWait(request);}catch(io.grpc.StatusRuntimeException failure){System.err.println("Automatic source submission status="+failure.getStatus().getCode().name());throw new IOException("opener submission uncertain; proof only");}}
   };
  }
  SourceOpenerLedger(String party,String impl,String governor,String user,Rpc rpc,IntakeLedger proofLedger){this.party=party;this.impl=impl;this.governor=governor;this.user=user;this.rpc=rpc;this.proofLedger=proofLedger;channel=null;}
@@ -129,7 +129,7 @@ public final class SourceOpenerLedger implements SourceOpenerQueue.Ledger,AutoCl
  }
  public void open(SourceOpenerQueue.Binding b,int seconds)throws IOException {
   if(seconds!=120)throw new IOException("automatic window must be120");validate(b);
-  var args=record("proposer",ValueOuterClass.Value.newBuilder().setParty(party).build(),"roundId",text(b.roundId()),"agenda",agenda(b),"baseVersion",integer(0),"closesAt",timestamp(rpc.now().plusSeconds(seconds)),"source",ValueOuterClass.Value.newBuilder().setOptional(ValueOuterClass.Optional.newBuilder().setValue(source(b))).build());
+  var args=record("proposer",ValueOuterClass.Value.newBuilder().setParty(party).build(),"roundId",text(b.roundId()),"agenda",agenda(b),"baseVersion",integer(0),"closesAt",timestamp(rpc.now().truncatedTo(java.time.temporal.ChronoUnit.MICROS).plusSeconds(seconds)),"source",ValueOuterClass.Value.newBuilder().setOptional(ValueOuterClass.Optional.newBuilder().setValue(source(b))).build());
   String choice="ProposeAgenda";
   if(b.kind().equals("proposal")&&!b.amendmentOriginal().isEmpty()) {
    var verified=amendments.get(b.roundId());if(verified==null)throw new IOException("verified amendment must be restored, never journal assertion");

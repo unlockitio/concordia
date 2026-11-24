@@ -234,6 +234,7 @@ public final class IntakeLedger implements Intake.Transport, AutoCloseable {
         return b.build();
     }
     private static void verifySnapshot(ValueOuterClass.Record snapshot,IntakePlan plan) throws IOException {
+        snapshot=SourceSnapshotWire.expand(snapshot);
         var source=plan.boundSource().getRecord();
         var observed=field(snapshot,"observation");
         var previous=field(snapshot,"previousDigest");

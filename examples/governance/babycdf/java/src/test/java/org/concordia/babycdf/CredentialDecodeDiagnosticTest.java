@@ -1,6 +1,7 @@
 package org.concordia.babycdf;
 import org.junit.jupiter.api.Test;import com.daml.ledger.api.v2.*;import java.util.*;import static org.junit.jupiter.api.Assertions.*;
 class CredentialDecodeDiagnosticTest {
+ @Test void trailingNoneElisionMatchesObservedSdkWire()throws Exception {var full=DemoInventoryScaleTest.credential(184,true);var ordered=full.getCreateArguments().toBuilder().clearFields();for(String name:List.of("opener","repo","observation","fingerprint","version"))ordered.addFields(full.getCreateArguments().getFieldsList().stream().filter(f->f.getLabel().equals(name)).findFirst().orElseThrow());var compact=full.toBuilder().setCreateArguments(ordered).build();assertEquals(CanonicalSourceCredential.decode(full,"opener"),CanonicalSourceCredential.decode(compact,"opener"));var wrong=compact.toBuilder().setCreateArguments(compact.getCreateArguments().toBuilder().setFields(4,compact.getCreateArguments().getFields(4).toBuilder().setValue(ValueOuterClass.Value.newBuilder().setInt64(2)))).build();assertThrows(CredentialDecodeFailure.class,()->CanonicalSourceCredential.decode(wrong,"opener"));}
  @Test void fixedReasonsPreserveStrictnessAndChangeOnlyLogs()throws Exception {
   var event=DemoInventoryScaleTest.credential(184,true);assertNotNull(CanonicalSourceCredential.decode(event,"opener"));
   var variants=new LinkedHashMap<CredentialDecodeFailure.Reason,EventOuterClass.CreatedEvent>();

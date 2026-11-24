@@ -10,7 +10,7 @@ public record IntegratedAgendaSnapshot(String cid,String round,String opener,lon
   var r=event.getCreateArguments();String opener=IntakeLedger.field(r,"opener").getParty(),round=IntakeLedger.text(r,"roundId");
   if(!IntakeLedger.field(r,"opener").hasParty()||!IntakeLedger.field(safeRecord(r,"subject"),"url").hasText()||opener.isBlank()||round.isBlank()||!event.getSignatoriesList().equals(List.of(opener))||!event.getWitnessPartiesList().contains(opener))throw new IOException("agenda issuer/witness mismatch");
   var optional=IntakeLedger.field(r,"sourceSnapshot");if(!optional.hasOptional()||!optional.getOptional().hasValue())return null;
-  if(!optional.getOptional().getValue().hasRecord())throw new IOException("malformed snapshot record");var s=optional.getOptional().getValue().getRecord();
+  if(!optional.getOptional().getValue().hasRecord())throw new IOException("malformed snapshot record");var s=SourceSnapshotWire.expand(optional.getOptional().getValue().getRecord());
   var sourceCid=IntakeLedger.field(s,"sourceCid");if(!sourceCid.hasContractId()||sourceCid.getContractId().isBlank())throw new IOException("source CID missing");
   var observation=IntakeLedger.field(s,"observation").getRecord();var o=SourceCatalogueCodec.observation(observation);long version=IntakeLedger.number(s,"version");String fingerprint=IntakeLedger.text(s,"fingerprint"),digest=IntakeLedger.text(s,"evidenceDigest");
   var previous=IntakeLedger.field(s,"previousDigest");if(!previous.hasOptional()||(previous.getOptional().hasValue()&&!previous.getOptional().getValue().hasText()))throw new IOException("snapshot previous digest type");String prior=previous.getOptional().hasValue()?previous.getOptional().getValue().getText():null;
