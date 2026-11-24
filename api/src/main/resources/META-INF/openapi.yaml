@@ -1,0 +1,1421 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "CAP Query API",
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/v1/governance/actions": {
+      "get": {
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Active interface state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "PQS unavailable or snapshot pruned"
+          },
+          "400": {
+            "description": "Invalid pagination or context"
+          }
+        }
+      }
+    },
+    "/v1/governance/actions/{contractId}": {
+      "get": {
+        "parameters": [
+          {
+            "name": "contractId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Active interface state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ACTIONContract"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "PQS unavailable or snapshot pruned"
+          },
+          "404": {
+            "description": "Parent, contract or facet unavailable"
+          }
+        }
+      }
+    },
+    "/v1/governance/executables": {
+      "get": {
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Active interface state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "PQS unavailable or snapshot pruned"
+          },
+          "400": {
+            "description": "Invalid pagination or context"
+          }
+        }
+      }
+    },
+    "/v1/governance/executables/{contractId}": {
+      "get": {
+        "parameters": [
+          {
+            "name": "contractId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Active interface state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EXECUTABLEContract"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "PQS unavailable or snapshot pruned"
+          },
+          "404": {
+            "description": "Parent, contract or facet unavailable"
+          }
+        }
+      }
+    },
+    "/v1/governance/resolvers": {
+      "get": {
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Active interface state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "PQS unavailable or snapshot pruned"
+          },
+          "400": {
+            "description": "Invalid pagination or context"
+          }
+        }
+      }
+    },
+    "/v1/governance/resolvers/{contractId}": {
+      "get": {
+        "parameters": [
+          {
+            "name": "contractId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Active interface state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RESOLVERContract"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "PQS unavailable or snapshot pruned"
+          },
+          "404": {
+            "description": "Parent, contract or facet unavailable"
+          }
+        }
+      }
+    },
+    "/v1/governance/vote-records": {
+      "get": {
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Active interface state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "PQS unavailable or snapshot pruned"
+          },
+          "400": {
+            "description": "Invalid pagination or context"
+          }
+        }
+      }
+    },
+    "/v1/governance/vote-records/{contractId}": {
+      "get": {
+        "parameters": [
+          {
+            "name": "contractId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Active interface state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VOTE_RECORDContract"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "PQS unavailable or snapshot pruned"
+          },
+          "404": {
+            "description": "Parent, contract or facet unavailable"
+          }
+        }
+      }
+    },
+    "/v1/governance/voting-rights": {
+      "get": {
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Active interface state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "PQS unavailable or snapshot pruned"
+          },
+          "400": {
+            "description": "Invalid pagination or context"
+          }
+        }
+      }
+    },
+    "/v1/governance/voting-rights/{contractId}": {
+      "get": {
+        "parameters": [
+          {
+            "name": "contractId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Active interface state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VOTING_RIGHTSContract"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "PQS unavailable or snapshot pruned"
+          },
+          "404": {
+            "description": "Parent, contract or facet unavailable"
+          }
+        }
+      }
+    },
+    "/v1/governance/vote-topics": {
+      "get": {
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Active interface state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "PQS unavailable or snapshot pruned"
+          },
+          "400": {
+            "description": "Invalid pagination or context"
+          }
+        }
+      }
+    },
+    "/v1/governance/vote-topics/{contractId}": {
+      "get": {
+        "parameters": [
+          {
+            "name": "contractId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Active interface state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VOTE_TOPICContract"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "PQS unavailable or snapshot pruned"
+          },
+          "404": {
+            "description": "Parent, contract or facet unavailable"
+          }
+        }
+      }
+    },
+    "/v1/auctions/bid-proposals": {
+      "get": {
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Active interface state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "PQS unavailable or snapshot pruned"
+          },
+          "400": {
+            "description": "Invalid pagination or context"
+          }
+        }
+      }
+    },
+    "/v1/auctions/bid-proposals/{contractId}": {
+      "get": {
+        "parameters": [
+          {
+            "name": "contractId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Active interface state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BID_PROPOSALContract"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "PQS unavailable or snapshot pruned"
+          },
+          "404": {
+            "description": "Parent, contract or facet unavailable"
+          }
+        }
+      }
+    },
+    "/v1/auctions/bids": {
+      "get": {
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Active interface state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "PQS unavailable or snapshot pruned"
+          },
+          "400": {
+            "description": "Invalid pagination or context"
+          }
+        }
+      }
+    },
+    "/v1/auctions/bids/{contractId}": {
+      "get": {
+        "parameters": [
+          {
+            "name": "contractId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Active interface state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BIDContract"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "PQS unavailable or snapshot pruned"
+          },
+          "404": {
+            "description": "Parent, contract or facet unavailable"
+          }
+        }
+      }
+    },
+    "/v1/auctions/single-lot-quotes-bids": {
+      "get": {
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Active interface state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "PQS unavailable or snapshot pruned"
+          },
+          "400": {
+            "description": "Invalid pagination or context"
+          }
+        }
+      }
+    },
+    "/v1/auctions/single-lot-quotes-bids/{contractId}": {
+      "get": {
+        "parameters": [
+          {
+            "name": "contractId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Active interface state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SINGLE_LOT_QUOTESContract"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "PQS unavailable or snapshot pruned"
+          },
+          "404": {
+            "description": "Parent, contract or facet unavailable"
+          }
+        }
+      }
+    },
+    "/v1/auctions/settlements": {
+      "get": {
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Active interface state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "PQS unavailable or snapshot pruned"
+          },
+          "400": {
+            "description": "Invalid pagination or context"
+          }
+        }
+      }
+    },
+    "/v1/auctions/settlements/{contractId}": {
+      "get": {
+        "parameters": [
+          {
+            "name": "contractId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Active interface state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SETTLEMENTContract"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "PQS unavailable or snapshot pruned"
+          },
+          "404": {
+            "description": "Parent, contract or facet unavailable"
+          }
+        }
+      }
+    },
+    "/v1/auctions/trade-proposals": {
+      "get": {
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Active interface state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "PQS unavailable or snapshot pruned"
+          },
+          "400": {
+            "description": "Invalid pagination or context"
+          }
+        }
+      }
+    },
+    "/v1/auctions/trade-proposals/{contractId}": {
+      "get": {
+        "parameters": [
+          {
+            "name": "contractId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Active interface state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TRADE_PROPOSALContract"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "PQS unavailable or snapshot pruned"
+          },
+          "404": {
+            "description": "Parent, contract or facet unavailable"
+          }
+        }
+      }
+    },
+    "/v1/governance/vote-topics/{contractId}/action": {
+      "get": {
+        "parameters": [
+          {
+            "name": "contractId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Active interface state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActionLink"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "PQS unavailable or snapshot pruned"
+          },
+          "404": {
+            "description": "Parent, contract or facet unavailable"
+          }
+        }
+      }
+    },
+    "/v1/governance/vote-records/{contractId}/action": {
+      "get": {
+        "parameters": [
+          {
+            "name": "contractId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Active interface state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActionLink"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "PQS unavailable or snapshot pruned"
+          },
+          "404": {
+            "description": "Parent, contract or facet unavailable"
+          }
+        }
+      }
+    },
+    "/v1/auctions/bids/{contractId}/single-lot-quotes": {
+      "get": {
+        "parameters": [
+          {
+            "name": "contractId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Active interface state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SINGLE_LOT_QUOTESContract"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "PQS unavailable or snapshot pruned"
+          },
+          "404": {
+            "description": "Parent, contract or facet unavailable"
+          }
+        }
+      }
+    },
+    "/v1/governance/vote-topics/{contractId}/vote-records": {
+      "get": {
+        "parameters": [
+          {
+            "name": "contractId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Active interface state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "PQS unavailable or snapshot pruned"
+          },
+          "400": {
+            "description": "Invalid pagination or context"
+          },
+          "404": {
+            "description": "Parent unavailable"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Page": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/ACTIONContract"
+                },
+                {
+                  "$ref": "#/components/schemas/EXECUTABLEContract"
+                },
+                {
+                  "$ref": "#/components/schemas/RESOLVERContract"
+                },
+                {
+                  "$ref": "#/components/schemas/VOTE_RECORDContract"
+                },
+                {
+                  "$ref": "#/components/schemas/VOTING_RIGHTSContract"
+                },
+                {
+                  "$ref": "#/components/schemas/VOTE_TOPICContract"
+                },
+                {
+                  "$ref": "#/components/schemas/BID_PROPOSALContract"
+                },
+                {
+                  "$ref": "#/components/schemas/BIDContract"
+                },
+                {
+                  "$ref": "#/components/schemas/SINGLE_LOT_QUOTESContract"
+                },
+                {
+                  "$ref": "#/components/schemas/SETTLEMENTContract"
+                },
+                {
+                  "$ref": "#/components/schemas/TRADE_PROPOSALContract"
+                }
+              ]
+            }
+          },
+          "snapshot": {
+            "type": "string",
+            "pattern": "^[0-9]+$"
+          },
+          "nextCursor": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "ActionLink": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "available",
+              "no_generic_reference",
+              "target_unavailable"
+            ]
+          },
+          "target": {
+            "type": "object",
+            "nullable": true,
+            "required": ["contractId", "view"],
+            "properties": {
+              "contractId": { "type": "string" },
+              "view": { "$ref": "#/components/schemas/ACTIONView" }
+            }
+          },
+          "snapshot": {
+            "type": "string"
+          }
+        }
+      },
+      "ACTIONView": {
+        "type": "object",
+        "properties": {
+          "authorizers": {},
+          "snapshots": {},
+          "meta": {}
+        },
+        "required": [
+          "authorizers",
+          "snapshots",
+          "meta"
+        ]
+      },
+      "ACTIONContract": {
+        "type": "object",
+        "required": [
+          "contractId",
+          "view"
+        ],
+        "properties": {
+          "contractId": {
+            "type": "string"
+          },
+          "view": {
+            "$ref": "#/components/schemas/ACTIONView"
+          }
+        }
+      },
+      "EXECUTABLEView": {
+        "type": "object",
+        "properties": {
+          "executionCore": {},
+          "snapshots": {},
+          "outcome": {}
+        },
+        "required": [
+          "executionCore",
+          "snapshots",
+          "outcome"
+        ]
+      },
+      "EXECUTABLEContract": {
+        "type": "object",
+        "required": [
+          "contractId",
+          "view"
+        ],
+        "properties": {
+          "contractId": {
+            "type": "string"
+          },
+          "view": {
+            "$ref": "#/components/schemas/EXECUTABLEView"
+          }
+        }
+      },
+      "RESOLVERView": {
+        "type": "object",
+        "properties": {
+          "keyId": {
+            "type": "string",
+            "nullable": false
+          },
+          "mechanisms": {},
+          "meta": {}
+        },
+        "required": [
+          "keyId",
+          "mechanisms",
+          "meta"
+        ]
+      },
+      "RESOLVERContract": {
+        "type": "object",
+        "required": [
+          "contractId",
+          "view"
+        ],
+        "properties": {
+          "contractId": {
+            "type": "string"
+          },
+          "view": {
+            "$ref": "#/components/schemas/RESOLVERView"
+          }
+        }
+      },
+      "VOTE_RECORDView": {
+        "type": "object",
+        "properties": {
+          "resolution": {},
+          "votes": {},
+          "snapshots": {},
+          "action": {
+            "type": "string",
+            "nullable": true
+          },
+          "consumers": {},
+          "meta": {}
+        },
+        "required": [
+          "resolution",
+          "votes",
+          "snapshots",
+          "action",
+          "consumers",
+          "meta"
+        ]
+      },
+      "VOTE_RECORDContract": {
+        "type": "object",
+        "required": [
+          "contractId",
+          "view"
+        ],
+        "properties": {
+          "contractId": {
+            "type": "string"
+          },
+          "view": {
+            "$ref": "#/components/schemas/VOTE_RECORDView"
+          }
+        }
+      },
+      "VOTING_RIGHTSView": {
+        "type": "object",
+        "properties": {
+          "keyId": {
+            "type": "string",
+            "nullable": false
+          },
+          "rights": {},
+          "validUntil": {
+            "type": "string",
+            "nullable": true
+          },
+          "meta": {}
+        },
+        "required": [
+          "keyId",
+          "rights",
+          "validUntil",
+          "meta"
+        ]
+      },
+      "VOTING_RIGHTSContract": {
+        "type": "object",
+        "required": [
+          "contractId",
+          "view"
+        ],
+        "properties": {
+          "contractId": {
+            "type": "string"
+          },
+          "view": {
+            "$ref": "#/components/schemas/VOTING_RIGHTSView"
+          }
+        }
+      },
+      "VOTE_TOPICView": {
+        "type": "object",
+        "properties": {
+          "resolution": {},
+          "proposer": {
+            "type": "string",
+            "nullable": false
+          },
+          "subject": {
+            "type": "object",
+            "properties": {
+              "url": {
+                "type": "string"
+              },
+              "body": {
+                "type": "string"
+              }
+            }
+          },
+          "action": {
+            "type": "string",
+            "nullable": true
+          },
+          "voteBefore": {
+            "type": "string",
+            "nullable": true
+          },
+          "effectiveAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "meta": {}
+        },
+        "required": [
+          "resolution",
+          "proposer",
+          "subject",
+          "action",
+          "voteBefore",
+          "effectiveAt",
+          "meta"
+        ]
+      },
+      "VOTE_TOPICContract": {
+        "type": "object",
+        "required": [
+          "contractId",
+          "view"
+        ],
+        "properties": {
+          "contractId": {
+            "type": "string"
+          },
+          "view": {
+            "$ref": "#/components/schemas/VOTE_TOPICView"
+          }
+        }
+      },
+      "BID_PROPOSALView": {
+        "type": "object",
+        "properties": {
+          "authorities": {},
+          "resolutionInfo": {},
+          "terms": {},
+          "availableActions": {},
+          "meta": {}
+        },
+        "required": [
+          "authorities",
+          "resolutionInfo",
+          "terms",
+          "availableActions",
+          "meta"
+        ]
+      },
+      "BID_PROPOSALContract": {
+        "type": "object",
+        "required": [
+          "contractId",
+          "view"
+        ],
+        "properties": {
+          "contractId": {
+            "type": "string"
+          },
+          "view": {
+            "$ref": "#/components/schemas/BID_PROPOSALView"
+          }
+        }
+      },
+      "BIDView": {
+        "type": "object",
+        "properties": {
+          "resolutionInfo": {},
+          "terms": {},
+          "schedule": {},
+          "fundings": {},
+          "availableActions": {},
+          "meta": {}
+        },
+        "required": [
+          "resolutionInfo",
+          "terms",
+          "schedule",
+          "fundings",
+          "availableActions",
+          "meta"
+        ]
+      },
+      "BIDContract": {
+        "type": "object",
+        "required": [
+          "contractId",
+          "view"
+        ],
+        "properties": {
+          "contractId": {
+            "type": "string"
+          },
+          "view": {
+            "$ref": "#/components/schemas/BIDView"
+          }
+        }
+      },
+      "SINGLE_LOT_QUOTESView": {
+        "type": "object",
+        "properties": {
+          "quotes": {}
+        },
+        "required": [
+          "quotes"
+        ]
+      },
+      "SINGLE_LOT_QUOTESContract": {
+        "type": "object",
+        "required": [
+          "contractId",
+          "view"
+        ],
+        "properties": {
+          "contractId": {
+            "type": "string"
+          },
+          "view": {
+            "$ref": "#/components/schemas/SINGLE_LOT_QUOTESView"
+          }
+        }
+      },
+      "SETTLEMENTView": {
+        "type": "object",
+        "properties": {
+          "executionCore": {},
+          "resolutionInfo": {},
+          "executors": {},
+          "batches": {},
+          "fundings": {},
+          "meta": {}
+        },
+        "required": [
+          "executionCore",
+          "resolutionInfo",
+          "executors",
+          "batches",
+          "fundings",
+          "meta"
+        ]
+      },
+      "SETTLEMENTContract": {
+        "type": "object",
+        "required": [
+          "contractId",
+          "view"
+        ],
+        "properties": {
+          "contractId": {
+            "type": "string"
+          },
+          "view": {
+            "$ref": "#/components/schemas/SETTLEMENTView"
+          }
+        }
+      },
+      "TRADE_PROPOSALView": {
+        "type": "object",
+        "properties": {
+          "resolutionInfo": {},
+          "terms": {},
+          "schedule": {},
+          "acceptBefore": {
+            "type": "string",
+            "nullable": false
+          },
+          "availableActions": {},
+          "meta": {}
+        },
+        "required": [
+          "resolutionInfo",
+          "terms",
+          "schedule",
+          "acceptBefore",
+          "availableActions",
+          "meta"
+        ]
+      },
+      "TRADE_PROPOSALContract": {
+        "type": "object",
+        "required": [
+          "contractId",
+          "view"
+        ],
+        "properties": {
+          "contractId": {
+            "type": "string"
+          },
+          "view": {
+            "$ref": "#/components/schemas/TRADE_PROPOSALView"
+          }
+        }
+      }
+    }
+  }
+}
