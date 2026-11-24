@@ -211,6 +211,20 @@ HEADING_TITLE_WIDTH = 48
 def heading(title):
     return '########## ' + title.center(max(HEADING_TITLE_WIDTH, len(title))) + ' ##########'
 
+DISPLAY_HANDLES = {'member-a':'jonathan-ieu','member-b':'heslin-zenith','member-c':'shaul-da','member-d':'ali-abrar','member-e':'EduardoFromTheFuture','alternate-f':'Jatinp26','alternate-g':'alexatdrw'}
+
+def display_roles(text):
+    import re
+    text = re.sub(r'(?<![A-Za-z0-9_-])(?:member-[a-e]|alternate-[fg])(?![A-Za-z0-9_-]|::)', lambda match: DISPLAY_HANDLES[match.group(0)], text)
+    return text.replace(': YES (core)', ': YES (Voting member)').replace('; core ', '; Voting members ').replace('; alternates ', '; Alternates ').replace('5 permanent (core)', '5 Voting members').replace(' core YES', ' Voting members YES')
+
+def recognized_role_narration(payload):
+    import re
+    if '\n' in payload or '\r' in payload or '::' in payload:
+        return False
+    role = r'(?:member-[a-e]|alternate-[fg])'
+    return bool(re.fullmatch(r'\[STEP [1-6]\]\[BUSINESS\] ' + role + r': credential accepted \((?:direct|registry)\)\.', payload) or re.fullmatch(r'\[STEP [1-6]\]\[VOTE\] ' + role + r': (?:YES \(core\)|ABSENT \(no cast; not an abstention, not a NO\))', payload))
+
 def layout_text(text):
     import re
     # Decode a literal separator only at an otherwise complete heading boundary.
@@ -225,9 +239,11 @@ def setup_line(text):
     import re
     title, separator, body = text.partition(': ')
     if separator and title in ('SANDBOX','COMMITTEE','CREDENTIALS','RULEBOOK','ACCESS','SETUP','INITIAL PENDING'):
-        if title == 'COMMITTEE':
-            body = re.sub(r'\[([^\[\]\r\n]*)\]', lambda m: m.group(1).replace('"',''), body)
-        return heading('LEDGER USERS' if title == 'ACCESS' else title) + '\n' + body
+        committee = re.fullmatch(r'opener [A-Za-z0-9_-]+; core \[(?:"?(?:member-[a-e]|alternate-[fg])"?[, ]*)+\]; alternates \[(?:"?(?:member-[a-e]|alternate-[fg])"?[, ]*)+\]', body)
+        mapped = display_roles(body) if title == 'COMMITTEE' and committee and '::' not in body else body
+        if title == 'COMMITTEE' and committee and '::' not in body:
+            mapped = re.sub(r'\[([^\[\]\r\n]*)\]', lambda m: m.group(1).replace('"',''), mapped)
+        return heading('LEDGER USERS' if title == 'ACCESS' else title) + '\n' + mapped
     return text
 
 def render(line, verbose):
@@ -249,7 +265,7 @@ def render(line, verbose):
     for part in payload.split("\n"):
         shown = presentable(part)
         if shown:
-            out.append(layout_text(shown))
+            out.append(display_roles(layout_text(shown)) if recognized_role_narration(payload) else layout_text(shown))
     return "\n".join(out) if out else None
 
 
