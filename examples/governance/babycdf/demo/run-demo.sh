@@ -369,7 +369,26 @@ PY
     python3 - "$STATE" <<'PY'
 import json,sys
 from pathlib import Path
-s=Path(sys.argv[1]); (s/'run-id.json').write_text(json.dumps(json.loads((s/'bootstrap-input.json').read_text())['userName']))
+s=Path(sys.argv[1])
+configured=json.loads((s/'bootstrap-input.json').read_text())
+if not isinstance(configured,dict) or not isinstance(configured.get('input'),dict):
+    raise SystemExit('Invalid bootstrap-input.json: input must be an object')
+user_name=configured['input'].get('userName')
+if not isinstance(user_name,str) or not user_name or any(c.isspace() for c in user_name):
+    raise SystemExit('Invalid bootstrap-input.json: input.userName must be a nonblank canonical user ID')
+bootstrap=json.loads((s/'bootstrap.json').read_text())
+if not isinstance(bootstrap,dict) or bootstrap.get('userName') != user_name:
+    raise SystemExit('Invalid bootstrap.json: userName must match bootstrap-input.json input.userName')
+intake_user=bootstrap.get('intakeUserName')
+if intake_user != user_name + '-intake':
+    raise SystemExit('Invalid bootstrap.json: intakeUserName must match input.userName plus -intake')
+opener=bootstrap.get('opener')
+if not isinstance(opener,str) or not opener or any(c.isspace() for c in opener):
+    raise SystemExit('Invalid bootstrap.json: opener must be a nonblank party ID')
+for field,tag in (('verifiedRights','CanReadAs'),('intakeVerifiedRights','CanActAs')):
+    if bootstrap.get(field) != [{'tag':tag,'value':opener}]:
+        raise SystemExit(f'Invalid bootstrap.json: {field} must contain exactly {tag} opener')
+(s/'run-id.json').write_text(json.dumps(user_name))
 PY
     up_inspect_impl() {
       dpm inspect-dar "$HERE/../impl/.daml/dist/cap-example-babycdf-0.1.0.dar" --json > "$STATE/impl-package.json"
