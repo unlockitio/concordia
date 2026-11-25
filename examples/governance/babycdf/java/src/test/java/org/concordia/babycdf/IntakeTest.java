@@ -114,7 +114,7 @@ class IntakeTest {
         assertEquals("Cap.Examples.BabyCdf.Intake",exercise.getTemplateId().getModuleName());
         assertEquals("IntakeRequest",exercise.getTemplateId().getEntityName());
         var args=exercise.getChoiceArgument().getRecord();
-        assertEquals(1,args.getFieldsCount());
+        assertEquals(2,args.getFieldsCount());
         assertEquals("gov",IntakeLedger.field(args,"governorCid").getContractId());
     }
     @Test void successfulStepAllowsNextDifferentRequest() throws Exception {
@@ -138,11 +138,13 @@ class IntakeTest {
         assertEquals(1,calls.get());
     }
     IntakeLedger adapter(IntakeLedger.Rpc rpc,boolean retry) {
+        var members=List.of("primary-a","primary-b","primary-c","primary-d","primary-e");
+        var governor=PrimaryRightsFixtures.governor(com.daml.ledger.api.v2.EventOuterClass.CreatedEvent.newBuilder().setContractId("gov")
+                .addSignatories("opener").setCreateArguments(com.daml.ledger.api.v2.ValueOuterClass.Record.newBuilder().addFields(
+                    IntakeLedger.f("opener",com.daml.ledger.api.v2.ValueOuterClass.Value.newBuilder().setParty("opener").build()))).build(),"test-cdf",members);
+        var rights=PrimaryRightsFixtures.rights("opener","test-cdf",members,java.time.Instant.now());
         return new IntakeLedger("opener","a".repeat(64),"b".repeat(64),"gov","readback-intake",journal,rpc,
-            (pkg,module,entity)->entity.equals("AgendaGovernor") ? List.of(
-                com.daml.ledger.api.v2.EventOuterClass.CreatedEvent.newBuilder().setContractId("gov")
-                .setCreateArguments(com.daml.ledger.api.v2.ValueOuterClass.Record.newBuilder().addFields(
-                    IntakeLedger.f("opener",com.daml.ledger.api.v2.ValueOuterClass.Value.newBuilder().setParty("opener").build()))).build()) : List.of(),retry);
+            (pkg,module,entity)->entity.equals("AgendaGovernor") ? List.of(governor) : entity.equals("RegisteredVotingRight") ? rights : List.of(),retry);
     }
     @Test void realAdapterDefiniteRejectionAllowsOnlyOneExplicitIdenticalRetry() throws Exception {
         var r=request(); var plan=new IntakePlan(IntakeSources.MILESTONE,r.roundId());
@@ -245,7 +247,14 @@ class IntakeTest {
         try(var rejected=adapter(c->{throw io.grpc.Status.PERMISSION_DENIED.asRuntimeException();},false)) {
             assertThrows(Intake.Rejected.class,()->rejected.submit(r,plan));
         }
-        assertArrayEquals(IntakeLedger.request(r,plan,"b".repeat(64),"gov","readback-intake").toByteArray(),
+        var fixtureMembers=List.of("primary-a","primary-b","primary-c","primary-d","primary-e");
+        var fixtureNow=java.time.Instant.now();
+        var fixtureGovernor=PrimaryRightsFixtures.governor(com.daml.ledger.api.v2.EventOuterClass.CreatedEvent.newBuilder()
+                .setContractId("gov").addSignatories("opener").setCreateArguments(com.daml.ledger.api.v2.ValueOuterClass.Record.newBuilder()
+                    .addFields(IntakeLedger.f("opener",com.daml.ledger.api.v2.ValueOuterClass.Value.newBuilder().setParty("opener").build()))).build(),"test-cdf",fixtureMembers);
+        var fixtureRights=PrimaryRightsFixtures.rights("opener","test-cdf",fixtureMembers,fixtureNow);
+        var fixtureReferences=PrimaryRights.references(fixtureGovernor,fixtureRights,"opener",fixtureNow,fixtureNow.plusSeconds(r.windowSeconds()));
+        assertArrayEquals(IntakeLedger.request(r,plan,"b".repeat(64),"gov","readback-intake",fixtureReferences).toByteArray(),
                 IntakeLedger.readMarker(journal.resolve(plan.commandId()+".intent")));
         var party=com.daml.ledger.api.v2.ValueOuterClass.Value.newBuilder().setParty("opener").build();
         var proposal=com.daml.ledger.api.v2.EventOuterClass.CreatedEvent.newBuilder().addSignatories("opener")
@@ -262,8 +271,9 @@ class IntakeTest {
             (pkg,module,entity)-> switch(entity) {
                 case "AgendaProposal" -> List.of(proposal);
                 case "AgendaAction" -> List.of(action);
-                default -> List.of(com.daml.ledger.api.v2.EventOuterClass.CreatedEvent.newBuilder().setContractId("gov")
-                    .setCreateArguments(com.daml.ledger.api.v2.ValueOuterClass.Record.newBuilder().addFields(IntakeLedger.f("opener",party))).build());
+                case "AgendaGovernor" -> List.of(fixtureGovernor);
+                case "RegisteredVotingRight" -> fixtureRights;
+                default -> List.of();
             },true)) {
             var failure=assertThrows(Intake.PreTransmission.class,()->ledger.submit(r,plan));
             assertTrue(failure.getCause().getMessage().contains("round already exists"));

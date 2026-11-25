@@ -44,6 +44,14 @@ data BootstrapInput = BootstrapInput with
   proposedRuleRef : RuleRef
     deriving (Eq, Show)
 
+data ConfiguredBootstrapInput = ConfiguredBootstrapInput with
+  input : BootstrapInput
+  credentialValiditySeconds : Int
+    deriving (Eq, Show)
+
+bootstrapConfigured : ConfiguredBootstrapInput -> Script LiveState
+bootstrapConfigured configured = bootstrapWithValidity configured.credentialValiditySeconds configured.input
+
 data LiveState = LiveState with
   member : Party
   opener : Party
@@ -82,7 +90,11 @@ template DemoAnchor
     observer member
 
 bootstrap : BootstrapInput -> Script LiveState
-bootstrap input = do
+bootstrap = bootstrapWithValidity (30 * 24 * 60 * 60)
+
+bootstrapWithValidity : Int -> BootstrapInput -> Script LiveState
+bootstrapWithValidity validitySeconds input = do
+  assert (validitySeconds >= 3600 && validitySeconds <= 365 * 24 * 60 * 60 && validitySeconds % 3600 == 0)
   stepHeading 1 "SETUP AND CREDENTIALS"
   -- INITIAL STATE for step 1 is a special case, and is reported honestly as
   -- one. No demo party exists yet, so there is no witness to scope a
@@ -133,21 +145,21 @@ bootstrap input = do
   action 1 (who contract.opener <> " creates VotingRightFactory (7 members)")
     ("VotingRightFactory " <> cid factory)
   phase 1 "CREDENTIALS"
-  business 1 "Each member receives one personal voting credential, valid 12 hours."
-  business 1 "All seven use the voting-right factory and registry. Same weight: 1 vote each."
+  business 1 ("Each member receives one personal voting credential, valid " <> show validitySeconds <> " seconds.")
+  business 1 "All seven use the voting-right factory and registry. Five primary seats vote; two substitutes have no independent votes."
   now <- getTime
   credentials <- forA (Set.toList members) $ \voter -> do
     invitation <- submit contract.opener $ createCmd VotingRightInvitation with
       cdf = contract.opener; consortiumId = contract.consortiumId
-      member = voter; expiresAt = now `addRelTime` hours 12
+      member = voter; expiresAt = now `addRelTime` seconds validitySeconds
     action 1 (who contract.opener <> " creates VotingRightInvitation for "
-      <> who voter <> " (expires in 12h)") ("VotingRightInvitation " <> cid invitation)
+      <> who voter <> " (expires in " <> show validitySeconds <> " seconds)") ("VotingRightInvitation " <> cid invitation)
     accepted <- submit voter $ exerciseCmd invitation AcceptRegistered with factory = toInterfaceContractId factory
     business 1 (name voter <> ": credential accepted (registry).")
     action 1 (who voter <> " exercises VotingRightInvitation.AcceptRegistered on " <> cid invitation
       <> " (via factory " <> cid factory <> ")") ("RegisteredVotingRight " <> cid accepted)
     pure (voter, RegisteredRight accepted)
-  evidenceLine 1 ("[SETUP-SUMMARY] CREDENTIALS: " <> show (length credentials) <> " invitations accepted; direct " <> show (length [() | (_,DirectRight _) <- credentials]) <> "; registered " <> show (length [() | (_,RegisteredRight _) <- credentials]) <> "; validity 12h; 1 vote each.")
+  evidenceLine 1 ("[SETUP-SUMMARY] CREDENTIALS: " <> show (length credentials) <> " invitations accepted; direct " <> show (length [() | (_,DirectRight _) <- credentials]) <> "; registered " <> show (length [() | (_,RegisteredRight _) <- credentials]) <> "; validity " <> show validitySeconds <> " seconds; five primary votes; substitute assignment PENDING.")
   debug "[STEP 1] direct and registered unit voting credentials issued to seven members"
   business 1 "All 7 credentialed, 1 vote each."
   business 1 "Credentials are re-checked when a result is counted, not only when issued."
@@ -266,7 +278,7 @@ quorumSize = 3
 
 -- | How many of the electorate stay away in the positive story.
 absentSize : Int
-absentSize = 7 - quorumSize
+absentSize = 5 - quorumSize
 
 -- | A round where quorum is deliberately missed, for optional round 3.
 belowQuorumSize : Int
@@ -695,7 +707,7 @@ roundName roundId =
 -- Only a daml-prim Text crosses the JSON boundary. State/CIDs are fetched
 -- from a unique signed anchor on this participant, never coerced from JSON.
 ruleVote : Text -> Script Text
-ruleVote = ruleVoteWith waitUntilClosed
+ruleVote = ruleVoteWith (const (pure ()))
 
 ruleVoteWith : (Time -> Script ()) -> Text -> Script Text
 ruleVoteWith closeWindow runId = do
@@ -731,7 +743,7 @@ ruleVoteWith closeWindow runId = do
       propose roundId = do
         created <- submit (actAs state.member <> readAs state.opener) $ exerciseCmd state.governor ProposeAgenda with
           proposer = state.member; roundId; agenda = Architecture (RuleDraft "architecture-review" 2 "live v2" state.proposedRuleRef)
-          baseVersion = 1; source = None; closesAt
+          baseVersion = 1; source = None; closesAt; primaryRights = presentedRights state.core state.credentials
         action 2 (who state.member <> " exercises AgendaGovernor.ProposeAgenda (round " <> roundId
           <> ", architecture-review v2, baseVersion 1)") ("AgendaProposal " <> cid created)
         pure created
@@ -759,8 +771,7 @@ ruleVoteWith closeWindow runId = do
   votingEvidence 2 witnesses "After casting"
   business 2 ("Tally: " <> show quorumSize <> " YES, 0 NO, " <> show absentSize
     <> " ABSENT. Nothing is decided until the window closes.")
-  closeWindow closesAt
-  sleep (seconds 3)
+  pure ()
   resolving <- getTime
   debug ("[TIMING] resolve " <> show resolving)
   phase 2 "RESOLUTION"
@@ -909,7 +920,7 @@ staleRuleChange runId = do
       proposal <- submit (actAs state.member <> readAs state.opener) $ exerciseCmd state.governor ProposeAgenda with
         proposer = state.member; roundId = runId <> ":opt-stale"
         agenda = Architecture (RuleDraft "architecture-review" 2 "stale v2 attempt" state.proposedRuleRef)
-        baseVersion = 1; source = None; closesAt
+        baseVersion = 1; source = None; closesAt; primaryRights = presentedRights state.core state.credentials
       action 0 (who state.member <> " exercises AgendaGovernor.ProposeAgenda (round " <> runId
         <> ":opt-stale, architecture-review v2, baseVersion 1 while live registry is v"
         <> show registry.version <> ")") ("AgendaProposal " <> cid proposal)
@@ -1177,7 +1188,7 @@ manualExistingRound runId step milestone = do
       expectedUrl = "https://github.com/canton-foundation/canton-dev-fund/"
         <> (if milestone then "issues/540" else "pull/184")
   Some governor <- queryContractId opener state.governor
-  let electorate = Set.union governor.permanent governor.alternates
+  let electorate = governor.permanent
   if milestone then do
     approvals <- query @ApprovedGrantProposal opener
     assertMsg "Milestone #540 requires an actual pinned approval of PR184."
@@ -1185,7 +1196,7 @@ manualExistingRound runId step milestone = do
         && a.sourceSnapshot.originalProposal == 184 && validSnapshot a.sourceSnapshot
         && manualProposalPin a.sourceSnapshot
         && a.proposal.contentVersion == a.sourceSnapshot.fingerprint
-        && a.members == Set.fromList (map fst state.credentials)) approvals)
+        && a.members == electorate) approvals)
   else pure ()
   completed <- query @ManualRoundCompleted opener
   resolved <- query @ManualRoundResolved opener
@@ -1231,7 +1242,7 @@ manualExistingRound runId step milestone = do
         voters = coreQuorum quorumSize state.core
         rights = presentedRights voters state.credentials
     assertMsg "Manual vote retains the seven-member electorate and actual selected credential holders."
-      (Set.size proposal.members == 7 && length voters == quorumSize && length rights == quorumSize
+      (Set.size proposal.members == 5 && length voters == quorumSize && length rights == quorumSize
         && all (\v -> Set.member v proposal.members) voters)
     assertMsg "Checkpoint must retain the exact previously selected proposal."
       (all (\(_,p) -> p.proposalCid == proposalCid && p.snapshot == snapshot) waiting)
@@ -1256,16 +1267,18 @@ manualExistingRound runId step milestone = do
     ballots <- manualRoundBallots opener proposalCid proposal
     voted <- castManualMissing opener voters proposal ballots
     now <- getTime
-    if now < proposal.closesAt then do
+    actualBallots <- mapA (queryContractId opener) voted
+    let yesVoters = Set.fromList [ballot.voter | Some ballot <- actualBallots, ballot.voter `Set.member` proposal.members, ballot.vote == Count.Voted Yes]
+    if now < proposal.closesAt && Set.size yesVoters < 3 then do
       debug ("[STEP " <> show step <> "] PENDING: existing round " <> proposal.roundId
-        <> " closes at " <> show proposal.closesAt <> "; rerun the same command after the deadline. No sleep, early resolution, or repeated casts.")
-      pure ("PENDING: " <> proposal.roundId <> "; resume after " <> show proposal.closesAt)
+        <> " requires three distinct primary YES votes; resume this same round without reopening or recasting.")
+      pure ("PENDING: " <> proposal.roundId <> "; fewer than three primary YES votes")
     else do
       debug "Resolution requires independently still-valid holder credentials; expired bootstrap rights are not renewed by this command."
       resolvedCid <- submit opener $ exerciseCmd checkpoint ResolveManualRound with
         governorCid = state.governor; ballotCids = voted; rights
       _ <- submit opener $ exerciseCmd resolvedCid ExecuteManualRound
-      pure "complete: existing round resolved after deadline and approval executed"
+      pure "complete: existing round resolved and approval executed"
 
 proposalVote : Text -> Script Text
 proposalVote runId = do
@@ -1530,6 +1543,7 @@ credentialRefusalsWith closeWindow runId = do
   p1 <- submit (actAs state.member <> readAs state.opener) $ exerciseCmd state.governor ProposeAgenda with
     proposer = state.member; roundId = runId <> ":blocked-foreign"
     agenda = Grant blockedSubject; baseVersion = 0; source = Some blockedSource; closesAt = closes1
+    primaryRights = presentedRights state.core state.credentials
   action 6 (who state.member <> " exercises AgendaGovernor.ProposeAgenda (round " <> runId
     <> ":blocked-foreign)") ("AgendaProposal " <> cid p1)
   b1 <- inviteBallotsFor 6 state.opener p1
@@ -1613,6 +1627,7 @@ noQuorumWith closeWindow runId = do
   p2 <- submit (actAs state.member <> readAs state.opener) $ exerciseCmd state.governor ProposeAgenda with
     proposer = state.member; roundId = runId <> ":blocked-quorum"
     agenda = Grant blockedSubject; baseVersion = 0; source = Some blockedSource; closesAt = closes2
+    primaryRights = presentedRights state.core state.credentials
   action 6 (who state.member <> " exercises AgendaGovernor.ProposeAgenda (round " <> runId
     <> ":blocked-quorum)") ("AgendaProposal " <> cid p2)
   b2 <- inviteBallotsFor 6 state.opener p2
@@ -1662,6 +1677,7 @@ doubleVote runId = do
   p3 <- submit (actAs state.member <> readAs state.opener) $ exerciseCmd state.governor ProposeAgenda with
     proposer = state.member; roundId = runId <> ":blocked-double"
     agenda = Grant blockedSubject; baseVersion = 0; source = Some blockedSource; closesAt = closes3
+    primaryRights = presentedRights state.core state.credentials
   action 6 (who state.member <> " exercises AgendaGovernor.ProposeAgenda (round " <> runId
     <> ":blocked-double)") ("AgendaProposal " <> cid p3)
   b3 <- inviteBallotsFor 6 state.opener p3
@@ -1708,6 +1724,7 @@ outsiderRefusals runId = do
     proposer = state.member; roundId = runId <> ":blocked-outsider-ballot"
     agenda = Grant blockedSubject; baseVersion = 0; source = Some blockedSource
     closesAt = now3 `addRelTime` seconds state.windowSeconds
+    primaryRights = presentedRights state.core state.credentials
   b3 <- inviteBallotsFor 6 state.opener p3
   debug "[STEP 6] case 4: non-member attempts to take part"
   phase 6 "CASE 4: NON-MEMBER"
@@ -1719,6 +1736,7 @@ outsiderRefusals runId = do
     proposer = outsider; roundId = runId <> ":blocked-nonmember"
     agenda = Grant blockedSubject; baseVersion = 0; source = Some blockedSource
     closesAt = now3 `addRelTime` seconds state.windowSeconds
+    primaryRights = presentedRights state.core state.credentials
   case stranger of
     Left err -> do
       rejected 6 (who outsider <> " exercises AgendaGovernor.ProposeAgenda (round " <> runId
@@ -1755,6 +1773,7 @@ outsiderRefusals runId = do
     proposer = outsider; roundId = runId <> ":blocked-unauthorized-proposer"
     agenda = Grant blockedSubject; baseVersion = 0; source = Some blockedSource
     closesAt = now3 `addRelTime` seconds state.windowSeconds
+    primaryRights = presentedRights state.core state.credentials
   case unauthorized of
     Left err -> do
       rejected 6 "Outsider controller with opener read authority: ProposeAgenda" (show err)

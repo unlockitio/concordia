@@ -16,7 +16,7 @@ sourcePendingAcrossExistingStep2 = script do
  now <- getTime
  proposal <- submit state.opener $ exerciseCmd state.governor ProposeAgenda with
    proposer = state.opener; roundId = runId <> ":source"; agenda = Grant subject
-   baseVersion = 0; closesAt = addRelTime now (seconds 120); source = Some source
+   baseVersion = 0; closesAt = addRelTime now (seconds 120); source = Some source; primaryRights = presentedRights state.core state.credentials
  Some before <- queryContractId state.opener proposal
  assert (before.sourceSnapshot /= None)
  -- Existing step2 retains its own Architecture ballots and member controllers.

@@ -8,6 +8,20 @@ import Cap.Examples.BabyCdf.Live
 import Cap.Examples.BabyCdf.Rights
 import Cap.Examples.BabyCdf.RuleVote
 
+customTwoDaysRegistered : Script ()
+customTwoDaysRegistered = script do
+ state <- bootstrapWithValidity (2 * 24 * 60 * 60) (BootstrapInput "factory-two-days" 5 ruleRefV1 ruleRefV2)
+ direct <- query @DirectVotingRight state.opener
+ registered <- query @RegisteredVotingRight state.opener
+ length direct === 0
+ length registered === 7
+ length state.credentials === 7
+ forA_ registered $ \(_,right) -> do
+   right.cdf === state.opener
+   right.registryAdmin === state.opener
+   right.expiresAt === addRelTime right.issuedAt (days 2)
+   right.registrationExpiresAt === Some right.expiresAt
+
 allSevenRegistered : Script ()
 allSevenRegistered = script do
  state <- bootstrap (BootstrapInput "factory-seven" 5 ruleRefV1 ruleRefV2)
@@ -29,7 +43,7 @@ allSevenRegistered = script do
    right.cdf === state.opener
    right.registryAdmin === state.opener
    right.registeredAt === right.issuedAt
-   right.expiresAt === addRelTime right.issuedAt (hours 12)
+   right.expiresAt === addRelTime right.issuedAt (days 30)
    right.registrationExpiresAt === Some right.expiresAt
  now <- getTime
  invitation <- submit state.opener $ createCmd VotingRightInvitation with

@@ -1,0 +1,22 @@
+module Cap.Examples.BabyCdf.PrimaryRightsFixture where
+
+import Daml.Script
+import DA.Time
+import qualified DA.Set as Set
+import Cap.Examples.BabyCdf.RuleVote
+import Cap.Examples.BabyCdf.Rights
+import Cap.Governance.VotingRightsV1
+
+fixturePrimaryRights : Party -> ContractId AgendaGovernor -> Script [(Party, RightRef)]
+fixturePrimaryRights opener governorCid = do
+  Some governor <- queryContractId opener governorCid
+  let members = Set.toList (Set.union governor.permanent governor.alternates)
+  factory <- submit opener $ createCmd VotingRightFactory with cdf = opener; members
+  now <- getTime
+  forA (Set.toList governor.permanent) $ \member -> do
+    invitation <- submit opener $ createCmd VotingRightInvitation with
+      cdf = opener; consortiumId = governor.consortiumId; member
+      expiresAt = addRelTime now (days 30)
+    accepted <- submit member $ exerciseCmd invitation AcceptRegistered with
+      factory = toInterfaceContractId factory
+    pure (member, RegisteredRight accepted)

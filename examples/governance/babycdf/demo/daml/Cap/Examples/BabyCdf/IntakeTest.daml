@@ -6,6 +6,7 @@ import qualified DA.Set as Set
 import Cap.Examples.BabyCdf.RuleVote
 import Cap.Examples.BabyCdf.Intake
 import Cap.Examples.BabyCdf.SourceAgendaFixtures
+import Cap.Examples.BabyCdf.PrimaryRightsFixture
 import qualified Cap.Examples.BabyCdf.Live as Live
 
 requestBoundary : Script ()
@@ -29,14 +30,15 @@ bridgeUsesLedgerTime = script do
   let permanent = Set.fromList (take 5 members); alternates = Set.fromList (drop 5 members)
   governorCid <- submit opener $ createCmd (AgendaGovernor opener "bridge" permanent alternates)
   wrong <- submit other $ createCmd (AgendaGovernor other "wrong" permanent alternates)
+  primaryRights <- fixturePrimaryRights opener governorCid
   (source,subject) <- fixtureSource opener False
   request <- submit opener $ createCmd (IntakeRequest opener "bridge" "bridge:round" "proposal-184" 60 0 (Grant subject) source)
-  submitMustFail (actAs opener <> readAs other) $ exerciseCmd request (OpenAgenda wrong)
+  submitMustFail (actAs opener <> readAs other) $ exerciseCmd request (OpenAgenda wrong primaryRights)
   now <- getTime
-  proposalCid <- submit opener $ exerciseCmd request (OpenAgenda governorCid)
+  proposalCid <- submit opener $ exerciseCmd request (OpenAgenda governorCid primaryRights)
   Some proposal <- queryContractId opener proposalCid
   proposal.closesAt === addRelTime now (seconds 60)
   actions <- query @AgendaAction opener
   assert (Live.validateIntake opener "bridge:round" (Grant subject) now [proposal] actions)
   assert (not (Live.validateIntake opener "bridge:round" (Grant subject) now [proposal] []))
-  submitMustFail opener $ exerciseCmd request (OpenAgenda governorCid)
+  submitMustFail opener $ exerciseCmd request (OpenAgenda governorCid primaryRights)

@@ -139,8 +139,10 @@ REPO_REL="examples/governance/babycdf/demo/daml/Cap/Examples/BabyCdf/Live.daml"
 # v19 deliberately changes source casting: verified existing rounds, pending/resume,
 # and atomic opener phase checkpoints. RuleVote/Rights and step 2 are unchanged.
 # v20 validates existing ballot sets and vote compatibility before checkpoint creation.
-SPEC_VERSION='quorum-of-three-core-v20-manual-ballot-prevalidation'
-SPEC_DIGEST='2dd3fedaba70a94ac228f9dc57c4d0dfb923df1e28258de7f14abe54734637e1'
+SPEC_VERSION='v21-three-primary-yes-through-close'
+# Authorized v21 behavior change, not equivalence to v20: five primary seats,
+# three YES early approval, rights through close, configurable fresh bootstrap.
+SPEC_DIGEST='3fd8f9c759c0d9fb0143eddb23d5f357632d9629add21742efb4a04342d980cb'
 
 for required in "$LIVE" "$SELECTOR" "$RULE"; do
   if [ ! -f "$required" ]; then
@@ -418,13 +420,17 @@ def check_quorum_numbers(live_path, selector_path, rule_path):
     below = constant("belowQuorumSize")
     if quorum != "3":
         failures.append("quorumSize must be 3 to match the governance rule, found %r" % quorum)
-    if absent != "7 - quorumSize":
-        failures.append("absentSize must be derived as 7 - quorumSize, found %r" % absent)
+    if absent != "5 - quorumSize":
+        failures.append("absentSize must be derived as 5 - quorumSize, found %r" % absent)
     if below != "quorumSize - 1":
         failures.append("belowQuorumSize must be derived as quorumSize - 1, found %r" % below)
 
     # The rule itself must still be the untouched atLeastPresent 3 /
     # shareOfVotes 1 2 decision. The demo illustrates it; it must not edit it.
+    # Authorized protocol change: five primary seats, three YES, coverage through close.
+    for required in ["eligible permanent alternates = permanent", "now >= proposal.closesAt || yesCount >= 3", "if yesCount >= 3 then Count.Decided Yes", "checkRight opener consortiumId member now right", "Count.Decided Yes -> Count.Undecided", "opensAt = now", "checkRight opener consortiumId member closesAt right", "checkRight opener consortiumId member proposal.closesAt right", "Set.fromList primaryMembers == permanent"]:
+        if required not in rule:
+            failures.append("primary protocol invariant missing: " + required)
     if "Count.decide (Count.atLeastPresent 3) (Count.shareOfVotes 1 2)" not in rule:
         failures.append("the governance rule in RuleVote.daml is no longer "
                         "Count.decide (atLeastPresent 3) (shareOfVotes 1 2)")

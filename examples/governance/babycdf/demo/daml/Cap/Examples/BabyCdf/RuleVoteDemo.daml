@@ -21,6 +21,7 @@ import qualified Cap.Governance.Utils.Count as Count
 import Cap.Examples.BabyCdf.RuleVote
 import Cap.Examples.BabyCdf.SourceAgendaFixtures
 import Cap.Examples.BabyCdf.SourceAgenda
+import Cap.Examples.BabyCdf.PrimaryRightsFixture
 import Cap.Examples.BabyCdf.Rights
 
 ruleReferencesAreValidated : Script ()
@@ -87,7 +88,7 @@ extra : ExtraArgs
 extra = ExtraArgs with context = emptyChoiceContext; meta = emptyMetadata
 
 -- Proposal authority is independent of voting membership: the opener can
--- propose without acquiring a ballot or changing the seven-member electorate.
+-- propose without acquiring a ballot or changing the five-primary electorate.
 proposerAuthorization : Script ()
 proposerAuthorization = do
   opener <- allocateParty "authorization-opener"
@@ -105,19 +106,20 @@ proposerAuthorization = do
   governor <- submit opener $ createCmd AgendaGovernor with
     opener; consortiumId = "authorization-cdf"; permanent; alternates
   now <- getTime
+  primaryRights <- fixturePrimaryRights opener governor
   (sourceRequest,pinnedSubject) <- fixtureSource opener False
   let proposal proposer roundId = exerciseCmd governor ProposeAgenda with
         proposer; roundId; agenda = Grant pinnedSubject; baseVersion = 0; source = Some sourceRequest
-        closesAt = now `addRelTime` hours 1
+        closesAt = now `addRelTime` hours 1; primaryRights
       checkProposal proposer roundId = do
         cid <- submit (actAs proposer <> readAs opener) $ proposal proposer roundId
         Some created <- queryContractId opener cid
         created.proposer === proposer
         created.members === members
-        Set.size created.members === 7
+        Set.size created.members === 5
         Set.member opener created.members === False
         ballots <- submit opener $ exerciseCmd cid InviteBallots
-        length ballots === 7
+        length ballots === 5
         voters <- forA ballots $ \ballot -> do
           Some recorded <- queryContractId opener ballot
           pure recorded.voter
@@ -169,6 +171,9 @@ capRuleAndSeparateApprovalsWithMilestone = do
   ra <- issue a False
   rb <- issue b True
   rc <- issue c False
+  rd <- issue d True
+  re <- issue e False
+  let primaryRights = [ra,rb,rc,rd,re]
   rf <- issue f True
   rg <- issue g False
   -- A second live credential for the same member: duplicates can exist on the
@@ -190,7 +195,7 @@ capRuleAndSeparateApprovalsWithMilestone = do
         opened <- getTime
         (agenda,source) <- sourceForAgenda opener original
         submit (actAs proposer <> readAs opener) $ exerciseCmd governor ProposeAgenda with
-          proposer; roundId; agenda; baseVersion; source; closesAt = opened `addRelTime` hours 1
+          proposer; roundId; agenda; baseVersion; source; closesAt = opened `addRelTime` hours 1; primaryRights
       invite proposal = submit opener $ exerciseCmd proposal InviteBallots
       cast voter cid option = submit voter $ exerciseCmd cid CastAgendaVote with option
       resolve proposal ballots rights = submit opener $ exerciseCmd governor ResolveAgenda with
@@ -199,17 +204,17 @@ capRuleAndSeparateApprovalsWithMilestone = do
         actors = [opener]; targetCids = targets; extraArgs = extra
   submitMustFail outsider $ exerciseCmd governor ProposeAgenda with
     proposer = outsider; roundId = "outsider"; agenda = Grant proposalSubject
-    baseVersion = 0; source = None; closesAt = now `addRelTime` hours 1
+    baseVersion = 0; source = None; closesAt = now `addRelTime` hours 1; primaryRights
   first <- propose a "rule-v1" (Architecture (RuleDraft "architecture-review" 1 "interfaces" ruleRefV1)) 0
   -- A second architecture agenda fixes the same base version before either
   -- executes. Its resolved execution must fail against the advanced registry.
   stale <- propose b "rule-v1-stale" (Architecture (RuleDraft "architecture-review" 1 "stale" ruleRefV1)) 0
-  [tf,tg,ta,tb,tc,td,te] <- invite stale
+  [ta,tb,tc,td,te] <- invite stale
   ta1 <- cast a ta (Count.Voted Yes)
   tb1 <- cast b tb (Count.Voted Yes)
-  tc1 <- cast c tc Count.Abstained
+  tc1 <- cast c tc (Count.Voted Yes)
   ballots <- invite first
-  let [bf, bg, ba, bb, bc, bd, be] = ballots
+  let [ba, bb, bc, bd, be] = ballots
   let castExtra = ExtraArgs with
         context = ChoiceContext (TextMap.fromList [("babycdf/proposal", AV_ContractId (coerceContractId first)),
           ("babycdf/invited-ballot", AV_ContractId (coerceContractId ba))])
@@ -251,12 +256,12 @@ capRuleAndSeparateApprovalsWithMilestone = do
   submitMustFail a $ exerciseCmd votedA CastAgendaVote with option = Count.Voted Yes
   submitMustFail b $ exerciseCmd bb CastAgendaVote with option = Count.Absent
   votedB <- cast b bb (Count.Voted Yes)
-  abstained <- cast c bc Count.Abstained
   submitMustFail opener $ exerciseCmd governor ResolveAgenda with
-    proposalCid = first; ballotCids = [votedA,votedB,abstained,bd,be,bf,bg]; rights = [ra,rb,rc]
+    proposalCid = first; ballotCids = [votedA,votedB,bc,bd,be]; rights = [ra,rb]
+  abstained <- cast c bc (Count.Voted Yes)
   setTime (now `addRelTime` hours 1)
   let resolveFirst rights = submitMustFail opener $ exerciseCmd governor ResolveAgenda with
-        proposalCid = first; ballotCids = [votedA,votedB,abstained,bd,be,bf,bg]; rights
+        proposalCid = first; ballotCids = [votedA,votedB,abstained,bd,be]; rights
   -- Both of a's credentials are live at the same time: this package does not
   -- prevent duplicate issuance, it only refuses to count two for one voter.
   liveDirect <- query @DirectVotingRight a
@@ -281,12 +286,12 @@ capRuleAndSeparateApprovalsWithMilestone = do
   resolveFirst [ra, (b, otherConsortiumB), rc]
   -- Expired at the intended resolution time, even though it was valid earlier.
   resolveFirst [ra, rb, (c, expiringC)]
-  Resolution verdict executions <- resolve first [votedA,votedB,abstained,bd,be,bf,bg] [ra,rb,rc]
+  Resolution verdict executions <- resolve first [votedA,votedB,abstained,bd,be] [ra,rb,rc]
   verdict === Count.Decided Yes
-  forA_ [votedA,votedB,abstained,bd,be,bf,bg] $ \cid -> do
+  forA_ [votedA,votedB,abstained,bd,be] $ \cid -> do
     consumed <- queryContractId opener cid
     assert (case consumed of None -> True; Some _ -> False)
-  Resolution _ [staleExecution] <- resolve stale [ta1,tb1,tc1,td,te,tf,tg] [ra,rb,rc]
+  Resolution _ [staleExecution] <- resolve stale [ta1,tb1,tc1,td,te] [ra,rb,rc]
   let [execution] = executions
       target cid = Map.fromList [(registryKey opener, coerceContractId cid)]
   submitMustFail outsider $ exerciseCmd execution Executable_Execute with
@@ -305,13 +310,13 @@ capRuleAndSeparateApprovalsWithMilestone = do
   applied.draft.ruleRef === ruleRefV1
   applied.findings === []
   second <- propose b "rule-v2" (Architecture (RuleDraft "architecture-review" 2 "migration" ruleRefV2)) 1
-  [sf,sg,sa,sb,sc,sd,se] <- invite second
+  [sa,sb,sc,sd,se] <- invite second
   sa1 <- cast a sa (Count.Voted Yes)
   sb1 <- cast b sb (Count.Voted Yes)
-  sc1 <- cast c sc Count.Abstained
+  sc1 <- cast c sc (Count.Voted Yes)
   current <- getTime
   setTime (current `addRelTime` hours 1)
-  Resolution _ [secondExec] <- resolve second [sa1,sb1,sc1,sd,se,sf,sg] [ra,rb,rc]
+  Resolution _ [secondExec] <- resolve second [sa1,sb1,sc1,sd,se] [ra,rb,rc]
   submitMustFail opener $ exerciseCmd secondExec Executable_Execute with
     actors = [opener]; targetCids = target registry; extraArgs = extra
   updated <- execute secondExec (target (coerceContractId nextRegistry : ContractId RuleRegistry))
@@ -322,41 +327,41 @@ capRuleAndSeparateApprovalsWithMilestone = do
   reviewed.draft.ruleRef === ruleRefV2
   reviewed.findings === []
   grant <- propose a "grant" (Grant proposalSubject) 0
-  [gf,gg,ga,gb,gc,gd,ge] <- invite grant
+  [ga,gb,gc,gd,ge] <- invite grant
   ga1 <- cast a ga (Count.Voted Yes)
   gb1 <- cast b gb (Count.Voted Yes)
-  gf1 <- cast f gf Count.Abstained
+  gc1 <- cast c gc (Count.Voted Yes)
   current <- getTime
   setTime (current `addRelTime` hours 1)
   -- Resolve through the generic interface using a signed, typed request;
   -- it must execute the same credential-backed strict resolution path.
   request <- submit opener $ createCmd AgendaResolverRequest with
-    opener; proposalCid = grant; rights = [ra,rb,rf]
+    opener; proposalCid = grant; rights = [ra,rb,rc]
   let requestExtra = ExtraArgs with
         context = ChoiceContext (TextMap.singleton "babycdf/request" (AV_ContractId (coerceContractId request)))
         meta = emptyMetadata
   submitMustFail a $ exerciseCmd (toInterfaceContractId @Resolver governor) Resolver_Resolve with
     actors = [a]; resolution = agendaResolution opener "grant"
-    voteRecordCids = map (toInterfaceContractId @VoteRecord) [ga1,gb1,gc,gd,ge,gf1,gg]
+    voteRecordCids = map (toInterfaceContractId @VoteRecord) [ga1,gb1,gc1,gd,ge]
     extraArgs = requestExtra
   wrongRequest <- submit opener $ createCmd AgendaResolverRequest with
-    opener; proposalCid = grant; rights = [ra,rb,rf]
+    opener; proposalCid = grant; rights = [ra,rb,rc]
   submitMustFail opener $ exerciseCmd (toInterfaceContractId @Resolver governor) Resolver_Resolve with
     actors = [opener]; resolution = agendaResolution opener "another-proposal"
-    voteRecordCids = map (toInterfaceContractId @VoteRecord) [ga1,gb1,gc,gd,ge,gf1,gg]
+    voteRecordCids = map (toInterfaceContractId @VoteRecord) [ga1,gb1,gc1,gd,ge]
     extraArgs = ExtraArgs with
       context = ChoiceContext (TextMap.singleton "babycdf/request" (AV_ContractId (coerceContractId wrongRequest)))
       meta = emptyMetadata
   generic <- submit opener $ exerciseCmd (toInterfaceContractId @Resolver governor) Resolver_Resolve with
     actors = [opener]; resolution = agendaResolution opener "grant"
-    voteRecordCids = map (toInterfaceContractId @VoteRecord) [ga1,gb1,gc,gd,ge,gf1,gg]
+    voteRecordCids = map (toInterfaceContractId @VoteRecord) [ga1,gb1,gc1,gd,ge]
     extraArgs = requestExtra
   generic.status === RS_Decided
   consumedRequest <- queryContractId opener request
   assert (case consumedRequest of None -> True; Some _ -> False)
   submitMustFail opener $ exerciseCmd (toInterfaceContractId @Resolver governor) Resolver_Resolve with
     actors = [opener]; resolution = agendaResolution opener "grant"
-    voteRecordCids = map (toInterfaceContractId @VoteRecord) [ga1,gb1,gc,gd,ge,gf1,gg]
+    voteRecordCids = map (toInterfaceContractId @VoteRecord) [ga1,gb1,gc1,gd,ge]
     extraArgs = requestExtra
   let [grantExec] = generic.executions
   grantResult <- execute grantExec Map.empty
@@ -365,15 +370,15 @@ capRuleAndSeparateApprovalsWithMilestone = do
   approvedGrant.proposal.kind === "proposal"
   submitMustFail a $ exerciseCmd governor ProposeAgenda with
     proposer = a; roundId = "unpinned"; agenda = Milestone milestoneSubject
-    baseVersion = 0; source = None; closesAt = current `addRelTime` hours 2
+    baseVersion = 0; source = None; closesAt = current `addRelTime` hours 2; primaryRights
   milestone <- propose f "milestone" (Milestone illustrativeMilestone) 0
-  [mf,mg,ma,mb,mc,md,me] <- invite milestone
+  [ma,mb,mc,md,me] <- invite milestone
   ma1 <- cast a ma (Count.Voted Yes)
   mb1 <- cast b mb (Count.Voted No)
   mc1 <- cast c mc Count.Abstained
   current <- getTime
   setTime (current `addRelTime` hours 1)
-  Resolution split noExecution <- resolve milestone [ma1,mb1,mc1,md,me,mf,mg] [ra,rb,rc]
+  Resolution split noExecution <- resolve milestone [ma1,mb1,mc1,md,me] [ra,rb,rc]
   split === Count.Undecided
   noExecution === []
   -- Missing delivery evidence is blocked, never an illustrative executable approval.
@@ -385,8 +390,6 @@ capRuleAndSeparateApprovalsWithMilestone = do
   -- Quorum of three core members, offline. This mirrors exactly what the live
   -- journey does in steps 2-4 and in step 6 case 2, so the behaviour the demo
   -- narrates is proven here without a network, a container or wall-clock time.
-  rd <- issue d False
-  re <- issue e True
   let permanentList = [a, b, c, d, e]
       alternateList = [f, g]
       allCredentials = [ra, rb, rc, rd, re, rf, rg]
@@ -412,23 +415,23 @@ capRuleAndSeparateApprovalsWithMilestone = do
   length (presentedFor three) === 3
   length (presentedFor two) === 2
 
-  -- A quorate round: all seven ballots exist, exactly three are cast YES, four
-  -- stay Absent, and only the three participants present a credential.
+  -- All five primary ballots exist, three are cast YES, two stay Absent,
+  -- and only the three participants present a credential.
   quorate <- propose a "core-quorum-three" (Grant proposalSubject) 0
   quorateBallots <- invite quorate
-  length quorateBallots === 7
+  length quorateBallots === 5
   loadedQuorate <- forA quorateBallots $ \cid -> do
     Some ballot <- queryContractId opener cid
     pure (cid, ballot)
   -- Every member of the electorate holds exactly one ballot in the round.
-  Set.fromList (map ((.voter) . snd) loadedQuorate) === Set.fromList (permanentList ++ alternateList)
+  Set.fromList (map ((.voter) . snd) loadedQuorate) === Set.fromList permanentList
   castQuorate <- forA loadedQuorate $ \(cid, ballot) ->
     if ballot.voter `elem` three then cast ballot.voter cid (Count.Voted Yes) else pure cid
-  -- Exactly four ballots were never cast and still record Absent on the ledger.
+  -- Exactly two primary ballots remain uncast and record Absent on the ledger.
   absentVotes <- forA [cid | (cid, ballot) <- loadedQuorate, not (ballot.voter `elem` three)] $ \cid -> do
     Some untouched <- queryContractId opener cid
     pure untouched.vote
-  length absentVotes === 4
+  length absentVotes === 2
   forA_ absentVotes (=== Count.Absent)
   current <- getTime
   setTime (current `addRelTime` hours 1)
@@ -489,33 +492,33 @@ capRuleAndSeparateApprovalsWithMilestone = do
   -- Stage B: issuance only. Both rounds issue 7 ballots, all Absent, and no
   -- YES exists yet. This is exactly the moment the live snapshot claims.
   issuedA <- invite orderA
-  length issuedA === 7
+  length issuedA === 5
   (afterFirstIssue, yesFirstIssue, absentFirstIssue) <- voteRecordsVisibleTo witnesses
-  afterFirstIssue === 7
+  afterFirstIssue === 5
   yesFirstIssue === 0
-  absentFirstIssue === 7
+  absentFirstIssue === 5
   issuedB <- invite orderB
-  length issuedB === 7
+  length issuedB === 5
   (afterBothIssued, yesBothIssued, absentBothIssued) <- voteRecordsVisibleTo witnesses
-  afterBothIssued === 14
+  afterBothIssued === 10
   yesBothIssued === 0
-  absentBothIssued === 14
+  absentBothIssued === 10
 
   -- Stage C: casting. Three core YES per round, four Absent per round.
   castA <- forA (zip issuedA [0, 1, 2, 3, 4, 5, 6]) $ \(cid, _) -> do
     Some ballot <- queryContractId opener cid
     if ballot.voter `elem` three then cast ballot.voter cid (Count.Voted Yes) else pure cid
   (afterCastA, yesCastA, absentCastA) <- voteRecordsVisibleTo witnesses
-  afterCastA === 14
+  afterCastA === 10
   yesCastA === 3
-  absentCastA === 11
+  absentCastA === 7
   castB <- forA (zip issuedB [0, 1, 2, 3, 4, 5, 6]) $ \(cid, _) -> do
     Some ballot <- queryContractId opener cid
     if ballot.voter `elem` three then cast ballot.voter cid (Count.Voted Yes) else pure cid
   (afterCastB, yesCastB, absentCastB) <- voteRecordsVisibleTo witnesses
-  afterCastB === 14
+  afterCastB === 10
   yesCastB === 6
-  absentCastB === 8
+  absentCastB === 4
 
   -- Stage D: resolution consumes the records it counted. Exactly three
   -- credentials are presented, one per participant.
@@ -524,7 +527,7 @@ capRuleAndSeparateApprovalsWithMilestone = do
   Resolution orderVerdictA _ <- resolve orderA castA (presentedFor three)
   orderVerdictA === Count.Decided Yes
   (afterResolveA, _, _) <- voteRecordsVisibleTo witnesses
-  afterResolveA === 7
+  afterResolveA === 5
   Resolution orderVerdictB _ <- resolve orderB castB (presentedFor three)
   orderVerdictB === Count.Decided Yes
   (afterResolveB, yesAfterResolve, absentAfterResolve) <- voteRecordsVisibleTo witnesses
@@ -550,18 +553,18 @@ capRuleAndSeparateApprovalsWithMilestone = do
   soloTopicsOpen <- topicsVisible
   soloTopicsOpen === 1
   soloIssued <- invite solo
-  length soloIssued === 7
+  length soloIssued === 5
   (soloAfterIssue, soloYesIssue, soloAbsentIssue) <- voteRecordsVisibleTo witnesses
-  soloAfterIssue === 7
+  soloAfterIssue === 5
   soloYesIssue === 0
-  soloAbsentIssue === 7
+  soloAbsentIssue === 5
   soloCast <- forA soloIssued $ \cid -> do
     Some ballot <- queryContractId opener cid
     if ballot.voter `elem` three then cast ballot.voter cid (Count.Voted Yes) else pure cid
   (soloAfterCast, soloYesCast, soloAbsentCast) <- voteRecordsVisibleTo witnesses
-  soloAfterCast === 7
+  soloAfterCast === 5
   soloYesCast === 3
-  soloAbsentCast === 4
+  soloAbsentCast === 2
   current <- getTime
   setTime (current `addRelTime` hours 1)
   Resolution soloVerdict soloExecutions <- resolve solo soloCast (presentedFor three)
@@ -598,14 +601,14 @@ capRuleAndSeparateApprovalsWithMilestone = do
   staleAgenda <- propose a "stale-after-v2"
     (Architecture (RuleDraft "architecture-review" 2 "stale attempt" ruleRefV2)) 1
   staleIssued <- invite staleAgenda
-  length staleIssued === 7
+  length staleIssued === 5
   staleCast <- forA staleIssued $ \cid -> do
     Some ballot <- queryContractId opener cid
     if ballot.voter `elem` three then cast ballot.voter cid (Count.Voted Yes) else pure cid
   (staleRecords, staleYes, staleAbsent) <- voteRecordsVisibleTo witnesses
-  staleRecords === 7
+  staleRecords === 5
   staleYes === 3
-  staleAbsent === 4
+  staleAbsent === 2
   currentStale <- getTime
   setTime (currentStale `addRelTime` hours 1)
   -- The VOTE succeeds: three core YES, exactly three credentials presented.
@@ -625,7 +628,7 @@ capRuleAndSeparateApprovalsWithMilestone = do
   -- rejected and nothing fails; the count answers Lapsed with no executions.
   short <- propose a "core-quorum-two" (Grant proposalSubject) 0
   shortBallots <- invite short
-  length shortBallots === 7
+  length shortBallots === 5
   loadedShort <- forA shortBallots $ \cid -> do
     Some ballot <- queryContractId opener cid
     pure (cid, ballot)

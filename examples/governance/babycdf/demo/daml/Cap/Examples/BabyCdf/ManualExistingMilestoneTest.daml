@@ -1,5 +1,4 @@
 module Cap.Examples.BabyCdf.ManualExistingMilestoneTest where
-
 import Daml.Script
 import DA.Assert
 import DA.Time
@@ -20,43 +19,41 @@ manualExistingMilestonePending = script do
   grant <- submit state.opener $ exerciseCmd state.governor ProposeAgenda with
     proposer = state.opener; roundId = runId <> ":pr184"; agenda = Grant grantSubject
     baseVersion = 0; closesAt = addRelTime now (seconds 60); source = Some grantSource
+    primaryRights = presentedRights state.core state.credentials
   _ <- proposalVote runId
-  setTime (addRelTime now (seconds 60))
-  _ <- proposalVote runId
+  None <- queryContractId state.opener grant
+  grantApprovals <- query @ApprovedGrantProposal state.opener
+  length grantApprovals === 1
   (blocked,subject) <- fixtureSource state.opener True
   sources <- query @Source.SourceObservationCredential state.opener
   let [stored] = [s | (_,s) <- sources, s.observation.number == 540]
-      pin = DeliveryPin "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" stored.observation.bodySha256 123 (addRelTime now (seconds 60))
+      pin = DeliveryPin "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" stored.observation.bodySha256 123 now
       source = blocked with pin; previousRound = None
   milestone <- submit state.opener $ exerciseCmd state.governor ProposeAgenda with
     proposer = state.opener; roundId = runId <> ":milestone540"; agenda = Milestone subject
     baseVersion = 0; closesAt = addRelTime now (hours 2); source = Some source
-  proposalsBefore <- query @AgendaProposal state.opener
+    primaryRights = presentedRights state.core state.credentials
+  Some selected <- queryContractId state.opener milestone
   actionsBefore <- query @AgendaAction state.opener
   receiptsBefore <- query @AgendaRoundReceipt state.opener
   sourcesBefore <- query @Source.SourceObservationCredential state.opener
-  _ <- milestoneVote runId
-  _ <- milestoneVote runId
-  proposalsAfter <- query @AgendaProposal state.opener
-  actionsAfter <- query @AgendaAction state.opener
-  receiptsAfter <- query @AgendaRoundReceipt state.opener
-  sourcesAfter <- query @Source.SourceObservationCredential state.opener
-  assert (length proposalsBefore == length proposalsAfter && all (\row -> row `elem` proposalsAfter) proposalsBefore)
-  assert (length actionsBefore == length actionsAfter && all (\row -> row `elem` actionsAfter) actionsBefore)
-  assert (length receiptsBefore == length receiptsAfter && all (\row -> row `elem` receiptsAfter) receiptsBefore)
-  assert (length sourcesBefore == length sourcesAfter && all (\row -> row `elem` sourcesAfter) sourcesBefore)
-  setTime (addRelTime now (hours 2))
-  _ <- milestoneVote runId
-  _ <- milestoneVote runId
+  first <- milestoneVote runId
+  assert (not (Text.isInfixOf "PENDING" first))
+  afterVote <- getTime
+  afterVote === now
   None <- queryContractId state.opener milestone
   approvals <- query @ApprovedMilestone state.opener
-  let [approved] = [a | (_,a) <- approvals, a.sourceSnapshot.roundId == runId <> ":milestone540"]
-      [(_,selected)] = [(ref,p) | (ref,p) <- proposalsBefore, ref == milestone]
+  let [approved] = [a | (_,a) <- approvals, a.sourceSnapshot.roundId == selected.roundId]
   selected.sourceSnapshot === Some approved.sourceSnapshot
-  finalReceipts <- query @AgendaRoundReceipt state.opener
-  finalSources <- query @Source.SourceObservationCredential state.opener
-  finalActions <- query @AgendaAction state.opener
-  assert (length receiptsBefore == length finalReceipts && all (\row -> row `elem` finalReceipts) receiptsBefore)
-  assert (length sourcesBefore == length finalSources && all (\row -> row `elem` finalSources) sourcesBefore)
-  assert (all (\(ref,_) -> ref `elem` map fst actionsBefore) finalActions)
-  pure ()
+  second <- milestoneVote runId
+  assert (not (Text.isInfixOf "PENDING" second))
+  approvalsAfter <- query @ApprovedMilestone state.opener
+  approvalsAfter === approvals
+  receiptsAfter <- query @AgendaRoundReceipt state.opener
+  receiptsAfter === receiptsBefore
+  sourcesAfter <- query @Source.SourceObservationCredential state.opener
+  sourcesAfter === sourcesBefore
+  actionsAfter <- query @AgendaAction state.opener
+  assert (all (\(ref,_) -> ref `elem` map fst actionsBefore) actionsAfter)
+  proposalsAfter <- query @AgendaProposal state.opener
+  assert (null proposalsAfter)

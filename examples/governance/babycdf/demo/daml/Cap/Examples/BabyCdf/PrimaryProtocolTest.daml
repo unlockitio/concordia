@@ -1,0 +1,144 @@
+module Cap.Examples.BabyCdf.PrimaryProtocolTest where
+
+import Daml.Script
+import DA.Assert
+import DA.Time
+import qualified DA.Set as Set
+import qualified Cap.Governance.Utils.Count as Count
+import Cap.Governance.Types
+import Cap.Governance.ExecutableV1
+import Cap.Core.Types
+import Splice.Api.Token.MetadataV1
+import qualified DA.Map as Map
+import Cap.Examples.BabyCdf.RuleVote
+import Cap.Examples.BabyCdf.PrimaryRightsFixture
+import Cap.Examples.BabyCdf.SourceAgendaFixtures
+
+openingCoverage : Script ()
+openingCoverage = script do
+  opener <- allocateParty "coverage-opener"
+  members <- mapA allocateParty ["a","b","c","d","e","f","g"]
+  governor <- submit opener $ createCmd (AgendaGovernor opener "coverage" (Set.fromList (take 5 members)) (Set.fromList (drop 5 members)))
+  rights <- fixturePrimaryRights opener governor
+  (source,subject) <- fixtureSource opener False
+  issued <- getTime
+  let open roundId closesAt primaryRights = exerciseCmd governor ProposeAgenda with
+        proposer = opener; roundId; agenda = Grant subject; baseVersion = 0; source = Some source; closesAt; primaryRights
+  _ <- submit opener $ open "fresh-21d" (addRelTime issued (days 21)) rights
+  submitMustFail opener $ open "missing-primary" (addRelTime issued (days 21)) (take 4 rights)
+  submitMustFail opener $ open "duplicate-primary" (addRelTime issued (days 21)) (take 4 rights ++ take 1 rights)
+  submitMustFail opener $ open "365d" (addRelTime issued (days 365)) rights
+  setTime (addRelTime issued (days 8))
+  _ <- submit opener $ open "aged-eight-days" (addRelTime issued (days 29)) rights
+  before <- query @AgendaProposal opener
+  setTime (addRelTime issued (days 9))
+  submitMustFail opener $ open "exclusive-boundary" (addRelTime issued (days 30)) rights
+  after <- query @AgendaProposal opener
+  length after === length before
+  setTime (addRelTime issued (days 10))
+  submitMustFail opener $ open "aged-ten-days" (addRelTime issued (days 31)) rights
+  afterAged <- query @AgendaProposal opener
+  length afterAged === length before
+
+threeYesExecutesImmediately : Script ()
+threeYesExecutesImmediately = threeYesExecution False
+
+threeYesExecutesAfterDeadline : Script ()
+threeYesExecutesAfterDeadline = threeYesExecution True
+
+threeYesExecution : Bool -> Script ()
+threeYesExecution afterDeadline = script do
+  opener <- allocateParty "early-opener"
+  members <- mapA allocateParty ["a","b","c","d","e","f","g"]
+  governor <- submit opener $ createCmd (AgendaGovernor opener "early" (Set.fromList (take 5 members)) (Set.fromList (drop 5 members)))
+  rights <- fixturePrimaryRights opener governor
+  (source,subject) <- fixtureSource opener False
+  now <- getTime
+  proposal <- submit opener $ exerciseCmd governor ProposeAgenda with
+    proposer = opener; roundId = "early-three"; agenda = Grant subject; baseVersion = 0
+    source = Some source; closesAt = addRelTime now (days 21); primaryRights = rights
+  ballots <- submit opener $ exerciseCmd proposal InviteBallots
+  length ballots === 5
+  loaded <- mapA (queryContractId opener) ballots
+  let voters = take 3 (Set.toList (Set.fromList (take 5 members)))
+      presented = [(member,right) | (member,right) <- rights, member `elem` voters]
+  cast <- forA (zip ballots loaded) $ \(cid,Some ballot) ->
+    if ballot.voter `elem` voters then submit ballot.voter $ exerciseCmd cid CastAgendaVote with option = Count.Voted Yes else pure cid
+  submitMustFail opener $ exerciseCmd governor ResolveAgenda with
+    proposalCid = proposal; ballotCids = cast ++ take 1 cast; rights = presented
+  other <- submit opener $ exerciseCmd governor ProposeAgenda with
+    proposer = opener; roundId = "foreign-round"; agenda = Grant subject; baseVersion = 0
+    source = Some source; closesAt = addRelTime now (days 21); primaryRights = rights
+  otherBallots <- submit opener $ exerciseCmd other InviteBallots
+  submitMustFail opener $ exerciseCmd governor ResolveAgenda with
+    proposalCid = proposal; ballotCids = take 4 cast ++ take 1 otherBallots; rights = presented
+  submitMustFail opener $ exerciseCmd governor ResolveAgenda with
+    proposalCid = proposal; ballotCids = cast; rights = take 2 presented
+  if afterDeadline then setTime (addRelTime now (days 21 + seconds 1)) else pure ()
+  Resolution verdict [execution] <- submit opener $ exerciseCmd governor ResolveAgenda with
+    proposalCid = proposal; ballotCids = cast; rights = presented
+  verdict === Count.Decided Yes
+  atResolution <- getTime
+  atResolution === (if afterDeadline then addRelTime now (days 21 + seconds 1) else now)
+  result <- submit opener $ exerciseCmd execution Executable_Execute with
+    actors = [opener]; targetCids = Map.empty
+    extraArgs = ExtraArgs with context = emptyChoiceContext; meta = emptyMetadata
+  length result.created === 1
+  approved <- query @ApprovedGrantProposal opener
+  length approved === 1
+  gone <- queryContractId opener proposal
+  assert (case gone of None -> True; Some _ -> False)
+
+noEarlyRejection : Script ()
+noEarlyRejection = script do
+  opener <- allocateParty "no-early-rejection"
+  members <- mapA allocateParty ["a","b","c","d","e","f","g"]
+  governor <- submit opener $ createCmd (AgendaGovernor opener "no-early" (Set.fromList (take 5 members)) (Set.fromList (drop 5 members)))
+  rights <- fixturePrimaryRights opener governor
+  (source,subject) <- fixtureSource opener False
+  now <- getTime
+  proposal <- submit opener $ exerciseCmd governor ProposeAgenda with
+    proposer = opener; roundId = "three-no"; agenda = Grant subject; baseVersion = 0
+    source = Some source; closesAt = addRelTime now (days 21); primaryRights = rights
+  ballots <- submit opener $ exerciseCmd proposal InviteBallots
+  loaded <- mapA (queryContractId opener) ballots
+  let voters = take 3 (Set.toList (Set.fromList (take 5 members)))
+      presented = [(member,right) | (member,right) <- rights, member `elem` voters]
+  cast <- forA (zip ballots loaded) $ \(cid,Some ballot) ->
+    if ballot.voter `elem` voters then submit ballot.voter $ exerciseCmd cid CastAgendaVote with option = Count.Voted No else pure cid
+  submitMustFail opener $ exerciseCmd governor ResolveAgenda with
+    proposalCid = proposal; ballotCids = cast; rights = presented
+  stillThere <- queryContractId opener proposal
+  assert (case stillThere of Some _ -> True; None -> False)
+  remaining <- mapA (queryContractId opener) cast
+  length [() | Some _ <- remaining] === 5
+
+primaryThreshold : Script ()
+primaryThreshold = script do
+  opener <- allocateParty "threshold-opener"
+  members <- mapA allocateParty ["a","b","c","d","e","f","g"]
+  governor <- submit opener $ createCmd (AgendaGovernor opener "threshold" (Set.fromList (take 5 members)) (Set.fromList (drop 5 members)))
+  rights <- fixturePrimaryRights opener governor
+  (source,subject) <- fixtureSource opener False
+  now <- getTime
+  proposal <- submit opener $ exerciseCmd governor ProposeAgenda with
+    proposer = opener; roundId = "two-yes"; agenda = Grant subject; baseVersion = 0
+    source = Some source; closesAt = addRelTime now (days 21); primaryRights = rights
+  ballots <- submit opener $ exerciseCmd proposal InviteBallots
+  length ballots === 5
+  loaded <- mapA (queryContractId opener) ballots
+  let voters = take 2 (Set.toList (Set.fromList (take 5 members)))
+  let [abstainer] = take 1 (drop 2 (Set.toList (Set.fromList (take 5 members))))
+  cast <- forA (zip ballots loaded) $ \(cid,Some ballot) ->
+    if ballot.voter `elem` voters then submit ballot.voter $ exerciseCmd cid CastAgendaVote with option = Count.Voted Yes
+    else if ballot.voter == abstainer then submit ballot.voter $ exerciseCmd cid CastAgendaVote with option = Count.Abstained
+    else pure cid
+  let presented = [(member,right) | (member,right) <- rights, member `elem` voters || member == abstainer]
+  submitMustFail opener $ exerciseCmd governor ResolveAgenda with proposalCid = proposal; ballotCids = cast; rights = presented
+  Some stillOpen <- queryContractId opener proposal
+  stillOpen.roundId === "two-yes"
+  setTime (addRelTime now (days 21))
+  Resolution verdict executions <- submit opener $ exerciseCmd governor ResolveAgenda with
+    proposalCid = proposal; ballotCids = cast; rights = presented
+  assert (verdict /= Count.Decided Yes)
+  executions === []

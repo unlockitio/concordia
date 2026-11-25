@@ -10,6 +10,7 @@ import qualified DA.Map as Map
 import qualified Cap.Examples.BabyCdf.SourceObservationCredential as S
 import Cap.Examples.BabyCdf.SourceAgenda
 import Cap.Examples.BabyCdf.SourceAgendaFixtures
+import Cap.Examples.BabyCdf.PrimaryRightsFixture
 import Cap.Examples.BabyCdf.RuleVote
 import Cap.Governance.ActionV1 (Action)
 import Canton.Network.Credentials.V1
@@ -22,9 +23,10 @@ credentialBoundRounds = script do
   let (member :: _) = members
   governor <- submit opener $ createCmd (AgendaGovernor opener "snapshots" (Set.fromList (take 5 members)) (Set.fromList (drop 5 members)))
   (request,subject) <- fixtureSource opener False
+  primaryRights <- fixturePrimaryRights opener governor
   now <- getTime
   let propose roundId source agenda = exerciseCmd governor ProposeAgenda with
-        proposer = opener; roundId; source = Some source; agenda; baseVersion = 0; closesAt = addRelTime now (hours 1)
+        proposer = opener; roundId; source = Some source; agenda; baseVersion = 0; closesAt = addRelTime now (hours 1); primaryRights
   first <- submit opener $ propose "original" request (Grant subject)
   Some copied <- queryContractId member first
   let Some snapshot = copied.sourceSnapshot

@@ -7,7 +7,8 @@ class SourceOpenerMilestoneAdapterTest {
  @Test void productionMilestoneCommandPinsExactPredecessorAndEvidence()throws Exception {
   String pkg="a".repeat(64),party="opener";var sample=SourceCatalogueCodecTest.sample();var obs=observation(sample);String fingerprint=SourceCatalogueDigest.digest(obs.getRecord());Instant now=sample.observedAt();
   var credential=event("credential",record("opener",ValueOuterClass.Value.newBuilder().setParty(party).build(),"repo",text(REPOSITORY),"observation",obs,"version",integer(1),"fingerprint",text(fingerprint),"previousDigest",SourceOpenerLedger.none()));
-  var rows=new HashMap<String,List<EventOuterClass.CreatedEvent>>();rows.put("SourceObservationCredential",List.of(credential));rows.put("AgendaGovernor",List.of(event("gov",record("opener",ValueOuterClass.Value.newBuilder().setParty(party).build()))));
+  var rows=new HashMap<String,List<EventOuterClass.CreatedEvent>>();rows.put("SourceObservationCredential",List.of(credential));rows.put("AgendaGovernor",List.of(PrimaryRightsFixtures.governor(event("gov",record("opener",ValueOuterClass.Value.newBuilder().setParty(party).build())),"test-cdf",List.of("primary-a","primary-b","primary-c","primary-d","primary-e"))));
+  rows.put("RegisteredVotingRight",PrimaryRightsFixtures.rights(party,"test-cdf",List.of("primary-a","primary-b","primary-c","primary-d","primary-e"),now));
   var sent=new ArrayList<CommandServiceOuterClass.SubmitAndWaitRequest>();var rpc=new SourceOpenerLedger.Rpc(){public Instant now(){return now;}public List<EventOuterClass.CreatedEvent> active(String m,String e){return rows.getOrDefault(e,List.of());}public void submit(CommandServiceOuterClass.SubmitAndWaitRequest r){sent.add(r);}};
   var proof=new IntakeLedger(party,pkg,pkg,"gov","user",root.toRealPath(),r->{},(p,m,e)->List.of(),false);
   try(var ledger=new SourceOpenerLedger(party,pkg,"gov","user",rpc,proof)) {

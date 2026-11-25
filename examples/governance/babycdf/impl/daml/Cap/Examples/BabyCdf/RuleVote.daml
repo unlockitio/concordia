@@ -231,7 +231,7 @@ illustrativeMilestone = GithubSubject "milestone"
   "illustrative-immutable-milestone-revision-v1"
 
 eligible : Set Party -> Set Party -> Set Party
-eligible permanent alternates = Set.union permanent alternates
+eligible permanent alternates = permanent
 
 registryKey : Party -> AuthenticKey
 registryKey opener = AuthenticKey with authorities = Set.singleton opener; id = "babycdf-architecture-registry"
@@ -507,7 +507,7 @@ template AgendaGovernor
   with opener : Party; consortiumId : Text; permanent : Set Party; alternates : Set Party
   where
     signatory opener
-    observer Set.toList (eligible permanent alternates)
+    observer Set.toList (Set.union permanent alternates)
     ensure consortiumId /= "" && Set.size permanent == 5 && Set.size alternates == 2
       && Set.null (Set.intersection permanent alternates)
     interface instance Resolver for AgendaGovernor where
@@ -556,12 +556,20 @@ template AgendaGovernor
       with proposer : Party; roundId : Text; agenda : Agenda
            baseVersion : Int; closesAt : Time
            source : Optional SourceAgendaRequest
+           primaryRights : [(Party, RightRef)]
       controller proposer
       do
         now <- getTime
         assertMsg "not opener or eligible member"
-          (proposer == opener || proposer `Set.member` eligible permanent alternates)
+          (proposer == opener || proposer `Set.member` Set.union permanent alternates)
         assertMsg "invalid agenda or window" (validAgenda agenda && now < closesAt)
+        let primaryMembers = map fst primaryRights
+        assertMsg "one credential per primary governor required"
+          (unique primaryMembers && Set.fromList primaryMembers == permanent
+            && length primaryRights == Set.size permanent)
+        forA_ primaryRights $ \(member, right) -> do
+          checkRight opener consortiumId member now right
+          checkRight opener consortiumId member closesAt right
         existing <- lookupByKey @AgendaRoundReceipt (opener,roundId)
         assertMsg "round already opened" (existing == None)
         snapshot <- case (agenda,source) of
@@ -618,8 +626,17 @@ template AgendaGovernor
       with proposer : Party; roundId : Text; agenda : Agenda; baseVersion : Int; closesAt : Time
            source : SourceAgendaRequest
            relation : AmendmentRelation
+           primaryRights : [(Party, RightRef)]
       controller proposer
       do
+        now <- getTime
+        let primaryMembers = map fst primaryRights
+        assertMsg "one credential per primary governor required"
+          (unique primaryMembers && Set.fromList primaryMembers == permanent
+            && length primaryRights == Set.size permanent)
+        forA_ primaryRights $ \(member, right) -> do
+          checkRight opener consortiumId member now right
+          checkRight opener consortiumId member closesAt right
         assertMsg "amendment manifest commitment missing" (Source.validDigest relation.manifestDigest && relation.evidenceId > 0)
         assertMsg "amendment opener/repository/source mismatch" (relation.repo == Source.repository
           && relation.amendingNumber /= relation.originalNumber && source.originalProposal == relation.amendingNumber
@@ -634,7 +651,7 @@ template AgendaGovernor
           None -> False)
         _ <- create SourceAmendmentRound with opener; roundId; relation
         -- Ordinary creation still validates the AMENDING source, not relabelled original.
-        exercise self ProposeAgenda with proposer; roundId; agenda; baseVersion; closesAt; source = Some source
+        exercise self ProposeAgenda with proposer; roundId; agenda; baseVersion; closesAt; source = Some source; primaryRights
 
     nonconsuming choice ResolveAgenda : Resolution
       with proposalCid : ContractId AgendaProposal
@@ -646,7 +663,6 @@ template AgendaGovernor
         let members = eligible permanent alternates
         assertMsg "proposal belongs to this governor" (proposal.opener == opener && proposal.members == members)
         now <- getTime
-        assertMsg "voting still open" (now >= proposal.closesAt)
         presented <- fetchGroup (agendaResolution opener proposal.roundId) ballotCids
         let (cids, ballots) = unzip presented
         assertMsg "ballots do not cover exactly this electorate"
@@ -670,9 +686,16 @@ template AgendaGovernor
         assertMsg "one presented credential per participating eligible voter"
           (unique presentedMembers && Set.fromList (map partyAsOwnerId presentedMembers) == participants
             && length rights == Set.size participants)
-        forA_ rights $ \(member, right) ->
+        forA_ rights $ \(member, right) -> do
           checkRight opener consortiumId member now right
-        let verdict = Count.decide (Count.atLeastPresent 3) (Count.shareOfVotes 1 2) casts
+          checkRight opener consortiumId member proposal.closesAt right
+        let yesCount = length [() | cast <- Map.values casts, cast.vote == Count.Voted Yes]
+        assertMsg "voting still open without three primary YES votes"
+          (now >= proposal.closesAt || yesCount >= 3)
+        let counted = Count.decide (Count.atLeastPresent 3) (Count.shareOfVotes 1 2) casts
+            verdict = if yesCount >= 3 then Count.Decided Yes else case counted of
+              Count.Decided Yes -> Count.Undecided
+              other -> other
         consumeVoteRecords cids
         let actionDataCid = fromInterfaceContractId @AgendaAction @Action proposal.actionCid
         actionData <- fetch actionDataCid
@@ -686,7 +709,7 @@ template AgendaGovernor
               executionCore = ExecutionCore with
                 authorities = Set.singleton opener
                 availableActions = Map.fromList [(EA_Execute, [[opener]])]
-                opensAt = proposal.closesAt
+                opensAt = now
                 cancelAfter = proposal.closesAt
                 expiresAt = None
                 meta = emptyMetadata

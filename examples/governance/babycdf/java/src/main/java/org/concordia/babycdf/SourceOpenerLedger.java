@@ -23,7 +23,14 @@ public final class SourceOpenerLedger implements SourceOpenerQueue.Ledger,AutoCl
      var stream=service.getActiveContracts(StateServiceOuterClass.GetActiveContractsRequest.newBuilder().setActiveAtOffset(offset).setEventFormat(TransactionFilterOuterClass.EventFormat.newBuilder().putFiltersByParty(party,filters.build()).setVerbose(true)).build());
      var out=new ArrayList<EventOuterClass.CreatedEvent>();int count=0,bytes=0;
      while(stream.hasNext()){var row=stream.next();bytes+=row.getSerializedSize();if(++count>10000||bytes>20_000_000||row.hasIncompleteAssigned()||row.hasIncompleteUnassigned())throw new IOException("bounded opener ACS unavailable");
-      if(row.hasActiveContract()){var e=row.getActiveContract().getCreatedEvent();IntakeLedger.verifyActiveEvent(e,IntakeLedger.id(impl,module,entity),party);if(!e.getSignatoriesList().equals(List.of(party)))throw new IOException("foreign opener signatory");out.add(e);}}
+      if(row.hasActiveContract()){var e=row.getActiveContract().getCreatedEvent();IntakeLedger.verifyActiveEvent(e,IntakeLedger.id(impl,module,entity),party);if("Cap.Examples.BabyCdf.Rights".equals(module)&&"RegisteredVotingRight".equals(entity)){
+        var fields=e.getCreateArguments().getFieldsList();
+        var members=fields.stream().filter(f->"member".equals(f.getLabel())).toList();
+        var issuers=fields.stream().filter(f->"cdf".equals(f.getLabel())).toList();
+        if(members.size()!=1||issuers.size()!=1||!members.get(0).getValue().hasParty()||!issuers.get(0).getValue().hasParty()
+          ||!party.equals(issuers.get(0).getValue().getParty())||party.equals(members.get(0).getValue().getParty())
+          ||e.getSignatoriesCount()!=2||!new java.util.HashSet<>(e.getSignatoriesList()).equals(java.util.Set.of(party,members.get(0).getValue().getParty())))throw new IOException("foreign registered-right signatory");
+       }else if(!e.getSignatoriesList().equals(List.of(party)))throw new IOException("foreign opener signatory");out.add(e);}}
      return out;
     }catch(io.grpc.StatusRuntimeException failure){throw new IOException("opener ACS unavailable");}
    }
@@ -150,10 +157,18 @@ public final class SourceOpenerLedger implements SourceOpenerQueue.Ledger,AutoCl
   if(seconds!=120)throw new IOException("automatic window must be120");
    openAt(b,rpc.now().truncatedTo(java.time.temporal.ChronoUnit.MICROS).plusSeconds(seconds));
   }
-  public void openAt(SourceOpenerQueue.Binding b,java.time.Instant deadline)throws IOException {
+  public void validateWindow(SourceOpenerQueue.Binding b,java.time.Instant deadline)throws IOException {
+  var governors=rpc.active("Cap.Examples.BabyCdf.RuleVote","AgendaGovernor").stream().filter(e->e.getContractId().equals(governor)).toList();
+  if(governors.size()!=1)throw new IOException("BLOCKED: governor unavailable for primary credential coverage");
+  PrimaryRights.references(governors.getFirst(),rpc.active("Cap.Examples.BabyCdf.Rights","RegisteredVotingRight"),party,rpc.now(),deadline);
+ }
+ public void openAt(SourceOpenerQueue.Binding b,java.time.Instant deadline)throws IOException {
    if(deadline==null||!deadline.equals(deadline.truncatedTo(java.time.temporal.ChronoUnit.MICROS))||!rpc.now().isBefore(deadline))throw new IOException("invalid/expired absolute voting deadline");
    validate(b);
-  var args=record("proposer",ValueOuterClass.Value.newBuilder().setParty(party).build(),"roundId",text(b.roundId()),"agenda",agenda(b),"baseVersion",integer(0),"closesAt",timestamp(deadline),"source",ValueOuterClass.Value.newBuilder().setOptional(ValueOuterClass.Optional.newBuilder().setValue(source(b))).build());
+  var governors=rpc.active("Cap.Examples.BabyCdf.RuleVote","AgendaGovernor").stream().filter(e->e.getContractId().equals(governor)).toList();
+  if(governors.size()!=1)throw new IOException("BLOCKED: governor unavailable for primary credential coverage");
+  var primaryRights=PrimaryRights.references(governors.getFirst(),rpc.active("Cap.Examples.BabyCdf.Rights","RegisteredVotingRight"),party,rpc.now(),deadline);
+  var args=record("primaryRights",primaryRights,"proposer",ValueOuterClass.Value.newBuilder().setParty(party).build(),"roundId",text(b.roundId()),"agenda",agenda(b),"baseVersion",integer(0),"closesAt",timestamp(deadline),"source",ValueOuterClass.Value.newBuilder().setOptional(ValueOuterClass.Optional.newBuilder().setValue(source(b))).build());
   String choice="ProposeAgenda";
   if(b.kind().equals("proposal")&&!b.amendmentOriginal().isEmpty()) {
    var verified=amendments.get(b.roundId());if(verified==null)throw new IOException("verified amendment must be restored, never journal assertion");

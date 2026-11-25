@@ -9,8 +9,10 @@ end=runner.index('\nPY',start)
 program=runner[start:end]
 with tempfile.TemporaryDirectory() as tmp:
     output=Path(tmp)/'input.json'
-    subprocess.run(['python3','-',str(r/'rules'),str(output)],input=program,text=True,check=True)
-    value=json.loads(output.read_text())
+    subprocess.run(['python3','-',str(r/'rules'),str(output),str(30*24*60*60)],input=program,text=True,check=True)
+    configured=json.loads(output.read_text())
+    assert configured['credentialValiditySeconds']==30*24*60*60
+    value=configured['input']
     for version,key in [(1,'initialRuleRef'),(2,'proposedRuleRef')]:
         ref=value[key]
         assert ref==dict(location=f'rules/rule-v{version}.json',commit=None,sha256=hashlib.sha256((r/f'rules/rule-v{version}.json').read_bytes()).hexdigest())

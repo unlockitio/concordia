@@ -29,14 +29,14 @@ manualIdentityRejectsWrongSubjectAndPin = script do
   now <- getTime
   ref <- submit state.opener $ exerciseCmd state.governor ProposeAgenda with
     proposer = state.opener; roundId = runId <> ":existing"; agenda = Grant subject
-    baseVersion = 0; closesAt = addRelTime now (hours 2); source = Some source
+    baseVersion = 0; closesAt = addRelTime now (hours 2); source = Some source; primaryRights = presentedRights state.core state.credentials
   Some proposal <- queryContractId state.opener ref
   let Some snapshot = proposal.sourceSnapshot
   actions <- query @AgendaAction state.opener
   receipts <- query @AgendaRoundReceipt state.opener
   Some governor <- queryContractId state.opener state.governor
   let [action] = [a | (cid,a) <- actions, toInterfaceContractId cid == proposal.actionCid]
-      electorate = Set.union governor.permanent governor.alternates
+      electorate = governor.permanent
       accepts p s = manualIdentityValid state.opener electorate subject.url False p s action (map snd receipts)
   assert (accepts proposal snapshot)
   let wrong = proposal with subject = proposal.subject with body = "wrong-fingerprint"
@@ -49,7 +49,7 @@ manualIdentityRejectsWrongSubjectAndPin = script do
   assert (not (manualCanResume proposal.closesAt proposal state.core []))
   _ <- submit state.opener $ exerciseCmd state.governor ProposeAgenda with
     proposer = state.opener; roundId = runId <> ":ambiguous"; agenda = Grant subject
-    baseVersion = 0; closesAt = addRelTime now (hours 2); source = Some source
+    baseVersion = 0; closesAt = addRelTime now (hours 2); source = Some source; primaryRights = presentedRights state.core state.credentials
   receiptsBefore <- query @AgendaRoundReceipt state.opener
   actionsBefore <- query @AgendaAction state.opener
   manualRefuses (proposalVote runId)
@@ -71,7 +71,7 @@ manualIdentityRejectsWrongSubjectAndPin = script do
   _ <- submit state.opener $ exerciseCmd state.governor ProposeAgenda with
     proposer = state.opener; roundId = runId <> ":blocked"; agenda = Grant subject
     baseVersion = 0; closesAt = addRelTime now (hours 3)
-    source = Some (source with pin = BlockedPin "missing executable pin")
+    source = Some (source with pin = BlockedPin "missing executable pin"); primaryRights = presentedRights state.core state.credentials
   manualRefuses (proposalVote runId)
   checkpoints <- query @ManualRoundPending state.opener
   assert (null checkpoints)

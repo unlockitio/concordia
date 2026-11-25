@@ -58,7 +58,7 @@ class AuthWiring(unittest.TestCase):
             unreadable = root / 'unreadable'; unreadable.write_text('synthetic\n'); unreadable.chmod(0)
             link = root / 'link'; link.symlink_to(valid)
             state = root / 'state'; state.write_text('untouched')
-            script = ('set -eu\nrm() { echo forbidden-rm; exit 99; }\n'
+            script = ('set -eu\nHERE="$1"\nrm() { echo forbidden-rm; exit 99; }\n'
                       'docker() { echo forbidden-docker; exit 99; }\n'
                       'up_stage() { echo forbidden-stage; exit 99; }\n' + guard + '\nprintf passed')
             env = clean_env()
@@ -72,7 +72,7 @@ class AuthWiring(unittest.TestCase):
                     current = dict(env)
                     if value is not None:
                         current['INTAKE_GITHUB_TOKEN_FILE'] = value
-                    result = subprocess.run(['sh', '-c', script], env=current, text=True, capture_output=True)
+                    result = subprocess.run(['sh', '-c', script, 'fixture', str(HERE)], env=current, text=True, capture_output=True)
                     self.assertEqual(2, result.returncode, result.stderr)
                     self.assertEqual('', result.stdout)
                     self.assertIn('GITHUB-TOKEN.md', result.stderr)
@@ -81,7 +81,7 @@ class AuthWiring(unittest.TestCase):
                     self.assertFalse((root / 'step-3.attempted').exists())
                 for current in (dict(env, INTAKE_DISCOVERY_MODE='fixture'),
                                 dict(env, INTAKE_GITHUB_TOKEN_FILE=str(valid))):
-                    result = subprocess.run(['sh', '-c', script], env=current, text=True, capture_output=True)
+                    result = subprocess.run(['sh', '-c', script, 'fixture', str(HERE)], env=current, text=True, capture_output=True)
                     self.assertEqual(0, result.returncode, result.stderr)
                     self.assertEqual('passed', result.stdout)
             finally:

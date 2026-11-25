@@ -19,7 +19,8 @@ class IndependentSourceRoundsAdapterTest {
   root=root.toRealPath();String pkg=SourceCatalogueLedgerTest.PKG,repo=SourceEvidenceCollector.REPO;
   Instant now=Instant.parse("2026-11-23T00:00:00.123456789Z");String content="same Concordia immutable proposal\n";String head="a".repeat(40),blob=EvidenceBundle.blob(content);
   var rows=new HashMap<String,List<EventOuterClass.CreatedEvent>>();var sent=new ArrayList<CommandServiceOuterClass.SubmitAndWaitRequest>();
-  rows.put("AgendaGovernor",List.of(event("gov",record("opener",party()))));
+  rows.put("AgendaGovernor",List.of(PrimaryRightsFixtures.governor(event("gov",record("opener",party())),"test-cdf",List.of("primary-a","primary-b","primary-c","primary-d","primary-e"))));
+rows.put("RegisteredVotingRight",PrimaryRightsFixtures.rights("opener","test-cdf",List.of("primary-a","primary-b","primary-c","primary-d","primary-e"),now));
   var observations=new HashMap<Long,SourceObservation>();
   for(long number:new long[]{473,475,540}){
    boolean milestone=number==540;

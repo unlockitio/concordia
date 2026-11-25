@@ -21,6 +21,7 @@ manualBallotPrevalidation milestone invalid = script do
   grant <- submit state.opener $ exerciseCmd state.governor ProposeAgenda with
     proposer = state.opener; roundId = runId <> ":grant"; agenda = Grant grantSubject
     baseVersion = 0; closesAt = addRelTime now (seconds 60); source = Some grantSource
+    primaryRights = presentedRights state.core state.credentials
   proposal <- if milestone then do
     _ <- proposalVote runId
     setTime (addRelTime now (seconds 60))
@@ -33,6 +34,7 @@ manualBallotPrevalidation milestone invalid = script do
     submit state.opener $ exerciseCmd state.governor ProposeAgenda with
       proposer = state.opener; roundId = runId <> ":milestone"; agenda = Milestone subject
       baseVersion = 0; closesAt = addRelTime now (hours 2); source = Some source
+      primaryRights = presentedRights state.core state.credentials
    else pure grant
   Some selected <- queryContractId state.opener proposal
   refs <- submit state.opener $ exerciseCmd proposal InviteBallots

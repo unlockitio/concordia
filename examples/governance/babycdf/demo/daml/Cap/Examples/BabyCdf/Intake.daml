@@ -2,6 +2,7 @@ module Cap.Examples.BabyCdf.Intake where
 
 import DA.Time
 import Cap.Examples.BabyCdf.RuleVote
+import Cap.Examples.BabyCdf.Rights (RightRef)
 import Cap.Examples.BabyCdf.SourceAgenda
 
 -- Signed, explicit source-bound input. No curated source selector grants authority.
@@ -23,11 +24,12 @@ template IntakeRequest
 
     choice OpenAgenda : ContractId AgendaProposal
       with governorCid : ContractId AgendaGovernor
+           primaryRights : [(Party, RightRef)]
       controller opener
       do
         governor <- fetch governorCid
         assertMsg "intake governor opener mismatch" (governor.opener == opener)
         now <- getTime
         exercise governorCid ProposeAgenda with
-          proposer = opener; roundId; agenda; baseVersion; source = Some source
+          proposer = opener; roundId; agenda; baseVersion; source = Some source; primaryRights
           closesAt = addRelTime now (seconds windowSeconds)

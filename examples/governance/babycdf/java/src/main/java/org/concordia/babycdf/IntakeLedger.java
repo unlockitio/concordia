@@ -311,8 +311,13 @@ public final class IntakeLedger implements Intake.Transport, AutoCloseable {
     }
     static CommandServiceOuterClass.SubmitAndWaitRequest request(Intake.Request r,IntakePlan plan,
                                                                 String demo,String governor,String user) {
+        return request(r,plan,demo,governor,user,ValueOuterClass.Value.newBuilder().setList(ValueOuterClass.List.getDefaultInstance()).build());
+    }
+
+    static CommandServiceOuterClass.SubmitAndWaitRequest request(Intake.Request r,IntakePlan plan,
+                                                                String demo,String governor,String user,ValueOuterClass.Value primaryRights) {
         var args=ValueOuterClass.Record.newBuilder().addFields(f("governorCid",
-                ValueOuterClass.Value.newBuilder().setContractId(governor).build()));
+                ValueOuterClass.Value.newBuilder().setContractId(governor).build())).addFields(f("primaryRights",primaryRights));
         var exercise=CommandsOuterClass.ExerciseCommand.newBuilder().setTemplateId(id(demo,TRIGGER,"IntakeRequest"))
                 .setContractId(r.cid()).setChoice("OpenAgenda").setChoiceArgument(ValueOuterClass.Value.newBuilder().setRecord(args));
         return CommandServiceOuterClass.SubmitAndWaitRequest.newBuilder().setCommands(CommandsOuterClass.Commands.newBuilder()
@@ -331,7 +336,9 @@ public final class IntakeLedger implements Intake.Transport, AutoCloseable {
             throw new Intake.PreTransmission("BLOCKED: governor opener mismatch",null);
         // Durable create-new intent marker prevents restart-based blind resubmission.
         // Never delete automatically: an absent active proposal is not nonexecution proof.
-        var command=request(r,plan,demo,governor,user);
+        var coverageNow=java.time.Instant.now();
+        var primaryRights=PrimaryRights.references(governors.getFirst(),active(impl,"Cap.Examples.BabyCdf.Rights","RegisteredVotingRight"),party,coverageNow,coverageNow.plusSeconds(r.windowSeconds()));
+        var command=request(r,plan,demo,governor,user,primaryRights);
         byte[] intent=command.toByteArray();
         String attempt=plan.commandId();
         try {

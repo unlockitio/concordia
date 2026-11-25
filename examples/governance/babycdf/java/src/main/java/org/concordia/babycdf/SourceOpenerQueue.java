@@ -32,6 +32,7 @@ public final class SourceOpenerQueue implements AutoCloseable {
   boolean anyActiveRound()throws IOException;
   /** Exact active registered credential and predecessor/head checks, never silently substitute. */
   void validate(Binding binding)throws IOException;
+   default void validateWindow(Binding binding,Instant deadline)throws IOException {}
   default Binding prepare(Binding binding)throws IOException{return binding;}
   /** Exactly one submission; caller durably latched uncertainty before invoking. */
   void open(Binding binding,int windowSeconds)throws IOException;
@@ -199,7 +200,8 @@ public final class SourceOpenerQueue implements AutoCloseable {
    try{ledger.validate(row.binding());}catch(IOException invalid){rows.put(row.binding().roundId(),new Row(row.binding(),State.blocked,"exact credential/pin/head validation failed"));persist();return "blocked";}
    Instant deadline=deadlines.computeIfAbsent(row.binding().roundId(),ignored->clock.instant().truncatedTo(java.time.temporal.ChronoUnit.MICROS).plus(votingWindow));
     if(!clock.instant().isBefore(deadline)){rows.put(row.binding().roundId(),new Row(row.binding(),State.blocked,"persisted deadline expired; no extension"));persist();return "blocked";}
-    rows.put(row.binding().roundId(),new Row(row.binding(),State.submission_uncertain,""));persist();
+    try{ledger.validateWindow(row.binding(),deadline);}catch(IOException invalid){rows.put(row.binding().roundId(),new Row(row.binding(),State.blocked,"renewal_required: primary credentials must cover the persisted closing deadline"));persist();return "blocked";}
+     rows.put(row.binding().roundId(),new Row(row.binding(),State.submission_uncertain,""));persist();
    ledger.openAt(row.binding(),deadline); // Failure intentionally retains durable uncertainty.
    var proof=ledger.proof(row.binding(),Optional.ofNullable(deadlines.get(row.binding().roundId())));if(proof.isEmpty())throw new IOException("submission uncertain; authoritative receipt/action proof required");
    if(!proof.get().roundId().equals(row.binding().roundId())||!proof.get().bindingDigest().equals(digest(row.binding())))throw new IOException("receipt/action binding mismatch");

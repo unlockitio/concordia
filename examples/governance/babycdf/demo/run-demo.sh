@@ -260,6 +260,7 @@ run_opt_step() {
 }
 case "${1:-help}" in
   up)
+    credential_validity_seconds=$(python3 "$HERE/credential_validity.py" "${BABYCDF_CREDENTIAL_VALIDITY:-30d}") || exit $?
     case "${BABYCDF_STARTUP_TIMEOUT:-600}" in ''|*[!0-9]*|0*|?????*) echo 'BABYCDF_STARTUP_TIMEOUT must be 180..1800 seconds' >&2; exit 2;; esac
     [ "${BABYCDF_STARTUP_TIMEOUT:-600}" -ge 180 ] && [ "${BABYCDF_STARTUP_TIMEOUT:-600}" -le 1800 ] || { echo 'BABYCDF_STARTUP_TIMEOUT must be 180..1800 seconds' >&2; exit 2; }
     if [ "${BABYCDF_LLM_ENABLED:-0}" = 1 ] && [ -n "${LLM_API_KEY_FILE:-}" ]; then
@@ -339,19 +340,19 @@ case "${1:-help}" in
     up_stage canton 'Starting Canton (wait for healthy)' compose up -d --build --wait --wait-timeout "${BABYCDF_STARTUP_TIMEOUT:-600}" canton
     mkdir -p "$STATE"
     NEXT=$(mktemp "$STATE/bootstrap-next-XXXXXXXX.json")
-    python3 - "$HERE/../rules" "$STATE/bootstrap-input.json" <<'PY'
+    python3 - "$HERE/../rules" "$STATE/bootstrap-input.json" "$credential_validity_seconds" <<'PY'
 import hashlib, json, sys
 from pathlib import Path
 root=Path(sys.argv[1])
 def ref(version):
     path=root/f'rule-v{version}.json'
     return dict(location=f'rules/rule-v{version}.json',commit=None,sha256=hashlib.sha256(path.read_bytes()).hexdigest())
-Path(sys.argv[2]).write_text(json.dumps(dict(userName='babycdf-agent',windowSeconds=60,initialRuleRef=ref(1),proposedRuleRef=ref(2)))+'\n')
+Path(sys.argv[2]).write_text(json.dumps(dict(input=dict(userName='babycdf-agent',windowSeconds=60,initialRuleRef=ref(1),proposedRuleRef=ref(2)),credentialValiditySeconds=int(sys.argv[3])))+'\n')
 PY
     printf '[INIT] network healthy; uploading DAR, allocating synthetic parties and verifying dedicated user rights\n'
     DEMO_SETUP_FILTER=1 render_step step-1 \
       dpm script --dar "$HERE/.daml/dist/cap-example-babycdf-demo-0.1.0.dar" \
-      --script-name Cap.Examples.BabyCdf.Live:bootstrap --input-file "$STATE/bootstrap-input.json" \
+      --script-name Cap.Examples.BabyCdf.Live:bootstrapConfigured --input-file "$STATE/bootstrap-input.json" \
       --ledger-host 127.0.0.1 --ledger-port "$LEDGER_PORT" --wall-clock-time \
       --upload-dar true --output-file "$NEXT"
     mv "$NEXT" "$STATE/bootstrap.json"
