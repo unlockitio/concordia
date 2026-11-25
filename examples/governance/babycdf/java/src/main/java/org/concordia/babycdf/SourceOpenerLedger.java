@@ -42,7 +42,11 @@ public final class SourceOpenerLedger implements SourceOpenerQueue.Ledger,AutoCl
  static ValueOuterClass.Value optionalText(String s){return s.isEmpty()?none():ValueOuterClass.Value.newBuilder().setOptional(ValueOuterClass.Optional.newBuilder().setValue(text(s))).build();}
  static ValueOuterClass.Value pin(SourceOpenerQueue.Binding b)throws IOException {
   var json=new com.fasterxml.jackson.databind.ObjectMapper().readTree(b.pinJson());
-  if(b.kind().equals("milestone"))return ValueOuterClass.Value.newBuilder().setVariant(ValueOuterClass.Variant.newBuilder().setConstructor("DeliveryPin").setValue(record("deliveryCommit",text(json.get(0).asText()),"issueDigest",text(json.get(1).asText()),"voteCommentId",integer(json.get(2).asLong()),"voteCommentAt",timestamp(Instant.parse(json.get(3).asText()))))).build();
+  if(b.kind().equals("milestone")&&json.isObject()){
+    if(json.path("version").asInt()!=1||!json.path("constructor").asText().equals("BlockedPin")||!json.path("reason").isTextual()||json.path("reason").asText().isEmpty()||json.path("reason").asText().length()>512)throw new IOException("invalid blocked milestone pin");
+    return ValueOuterClass.Value.newBuilder().setVariant(ValueOuterClass.Variant.newBuilder().setConstructor("BlockedPin").setValue(record("reason",text(json.path("reason").asText())))).build();
+   }
+   if(b.kind().equals("milestone"))return ValueOuterClass.Value.newBuilder().setVariant(ValueOuterClass.Variant.newBuilder().setConstructor("DeliveryPin").setValue(record("deliveryCommit",text(json.get(0).asText()),"issueDigest",text(json.get(1).asText()),"voteCommentId",integer(json.get(2).asLong()),"voteCommentAt",timestamp(Instant.parse(json.get(3).asText()))))).build();
   if(!json.isArray()||json.size()!=2||!json.get(0).asText().matches("[0-9a-f]{40}")||!json.get(1).isArray())throw new IOException("invalid queue pin");
   var files=ValueOuterClass.List.newBuilder();for(var f:json.get(1)){if(!f.isArray()||f.size()!=4||!f.get(2).asText().matches("[0-9a-f]{40}")||f.get(1).asText().equals("removed"))throw new IOException("invalid queue file pin");files.addElements(record("path",text(f.get(0).asText()),"blob",text(f.get(2).asText())));}
   if(files.getElementsCount()==0)throw new IOException("empty queue pin");

@@ -1069,8 +1069,8 @@ manualIdentityValid opener electorate expectedUrl milestone proposal snapshot ac
   proposal.opener == opener && proposal.proposer == opener && proposal.members == electorate
   && proposal.subject.url == expectedUrl && proposal.subject.body == snapshot.fingerprint
   && snapshot.originalProposal == 184 && snapshot.observation.sourceUrl == expectedUrl
-  && validSnapshot snapshot && executablePin snapshot.pin && snapshot.roundId == proposal.roundId
-  && (if milestone then case snapshot.pin of DeliveryPin _ _ _ _ -> True; _ -> False
+  && validSnapshot snapshot && (milestone || executablePin snapshot.pin) && snapshot.roundId == proposal.roundId
+  && (if milestone then case snapshot.pin of DeliveryPin _ _ _ _ -> True; BlockedPin _ -> True; _ -> False
       else manualProposalPin snapshot)
   && action.opener == opener && action.members == proposal.members && action.sourceSnapshot == Some snapshot
   && agendaSnapshotConsistent opener action.agenda (Some snapshot)
@@ -1110,10 +1110,10 @@ manualExistingRound runId step milestone = do
           topicCid == toInterfaceContractId @VoteTopic ref,
           topic.subject == p.subject, topic.action == Some p.actionCid,
           topic.voteBefore == Some p.closesAt,
-          Some s <- [p.sourceSnapshot], matches s, validSnapshot s, executablePin s.pin,
+          Some s <- [p.sourceSnapshot], matches s, validSnapshot s, (milestone || executablePin s.pin),
           p.subject.body == s.fingerprint,
           s.roundId == p.roundId,
-          (if milestone then case s.pin of DeliveryPin _ _ _ _ -> True; _ -> False
+          (if milestone then case s.pin of DeliveryPin _ _ _ _ -> True; BlockedPin _ -> True; _ -> False
            else manualProposalPin s),
           (actionRef,a) <- actions, toInterfaceContractId actionRef == p.actionCid,
           a.opener == opener, a.members == p.members, a.sourceSnapshot == Some s,
@@ -1196,21 +1196,28 @@ manualExistingRound runId step milestone = do
     business 4 (if not milestone then "" else ("########## " <> "RESOLVE THE ACTUAL TOPIC" <> " ##########"))
     decision 3 (if milestone then "" else (show quorumSize <> " primary YES votes satisfy the " <> show quorumSize <> "-of-" <> show (Set.size proposal.members) <> " approval threshold. Approval need not wait for the voting deadline; ABSENT ballots are not YES votes."))
     decision 4 (if not milestone then "" else (show quorumSize <> " primary YES votes satisfy the " <> show quorumSize <> "-of-" <> show (Set.size proposal.members) <> " approval threshold. Approval need not wait for the voting deadline; ABSENT ballots are not YES votes."))
-    Resolution verdict [execution] <- submit opener $ exerciseCmd state.governor ResolveAgenda with
+    Resolution verdict executions <- submit opener $ exerciseCmd state.governor ResolveAgenda with
       proposalCid; ballotCids = voted; rights
     assertMsg "Existing round was not approved." (verdict == Count.Decided Yes)
-    decision 3 (if milestone then "" else ("Approved the existing topic: " <> proposal.subject.url <> ". ResolveAgenda returned its executable approval action."))
-    decision 4 (if not milestone then "" else ("Approved the existing topic: " <> proposal.subject.url <> ". ResolveAgenda returned its executable approval action."))
-    business 3 (if milestone then "" else ("########## " <> "EXECUTE THE RETURNED APPROVAL" <> " ##########"))
-    business 4 (if not milestone then "" else ("########## " <> "EXECUTE THE RETURNED APPROVAL" <> " ##########"))
-    result <- submit opener $ exerciseCmd execution Executable_Execute with
-      actors = [opener]; targetCids = Map.empty; extraArgs = extra
-    assertMsg "Existing round execution must create exactly one approval." (length result.created == 1)
-    outcomeLine 3 (if milestone then "" else (if milestone then "Milestone approval created for the existing pinned milestone topic. This approval is not a cash payment or proof of delivery." else "Grant proposal approval created for the existing pinned PR topic. This approval is not a cash payment or proof of delivery."))
-    outcomeLine 4 (if not milestone then "" else (if milestone then "Milestone approval created for the existing pinned milestone topic. This approval is not a cash payment or proof of delivery." else "Grant proposal approval created for the existing pinned PR topic. This approval is not a cash payment or proof of delivery."))
-    outcomeLine 3 (if milestone then "" else ("Resolved topic: " <> proposal.subject.url <> "; round: " <> proposal.roundId <> ". " <> show quorumSize <> " YES casts succeeded; " <> show absentSize <> " ballots remained ABSENT. Exactly one approval was created by the returned action."))
-    outcomeLine 4 (if not milestone then "" else ("Resolved topic: " <> proposal.subject.url <> "; round: " <> proposal.roundId <> ". " <> show quorumSize <> " YES casts succeeded; " <> show absentSize <> " ballots remained ABSENT. Exactly one approval was created by the returned action."))
-    pure "complete: existing round resolved and approval executed"
+    case (milestone, snapshot.pin, executions) of
+      (True, BlockedPin _, []) -> do
+        outcomeLine 4 ("Votes recorded for " <> proposal.subject.url <> "; round: " <> proposal.roundId <> ". Immutable delivery evidence remains incomplete. No executable approval was returned; no approval or payment was created.")
+        pure "votes recorded; review incomplete; no executable approval"
+      (_, _, [execution]) -> do
+        assertMsg "Blocked milestone must not return an executable." (executablePin snapshot.pin)
+        decision 3 (if milestone then "" else ("Approved the existing topic: " <> proposal.subject.url <> ". ResolveAgenda returned its executable approval action."))
+        decision 4 (if not milestone then "" else ("Approved the existing topic: " <> proposal.subject.url <> ". ResolveAgenda returned its executable approval action."))
+        business 3 (if milestone then "" else ("########## " <> "EXECUTE THE RETURNED APPROVAL" <> " ##########"))
+        business 4 (if not milestone then "" else ("########## " <> "EXECUTE THE RETURNED APPROVAL" <> " ##########"))
+        result <- submit opener $ exerciseCmd execution Executable_Execute with
+          actors = [opener]; targetCids = Map.empty; extraArgs = extra
+        assertMsg "Existing round execution must create exactly one approval." (length result.created == 1)
+        outcomeLine 3 (if milestone then "" else "Grant proposal approval created for the existing pinned PR topic. This approval is not a cash payment or proof of delivery.")
+        outcomeLine 4 (if not milestone then "" else "Milestone approval created for the existing pinned milestone topic. This approval is not a cash payment or proof of delivery.")
+        outcomeLine 3 (if milestone then "" else ("Resolved topic: " <> proposal.subject.url <> "; round: " <> proposal.roundId <> ". " <> show quorumSize <> " YES casts succeeded; " <> show absentSize <> " ballots remained ABSENT. Exactly one approval was created by the returned action."))
+        outcomeLine 4 (if not milestone then "" else ("Resolved topic: " <> proposal.subject.url <> "; round: " <> proposal.roundId <> ". " <> show quorumSize <> " YES casts succeeded; " <> show absentSize <> " ballots remained ABSENT. Exactly one approval was created by the returned action."))
+        pure "complete: existing round resolved and approval executed"
+      _ -> abort "Unexpected executable resolution for existing round."
 
 proposalVote : Text -> Script Text
 proposalVote runId = do

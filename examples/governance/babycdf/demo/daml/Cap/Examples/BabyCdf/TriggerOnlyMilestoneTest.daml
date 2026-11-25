@@ -1,0 +1,51 @@
+module Cap.Examples.BabyCdf.TriggerOnlyMilestoneTest where
+
+import Daml.Script
+import DA.Assert
+import DA.Time
+import qualified DA.Set as Set
+import qualified Cap.Governance.Utils.Count as Count
+import Cap.Governance.Types
+import Cap.Examples.BabyCdf.RuleVote
+import Cap.Examples.BabyCdf.SourceAgenda
+import Cap.Examples.BabyCdf.PrimaryRightsFixture
+import Cap.Examples.BabyCdf.SourceAgendaFixtures
+
+triggerOnlyMilestone : Script ()
+triggerOnlyMilestone = script do
+  opener <- allocateParty "trigger-only-opener"
+  members <- mapA allocateParty ["a","b","c","d","e","f","g"]
+  governor <- submit opener $ createCmd (AgendaGovernor opener "trigger-only" (Set.fromList (take 5 members)) (Set.fromList (drop 5 members)))
+  rights <- fixturePrimaryRights opener governor
+  (source,subject) <- fixtureSource opener True
+  now <- getTime
+  let firstRound = "canton-foundation/canton-dev-fund/issues/540/comments/6038684918"
+      secondRound = "canton-foundation/canton-dev-fund/issues/540/comments/6606684361"
+  first <- submit opener $ exerciseCmd governor ProposeAgenda with
+    proposer = opener; roundId = firstRound; agenda = Milestone subject; baseVersion = 0
+    source = Some source; closesAt = addRelTime now (days 21); primaryRights = rights
+  second <- submit opener $ exerciseCmd governor ProposeAgenda with
+    proposer = opener; roundId = secondRound; agenda = Milestone subject; baseVersion = 0
+    source = Some (source with previousRound = Some firstRound)
+    closesAt = addRelTime now (days 21); primaryRights = rights
+  Some _ <- queryContractId opener first
+  Some _ <- queryContractId opener second
+  proposals <- query @AgendaProposal opener
+  length proposals === 2
+  heads <- query @SourceRoundHead opener
+  [secondRound] === [h.latest | (_,h) <- heads]
+  ballots <- submit opener $ exerciseCmd first InviteBallots
+  length ballots === 5
+  loaded <- mapA (queryContractId opener) ballots
+  let voters = take 3 (Set.toList (Set.fromList (take 5 members)))
+      presented = [(member,right) | (member,right) <- rights, member `elem` voters]
+  cast <- forA (zip ballots loaded) $ \(cid,Some ballot) ->
+    if ballot.voter `elem` voters then submit ballot.voter $ exerciseCmd cid CastAgendaVote with option = Count.Voted Yes else pure cid
+  Resolution verdict executions <- submit opener $ exerciseCmd governor ResolveAgenda with
+    proposalCid = first; ballotCids = cast; rights = presented
+  verdict === Count.Decided Yes
+  length executions === 0
+  approvals <- query @ApprovedMilestone opener
+  length approvals === 0
+  Some _ <- queryContractId opener second
+  pure ()

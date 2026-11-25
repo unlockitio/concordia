@@ -103,7 +103,7 @@ rows.put("RegisteredVotingRight",PrimaryRightsFixtures.rights("opener","test-cdf
   var result=new AgendaFollowingReview(evidence).cycle(reviewGateway);
   assertEquals(0,result.path("errors").size(),result.toString());assertEquals(3,result.path("reviews").size(),result.toString());
   var reviewedNumbers=new HashSet<Integer>();
-  for(var review:result.path("reviews")){assertTrue(review.path("pinned").asBoolean(),review.toString());assertEquals(2,review.path("rule_version_evaluated").asInt(),review.toString());assertTrue(review.path("immutable_snapshot_verified").asBoolean(),review.toString());reviewedNumbers.add(review.path("number").asInt());}
+  for(var review:result.path("reviews")){if(review.path("number").asInt()==540){assertFalse(review.path("pinned").asBoolean(),review.toString());assertEquals("INCONCLUSIVE",review.path("status").asText(),review.toString());}else{assertTrue(review.path("pinned").asBoolean(),review.toString());assertTrue(review.path("immutable_snapshot_verified").asBoolean(),review.toString());}assertEquals(2,review.path("rule_version_evaluated").asInt(),review.toString());reviewedNumbers.add(review.path("number").asInt());}
   assertEquals(Set.of(473,475,540),reviewedNumbers);
   var snapshot=reviewGateway.cycleSnapshot();
   assertTrue(snapshot.registryBacked());assertEquals(3,snapshot.agendaEvents().size());assertEquals(1,snapshot.activeRules().size());assertEquals(1,snapshot.registryEvents().size());

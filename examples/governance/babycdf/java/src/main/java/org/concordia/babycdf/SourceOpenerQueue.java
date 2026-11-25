@@ -46,6 +46,7 @@ public final class SourceOpenerQueue implements AutoCloseable {
  private final LinkedHashMap<String,Row> rows=new LinkedHashMap<>();
  private final Set<String> verifiedThisProcess=new HashSet<>();
  private final Map<String,Instant> deadlines=new HashMap<>();
+ Runnable migrationDurableCheckpoint=()->{};
  private Duration votingWindow=Duration.ofDays(21);
  private Clock clock=Clock.systemUTC();
  private java.util.function.Consumer<String> log=System.out::println;
@@ -116,7 +117,9 @@ public final class SourceOpenerQueue implements AutoCloseable {
    ||!b.fingerprint().matches("[0-9a-f]{64}")||!b.evidenceDigest().matches("[0-9a-f]{64}")||b.roundId().isBlank()||b.roundId().length()>1024||b.sourceId()<1||b.pinJson().length()>131072
    ||b.previousRound()==null||b.amendmentOriginal()==null)throw new IllegalArgumentException("invalid opener binding");
   try{var pin=JSON.readTree(b.pinJson());
-   if(b.kind().equals("milestone")){if(!pin.isArray()||pin.size()!=4||!pin.get(0).asText().matches("[0-9a-f]{40}")||!pin.get(1).asText().equals(b.evidenceDigest())||!pin.get(2).isIntegralNumber()||pin.get(2).asLong()!=b.sourceId()||!Instant.parse(pin.get(3).asText()).equals(b.eventAt()))throw new IOException();return;}
+   if(b.kind().equals("milestone")){if(pin.isObject()){
+     if(b.number()<538||b.number()>545||pin.size()!=3||!pin.path("version").isIntegralNumber()||pin.path("version").asInt()!=1||!pin.path("constructor").asText().equals("BlockedPin")||!pin.path("reason").isTextual()||pin.path("reason").asText().isBlank()||pin.path("reason").asText().length()>512||!b.roundId().equals(b.repo()+"/issues/"+b.number()+"/comments/"+b.sourceId()))throw new IOException();return;
+    }if(!pin.isArray()||pin.size()!=4||!pin.get(0).asText().matches("[0-9a-f]{40}")||!pin.get(1).asText().equals(b.evidenceDigest())||!pin.get(2).isIntegralNumber()||pin.get(2).asLong()!=b.sourceId()||!Instant.parse(pin.get(3).asText()).equals(b.eventAt()))throw new IOException();return;}
    if(!pin.isArray()||pin.size()!=2||!pin.get(0).isTextual()||!pin.get(0).textValue().matches("[0-9a-f]{40}")||!pin.get(1).isArray()||pin.get(1).isEmpty())throw new IOException();
    var paths=new HashSet<String>();for(var file:pin.get(1)){if(!file.isArray()||file.size()!=4)throw new IOException();for(var value:file)if(!value.isTextual())throw new IOException();String path=file.get(0).textValue();
     if(path.length()>1024||!path.matches("[A-Za-z0-9_.\\-/]+")||path.contains("..")||!paths.add(path)||!Set.of("added","modified","renamed","changed","copied").contains(file.get(1).textValue())||!file.get(2).textValue().matches("[0-9a-f]{40}")||(!file.get(3).textValue().isEmpty()&&!file.get(3).textValue().matches("[A-Za-z0-9_.\\-/]+")))throw new IOException();}
@@ -161,7 +164,20 @@ public final class SourceOpenerQueue implements AutoCloseable {
  /** Only collector-private Ready capability enters executable queue; public Entry/status cannot. */
  public synchronized void enqueue(SourceEvidenceCollector.Ready ready,Binding binding)throws IOException {
   valid(binding);if(!ready.matches(binding))throw new IOException("collector capability/binding mismatch");verifiedThisProcess.add(binding.roundId());
-  var old=rows.get(binding.roundId());if(old!=null){if(!old.binding().equals(binding)&&!(binding.kind().equals("milestone")&&sameEvidence(old.binding(),binding)))throw new IOException("round evidence conflict");return;}
+  var old=rows.get(binding.roundId());if(old!=null){
+    if(old.state()==State.blocked&&binding.kind().equals("milestone")&&!deadlines.containsKey(binding.roundId())&&Set.of("blocked_pin","unresolved","incomplete").contains(old.reason())&&old.binding().repo().equals(binding.repo())&&old.binding().number()==binding.number()&&old.binding().sourceId()==binding.sourceId()&&old.binding().eventAt().equals(binding.eventAt())&&old.binding().amendmentOriginal().equals(binding.amendmentOriginal())){
+     var policy=JSON.readTree(binding.pinJson());
+     if(policy.isObject()&&policy.path("version").asInt()==1&&policy.path("constructor").asText().equals("BlockedPin")){
+      byte[] previous=Files.readAllBytes(root.resolve("source-opener-v1.json"));
+      Path retained=root.resolve("opening-policy-v1-before-"+SourceObservation.hash(new String(previous,java.nio.charset.StandardCharsets.UTF_8))+".json");
+      if(Files.exists(retained,LinkOption.NOFOLLOW_LINKS)){if(Files.isSymbolicLink(retained)||!java.util.Arrays.equals(Files.readAllBytes(retained),previous))throw new IOException("migration history conflict");}
+      else{try(var channel=FileChannel.open(retained,StandardOpenOption.CREATE_NEW,StandardOpenOption.WRITE)){var buffer=java.nio.ByteBuffer.wrap(previous);while(buffer.hasRemaining())channel.write(buffer);channel.force(true);}}
+      try(var directory=FileChannel.open(root,StandardOpenOption.READ)){directory.force(true);}
+      migrationDurableCheckpoint.run();
+      rows.put(binding.roundId(),new Row(binding,State.queued,"opening_policy:recognized-milestone-comment/v1"));persist();return;
+     }
+    }
+    if(!old.binding().equals(binding)&&!(binding.kind().equals("milestone")&&sameEvidence(old.binding(),binding)))throw new IOException("round evidence conflict");return;}
   if(rows.size()>=1000)throw new IOException("opener queue bound");rows.put(binding.roundId(),new Row(binding,State.queued,""));persist();
  }
  public synchronized void retainEvidence(SourceEvidenceCollector.Batch batch)throws IOException {
@@ -193,7 +209,7 @@ public final class SourceOpenerQueue implements AutoCloseable {
   // Each submission remains serialized; pending independent subjects do not gate the queue.
   for(var row:ordered())if(row.state()==State.queued) {
     Binding candidate=row.binding();
-    if(rows.values().stream().anyMatch(other->!other.binding().roundId().equals(candidate.roundId())&&other.binding().repo().equals(candidate.repo())&&other.binding().number()==candidate.number()&&other.binding().kind().equals(candidate.kind())&&(other.state()==State.submission_uncertain||other.state()==State.proven_open)))continue;
+    if(rows.values().stream().anyMatch(other->!other.binding().roundId().equals(candidate.roundId())&&other.binding().repo().equals(candidate.repo())&&other.binding().number()==candidate.number()&&other.binding().kind().equals(candidate.kind())&&(other.state()==State.submission_uncertain||(!candidate.kind().equals("milestone")&&other.state()==State.proven_open))))continue;
    if(!verifiedThisProcess.contains(row.binding().roundId()))throw new IOException("queued evidence needs collector revalidation, not deserialized ready trust");
    Binding prepared=ledger.prepare(row.binding());
    if(!prepared.equals(row.binding())){if(!prepared.kind().equals("milestone")||!sameEvidence(prepared,row.binding()))throw new IOException("prepare altered immutable evidence");rows.put(prepared.roundId(),new Row(prepared,State.queued,""));persist();row=new Row(prepared,State.queued,"");}

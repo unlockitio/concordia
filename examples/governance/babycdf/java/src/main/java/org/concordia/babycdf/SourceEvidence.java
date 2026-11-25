@@ -39,7 +39,9 @@ public final class SourceEvidence {
   return new Proposal(number,head,pins,eligible,eligible?status:"ineligible");
  }
  /** Standalone command lines only, outside quoted lines and fenced code. */
- public static boolean voteCommand(String body) {
+ public static boolean voteCommand(String body) {return command(body,false);}
+ public static boolean milestoneVoteCommand(String body) {return command(body,true);}
+ private static boolean command(String body,boolean milestone) {
   char fence=0;int length=0;
   for(String line:body.split("\\R",-1)) {
    // Commands in nested quotes/list containers/indented code are never standalone.
@@ -49,14 +51,20 @@ public final class SourceEvidence {
    if(marker=='`'||marker=='~'){while(run<s.length()&&s.charAt(run)==marker)run++;}
    if(fence!=0){if(marker==fence&&run>=length&&s.substring(run).isBlank()){fence=0;length=0;}continue;}
    if(run>=3){fence=marker;length=run;continue;}
-   if(s.stripTrailing().equals("/vote"))return true;
+   if(s.stripTrailing().equals("/vote")||(milestone&&s.stripTrailing().equals("/git-vote")))return true;
   }return false;
  }
  public static List<Trigger> triggers(String repo,long issue,String currentBody,Instant issueUpdated,List<Comment> comments,List<LabelEvent> labels,Instant asOf) {
+   return triggers(repo,issue,currentBody,issueUpdated,comments,labels,asOf,false);
+  }
+  public static List<Trigger> milestoneTriggers(String repo,long issue,String currentBody,Instant issueUpdated,List<Comment> comments,List<LabelEvent> labels,Instant asOf) {
+   return triggers(repo,issue,currentBody,issueUpdated,comments,labels,asOf,true);
+  }
+  private static List<Trigger> triggers(String repo,long issue,String currentBody,Instant issueUpdated,List<Comment> comments,List<LabelEvent> labels,Instant asOf,boolean milestone) {
   var out=new ArrayList<Trigger>();var ids=new HashSet<Long>();
   for(var c:comments) {
    if(!ids.add(c.id()))throw new IllegalArgumentException("duplicate comment identity");
-   if(c.createdAt().isAfter(asOf) || c.deleted() || !voteCommand(c.body()))continue;
+   if(c.createdAt().isAfter(asOf) || c.deleted() || !(milestone?milestoneVoteCommand(c.body()):voteCommand(c.body())))continue;
    String status=c.updatedAt().isAfter(c.createdAt())?"historical_command_unknown":"observed_command";
    String digest=issueUpdated.isAfter(c.createdAt())||c.updatedAt().isAfter(c.createdAt())?"":SourceObservation.hash(currentBody);
    if(digest.isEmpty()&&!c.updatedAt().isAfter(c.createdAt()))status="historical_issue_unknown";

@@ -9,7 +9,7 @@ import java.util.regex.*;
 
 /** End-to-end read-only evidence collector. Never submits or opens an agenda. */
 public final class SourceEvidenceCollector {
- /** Collector-issued executable evidence capability. Never Jackson-deserialized. */
+ /** Collector-issued opening evidence capability. Never Jackson-deserialized. */
  public static final class Ready {
   private final long number;private final String round,head,pin,bodyDigest;
   private VerifiedAmendment amendment;
@@ -24,13 +24,11 @@ public final class SourceEvidenceCollector {
  public List<Ready> readyMilestones(long number,Instant asOf)throws IOException {return collectMilestones(number,asOf).ready();}
  public MilestoneCollection collectMilestones(long number,Instant asOf)throws IOException {
   var issue=object("/issues/"+positive(number));var comments=array("/issues/"+number+"/comments?per_page=100");var events=array("/issues/"+number+"/events?per_page=100");
-  var proofs=new HashMap<String,SourceEvidence.CommitProof>();
-  for(var c:comments.data()){var matcher=Pattern.compile("(?<![a-zA-Z0-9])[0-9a-f]{40}(?![a-zA-Z0-9])").matcher(c.path("body").asText());
-   while(matcher.find()&&proofs.size()<10){String sha=matcher.group();if(proofs.containsKey(sha))continue;var commit=object("/commits/"+sha);if(commit.complete()&&commit.data().path("sha").asText().equals(sha))proofs.put(sha,new SourceEvidence.CommitProof(sha,time(commit.data().path("commit").path("committer"),"date"),false));}}
+  var proofs=Map.<String,SourceEvidence.CommitProof>of();
   var batch=milestone(number,asOf,issue,comments,events,proofs,Map.of());var out=new ArrayList<Ready>();
-  for(var entry:batch.entries())if(batch.gaps().isEmpty()&&"pinned".equals(entry.payload().get("pin_status"))&&"observed_command".equals(entry.payload().get("trigger_status"))){
-   String pin;try{pin=json.writeValueAsString(List.of(entry.payload().get("delivery_commit"),entry.payload().get("issue_digest"),entry.numericId(),entry.at().toString()));}catch(Exception invalid){throw new IOException("invalid milestone pin");}
-   var ready=new Ready(number,entry.roundId(),"",pin,String.valueOf(entry.payload().get("issue_digest")),entry.at());ready.kind="milestone";ready.sourceId=entry.numericId();out.add(ready);
+  for(var entry:batch.entries())if(number>=538&&number<=545&&entry.type().equals("command")&&java.util.stream.StreamSupport.stream(comments.data().spliterator(),false).anyMatch(c->c.path("id").asLong()==entry.numericId()&&commentSource(c,number)&&SourceEvidence.milestoneVoteCommand(c.path("body").asText()))){
+   String pin;try{pin="pinned".equals(entry.payload().get("pin_status"))?json.writeValueAsString(List.of(entry.payload().get("delivery_commit"),entry.payload().get("issue_digest"),entry.numericId(),entry.at().toString())):json.writeValueAsString(Map.of("version",1,"constructor","BlockedPin","reason","Delivery evidence incomplete; opening based on current observed milestone comment only"));}catch(Exception invalid){throw new IOException("invalid milestone pin");}
+   var ready=new Ready(number,entry.roundId(),"",pin,SourceObservation.hash(issue.data().path("body").asText()),entry.at());ready.kind="milestone";ready.sourceId=entry.numericId();out.add(ready);
   }return new MilestoneCollection(batch,out);
  }
  public Set<Long> observedSourceIds(long number)throws IOException {
@@ -118,11 +116,15 @@ public final class SourceEvidenceCollector {
   var labels=new ArrayList<SourceEvidence.LabelEvent>();for(var e:events.data())if(e.path("event").asText().equals("labeled"))labels.add(new SourceEvidence.LabelEvent(e.path("id").asLong(),e.path("label").path("name").asText(),time(e,"created_at")));
   boolean complete=issue.complete()&&comments.complete()&&events.complete();
   if(!complete)gaps.add("partial issue/comments/events; trigger enumeration incomplete");
-  if(!issue.complete() || !comments.complete())return new Batch(List.of(),gaps,asOf,max(issue.retrievedAt(),comments.retrievedAt(),events.retrievedAt()));
-  var triggers=SourceEvidence.triggers(REPO,number,issue.data().path("body").asText(),time(issue.data(),"updated_at"),parsed,labels,asOf);
+  if(!issue.data().isObject()||!issue.data().path("body").isTextual()||!comments.data().isArray())return new Batch(List.of(),gaps,asOf,max(issue.retrievedAt(),comments.retrievedAt(),events.retrievedAt()));
+  var triggers=SourceEvidence.milestoneTriggers(REPO,number,issue.data().path("body").asText(),time(issue.data(),"updated_at"),parsed,labels,asOf);
   for(var trigger:triggers) {
    var payload=new TreeMap<String,Object>();payload.put("trigger_status",trigger.status());payload.put("enumeration_complete",complete);
    payload.put("issue_digest",trigger.bodyDigest());payload.put("source_comment_id",trigger.id());
+    payload.put("opening_policy","recognized-milestone-comment/v1");
+    payload.put("opening_delivery_enrichment","not_requested_by_opener");
+    payload.put("opening_basis","current_comment_observation");
+    payload.put("opening_observed_issue_digest",SourceObservation.hash(issue.data().path("body").asText()));
    var delivery=complete?SourceEvidence.delivery(trigger,parsed,commits,historicalBranches)
      :new SourceEvidence.Delivery("",trigger.bodyDigest(),"blocked_pin","incomplete issue/comments/events capture");
    payload.put("pin_status",delivery.status());payload.put("delivery_commit",delivery.commit());payload.put("pin_reason",delivery.reason());

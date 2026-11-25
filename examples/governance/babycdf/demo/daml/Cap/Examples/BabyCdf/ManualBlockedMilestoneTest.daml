@@ -1,0 +1,46 @@
+module Cap.Examples.BabyCdf.ManualBlockedMilestoneTest where
+
+import Daml.Script
+import DA.Assert
+import DA.Time
+import qualified DA.Text as Text
+import Cap.Examples.BabyCdf.Live
+import Cap.Examples.BabyCdf.RuleVote
+import Cap.Examples.BabyCdf.SourceAgendaFixtures
+import Cap.Governance.VoteTopicV1 (VoteTopic)
+import qualified Cap.Examples.BabyCdf.SourceObservationCredential as Source
+
+manualBlockedMilestone : Script ()
+manualBlockedMilestone = script do
+  let runId = "manual-blocked-milestone"
+  state <- bootstrap (BootstrapInput runId 5 ruleRefV1 ruleRefV2)
+  (grantSource,grantSubject) <- fixtureSource state.opener False
+  now <- getTime
+  grant <- submit state.opener $ exerciseCmd state.governor ProposeAgenda with
+    proposer = state.opener; roundId = runId <> ":pr184"; agenda = Grant grantSubject
+    baseVersion = 0; closesAt = addRelTime now (seconds 60); source = Some grantSource
+    primaryRights = presentedRights state.core state.credentials
+  _ <- proposalVote runId
+  None <- queryContractId state.opener grant
+  grants <- query @ApprovedGrantProposal state.opener
+  length grants === 1
+  (source,subject) <- fixtureSource state.opener True
+  milestone <- submit state.opener $ exerciseCmd state.governor ProposeAgenda with
+    proposer = state.opener; roundId = runId <> ":milestone540"; agenda = Milestone subject
+    baseVersion = 0; closesAt = addRelTime now (hours 2); source = Some source
+    primaryRights = presentedRights state.core state.credentials
+  receiptsBefore <- query @AgendaRoundReceipt state.opener
+  sourcesBefore <- query @Source.SourceObservationCredential state.opener
+  result <- milestoneVote runId
+  assert (Text.isInfixOf "votes recorded" result)
+  assert (Text.isInfixOf "review incomplete" result)
+  assert (Text.isInfixOf "no executable approval" result)
+  None <- queryContractId state.opener milestone
+  topics <- queryInterface @VoteTopic state.opener
+  assert (all (\(ref,_) -> ref /= toInterfaceContractId @VoteTopic milestone) topics)
+  approvals <- query @ApprovedMilestone state.opener
+  length approvals === 0
+  receiptsAfter <- query @AgendaRoundReceipt state.opener
+  receiptsAfter === receiptsBefore
+  sourcesAfter <- query @Source.SourceObservationCredential state.opener
+  sourcesAfter === sourcesBefore

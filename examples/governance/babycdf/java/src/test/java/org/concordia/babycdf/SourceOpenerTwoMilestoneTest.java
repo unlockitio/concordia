@@ -18,8 +18,8 @@ class SourceOpenerTwoMilestoneTest {
    public void open(SourceOpenerQueue.Binding b,int seconds){sends++;assertEquals(latest,b.previousRound());latest=b.roundId();proofs.put(b.roundId(),new SourceOpenerQueue.Proof(b.roundId(),SourceOpenerQueue.digest(b),false));}
   }
   var ledger=new Ledger();java.util.function.Function<SourceEvidenceCollector.Ready,SourceOpenerQueue.Binding> bind=r->new SourceOpenerQueue.Binding(repo,540,"milestone","credential",1,"b".repeat(64),SourceObservation.hash("body"),r.roundId(),r.eventAt(),r.sourceId(),r.pinJson(),"","184");
-  try(var q=new SourceOpenerQueue(root.toRealPath(),ledger)){for(var r:ready)q.enqueue(r,bind.apply(r));assertEquals("opened",q.tick());assertEquals(1,ledger.sends);assertEquals("proven-open",q.tick());assertEquals(1,ledger.sends);}
-  ledger.completed=true;
-  try(var q=new SourceOpenerQueue(root.toRealPath(),ledger)){for(var r:ready)q.enqueue(r,bind.apply(r));assertEquals("opened",q.tick());assertEquals(2,ledger.sends);assertEquals(ready.get(0).roundId(),q.snapshot().get(1).binding().previousRound());}
+  try(var q=new SourceOpenerQueue(root.toRealPath(),ledger)){for(var r:ready)q.enqueue(r,bind.apply(r));assertEquals("opened",q.tick());assertEquals(1,ledger.sends);assertEquals("opened",q.tick());assertEquals(2,ledger.sends);assertFalse(ledger.completed);assertEquals(2,ledger.proofs.size());}
+  assertFalse(ledger.completed);
+  try(var q=new SourceOpenerQueue(root.toRealPath(),ledger)){for(var r:ready)q.enqueue(r,bind.apply(r));assertEquals("proven-open",q.tick());assertEquals(2,ledger.sends);assertEquals(ready.get(0).roundId(),q.snapshot().get(1).binding().previousRound());}
  }
 }

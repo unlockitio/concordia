@@ -139,10 +139,12 @@ REPO_REL="examples/governance/babycdf/demo/daml/Cap/Examples/BabyCdf/Live.daml"
 # v19 deliberately changes source casting: verified existing rounds, pending/resume,
 # and atomic opener phase checkpoints. RuleVote/Rights and step 2 are unchanged.
 # v20 validates existing ballot sets and vote compatibility before checkpoint creation.
-SPEC_VERSION='v22-simple-existing-topic-vote'
+# v23 permits valid blocked milestone ballots and reports no executable approval.
+# Proposal pin requirements and on-ledger execution barriers remain unchanged.
+SPEC_VERSION='v23-trigger-only-milestone-voting'
 # Authorized v21 behavior change, not equivalence to v20: five primary seats,
 # three YES early approval, rights through close, configurable fresh bootstrap.
-SPEC_DIGEST='27aec67be88b3d29c239b464e0e968e58d0bd31021c683c801b543ae2b71dff4'
+SPEC_DIGEST='5296cc8c8a4be56e09b733b5b218ed8a1f5df849b69115d69489839fc8304fcf'
 
 for required in "$LIVE" "$SELECTOR" "$RULE"; do
   if [ ! -f "$required" ]; then
