@@ -1134,6 +1134,18 @@ manualExistingRound runId step milestone = do
     assertMsg "Manual vote retains the five-primary electorate and actual selected credential holders."
       (Set.size proposal.members == 5 && length voters == quorumSize && length rights == quorumSize
         && all (\v -> Set.member v proposal.members) voters)
+    business 3 (if milestone then "" else ("########## " <> "EXISTING PINNED TOPIC" <> " ##########"))
+    business 4 (if not milestone then "" else ("########## " <> "EXISTING PINNED TOPIC" <> " ##########"))
+    business 3 (if milestone then "" else ("Subject #" <> show snapshot.observation.number <> ": " <> snapshot.observation.title))
+    business 4 (if not milestone then "" else ("Subject #" <> show snapshot.observation.number <> ": " <> snapshot.observation.title))
+    business 3 (if milestone then "" else ("Source: " <> proposal.subject.url))
+    business 4 (if not milestone then "" else ("Source: " <> proposal.subject.url))
+    business 3 (if milestone then "" else ("Round: " <> proposal.roundId <> "; source pin: " <> show snapshot.pin))
+    business 4 (if not milestone then "" else ("Round: " <> proposal.roundId <> "; source pin: " <> show snapshot.pin))
+    business 3 (if milestone then "" else ("Voting window closes at " <> show proposal.closesAt <> ". Intake is already open; this vote does not open another round."))
+    business 4 (if not milestone then "" else ("Voting window closes at " <> show proposal.closesAt <> ". Intake is already open; this vote does not open another round."))
+    business 3 (if milestone then "" else ("Electorate: " <> show (Set.size proposal.members) <> " primary members; reserves are outside this electorate. Selected primary credential holders: " <> show (length voters) <> "."))
+    business 4 (if not milestone then "" else ("Electorate: " <> show (Set.size proposal.members) <> " primary members; reserves are outside this electorate. Selected primary credential holders: " <> show (length voters) <> "."))
     beforeMutation <- getTime
     forA_ rights $ \(holder,right) -> do
       case right of
@@ -1165,15 +1177,39 @@ manualExistingRound runId step milestone = do
       _ <- validateManualRoundBallots proposal existingRound
       assertMsg "Existing votes must be absent; no retry or recast is permitted."
         (all (\(_,b) -> b.vote == Count.Absent) existingRound)
+    business 3 (if milestone then "" else ("########## " <> "VALIDATED ELECTORATE AND BALLOTS" <> " ##########"))
+    business 4 (if not milestone then "" else ("########## " <> "VALIDATED ELECTORATE AND BALLOTS" <> " ##########"))
+    business 3 (if milestone then "" else ("Pinned topic, source action, round receipt, primary membership and " <> show quorumSize <> " selected voting credentials have passed validation. The voting window is open."))
+    business 4 (if not milestone then "" else ("Pinned topic, source action, round receipt, primary membership and " <> show quorumSize <> " selected voting credentials have passed validation. The voting window is open."))
+    business 3 (if milestone then "" else (if null existingRound then "No ballots exist for this round: invite the primary electorate." else "Reuse the existing validated ballots: all are ABSENT; no retry or recast is permitted."))
+    business 4 (if not milestone then "" else (if null existingRound then "No ballots exist for this round: invite the primary electorate." else "Reuse the existing validated ballots: all are ABSENT; no retry or recast is permitted."))
     ballots <- if null existingRound then inviteBallotsFor step opener proposalCid
       else pure (map fst existingRound)
+    business 3 (if milestone then "" else ("########## " <> "CAST THE SELECTED PRIMARY VOTES" <> " ##########"))
+    business 4 (if not milestone then "" else ("########## " <> "CAST THE SELECTED PRIMARY VOTES" <> " ##########"))
     voted <- castYesBy step opener voters ballots "on the existing pinned source agenda."
+    voteNarration 3 (if milestone then "" else (Text.intercalate "; " (map (\v -> name v <> ": YES confirmed after successful cast") voters)))
+    voteNarration 4 (if not milestone then "" else (Text.intercalate "; " (map (\v -> name v <> ": YES confirmed after successful cast") voters)))
+    business 3 (if milestone then "" else ("Ballots retained for this round: " <> show (length voted) <> ". Tally: " <> show quorumSize <> " YES, " <> show absentSize <> " ABSENT, out of " <> show (Set.size proposal.members) <> " primary members. Reserves are not additional votes."))
+    business 4 (if not milestone then "" else ("Ballots retained for this round: " <> show (length voted) <> ". Tally: " <> show quorumSize <> " YES, " <> show absentSize <> " ABSENT, out of " <> show (Set.size proposal.members) <> " primary members. Reserves are not additional votes."))
+    business 3 (if milestone then "" else ("########## " <> "RESOLVE THE ACTUAL TOPIC" <> " ##########"))
+    business 4 (if not milestone then "" else ("########## " <> "RESOLVE THE ACTUAL TOPIC" <> " ##########"))
+    decision 3 (if milestone then "" else (show quorumSize <> " primary YES votes satisfy the " <> show quorumSize <> "-of-" <> show (Set.size proposal.members) <> " approval threshold. Approval need not wait for the voting deadline; ABSENT ballots are not YES votes."))
+    decision 4 (if not milestone then "" else (show quorumSize <> " primary YES votes satisfy the " <> show quorumSize <> "-of-" <> show (Set.size proposal.members) <> " approval threshold. Approval need not wait for the voting deadline; ABSENT ballots are not YES votes."))
     Resolution verdict [execution] <- submit opener $ exerciseCmd state.governor ResolveAgenda with
       proposalCid; ballotCids = voted; rights
     assertMsg "Existing round was not approved." (verdict == Count.Decided Yes)
+    decision 3 (if milestone then "" else ("Approved the existing topic: " <> proposal.subject.url <> ". ResolveAgenda returned its executable approval action."))
+    decision 4 (if not milestone then "" else ("Approved the existing topic: " <> proposal.subject.url <> ". ResolveAgenda returned its executable approval action."))
+    business 3 (if milestone then "" else ("########## " <> "EXECUTE THE RETURNED APPROVAL" <> " ##########"))
+    business 4 (if not milestone then "" else ("########## " <> "EXECUTE THE RETURNED APPROVAL" <> " ##########"))
     result <- submit opener $ exerciseCmd execution Executable_Execute with
       actors = [opener]; targetCids = Map.empty; extraArgs = extra
     assertMsg "Existing round execution must create exactly one approval." (length result.created == 1)
+    outcomeLine 3 (if milestone then "" else (if milestone then "Milestone approval created for the existing pinned milestone topic. This approval is not a cash payment or proof of delivery." else "Grant proposal approval created for the existing pinned PR topic. This approval is not a cash payment or proof of delivery."))
+    outcomeLine 4 (if not milestone then "" else (if milestone then "Milestone approval created for the existing pinned milestone topic. This approval is not a cash payment or proof of delivery." else "Grant proposal approval created for the existing pinned PR topic. This approval is not a cash payment or proof of delivery."))
+    outcomeLine 3 (if milestone then "" else ("Resolved topic: " <> proposal.subject.url <> "; round: " <> proposal.roundId <> ". " <> show quorumSize <> " YES casts succeeded; " <> show absentSize <> " ballots remained ABSENT. Exactly one approval was created by the returned action."))
+    outcomeLine 4 (if not milestone then "" else ("Resolved topic: " <> proposal.subject.url <> "; round: " <> proposal.roundId <> ". " <> show quorumSize <> " YES casts succeeded; " <> show absentSize <> " ballots remained ABSENT. Exactly one approval was created by the returned action."))
     pure "complete: existing round resolved and approval executed"
 
 proposalVote : Text -> Script Text
