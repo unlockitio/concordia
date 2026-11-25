@@ -158,7 +158,7 @@ agent_log_summary() {
 }
 
 run_step() {
-  case "$1" in 3|4|5) echo 'Integrated source rounds are automatic and unvoted; scripted source steps are retired. Nothing was run.' >&2; return 2;; esac
+  case "$1" in 5) echo 'Step 5 remains retired. Nothing was run.' >&2; return 2;; esac
   # Raw logs live under the gitignored build root, never in the repository.
   if [ -z "$RAW_DIR" ]; then
     babycdf_build_root "$HERE/.." || return 2
@@ -166,23 +166,23 @@ run_step() {
   fi
   case "$1" in
     2) NUMBER=2; INPUT="$STATE/bootstrap.json"; SCRIPT=ruleVote ;;
-    3) NUMBER=3; INPUT="$STATE/step-2.json"; SCRIPT=proposalVote ;;
-    4) NUMBER=4; INPUT="$STATE/step-3.json"; SCRIPT=milestoneVote ;;
+    3) NUMBER=3; INPUT="$STATE/bootstrap.json"; SCRIPT=proposalVote ;;
+    4) NUMBER=4; INPUT="$STATE/bootstrap.json"; SCRIPT=milestoneVote ;;
     5) NUMBER=5; INPUT="$STATE/step-4.json"; SCRIPT=couponAllocate ;;
     6) echo 'Step 6 was split into independent optional rounds; use opt-step 2, 3, 4 or 5. Nothing was run.' >&2; return 2 ;;
     *) echo 'Steps 2-5 are implemented; pass a step number in that range.' >&2; return 2 ;;
   esac
   echo "EXPERIMENTAL step $NUMBER: host submits as synthetic opener/voters, not agent user." >&2
-  if [ ! -f "$INPUT" ] || [ -e "$STATE/step-$NUMBER.json" ] || [ -e "$STATE/step-$NUMBER.attempted" ]; then
-    echo "Refused step $NUMBER: prerequisite $INPUT must exist; step-$NUMBER.json and step-$NUMBER.attempted must not exist. After an attempt, run down/up." >&2
+  if [ ! -f "$INPUT" ] || { [ "$NUMBER" != 3 ] && [ "$NUMBER" != 4 ] && { [ -e "$STATE/step-$NUMBER.json" ] || [ -e "$STATE/step-$NUMBER.attempted" ]; }; }; then
+    if [ "$NUMBER" = 3 ] || [ "$NUMBER" = 4 ]; then
+      echo "Refused manual step $NUMBER: bootstrap prerequisite $INPUT must exist. Existing markers are retained; do not reset the network to resume a round." >&2
+    else
+      echo "Refused step $NUMBER: prerequisite $INPUT must exist; step-$NUMBER.json and step-$NUMBER.attempted must not exist. After an attempt, run down/up." >&2
+    fi
     return 2
   fi
   if [ "$NUMBER" = 3 ] || [ "$NUMBER" = 4 ]; then
-    INTAKE_RUNNING=$(compose ps --status running -q intake) || return 2
-    if [ -z "$INTAKE_RUNNING" ]; then
-      echo 'Intake process is not running; refusing before attempt/request. Inspect logs; do not delete markers.' >&2
-      return 2
-    fi
+    echo 'Manual existing-round vote: ledger proof requires Architecture step 2 or later and controls resume; bootstrap alone is not readiness. PENDING is not approval. No Intake request or round opening. Existing attempt markers are retained.' >&2
   fi
   if [ "$NUMBER" = 3 ] || [ "$NUMBER" = 4 ]; then
     agent_log_summary intake
@@ -422,20 +422,20 @@ PY
     printf '  logs      follow Canton and agent logs (terminal 1)\n'
     printf '  step N    run one step, N in 2..5 (terminal 2)\n'
     printf '  opt-step N  run one OPTIONAL round, N in 1..5 (not part of all)\n'
-    printf '  all       run steps 2-5 in order, PAUSE=%s seconds between them\n' "$PAUSE"
+    printf '  all       run the Architecture rule-vote journey only; source votes require explicit step 3/4 commands\n'
     printf '  down      stop everything and clear demo state\n'
     printf 'Startup: quiet stage summaries plus visible step-1 setup; VERBOSE=1 shows full stage logs.\n'
-    printf 'Steps: 2 rule vote, 3 proposal vote, 4 milestone, 5 coupon allocation.\n'
+    printf 'Steps: 2 rule vote; 3 existing PR184 round; 4 existing milestone540 round; 5 retired.\n'
     printf 'Optionals 2-5 need only bootstrap, run independently in any order, and never advance the main anchor.\n'
     printf '  2 credentials (group mismatch vs lookup privacy), 3 no quorum (Lapsed),\n'
     printf '  4 double vote (consumed and already cast), 5 outsider (visibility and proposer authorization).\n'
-    printf 'Main voting steps each complete ONE round: propose, vote, close, count, apply.\n'
+    printf 'Steps 3/4 never open rounds: cast missing votes, return PENDING, then explicitly resume after the existing deadline. Ledger evidence checks prerequisites.\n'
     printf 'Optional round 1 (after step 2): a rule change written against the superseded v1.\n'
     printf '  It is proposed, voted and APPROVED, then REFUSED at execution because the\n'
     printf '  agenda pinned registry v1 while the live registry is already v2. The vote is\n'
     printf '  not undone; only the application is refused. It does not advance the run,\n'
     printf '  so the main journey continues normally afterwards.\n'
-    printf 'Each step runs once per network; after any attempt run down then up.\n'
+    printf 'Step 2 remains one-shot. For steps 3/4 retain markers and rerun the same command: authoritative ledger checkpoints control safe resume.\n'
     ;;
   *) echo 'Unknown command; use help.' >&2; exit 2 ;;
 esac

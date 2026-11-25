@@ -83,11 +83,11 @@ class IntakePackaging(unittest.TestCase):
             start=runner.index(name+'() {'); end=runner.index('\n}',start)+2
             return runner[start:end]
         with tempfile.TemporaryDirectory() as tmp:
-            root=Path(tmp); (root/'state').mkdir(); (root/'state/step-2.json').write_text('{}')
+            root=Path(tmp); (root/'state').mkdir(); (root/'state/bootstrap.json').write_text('{}')
             harness=root/'harness.sh'
-            harness.write_text('set -eu\n'+function('run_step')+'\nRAW_DIR=x\nSTATE="$1/state"\nHERE="$2"\ncompose() { return 0; }\nrun_step 3\n')
+            harness.write_text('set -eu\n'+function('run_step')+'\nRAW_DIR=x\nSTATE="$1/state"\nHERE="$2"\ncompose() { return 0; }\nagent_log_summary() { :; }\npython3() { echo package-gate-reached; return 2; }\nrun_step 3\n')
             result=subprocess.run(['sh',str(harness),str(root),str(HERE)],text=True,capture_output=True)
-            self.assertEqual(2,result.returncode); self.assertIn('scripted source steps are retired',result.stderr)
+            self.assertEqual(2,result.returncode); self.assertIn('package-gate-reached',result.stdout)
             self.assertFalse((root/'state/step-3.attempted').exists())
             # Invoke real compose helper against fake pinned path and stub docker.
             pinned=root/'compose/.cips/8e36c20e5106014efb8348f749d9535afbc48921/cn-credentials-standard/demo'
@@ -101,14 +101,14 @@ class IntakePackaging(unittest.TestCase):
     def test_discovery_failure_continues_to_package_gate(self):
         runner=(HERE/'run-demo.sh').read_text(); start=runner.index('run_step() {'); end=runner.index('\n}',start)+2
         with tempfile.TemporaryDirectory() as tmp:
-            root=Path(tmp); (root/'step-2.json').write_text('{}')
+            root=Path(tmp); (root/'bootstrap.json').write_text('{}')
             harness=root/'h.sh'
             summary_start=runner.index('agent_log_summary() {'); summary_end=runner.index('\n}',summary_start)+2
             harness.write_text('set -eu\n'+runner[summary_start:summary_end]+'\n'+runner[start:end]+'\nRAW_DIR=x\nSTATE="$1"\nHERE="$2"\ncompose() { case "$*" in "ps --status running -q intake") echo running;; "logs --no-color intake") return 2;; *) exit 99;; esac; }\npython3() { echo package-gate-reached; return 2; }\nrun_step 3\n')
             result=subprocess.run(['sh',str(harness),str(root),str(HERE)],text=True,capture_output=True)
             self.assertEqual(2,result.returncode)
-            self.assertIn('scripted source steps are retired',result.stderr)
-            self.assertNotIn('package-gate-reached',result.stdout)
+            self.assertIn('package-gate-reached',result.stdout)
+            self.assertNotIn('scripted source steps are retired',result.stderr)
             self.assertFalse((root/'step-3.attempted').exists())
     def test_live_mode_environment_is_inherited_by_java(self):
         with tempfile.TemporaryDirectory() as tmp:

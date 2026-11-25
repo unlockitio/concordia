@@ -1,0 +1,80 @@
+module Cap.Examples.BabyCdf.ManualIdentityTest where
+
+import Daml.Script
+import DA.Assert
+import DA.Time
+import qualified DA.Set as Set
+import Cap.Examples.BabyCdf.Live
+import Cap.Examples.BabyCdf.RuleVote
+import Cap.Examples.BabyCdf.SourceAgenda
+import Cap.Examples.BabyCdf.SourceAgendaFixtures
+
+manualRefuses : Script Text -> Script ()
+manualRefuses operation = do
+  refused <- try do
+    _ <- operation
+    pure False
+   catch
+    (_ : AssertionFailed) -> pure True
+  assert refused
+
+manualIdentityRejectsWrongSubjectAndPin : Script ()
+manualIdentityRejectsWrongSubjectAndPin = script do
+  let runId = "manual-identity-negative"
+  state <- bootstrap (BootstrapInput runId 5 ruleRefV1 ruleRefV2)
+  _ <- ruleVoteWith setTime runId
+  manualRefuses (proposalVote runId)
+  manualRefuses (milestoneVote runId)
+  (source,subject) <- fixtureSource state.opener False
+  now <- getTime
+  ref <- submit state.opener $ exerciseCmd state.governor ProposeAgenda with
+    proposer = state.opener; roundId = runId <> ":existing"; agenda = Grant subject
+    baseVersion = 0; closesAt = addRelTime now (hours 2); source = Some source
+  Some proposal <- queryContractId state.opener ref
+  let Some snapshot = proposal.sourceSnapshot
+  actions <- query @AgendaAction state.opener
+  receipts <- query @AgendaRoundReceipt state.opener
+  Some governor <- queryContractId state.opener state.governor
+  let [action] = [a | (cid,a) <- actions, toInterfaceContractId cid == proposal.actionCid]
+      electorate = Set.union governor.permanent governor.alternates
+      accepts p s = manualIdentityValid state.opener electorate subject.url False p s action (map snd receipts)
+  assert (accepts proposal snapshot)
+  let wrong = proposal with subject = proposal.subject with body = "wrong-fingerprint"
+  wrongRef <- submit state.opener $ createCmd wrong
+  Some wrongStored <- queryContractId state.opener wrongRef
+  assert (not (accepts wrongStored snapshot))
+  assert (not (accepts proposal (snapshot with pin = BlockedPin "missing evidence")))
+  assert (not (manualIdentityValid state.opener electorate subject.url False proposal snapshot action []))
+  assert (manualCanResume now proposal state.core [])
+  assert (not (manualCanResume proposal.closesAt proposal state.core []))
+  _ <- submit state.opener $ exerciseCmd state.governor ProposeAgenda with
+    proposer = state.opener; roundId = runId <> ":ambiguous"; agenda = Grant subject
+    baseVersion = 0; closesAt = addRelTime now (hours 2); source = Some source
+  receiptsBefore <- query @AgendaRoundReceipt state.opener
+  actionsBefore <- query @AgendaAction state.opener
+  manualRefuses (proposalVote runId)
+  receiptsAfter <- query @AgendaRoundReceipt state.opener
+  actionsAfter <- query @AgendaAction state.opener
+  assert (length receiptsBefore == length receiptsAfter && all (\row -> row `elem` receiptsAfter) receiptsBefore)
+  assert (length actionsBefore == length actionsAfter && all (\row -> row `elem` actionsAfter) actionsBefore)
+  _ <- submit state.opener $ archiveCmd ref
+  proposals <- query @AgendaProposal state.opener
+  let [(other,otherProposal)] = [(cid,p) | (cid,p) <- proposals, p.roundId == runId <> ":ambiguous"]
+  _ <- submit state.opener $ archiveCmd other
+  wrongOnlyBefore <- query @AgendaProposal state.opener
+  manualRefuses (proposalVote runId)
+  wrongOnlyAfter <- query @AgendaProposal state.opener
+  assert (length wrongOnlyBefore == length wrongOnlyAfter && all (\row -> row `elem` wrongOnlyAfter) wrongOnlyBefore)
+  _ <- submit state.opener $ createCmd otherProposal
+  setTime (addRelTime now (hours 2))
+  manualRefuses (proposalVote runId)
+  _ <- submit state.opener $ exerciseCmd state.governor ProposeAgenda with
+    proposer = state.opener; roundId = runId <> ":blocked"; agenda = Grant subject
+    baseVersion = 0; closesAt = addRelTime now (hours 3)
+    source = Some (source with pin = BlockedPin "missing executable pin")
+  manualRefuses (proposalVote runId)
+  checkpoints <- query @ManualRoundPending state.opener
+  assert (null checkpoints)
+  ballots <- query @AgendaBallot state.opener
+  assert (null [b | (_,b) <- ballots, b.roundId == proposal.roundId])
+  pure ()

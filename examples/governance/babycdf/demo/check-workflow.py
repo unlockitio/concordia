@@ -47,15 +47,24 @@ for name in ('staleRuleChange', 'credentialRefusalsWith', 'noQuorumWith', 'doubl
         errors.append(name + ': optional round must not advance main anchor')
 if 'run_step 2' not in all_block.group(0) or 'exit $?' not in all_block.group(0):
     errors.append('integrated all must stop after Architecture step 2')
-for retired in ('3|4|5)', '2|3|4|5)'):
-    if retired not in runner:
-        errors.append('source ballot entrypoints must refuse before mutation')
-for name, source, suffix in [('proposalVote', 'proposal-184', ':grant'), ('milestoneVote', 'milestone-540', ':blocked-milestone')]:
+for name, step, milestone in [('proposalVote', 3, 'False'), ('milestoneVote', 4, 'True')]:
     text = body(name)
-    if not re.search(r'requestIntake state runId "' + source + r'" \(runId <> "' + suffix + r'"\)', text):
-        errors.append(name + ': missing Java Intake request with preserved round ID')
-    if 'proposal <- submit' in text:
-        errors.append(name + ': successful proposal must not bypass Java Intake')
+    if f'manualExistingRound runId {step} {milestone}' not in text:
+        errors.append(name + ': must dispatch the existing-round manual phase machine')
+manual = '\n'.join(body(name) for name in ['manualExistingRound', 'manualIdentityValid', 'manualCanResume', 'manualProposalPin', 'manualRoundBallots', 'validateManualRoundBallots', 'castManualMissing', 'proposalVote', 'milestoneVote'])
+for forbidden in ['requestIntake', 'ProposeAgenda', 'IntakeRequest', 'fixtureSource', 'sourceForAgenda', 'waitUntilClosed', 'sleep (']:
+    if forbidden in manual:
+        errors.append('manual existing-round path must not contain ' + forbidden)
+for required in ['query @AgendaProposal', 'query @AgendaAction', 'query @AgendaRoundReceipt', 'query @ManualRoundCompleted', 'query @ManualRoundResolved', 'query @ManualRoundPending', 'now < proposal.closesAt', 'PENDING:', 'coreQuorum quorumSize state.core', 'manualProposalPin s']:
+    if required not in manual:
+        errors.append('manual existing-round path missing ' + required)
+manual_phase = body('manualExistingRound')
+prevalidate = manual_phase.find('validateManualRoundBallots proposal existingRound')
+checkpoint_create = manual_phase.find('createCmd ManualRoundPending')
+if prevalidate < 0 or checkpoint_create < 0 or prevalidate >= checkpoint_create:
+    errors.append('manual existing ballots must be fully validated before checkpoint creation')
+if 'Existing votes conflict with this manual tally; no checkpoint or cast was created.' not in manual_phase[:checkpoint_create]:
+    errors.append('manual existing votes must be compatible before checkpoint creation')
 if 'awaitIntake state.opener roundId boundAgenda 120' not in body('requestIntake'):
     errors.append('Intake wait must remain bounded')
 catalogue = body('sourceCatalogueCounts')

@@ -1035,103 +1035,259 @@ sourceCatalogueEvidence opener = do
   debug "[EVIDENCE] Active now; visible to opener only; distinct (opener, repository, number) keys. Zero is valid while ingestion may still be running. Sync completeness unknown."
   debug "[EVIDENCE] Persisted candidate observations carry observed/updated provenance, not a verified GitHub snapshot. Catalogue items are separate from the two curated governed subjects; ingestion creates no voting authority."
 
+template ManualRoundPending
+  with
+    opener : Party
+    runId : Text
+    proposalCid : ContractId AgendaProposal
+    snapshot : SourceAgendaSnapshot
+  where
+    signatory opener
+    ensure runId /= "" && validSnapshot snapshot && snapshot.opener == opener && executablePin snapshot.pin
+
+    choice ResolveManualRound : ContractId ManualRoundResolved
+      with
+        governorCid : ContractId AgendaGovernor
+        ballotCids : [ContractId AgendaBallot]
+        rights : [(Party, RightRef)]
+      controller opener
+      do
+        proposal <- fetch proposalCid
+        assertMsg "Manual checkpoint must retain the selected source snapshot."
+          (proposal.opener == opener && proposal.sourceSnapshot == Some snapshot)
+        resolution <- exercise governorCid ResolveAgenda with proposalCid; ballotCids; rights
+        assertMsg "Manual round was not approved." (resolution.verdict == Count.Decided Yes)
+        assertMsg "Manual round must produce exactly one execution." (length resolution.executions == 1)
+        create ManualRoundResolved with opener; runId; proposalCid; snapshot
+                                        executions = resolution.executions
+
+template ManualRoundResolved
+  with
+    opener : Party
+    runId : Text
+    proposalCid : ContractId AgendaProposal
+    snapshot : SourceAgendaSnapshot
+    executions : [ContractId Executable]
+  where
+    signatory opener
+    ensure runId /= "" && validSnapshot snapshot && snapshot.opener == opener
+      && executablePin snapshot.pin && length executions == 1
+
+    choice ExecuteManualRound : ContractId ManualRoundCompleted
+      controller opener
+      do
+        let [execution] = executions
+        result <- exercise execution Executable_Execute with
+          actors = [opener]; targetCids = Map.empty; extraArgs = extra
+        assertMsg "Manual execution must create exactly one approval." (length result.created == 1)
+        create ManualRoundCompleted with opener; runId; proposalCid; snapshot; executions
+
+template ManualRoundCompleted
+  with
+    opener : Party
+    runId : Text
+    proposalCid : ContractId AgendaProposal
+    snapshot : SourceAgendaSnapshot
+    executions : [ContractId Executable]
+  where
+    signatory opener
+    ensure runId /= "" && validSnapshot snapshot && snapshot.opener == opener
+      && executablePin snapshot.pin && length executions == 1
+
+manualRoundBallots : Party -> ContractId AgendaProposal -> AgendaProposal -> Script [(ContractId AgendaBallot, AgendaBallot)]
+manualRoundBallots opener proposalCid proposal = do
+  now <- getTime
+  visible <- query @AgendaBallot opener
+  let relevant = [(ref,b) | (ref,b) <- visible,
+        b.roundId == proposal.roundId || b.actionCid == proposal.actionCid]
+  if null relevant then do
+    assertMsg "Existing round has no ballots and is already closed; do not reopen it." (now < proposal.closesAt)
+    _ <- submit opener $ exerciseCmd proposalCid InviteBallots
+    refreshed <- query @AgendaBallot opener
+    validateManualRoundBallots proposal [(ref,b) | (ref,b) <- refreshed,
+      b.roundId == proposal.roundId || b.actionCid == proposal.actionCid]
+  else validateManualRoundBallots proposal relevant
+
+validateManualRoundBallots : AgendaProposal -> [(ContractId AgendaBallot, AgendaBallot)] -> Script [(ContractId AgendaBallot, AgendaBallot)]
+validateManualRoundBallots proposal ballots = do
+  let voters = map (\(_,b) -> b.voter) ballots
+  assertMsg "Existing round requires exactly one ballot per eligible member; partial or duplicate invitations cannot be retried."
+    (length voters == Set.size proposal.members && Set.fromList voters == proposal.members)
+  assertMsg "Existing ballots must match the selected opener, round, action and deadline exactly."
+    (all (\(_,b) -> b.opener == proposal.opener && b.roundId == proposal.roundId
+      && b.actionCid == proposal.actionCid && b.closesAt == proposal.closesAt) ballots)
+  pure ballots
+
+castManualMissing : Party -> [Party] -> AgendaProposal -> [(ContractId AgendaBallot, AgendaBallot)] -> Script [ContractId AgendaBallot]
+castManualMissing opener voters proposal ballots = do
+  now <- getTime
+  let holders = map (\(_,b) -> b.voter) ballots
+  assertMsg "Selected voters must be actual ballot holders." (all (\v -> v `elem` holders) voters)
+  assertMsg "Existing votes conflict with this manual tally; nothing was cast."
+    (all (\(_,b) -> if b.voter `elem` voters
+      then b.vote == Count.Absent || b.vote == Count.Voted Yes
+      else b.vote == Count.Absent) ballots)
+  assertMsg "Selected voter has not cast and the round is expired; nothing was cast."
+    (now < proposal.closesAt || all (\(_,b) -> not (b.voter `elem` voters) || b.vote == Count.Voted Yes) ballots)
+  forA ballots $ \(ref,b) ->
+    if b.voter `elem` voters then
+      if b.vote == Count.Absent then do
+        assertMsg "Selected voter has not cast and the round is expired; do not reopen or extend it." (now < proposal.closesAt)
+        submit b.voter $ exerciseCmd ref CastAgendaVote with option = Count.Voted Yes
+      else do
+        assertMsg "Existing selected vote conflicts with the requested YES; never recast." (b.vote == Count.Voted Yes)
+        pure ref
+    else do
+      assertMsg "Unselected ballot is not absent; refuse to substitute a different tally." (b.vote == Count.Absent)
+      pure ref
+
+manualProposalPin : SourceAgendaSnapshot -> Bool
+manualProposalPin snapshot = case snapshot.pin of
+  ProposalPin head files -> case proposalPin of
+    ProposalPin expectedHead expectedFiles -> head == expectedHead && files == expectedFiles
+    _ -> False
+  _ -> False
+
+manualIdentityValid : Party -> Set.Set Party -> Text -> Bool -> AgendaProposal -> SourceAgendaSnapshot -> AgendaAction -> [AgendaRoundReceipt] -> Bool
+manualIdentityValid opener electorate expectedUrl milestone proposal snapshot action receipts =
+  proposal.opener == opener && proposal.proposer == opener && proposal.members == electorate
+  && proposal.subject.url == expectedUrl && proposal.subject.body == snapshot.fingerprint
+  && snapshot.originalProposal == 184 && snapshot.observation.sourceUrl == expectedUrl
+  && validSnapshot snapshot && executablePin snapshot.pin && snapshot.roundId == proposal.roundId
+  && (if milestone then case snapshot.pin of DeliveryPin _ _ _ _ -> True; _ -> False
+      else manualProposalPin snapshot)
+  && action.opener == opener && action.members == proposal.members && action.sourceSnapshot == Some snapshot
+  && agendaSnapshotConsistent opener action.agenda (Some snapshot)
+  && length [r | r <- receipts, r.opener == opener, r.proposer == proposal.proposer,
+       r.roundId == proposal.roundId, r.actionCid == proposal.actionCid,
+       r.sourceSnapshot == Some snapshot, r.agenda == action.agenda, r.baseVersion == action.baseVersion] == 1
+  && (case action.agenda of Milestone subject -> milestone && subject.url == expectedUrl
+                            Grant subject -> not milestone && subject.url == expectedUrl
+                            _ -> False)
+
+manualCanResume : Time -> AgendaProposal -> [Party] -> [(ContractId AgendaBallot, AgendaBallot)] -> Bool
+manualCanResume now proposal voters ballots =
+  now < proposal.closesAt || (not (null ballots)
+    && all (\v -> any (\(_,b) -> b.voter == v && b.vote == Count.Voted Yes) ballots) voters)
+
+manualExistingRound : Text -> Int -> Bool -> Script Text
+manualExistingRound runId step milestone = do
+  (_,state) <- findAnchorAtLeast runId 2
+  let opener = state.opener
+      expectedUrl = "https://github.com/canton-foundation/canton-dev-fund/"
+        <> (if milestone then "issues/540" else "pull/184")
+  Some governor <- queryContractId opener state.governor
+  let electorate = Set.union governor.permanent governor.alternates
+  if milestone then do
+    approvals <- query @ApprovedGrantProposal opener
+    assertMsg "Milestone #540 requires an actual pinned approval of PR184."
+      (any (\(_,a) -> a.opener == opener && a.proposal.url == "https://github.com/canton-foundation/canton-dev-fund/pull/184"
+        && a.sourceSnapshot.originalProposal == 184 && validSnapshot a.sourceSnapshot
+        && manualProposalPin a.sourceSnapshot
+        && a.proposal.contentVersion == a.sourceSnapshot.fingerprint
+        && a.members == Set.fromList (map fst state.credentials)) approvals)
+  else pure ()
+  completed <- query @ManualRoundCompleted opener
+  resolved <- query @ManualRoundResolved opener
+  pending <- query @ManualRoundPending opener
+  let matches s = s.originalProposal == 184 && s.observation.sourceUrl == expectedUrl
+      done = [(c,p) | (c,p) <- completed, p.runId == runId && matches p.snapshot]
+      ready = [(c,p) | (c,p) <- resolved, p.runId == runId && matches p.snapshot]
+      waiting = [(c,p) | (c,p) <- pending, p.runId == runId && matches p.snapshot]
+  assertMsg "Ambiguous manual phase checkpoints; select and investigate the exact round."
+    (length done + length ready + length waiting <= 1)
+  if not (null done) then pure "complete: authoritative manual execution checkpoint; nothing repeated"
+  else if not (null ready) then do
+    let [(ref,_)] = ready
+    _ <- submit opener $ exerciseCmd ref ExecuteManualRound
+    pure "complete: resumed recorded execution without recasting or resolving again"
+  else do
+    proposals <- query @AgendaProposal opener
+    actions <- query @AgendaAction opener
+    receipts <- query @AgendaRoundReceipt opener
+    let eligible = [(ref,p,s) | (ref,p) <- proposals, p.opener == opener,
+          p.proposer == opener, p.members == electorate, p.subject.url == expectedUrl,
+          Some s <- [p.sourceSnapshot], matches s, validSnapshot s, executablePin s.pin,
+          p.subject.body == s.fingerprint,
+          s.roundId == p.roundId,
+          (if milestone then case s.pin of DeliveryPin _ _ _ _ -> True; _ -> False
+           else manualProposalPin s),
+          (actionRef,a) <- actions, toInterfaceContractId actionRef == p.actionCid,
+          a.opener == opener, a.members == p.members, a.sourceSnapshot == Some s,
+          manualIdentityValid opener electorate expectedUrl milestone p s a (map snd receipts),
+          agendaSnapshotConsistent opener a.agenda (Some s),
+          length [r | (_,r) <- receipts, r.opener == opener, r.proposer == p.proposer,
+            r.roundId == p.roundId, r.actionCid == p.actionCid,
+            r.sourceSnapshot == Some s, r.agenda == a.agenda, r.baseVersion == a.baseVersion] == 1,
+          (case a.agenda of Milestone subject -> milestone && subject.url == expectedUrl
+                            Grant subject -> not milestone && subject.url == expectedUrl
+                            _ -> False)]
+        selected = if null waiting then eligible else
+          [(ref,p,s) | (ref,p,s) <- eligible, (_,checkpoint) <- waiting,
+            ref == checkpoint.proposalCid && s == checkpoint.snapshot]
+    assertMsg "Expected exactly one existing verified pinned round; missing, invalid or ambiguous evidence. Supply an unambiguous existing round; no fallback or opening is permitted."
+      (length selected == 1)
+    let [(proposalCid,proposal,snapshot)] = selected
+        voters = coreQuorum quorumSize state.core
+        rights = presentedRights voters state.credentials
+    assertMsg "Manual vote retains the seven-member electorate and actual selected credential holders."
+      (Set.size proposal.members == 7 && length voters == quorumSize && length rights == quorumSize
+        && all (\v -> Set.member v proposal.members) voters)
+    assertMsg "Checkpoint must retain the exact previously selected proposal."
+      (all (\(_,p) -> p.proposalCid == proposalCid && p.snapshot == snapshot) waiting)
+    beforeMutation <- getTime
+    existingBallots <- query @AgendaBallot opener
+    let existingRound = [(ref,b) | (ref,b) <- existingBallots,
+          b.roundId == proposal.roundId || b.actionCid == proposal.actionCid]
+    assertMsg "Expired round has missing selected votes; no checkpoint, invitation or cast was created."
+      (manualCanResume beforeMutation proposal voters existingRound)
+    if null existingRound then pure ()
+    else do
+      _ <- validateManualRoundBallots proposal existingRound
+      assertMsg "Existing votes conflict with this manual tally; no checkpoint or cast was created."
+        (all (\(_,b) -> if b.voter `elem` voters
+          then b.vote == Count.Absent || b.vote == Count.Voted Yes
+          else b.vote == Count.Absent) existingRound)
+    checkpoint <- if null waiting then
+      submit opener $ createCmd ManualRoundPending with opener; runId; proposalCid; snapshot
+      else do
+        let [(ref,_)] = waiting
+        pure ref
+    ballots <- manualRoundBallots opener proposalCid proposal
+    voted <- castManualMissing opener voters proposal ballots
+    now <- getTime
+    if now < proposal.closesAt then do
+      debug ("[STEP " <> show step <> "] PENDING: existing round " <> proposal.roundId
+        <> " closes at " <> show proposal.closesAt <> "; rerun the same command after the deadline. No sleep, early resolution, or repeated casts.")
+      pure ("PENDING: " <> proposal.roundId <> "; resume after " <> show proposal.closesAt)
+    else do
+      debug "Resolution requires independently still-valid holder credentials; expired bootstrap rights are not renewed by this command."
+      resolvedCid <- submit opener $ exerciseCmd checkpoint ResolveManualRound with
+        governorCid = state.governor; ballotCids = voted; rights
+      _ <- submit opener $ exerciseCmd resolvedCid ExecuteManualRound
+      pure "complete: existing round resolved after deadline and approval executed"
+
 proposalVote : Text -> Script Text
 proposalVote runId = do
-  (anchorCid,state) <- findAnchor runId 2
-  stepHeading 3 "PROPOSAL REVIEW AND VOTE"
-  let witnesses = [state.opener, state.member]
-  initialState 3 witnesses
+  stepHeading 3 "EXISTING PROPOSAL MANUAL VOTE"
+  (_,state) <- findAnchorAtLeast runId 2
+  initialState 3 [state.opener, state.member]
   sourceCatalogueEvidence state.opener
-  phase 3 "PROPOSAL"
-  business 3 "Subject: Unlockit CAP Development Fund proposal, judged under rule v2."
-  business 3 ("Document: " <> proposalSubject.url)
-  business 3 ("Pinned by content, not title: Git blob " <> abbreviate 10 proposalBlob
-    <> ". Different bytes would be a different document and this vote would not apply.")
-  business 3 "Funding figures are not restated here; they are in the pinned document."
-  business 3 "Expected Reviewer recommendation under v2: APPROVE."
-  business 3 "Caveat: expected, not observed. This script never reads the agent's output."
-  business 3 "The votes are scripted and are not guided by any agent opinion."
-  debug ("[STEP 3] proposal PR184 pinned blob " <> proposalBlob)
-  (proposal,closesAt) <- requestIntake state runId "proposal-184" (runId <> ":grant") (Grant proposalSubject)
-  action 3 "Java Intake as opener exercises IntakeRequest.OpenAgenda; ledger bridge proposes pinned grant"
-    ("AgendaProposal " <> cid proposal)
-  phase 3 "VOTING"
-  business 3 "Ballots issued to all 7; the whole electorate is entitled to vote."
-  let voters = coreQuorum quorumSize state.core
-      rights = presentedRights voters state.credentials
-  assert (length voters == quorumSize && length rights == quorumSize)
-  business 3 (show quorumSize <> " core YES, " <> show absentSize <> " ABSENT, as in step 2.")
-  ballots <- inviteBallotsFor 3 state.opener proposal
-  votingEvidence 3 witnesses "After ballots issued, before any cast"
-  voted <- castYesBy 3 state.opener voters ballots
-    ("approve CAP Development Fund proposal blob " <> abbreviate 10 proposalBlob
-      <> " under architecture-review v2")
-  castAt <- getTime
-  debug ("[TIMING] proposal last cast " <> show castAt)
-  debug ("[STEP 3] expected tally " <> show quorumSize <> " Yes / 0 No / 0 abstained / "
-    <> show absentSize <> " absent")
-  votingEvidence 3 witnesses "After casting"
-  business 3 (show quorumSize <> " YES, 0 NO, " <> show absentSize
-    <> " ABSENT. Waiting for the window to close before counting.")
-  waitUntilClosed closesAt
-  sleep (seconds 3)
-  phase 3 "RESOLUTION"
-  business 3 "Window closed. Each vote is checked against its caster's credential."
-  Resolution verdict [execution] <- submit state.opener $ exerciseCmd state.governor ResolveAgenda with
-    proposalCid = proposal; ballotCids = voted; rights
-  action 3 (who state.opener <> " exercises AgendaGovernor.ResolveAgenda (" <> show (length voted)
-    <> " ballots, " <> show (length rights) <> " credentials)")
-    (show verdict <> "; execution " <> cid execution)
-  assert (verdict == Count.Decided Yes)
-  decision 3 ("APPROVED - " <> show quorumSize <> " YES, 0 NO, " <> show absentSize
-    <> " ABSENT. Quorum " <> show quorumSize <> "/" <> show quorumSize <> "; majority "
-    <> show quorumSize <> "/" <> show quorumSize <> ".")
-  decision 3 "Deciding and recording are separate acts; the approval is recorded next."
-  resolutionEvidence 3 witnesses "After RESOLUTION"
-  phase 3 "EXECUTION"
-  result <- submit state.opener $ exerciseCmd execution Executable_Execute with
-    actors = [state.opener]; targetCids = Map.empty; extraArgs = extra
-  let [raw] = result.created
-  action 3 (who state.opener <> " exercises Executable_Execute on " <> cid execution)
-    ("ApprovedGrantProposal " <> cid raw)
-  Some approved <- queryContractId state.member (coerceContractId raw : ContractId ApprovedGrantProposal)
-  assert (approved.proposal.kind == "proposal")
-  debug ("[STEP 3] Decided Yes; ApprovedGrantProposal recorded " <> show raw)
-  outcomeLine 3 "ApprovedGrantProposal recorded, naming the document by content fingerprint."
-  outcomeLine 3 "Caveat: NOT a payment. No money moved, no budget committed, nobody invoiced."
-  advance anchorCid state 3
-  debug "[STEP 3] signed DemoAnchor advanced to step 3"
-  outcomeEvidence 3 witnesses "After EXECUTION"
-  finalState 3 witnesses
-    ("the pinned proposal was APPROVED by " <> show quorumSize <> " core YES / "
-      <> show absentSize <> " ABSENT and recorded as an ApprovedGrantProposal; no payment.")
-  pure "step 3 complete"
+  outcome <- manualExistingRound runId 3 False
+  finalState 3 [state.opener, state.member] outcome
+  pure outcome
 
 milestoneVote : Text -> Script Text
 milestoneVote runId = do
-  (anchorCid,state) <- findAnchor runId 3
-  stepHeading 4 "MILESTONE REVIEW AND VOTE"
-  let witnesses = [state.opener, state.member]
-  initialState 4 witnesses
+  stepHeading 4 "EXISTING MILESTONE MANUAL VOTE"
+  (_,state) <- findAnchorAtLeast runId 2
+  initialState 4 [state.opener, state.member]
   sourceCatalogueEvidence state.opener
-  phase 4 "SUBJECT"
-  business 4 ("Milestone tracked publicly as issue #540: " <> milestoneSubject.url)
-  business 4 "Caveat: a GitHub issue can be edited, so the link alone pins nothing."
-  business 4 "blocked_pin: delivery commit, issue digest and vote-comment evidence are unavailable."
-  business 4 "No illustrative metadata may authorize an executable milestone approval."
-  phase 4 "SAFETY CHECK: UNPINNED SUBJECT"
-  expectedRefusal 4 "Missing delivery evidence is recorded as blocked_pin; no executable approval."
-  (proposal,_) <- requestIntake state runId "milestone-540" (runId <> ":blocked-milestone") (Milestone illustrativeMilestone)
-  Some opened <- queryContractId state.opener proposal
-  actions <- query @AgendaAction state.opener
-  let [(_,bound)] = [(cid,a) | (cid,a) <- actions, toInterfaceContractId cid == opened.actionCid]
-  assert (case bound.sourceSnapshot of Some copied -> not (executablePin copied.pin); None -> False)
-  phase 4 "EXECUTION"
-  outcomeLine 4 "blocked_pin: no ApprovedMilestone or executable approval created."
-  submit state.opener $ archiveCmd proposal
-  advance anchorCid state 4
-  finalState 4 witnesses "Milestone #540 is blocked_pin; delivery evidence remains missing, not approved."
-  pure "step 4 complete (blocked_pin)"
+  outcome <- manualExistingRound runId 4 True
+  finalState 4 [state.opener, state.member] outcome
+  pure outcome
+
+
 
 -- Step 5 runs the real Splice allocation choice on wall-clock time, with no
 -- setTime. Feasibility rests on splice-amulet-0.1.22 validAmuletConfig only

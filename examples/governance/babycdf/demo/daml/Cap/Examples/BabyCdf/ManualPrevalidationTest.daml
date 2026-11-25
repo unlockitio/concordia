@@ -1,0 +1,93 @@
+module Cap.Examples.BabyCdf.ManualPrevalidationTest where
+
+import Daml.Script
+import DA.Assert
+import DA.Time
+import Cap.Examples.BabyCdf.Live
+import Cap.Examples.BabyCdf.RuleVote
+import Cap.Examples.BabyCdf.SourceAgenda
+import Cap.Examples.BabyCdf.SourceAgendaFixtures
+import Cap.Examples.BabyCdf.ManualIdentityTest (manualRefuses)
+import qualified Cap.Examples.BabyCdf.SourceObservationCredential as Source
+import qualified Cap.Governance.Utils.Count as Count
+
+manualBallotPrevalidation : Bool -> Int -> Script ()
+manualBallotPrevalidation milestone invalid = script do
+  let runId = "manual-prevalidation-" <> show milestone <> "-" <> show invalid
+  state <- bootstrap (BootstrapInput runId 5 ruleRefV1 ruleRefV2)
+  _ <- ruleVoteWith setTime runId
+  (grantSource,grantSubject) <- fixtureSource state.opener False
+  now <- getTime
+  grant <- submit state.opener $ exerciseCmd state.governor ProposeAgenda with
+    proposer = state.opener; roundId = runId <> ":grant"; agenda = Grant grantSubject
+    baseVersion = 0; closesAt = addRelTime now (seconds 60); source = Some grantSource
+  proposal <- if milestone then do
+    _ <- proposalVote runId
+    setTime (addRelTime now (seconds 60))
+    _ <- proposalVote runId
+    (blocked,subject) <- fixtureSource state.opener True
+    sources <- query @Source.SourceObservationCredential state.opener
+    let [stored] = [s | (_,s) <- sources, s.observation.number == 540]
+        delivery = DeliveryPin "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" stored.observation.bodySha256 123 (addRelTime now (seconds 60))
+        source = blocked with pin = delivery
+    submit state.opener $ exerciseCmd state.governor ProposeAgenda with
+      proposer = state.opener; roundId = runId <> ":milestone"; agenda = Milestone subject
+      baseVersion = 0; closesAt = addRelTime now (hours 2); source = Some source
+   else pure grant
+  Some selected <- queryContractId state.opener proposal
+  refs <- submit state.opener $ exerciseCmd proposal InviteBallots
+  let first :: rest = refs
+  Some ballot <- queryContractId state.opener first
+  if invalid == 0 then submit state.opener $ archiveCmd first
+  else if invalid == 1 then do
+    _ <- submit state.opener $ exerciseCmd proposal InviteBallots
+    pure ()
+  else if invalid == 2 then do
+    submit state.opener $ archiveCmd first
+    _ <- submit state.opener $ createCmd (ballot with closesAt = addRelTime ballot.closesAt (seconds 1))
+    pure ()
+  else do
+    _ <- submit ballot.voter $ exerciseCmd first CastAgendaVote with option = Count.Voted No
+    pure ()
+  checkpointsBefore <- query @ManualRoundPending state.opener
+  ballotsBefore <- query @AgendaBallot state.opener
+  grantsBefore <- query @ApprovedGrantProposal state.opener
+  milestonesBefore <- query @ApprovedMilestone state.opener
+  proposalsBefore <- query @AgendaProposal state.opener
+  receiptsBefore <- query @AgendaRoundReceipt state.opener
+  actionsBefore <- query @AgendaAction state.opener
+  sourcesBefore <- query @Source.SourceObservationCredential state.opener
+  manualRefuses (if milestone then milestoneVote runId else proposalVote runId)
+  checkpointsAfter <- query @ManualRoundPending state.opener
+  ballotsAfter <- query @AgendaBallot state.opener
+  grantsAfter <- query @ApprovedGrantProposal state.opener
+  milestonesAfter <- query @ApprovedMilestone state.opener
+  proposalsAfter <- query @AgendaProposal state.opener
+  receiptsAfter <- query @AgendaRoundReceipt state.opener
+  actionsAfter <- query @AgendaAction state.opener
+  sourcesAfter <- query @Source.SourceObservationCredential state.opener
+  assert (length checkpointsBefore == length checkpointsAfter && all (\r -> r `elem` checkpointsAfter) checkpointsBefore)
+  assert (length ballotsBefore == length ballotsAfter && all (\r -> r `elem` ballotsAfter) ballotsBefore)
+  assert (length grantsBefore == length grantsAfter && all (\r -> r `elem` grantsAfter) grantsBefore)
+  assert (length milestonesBefore == length milestonesAfter && all (\r -> r `elem` milestonesAfter) milestonesBefore)
+  assert (length proposalsBefore == length proposalsAfter && all (\r -> r `elem` proposalsAfter) proposalsBefore)
+  assert (length receiptsBefore == length receiptsAfter && all (\r -> r `elem` receiptsAfter) receiptsBefore)
+  assert (length actionsBefore == length actionsAfter && all (\r -> r `elem` actionsAfter) actionsBefore)
+  assert (length sourcesBefore == length sourcesAfter && all (\r -> r `elem` sourcesAfter) sourcesBefore)
+
+proposalPartial : Script ()
+proposalPartial = manualBallotPrevalidation False 0
+proposalDuplicate : Script ()
+proposalDuplicate = manualBallotPrevalidation False 1
+proposalWrongBinding : Script ()
+proposalWrongBinding = manualBallotPrevalidation False 2
+proposalConflicting : Script ()
+proposalConflicting = manualBallotPrevalidation False 3
+milestonePartial : Script ()
+milestonePartial = manualBallotPrevalidation True 0
+milestoneDuplicate : Script ()
+milestoneDuplicate = manualBallotPrevalidation True 1
+milestoneWrongBinding : Script ()
+milestoneWrongBinding = manualBallotPrevalidation True 2
+milestoneConflicting : Script ()
+milestoneConflicting = manualBallotPrevalidation True 3

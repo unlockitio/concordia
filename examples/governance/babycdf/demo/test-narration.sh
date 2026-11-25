@@ -136,8 +136,11 @@ REPO_REL="examples/governance/babycdf/demo/daml/Cap/Examples/BabyCdf/Live.daml"
 # v15 credential-bound source agendas copy immutable snapshots/pins and durable
 # round receipts. Step4 missing delivery is blocked_pin, never illustrative approval.
 # Architecture, RuleRef, seven-member electorate and counting formula stay unchanged.
-SPEC_VERSION='quorum-of-three-core-v18-explicit-handle-party-hints'
-SPEC_DIGEST='3a995336136194447999e13821cc2b1b08df6a4cdab8291949a9abe6f42b92c9'
+# v19 deliberately changes source casting: verified existing rounds, pending/resume,
+# and atomic opener phase checkpoints. RuleVote/Rights and step 2 are unchanged.
+# v20 validates existing ballot sets and vote compatibility before checkpoint creation.
+SPEC_VERSION='quorum-of-three-core-v20-manual-ballot-prevalidation'
+SPEC_DIGEST='2dd3fedaba70a94ac228f9dc57c4d0dfb923df1e28258de7f14abe54734637e1'
 
 for required in "$LIVE" "$SELECTOR" "$RULE"; do
   if [ ! -f "$required" ]; then
