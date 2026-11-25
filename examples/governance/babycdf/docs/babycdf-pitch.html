@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>BabyCDF — Voted rules, agentic review (v4)</title>
+<title>BabyCDF: Voted rules, human decisions (v5)</title>
 <style>
   :root {
     --bg: #0d1117;
@@ -420,18 +420,10 @@
 </style>
 </head>
 <body>
-<div style="position:relative;padding:8px 20px;background:#152535;color:#dcecff;font:14px sans-serif">Offline validated · live acceptance pending. Intake submits as opener via OpenAgenda; Advisory/Reviewer read only. Discovery: live catalogue ingestion by default, explicit offline synthetic fixture only, two curated voting topics. Bounded catalogue; live acceptance pending. Real opt-in LLM assessments are supplemental; ledger rules decide.</div>
-<!-- Current implementation note: three Java agents; Intake acts as opener via
-OpenAgenda in steps 3/4, Advisory/Reviewer read only. Anonymous sandbox rights are
-not an enforced security boundary. Catalogue ingestion uses live GitHub pagination by default; synthetic inventory
-requires explicit offline fixture mode. SourceItems are bounded candidate observations,
-not additional voting subjects; the two curated subjects remain unchanged. Steps 3/4 separately query active SourceItem contracts and proposal/milestone kinds
-as opener, with distinct ledger keys. Zero is valid; sync completeness is unknown.
-Persisted observations are not a verified GitHub snapshot. Client logs stay separately labeled. Real opt-in LLM responses are supplemental; deterministic and ledger
-checks retain authority. Offline validated, live participant acceptance pending. -->
+<div style="position:relative;padding:8px 20px;background:#152535;color:#dcecff;font:14px sans-serif">Target demo published and offline validated. Full new live acceptance pending. Earlier live Intake and LLM runs used older packages and do not establish full five-seat acceptance.</div>
 
 <div id="topbar">
-  <span class="brand">BabyCDF — Voted rules, agentic review</span>
+  <span class="brand">BabyCDF: Voted rules, human decisions</span>
   <span class="pill proto">prototype</span>
   <span class="spacer"></span>
   <span class="hint"><b>←/→</b> navigate &nbsp; <b>N</b> notes &nbsp; <b>P</b> print &nbsp; <b>1–9</b> jump</span>
@@ -446,28 +438,25 @@ checks retain authority. Offline validated, live participant acceptance pending.
   <section class="slide title-slide" aria-label="Title">
     <header>
       <div class="eyebrow">Canton Dev Fund · governance prototype on Concordia</div>
-      <h1>BabyCDF<br>Voted rules, agentic review</h1>
+      <h1>BabyCDF<br>Voted rules, human decisions</h1>
     </header>
     <p class="lead">
-      Community-voted rules drive agentic review of grant proposals and milestones.
-      The ledger holds voted proof of which rules are in force, and agents evaluate only against them.
+      Bring fund-eligible proposals and milestones into a shared, evidence-bound review.
+      Intake opens rounds. Reviewer assesses the active voted requirements.
       Humans decide. The ledger enforces.
-      <br><small>Today the clause text lives on the ledger in <span class="mono">EffectiveRule</span> and a vote activates a predefined clause set. Rule content in GitHub, bound by a repo/commit <b>attestation</b>, is <span class="pill plan">planned architecture</span>.</small>
+      <br><small>Versioned rules, immutable evidence pins and decision receipts make every approval easier to explain.</small>
     </p>
     <div class="meta">
-      <span class="pill proto">sandbox prototype — no production deployment or Foundation authority</span>
+      <span class="pill proto">sandbox prototype · no Foundation authority</span>
       <span class="pill">built on Concordia: the Daml Canton Allocation Primitives</span>
       <span class="pill">no production authority · no real payment</span>
     </div>
     <aside class="notes">
       <h4>Speaker notes</h4>
-      BabyCDF is a working governance prototype, not a product launch. One sentence to open with:
-      the rules the community votes on are the only rules an agent is allowed to review against.
-      Say plainly up front: this is a sandbox prototype with no production deployment or Foundation
-      authority, and no money moves. Add the one nuance that keeps the rest of the deck honest —
-      today the clauses live on the ledger and a vote activates a predefined clause set; the GitHub
-      attestation model you will see on the next slides is planned architecture, not running code.
-      That honesty is what makes the rest of the deck credible.
+      Open with the business value: broader evidence intake, consistent requirements and reconstructable decisions.
+      Intake acts as opener through OpenAgenda. Reviewer remains read-only; humans retain control of
+      requirements and ballots. The sandbox records governance approvals. Actual delivery and payments
+      require separate evidence and authority. No Foundation mandate or production deployment is claimed.
     </aside>
   </section>
 
@@ -475,7 +464,7 @@ checks retain authority. Offline validated, live participant acceptance pending.
   <section class="slide" aria-label="Problem">
     <header>
       <div class="eyebrow">Problem</div>
-      <h2>Reviewing proposals and milestones by hand does not scale — and does not audit</h2>
+      <h2>Growing review volume needs a reconstructable decision trail</h2>
     </header>
     <div class="grid-2">
       <div class="panel">
@@ -489,550 +478,274 @@ checks retain authority. Offline validated, live participant acceptance pending.
         </ul>
       </div>
       <div class="panel">
-        <div class="kicker">And automation is the wrong fix — as usually built</div>
+        <div class="kicker">Automation needs clear boundaries</div>
         <ul class="tight">
           <li><b>Untrusted.</b> An LLM that reads "the rules" from a moving document proves nothing.</li>
           <li><b>Or too powerful.</b> An agent that can approve or pay is an unaccountable authority.</li>
           <li><b>No binding between rule and verdict.</b> A verdict that cannot name the exact rule version it applied is an opinion.</li>
         </ul>
         <div class="caption">
-          The gap is not intelligence. It is <b>provable inputs</b>: which rules were in force, and which evidence was judged.
+          <b>Provable inputs</b> connect the rules in force to the exact evidence judged.
         </div>
       </div>
     </div>
     <aside class="notes">
       <h4>Speaker notes</h4>
-      Frame the problem as an evidence problem, not a labour problem. Reviewers are not the weak link;
-      the weak link is that nobody can prove afterwards which rule text was applied to which exact artefact.
-      Then name the trap: the usual answer is "add an AI reviewer", which either nobody trusts or which
-      quietly becomes the decision-maker. BabyCDF refuses both.
+      Frame the problem around evidence: reconstruct which requirements were applied to which exact
+      artefact. Shared proof and versioned rules help reviewers explain decisions under growing volume.
+      AI assessment supports human judgment while credentialed members retain decision authority.
     </aside>
   </section>
 
   <!-- 3 -->
   <section class="slide" aria-label="Core idea">
     <header>
-      <div class="eyebrow">Core idea <span class="pill plan">planned storage model</span></div>
-      <h2>Rules in GitHub · voted proof on the ledger · agents bound to the rules in force</h2>
-      <div class="caption">Today the clause text lives on the ledger in <span class="mono">EffectiveRule</span>, vote-governed. The GitHub attestation is the planned evolution of the same contract.</div>
+      <div class="eyebrow">Core idea</div>
+      <h2>Broader intake. Consistent review. Human decisions.</h2>
+      <div class="caption">A shared evidence trail connects discovery, voted requirements and approval.</div>
     </header>
     <div class="flowline">
-      <div class="node n-gh"><span class="nlabel">GitHub</span>Golden-copy rules repository<br><small class="mono">versioned rule files &amp; clauses</small></div>
+      <div class="node n-gh"><span class="nlabel">Discover</span>Fund-eligible PRs and milestones<br><small>Across the eligible source catalogue</small></div>
       <div class="arrow">→</div>
-      <div class="node n-agent"><span class="nlabel">Change <span class="pill plan">planned</span></span>A PR or commit triggers the rule-change process<br><small class="mono">agent pins commit + blob hashes</small></div>
+      <div class="node n-agent"><span class="nlabel">Intake</span>Opens independent rounds<br><small>Registered source credential</small></div>
       <div class="arrow">→</div>
-      <div class="node n-member"><span class="nlabel">Vote</span>Credentialed members vote, with quorum</div>
+      <div class="node n-ledger"><span class="nlabel">Pin</span>Immutable source proof<br><small>Title, URL and body hash</small></div>
       <div class="arrow">→</div>
-      <div class="node n-ledger"><span class="nlabel">Attest <span class="pill plan">planned</span></span>Ledger records repo, commit, hashes, version<br><small class="mono">today: ledger holds the clause set; a vote activates it</small></div>
+      <div class="node n-agent"><span class="nlabel">Reviewer</span>Read-only assessment<br><small>Active rules and exact evidence</small></div>
       <div class="arrow">→</div>
-      <div class="node n-agent"><span class="nlabel">Review</span>Agent evaluates only against the rules in force<br><small>today: the active ledger clause set</small></div>
+      <div class="node n-member"><span class="nlabel">Decide</span>Three distinct valid primary YES votes</div>
       <div class="arrow">→</div>
-      <div class="node n-member"><span class="nlabel">Decide</span>Humans vote the outcome</div>
-      <div class="arrow">→</div>
-      <div class="node n-ledger"><span class="nlabel">Enforce</span>Ledger records the approval</div>
+      <div class="node n-ledger"><span class="nlabel">Record</span>Approval and audit receipt</div>
     </div>
     <div class="panel" style="margin-top:16px">
-      <p class="core-claim">
-        <b>"Golden copy"</b> means the single canonical source of the rules: one repository whose versioned,
-        human-readable rule files are the authoritative text, with every other copy treated as derived.
-        The ledger does not need to hold that text — it holds the voted proof of <i>which version is in force</i>.
-      </p>
+      <p class="core-claim"><b>Requirements stay under human control.</b> A voted rule change activates a new rule identity. Reviewer reevaluates the same pending evidence against those updated requirements.</p>
     </div>
     <div class="legend">
-      <span class="l-gh">GitHub (rule content)</span>
-      <span class="l-agent">Agents (advisory, fail closed)</span>
-      <span class="l-member">Members (decide)</span>
-      <span class="l-ledger">Ledger (voted proof &amp; enforcement)</span>
+      <span class="l-gh">Sources (evidence)</span>
+      <span class="l-agent">Intake opens · Reviewer assesses</span>
+      <span class="l-member">Primary members (decide)</span>
+      <span class="l-ledger">Ledger (proof &amp; enforcement)</span>
     </div>
     <aside class="notes">
       <h4>Speaker notes</h4>
-      This is the slide to land. Define "golden copy" once, here, and never imply a particular product repository —
-      it is a role, not a brand. The key inversion: most designs try to put the rules on-chain. We put the
-      <i>proof of which rules are in force</i> on the ledger and leave the readable text where humans can review it
-      in a PR. The lane colours used here are reused on every later diagram.
+      Discovery covers all fund-eligible proposal PRs and milestones, subject to valid source evidence.
+      This breadth does not guarantee that every discovered item opens a round. Intake submits as opener
+      using a registered W3C source credential. Source bodies stay off the ledger; immutable proof pins
+      title, URL and body hash. Proof deduplication avoids repeated intake for the same evidence.
+      The static demo catalogue includes PRs 184, 473, 474, 475 and 1028 and issues 538 through 545.
     </aside>
   </section>
 
   <!-- 4 -->
   <section class="slide" aria-label="Rule governance swimlane">
     <header>
-      <div class="eyebrow">Rule governance <span class="pill plan">planned architecture</span></div>
-      <h2>A change to the golden copy starts the rule-change process</h2>
-      <div class="caption">Planned flow. <b>Today</b>: the clause text lives on the ledger in <span class="mono">EffectiveRule</span>, a vote activates a predefined clause set, and there is <b>no repository or commit attestation</b> — steps 1, 2, 5 and 6 below are the planned form.</div>
+      <div class="eyebrow">Rule governance</div>
+      <h2>Change requirements through a human vote</h2>
+      <div class="caption">The same pending evidence can receive a new assessment when the voted rules change.</div>
     </header>
-    <div class="swim">
-      <div class="lane-name lane-gh">GitHub<br>golden copy</div>
-      <div class="cell c-gh"><span class="step-no">1</span>Rule PR opened<br><small>clause edited in a versioned rule file</small></div>
-      <div class="cell"></div>
-      <div class="cell"></div>
-      <div class="cell"></div>
-      <div class="cell"></div>
-      <div class="cell c-gh"><span class="step-no">6</span>HEAD may move on<br><small>later commits are not in force</small></div>
-
-      <div class="lane-name lane-agent">Agents</div>
-      <div class="cell"></div>
-      <div class="cell c-agent"><span class="step-no">2</span><span class="pill plan">planned</span> Detect &amp; pin the change<br><small class="mono">commit SHA + rule-file blob hashes</small><br><small>today: no automatic detection</small></div>
-      <div class="cell c-agent"><span class="step-no">3</span>Prepare the agenda<br><small>diff summary, base version</small></div>
-      <div class="cell"></div>
-      <div class="cell"></div>
-      <div class="cell"></div>
-
-      <div class="lane-name lane-member">Members</div>
-      <div class="cell"></div>
-      <div class="cell"></div>
-      <div class="cell"></div>
-      <div class="cell c-member"><span class="step-no">4</span>Credentialed vote, quorum applied</div>
-      <div class="cell"></div>
-      <div class="cell"></div>
-
-      <div class="lane-name lane-ledger">Ledger</div>
-      <div class="cell"></div>
-      <div class="cell"></div>
-      <div class="cell"></div>
-      <div class="cell c-stop"><span class="step-no">4b</span>Stale change rejected<br><small>base version is outdated</small></div>
-      <div class="cell c-ledger"><span class="step-no">5</span><span class="pill plan">planned</span> Voted attestation recorded<br><small class="mono">repo · commit · blob hashes · version</small><br><small>today: the vote activates a predefined clause set on the ledger</small></div>
-      <div class="cell c-ledger"><span class="step-no">5b</span>Active rule pointer updated<br><small>v<i>n</i> becomes the rules in force</small></div>
+    <div class="flowline">
+      <div class="node n-member"><span class="nlabel">Propose</span>Prepare a versioned rule change</div>
+      <div class="arrow">→</div>
+      <div class="node n-member"><span class="nlabel">Vote</span>Three distinct valid primary YES votes</div>
+      <div class="arrow">→</div>
+      <div class="node n-ledger"><span class="nlabel">Activate</span>Update the active registry and hashedRuleRef</div>
+      <div class="arrow">→</div>
+      <div class="node n-agent"><span class="nlabel">Reevaluate</span>Reviewer assesses the same pending evidence</div>
     </div>
-    <div class="legend">
-      <span class="l-gh">rule content</span>
-      <span class="l-agent">pin &amp; agenda</span>
-      <span class="l-member">vote</span>
-      <span class="l-ledger">attestation &amp; pointer <span class="pill plan">planned</span></span>
+    <div class="grid-2" style="margin-top:16px">
+      <div class="panel"><div class="kicker">Controlled change</div><b>Humans own the requirements.</b><p>A changed recommendation can be traced to a changed rule identity.</p></div>
+      <div class="panel"><div class="kicker">Comparable evidence</div><b>Keep the evidence fixed.</b><p>Exact pins distinguish a rule change from a source edit.</p></div>
     </div>
     <aside class="notes">
       <h4>Speaker notes</h4>
-      Open by saying this lane diagram is the planned architecture, so nobody leaves thinking it runs today.
-      What runs today is the ledger half: the clause text sits on the ledger in EffectiveRule, a credentialed
-      vote activates a predefined clause set, and the stale check at step 4b is real. There is no repository
-      watcher, no commit detection and no repo/commit attestation yet.
-      With that said, two things deserve emphasis. First, the planned pin is mechanical: a commit SHA plus
-      the blob hashes of the rule files — no interpretation, no judgement.
-      Second, the stale check at step 4b: if a proposed change was written against an outdated base version,
-      it is rejected rather than silently merged into force. Step 6 sets up slide 5: the repository HEAD
-      can move freely, and moving it changes nothing until a vote says so.
+      Demo step 2 votes on and activates the new rule, then reevaluates the same pending evidence.
+      Explain the business benefit: decision-makers can see which requirement changed the assessment.
+      Reviewer remains read-only and does not activate rules or submit votes. An outdated base version
+      must not silently replace the current rule. Three distinct valid primary YES votes are required.
     </aside>
   </section>
 
   <!-- 5 -->
   <section class="slide" aria-label="Proof of rules in force">
     <header>
-      <div class="eyebrow">Proof of rules in force <span class="pill plan">planned</span></div>
-      <h2>Before reviewing anything, the agent proves which rules it may use</h2>
-      <div class="caption">Planned mechanics. <b>Today</b>: the agent reads the active <span class="mono">EffectiveRule</span> from the ledger and checks the package ID and version; there is no repo/commit attestation to hash-verify against.</div>
+      <div class="eyebrow">Proof of rules in force</div>
+      <h2>Every review carries its evidence and rule identity</h2>
+      <div class="caption">Exact pins connect a recommendation to the requirements humans activated.</div>
     </header>
     <div class="grid-2">
       <div class="panel">
-        <div class="kicker">The Reviewer's check sequence — every single review</div>
+        <div class="kicker">The Reviewer's check sequence</div>
         <div class="seq">
-          <div class="row"><span class="num">1</span><span>Read the <b>active attestation</b> on the ledger</span></div>
-          <div class="row"><span class="num">2</span><span>Fetch the rules from GitHub <b>at exactly that commit</b></span></div>
-          <div class="row"><span class="num">3</span><span><b>Verify the blob hashes</b> against the attestation</span></div>
-          <div class="row"><span class="num">4</span><span>Only then <b>evaluate the clauses</b></span></div>
+          <div class="row"><span class="num">1</span><span>Read the <b>active registry</b> and <span class="mono">hashedRuleRef</span></span></div>
+          <div class="row"><span class="num">2</span><span>Match the pending round's <b>exact evidence pins</b></span></div>
+          <div class="row"><span class="num">3</span><span>Apply rule checks and supplemental <b>LLM assessment</b></span></div>
+          <div class="row"><span class="num">4</span><span>Return an evidence-bound assessment for <b>human decision</b></span></div>
         </div>
       </div>
       <div class="panel">
-        <div class="kicker">Outcomes</div>
+        <div class="kicker">Reliable review across pending rounds</div>
         <div class="stack">
-          <div class="cell c-ok">
-            <div class="verdict v-ok">✓ verified</div>
-            <small>Hashes match the attestation. Review proceeds, citing the rule version and short SHA.</small>
-          </div>
-          <div class="cell">
-            <div class="verdict v-warn">⚠ unratified rule change at HEAD</div>
-            <small>Newer rule commits exist in the repository but carry no vote. They are <b>ignored</b>; the agent keeps using the ratified version and flags the divergence.</small>
-          </div>
-          <div class="cell c-stop">
-            <div class="verdict v-stop">⛔ BLOCKED — fail closed</div>
-            <small>Hash mismatch, or no attestation at all. The agent does not guess and does not fall back to HEAD. It refuses to review.</small>
-          </div>
+          <div class="cell c-ok"><div class="verdict v-ok">Exact context</div><small>Java Reviewer evaluates multiple pending rounds against the active rules.</small></div>
+          <div class="cell"><div class="verdict v-warn">Bounded reuse</div><small>Cached assessment evidence remains tied to its evidence pins and rule identity.</small></div>
+          <div class="cell c-stop"><div class="verdict v-stop">BLOCKED when unproven</div><small>Unknown milestone evidence and historical pins cannot support a current review.</small></div>
         </div>
       </div>
     </div>
-    <div class="caption">
-      Every verdict is traceable: <span class="mono">rules v2 @ 3f9a1c2 ✓ verified</span> — the rule version and the short commit SHA travel with the opinion. <b>The commit SHA and clause results shown here are illustrative examples.</b>
-    </div>
+    <div class="caption">Versioned requirements and immutable proof make decisions easier to explain and audit.</div>
     <aside class="notes">
       <h4>Speaker notes</h4>
-      This is the trust slide. The agent has no authority to decide which rules apply; it can only read
-      what was voted. Spell out fail-closed: a hash mismatch or a missing attestation produces BLOCKED,
-      never a best-effort review. And explain why "unratified HEAD is ignored, not used" matters —
-      it means merging a rule change to the repository is not a governance action. Only a vote is.
-      Flagging it keeps the divergence visible instead of hidden.
+      Reviewer is the sole read-only review agent. Its Java path combines rule checks with
+      concordia-cdf dynamic LLM assessment, bound to the active registry and hashedRuleRef.
+      Availability and cache evidence are bounded; do not imply that any cached answer remains valid
+      after a rule change. The same pending evidence is reevaluated after step 2 activates the new rule.
+      Unknown milestone evidence and historical pins remain BLOCKED. No assessment casts a ballot.
     </aside>
   </section>
 
   <!-- 6 -->
   <section class="slide" aria-label="Proposal review swimlane">
-    <header>
-      <div class="eyebrow">Flow 1 · grant proposal</div>
-      <h2>Proposal review: pinned evidence, ledger-resident rules, human vote</h2>
-    </header>
-    <div class="swim">
-      <div class="lane-name lane-gh">GitHub</div>
-      <div class="cell c-gh"><span class="step-no">1</span>Grant proposal PR opened<br><small class="mono">demo: PR #184</small></div>
-      <div class="cell"></div>
-      <div class="cell"></div>
-      <div class="cell"></div>
-      <div class="cell"><span class="step-no">5</span><span class="pill plan">planned</span> Advisory report posted as a PR comment<br><small>today: printed to the terminal only</small></div>
-      <div class="cell"></div>
-
-      <div class="lane-name lane-agent">Agents</div>
-      <div class="cell"></div>
-      <div class="cell c-agent"><span class="step-no">2</span>Advisory pins the evidence<br><small class="mono">Git blob SHA-1 ≠ PR head commit</small></div>
-      <div class="cell c-agent"><span class="step-no">3</span>Read clauses from the active <span class="mono">EffectiveRule</span><br><small class="mono">today: ledger-resident clause set</small><br><small><span class="pill plan">planned</span> attestation @ <span class="mono">3f9a1c2</span> (illustrative)</small></div>
-      <div class="cell c-agent"><span class="step-no">4</span>Clause-by-clause literal phrase match<br><small>pass · fail (names the missing text) · insufficient evidence</small></div>
-      <div class="cell"></div>
-      <div class="cell"></div>
-
-      <div class="lane-name lane-member">Members</div>
-      <div class="cell"></div>
-      <div class="cell"></div>
-      <div class="cell"></div>
-      <div class="cell"></div>
-      <div class="cell"></div>
-      <div class="cell c-member"><span class="step-no">7</span>Vote with credentials<br><small>Absent · Abstained · Voted</small></div>
-
-      <div class="lane-name lane-ledger">Ledger</div>
-      <div class="cell"></div>
-      <div class="cell"></div>
-      <div class="cell"></div>
-      <div class="cell"></div>
-      <div class="cell c-ledger"><span class="step-no">6</span>Proposal becomes an agenda</div>
-      <div class="cell c-ledger"><span class="step-no">8–9</span>Quorum &amp; tally → <b>ApprovedGrantProposal</b><br><small>≥3 present and a majority; 5 permanent + 2 alternates; advisers excluded</small></div>
+    <header><div class="eyebrow">Proposal review</div><h2>From eligible proposal to accountable approval</h2></header>
+    <div class="flowline">
+      <div class="node n-gh"><span class="nlabel">Discover</span>Eligible proposal PR</div><div class="arrow">→</div>
+      <div class="node n-agent"><span class="nlabel">Intake opens</span>Registered source credential and immutable proof</div><div class="arrow">→</div>
+      <div class="node n-agent"><span class="nlabel">Reviewer assesses</span>Exact evidence and active rules</div><div class="arrow">→</div>
+      <div class="node n-member"><span class="nlabel">Humans vote</span>Three distinct valid primary YES votes</div><div class="arrow">→</div>
+      <div class="node n-ledger"><span class="nlabel">Resolve</span>Approval and decision receipt</div>
     </div>
-    <div style="margin-top:12px; display:flex; gap:8px; flex-wrap:wrap">
-      <span class="verdict v-ok">clause 1 · pass · rules v2</span>
-      <span class="verdict v-stop">clause 4 · fail · required text absent</span>
-      <span class="verdict v-warn">clause 7 · insufficient evidence</span>
-      <span class="verdict" style="opacity:.75">illustrative example values</span>
+    <div class="grid-2" style="margin-top:16px">
+      <div class="panel"><div class="kicker">Broader coverage</div><p>Discovery spans all fund-eligible proposal PRs. Independent rounds keep each decision tied to its own evidence.</p></div>
+      <div class="panel"><div class="kicker">Clear accountability</div><p>Review supports the vote. Primary members retain approval authority, with immediate resolution once three valid YES votes are present.</p></div>
     </div>
-    <aside class="notes">
-      <h4>Speaker notes</h4>
-      Two details to call out. The evidence pin is a Git blob SHA-1 of the content reviewed — deliberately
-      distinct from the PR head commit, so later pushes cannot silently change what was judged.
-      And the clause evaluation is three-valued on purpose: "fail" must name the text it could not find,
-      and "insufficient evidence" is a first-class answer rather than a reluctant pass.
-      Be precise about two things. The clauses come from the ledger today, not from a GitHub attestation —
-      that is the planned evolution, and step 3 is labelled accordingly. And the agent's output goes to
-      the terminal and the log only: nothing is posted to GitHub, so step 5 is marked planned.
-      The agenda, the quorum, the tally and the approval are the ledger's.
+    <aside class="notes"><h4>Speaker notes</h4>
+      The static demo proposal catalogue is PRs 184, 473, 474, 475 and 1028. This is a bounded demonstration
+      of broad eligibility discovery, not a claim that all discovered items opened successfully.
+      Evidence pins are immutable and independent rounds default to 21 days, configurable.
+      Manual step 3 casts and resolves the existing PR 184 round; it does not open it.
+      Two YES votes never approve, including at the deadline. No automatic ballots are cast by AI.
     </aside>
   </section>
 
   <!-- 7 -->
   <section class="slide" aria-label="Milestone review swimlane">
-    <header>
-      <div class="eyebrow">Flow 2 · milestone</div>
-      <h2>Milestone review: the advisory result does not gate the vote</h2>
-    </header>
-    <div class="swim">
-      <div class="lane-name lane-gh">GitHub</div>
-      <div class="cell c-gh"><span class="step-no">1</span>Milestone issue opened<br><small class="mono">demo: issue #540</small></div>
-      <div class="cell"></div>
-      <div class="cell"></div>
-      <div class="cell"></div>
-      <div class="cell"></div>
-      <div class="cell"></div>
-
-      <div class="lane-name lane-agent">Agents</div>
-      <div class="cell"></div>
-      <div class="cell c-agent"><span class="step-no">2</span>Seek immutable evidence<br><small>unavailable in the proposal-only seed</small></div>
-      <div class="cell c-agent"><span class="step-no">3</span>Read clauses from the active <span class="mono">EffectiveRule</span><br><small class="mono">today: ledger-resident clause set</small></div>
-      <div class="cell c-agent"><span class="step-no">4</span>Evaluate the milestone subject</div>
-      <div class="cell c-stop"><span class="step-no">5</span><b>Recommendation: BLOCKED</b><br><small>no reviewed evidence for this subject — advisory only</small></div>
-      <div class="cell"></div>
-
-      <div class="lane-name lane-member">Members</div>
-      <div class="cell"></div>
-      <div class="cell"></div>
-      <div class="cell"></div>
-      <div class="cell"></div>
-      <div class="cell"></div>
-      <div class="cell c-member"><span class="step-no">6</span>Scripted vote proceeds regardless<br><small>the advisory result does not gate it</small></div>
-
-      <div class="lane-name lane-ledger">Ledger</div>
-      <div class="cell"></div>
-      <div class="cell"></div>
-      <div class="cell"></div>
-      <div class="cell"></div>
-      <div class="cell c-ledger"><span class="step-no">6b</span><b>ApprovedMilestone</b> recorded<br><small>curated illustrative milestone; the hard-coded agenda pin gates this</small></div>
-      <div class="cell c-ledger"><span class="step-no">7</span>Real sandbox <b>DevelopmentFundCoupon</b> allocated via Splice<br><small><b>sandbox only</b> — not a payment, not a mint</small></div>
+    <header><div class="eyebrow">Milestone review</div><h2>Connect delivery decisions to approved proposals</h2></header>
+    <div class="flowline">
+      <div class="node n-gh"><span class="nlabel">Discover</span>Fund-eligible milestone issue</div><div class="arrow">→</div>
+      <div class="node n-agent"><span class="nlabel">Intake opens</span>Valid immutable milestone proof</div><div class="arrow">→</div>
+      <div class="node n-agent"><span class="nlabel">Reviewer assesses</span>Exact milestone pin and active rules</div><div class="arrow">→</div>
+      <div class="node n-member"><span class="nlabel">Humans vote</span>Credentialed primary decisions</div><div class="arrow">→</div>
+      <div class="node n-ledger"><span class="nlabel">Resolve</span>Approved proposal and valid milestone pin required</div>
     </div>
-    <div class="caption">
-      Step 7 really runs Splice’s allocation choice on a sandbox network: the Splice allocation choice runs with its manager and amount checks — it allocates a coupon, which is neither a payment nor a mint. The separate Java <span class="mono">CouponAllocation</span> planner remains a deliberately blocked preview.
+    <div class="grid-2" style="margin-top:16px">
+      <div class="panel"><div class="kicker">Evidence before confidence</div><p>Unknown milestone evidence and historical pins remain <b>BLOCKED</b>.</p></div>
+      <div class="panel"><div class="kicker">Decision scope</div><p>Delivery approval records the members' decision. Actual delivery and cash settlement require separate proof and authority.</p></div>
     </div>
-    <aside class="notes">
-      <h4>Speaker notes</h4>
-      Be precise about step 5, because it is easy to overclaim. The agent recommends BLOCKED for the
-      milestone agenda: its offline evidence seed covers the pinned proposal only, so the milestone subject
-      was never reviewable. That recommendation is advisory and it does <b>not</b> stop anything —
-      the scripted vote proceeds and approves the curated illustrative milestone. What gates that approval
-      is the hard-coded agenda pin in the contract, not the agent.
-      On step 7, be equally precise: this is a real allocation of a DevelopmentFundCoupon through Splice
-      on a sandbox network, with the manager and amount checks intact. Say the words
-      "sandbox only, not a payment and not a mint" out loud. The blocked preview is the separate
-      Java CouponAllocation planner, not this step.
+    <aside class="notes"><h4>Speaker notes</h4>
+      The static demo milestone catalogue includes issues 538 through 545. It does not prove that each
+      item has opened a valid round. Manual step 4 casts and resolves the existing issue 540 round,
+      subject to a valid milestone pin and approved PR 184. Do not imply a real current issue 540 pin.
+      A read-only recommendation never casts a ballot or bypasses ledger preconditions. There is no
+      claimed real payment, Foundation authority or proof that physical delivery occurred.
     </aside>
   </section>
 
   <!-- 8 -->
   <section class="slide" aria-label="Rule-change loop">
-    <header>
-      <div class="eyebrow">Rule-change loop</div>
-      <h2>Rules evolve by vote — and only by vote</h2>
-    </header>
-    <div class="flowline">
-      <div class="node n-ledger"><span class="nlabel">In force</span>rules <b>v1</b><br><small class="mono">ledger-resident clause set</small><br><small><span class="pill plan">planned</span> attested @ commit A (illustrative)</small></div>
-      <div class="arrow">→</div>
-      <div class="node n-gh"><span class="nlabel">Change</span>PR edits a clause in the golden copy</div>
-      <div class="arrow">→</div>
-      <div class="node n-member"><span class="nlabel">Vote</span>Credentialed members, quorum applied</div>
-      <div class="arrow">→</div>
-      <div class="node n-ledger"><span class="nlabel">Attested <span class="pill plan">planned</span></span>rules <b>v2 @ commit B</b><br><small class="mono">repo · commit · hashes · version</small></div>
-      <div class="arrow">→</div>
-      <div class="node n-agent"><span class="nlabel">Next review</span>uses <b>v2</b> — and cites it<br><small class="mono">rules v2 ✓</small><br><small><span class="mono">@ 3f9a1c2</span> illustrative</small></div>
+    <header><div class="eyebrow">Human governance</div><h2>Five primary seats. Three valid YES votes.</h2></header>
+    <div class="grid-3">
+      <div class="panel"><div class="kicker">Membership</div><b>5 primary seats</b><p>Two credentialed substitutes bring the factory roster to seven.</p></div>
+      <div class="panel"><div class="kicker">Approval</div><b>3 distinct valid primary YES votes</b><p>Immediate resolution is permitted. Two YES votes never approve, including at the deadline.</p></div>
+      <div class="panel"><div class="kicker">Validity</div><b>Rights outlast the round</b><p>Primary rights must be valid now and strictly beyond the round close. The resolving participant must be valid.</p></div>
     </div>
-    <div class="grid-2" style="margin-top:16px">
-      <div class="panel">
-        <div class="kicker">Merged but unvoted <span class="pill plan">planned</span></div>
-        <div class="cell">
-          <div class="verdict v-warn">⚠ unratified rule change</div>
-          <small>
-            <b>Planned.</b> A clause merged to HEAD without a vote would be <b>ignored</b>: the agent would keep
-            reviewing against the ratified version and raise the flag so the gap is visible to members, not buried.
-            Today there is no repository watcher, so this flag does not run.
-          </small>
-        </div>
-      </div>
-      <div class="panel">
-        <div class="kicker">Written against an old base</div>
-        <div class="cell c-stop">
-          <div class="verdict v-stop">⛔ stale rule change rejected</div>
-          <small>
-            If the proposed change's base version is outdated, the ledger rejects it. Rule history stays linear:
-            v1 → v2 → v3, each step carrying its own vote.
-          </small>
-        </div>
-      </div>
-    </div>
-    <aside class="notes">
-      <h4>Speaker notes</h4>
-      The one-liner: in this design, merge permission is not governance permission.
-      Anyone with write access to the repository can change the text; only a vote can change the rules.
-      That split is what lets you keep rules readable and reviewable in GitHub without making the
-      repository's access control the de facto constitution.
+    <div class="panel" style="margin-top:16px"><b>Configurable defaults:</b> factory credential duration 30 days; independent round duration 21 days.</div>
+    <aside class="notes"><h4>Speaker notes</h4>
+      Five PRIMARY seats plus two credentialed substitutes make seven factory credentials, not seven
+      independent primary voters. Substitute assignment is unsupported policy and remains pending;
+      do not invent a proxy workflow or imply automatic promotion. Primary voting rights must be valid
+      at the time of the vote and strictly beyond closesAt. Resolution also requires a valid participant.
+      The 30-day credential and 21-day round durations are configurable defaults, not universal policy
+      and not a migration claim. Any optional member handles would be synthetic labels without account binding.
     </aside>
   </section>
 
   <!-- 9 -->
   <section class="slide" aria-label="Trust boundaries">
-    <header>
-      <div class="eyebrow">Trust boundaries</div>
-      <h2>Each party does exactly one job</h2>
-    </header>
+    <header><div class="eyebrow">Trust boundaries</div><h2>Clear authority at every step</h2></header>
     <div class="grid-3">
-      <div class="panel" style="border-color: rgba(139,148,255,0.5); background: var(--gh-bg)">
-        <div class="kicker" style="color: var(--gh)">GitHub</div>
-        <b>Holds the rule content.</b>
-        <ul class="tight">
-          <li><span class="pill plan">planned</span> Versioned, human-readable rule files and clauses</li>
-          <li>Reviewed the way code is reviewed</li>
-          <li>Write access ≠ governance authority</li>
-          <li><b>Today:</b> GitHub holds the <i>proposal</i> evidence, pinned by blob SHA; the rules live on the ledger</li>
-        </ul>
-      </div>
-      <div class="panel" style="border-color: rgba(198,120,240,0.5); background: var(--ledger-bg)">
-        <div class="kicker" style="color: var(--ledger)">Ledger</div>
-        <b>Holds the voted proof — and enforces.</b>
-        <ul class="tight">
-          <li><b>Today:</b> the clause set itself, versioned in <span class="mono">EffectiveRule</span>; a vote activates a predefined set</li>
-          <li>Active rule pointer; stale changes rejected</li>
-          <li>Agendas, quorum, tally, approvals</li>
-          <li><span class="pill plan">planned</span> Attestation: repo, commit, blob hashes, version</li>
-        </ul>
-      </div>
-      <div class="panel" style="border-color: rgba(57,211,192,0.5); background: var(--agent-bg)">
-        <div class="kicker" style="color: var(--agent)">Agents</div>
-        <b>Advise only.</b>
-        <ul class="tight">
-          <li>No voting rights, no approval power (<span class="mono">readAs</span> only)</li>
-          <li><b>Today:</b> evaluate only against the active ledger clause set</li>
-          <li>Fail closed with no authenticated ledger</li>
-          <li><span class="pill plan">planned</span> Hash-verify against the attestation; fail closed on mismatch</li>
-        </ul>
-      </div>
+      <div class="panel"><div class="kicker">Intake</div><b>Opens evidence-bound rounds.</b><ul class="tight"><li>Fund-eligible proposals and milestones</li><li>Registered W3C source credential</li><li>Title, URL and body hash pinned</li><li>Raw bodies stay off the ledger</li></ul></div>
+      <div class="panel"><div class="kicker">Reviewer</div><b>Read-only assessment.</b><ul class="tight"><li>Java reviews multiple pending rounds</li><li>Exact pins and active registry</li><li>Rule checks plus supplemental LLM assessment</li><li>No automatic ballots or approval power</li></ul></div>
+      <div class="panel"><div class="kicker">Ledger</div><b>Enforces voted requirements.</b><ul class="tight"><li>Active hashedRuleRef</li><li>Credential and round-pin checks</li><li>Distinct valid primary votes</li><li>Approval and audit receipts</li></ul></div>
     </div>
-    <div class="panel" style="margin-top:14px; border-color: rgba(242,181,60,0.5); background: var(--member-bg)">
-      <div class="kicker" style="color: var(--member)">Members</div>
-      <b>Humans decide.</b> Credentialed members vote; agents produce evidence-bound opinions that make the vote better informed,
-      never a substitute for it. <span class="mono">Agents advise → humans decide → the ledger enforces.</span>
-    </div>
-    <aside class="notes">
-      <h4>Speaker notes</h4>
-      Use this slide to answer the governance objection before it is raised: "are you letting an AI decide
-      who gets funded?" No — the agent cannot vote, cannot approve, cannot pay, and refuses to act when its
-      inputs are unproven. It holds readAs only, so it is incapable of casting a vote, not merely restrained.
-      Its entire power is to read the active ledger clause set and write an opinion with citations.
-      Mind the today-versus-planned split in the ledger and agent columns: today the ledger holds the clause
-      set itself and the agent evaluates against that; the repo/commit attestation and the hash-verification
-      refusal are planned. Keep the four-part refrain tight: GitHub holds content, the ledger holds proof,
-      agents advise, humans decide.
+    <div class="panel" style="margin-top:14px"><b>Humans control requirements and decisions.</b> Credentialed primary members cast their own ballots.</div>
+    <aside class="notes"><h4>Speaker notes</h4>
+      Intake submits through OpenAgenda as opener. Reviewer is the sole read-only review agent; its Java
+      path combines rule checks with concordia-cdf dynamic LLM assessment. Availability and cache evidence
+      are bounded by evidence and rule identity. Anonymous sandbox rights do not establish a production
+      security boundary. Governance approval records a decision; actual delivery and payments require
+      separate evidence and authority. No Foundation mandate is claimed.
     </aside>
   </section>
 
   <!-- 10 -->
   <section class="slide" aria-label="Demo script">
-    <header>
-      <div class="eyebrow">Demo script</div>
-      <h2>What we show, including what we deliberately refuse</h2>
-    </header>
+    <header><div class="eyebrow">Demo journey</div><h2>See the evidence stay fixed as requirements change</h2></header>
     <div class="grid-3">
-      <div class="panel">
-        <div class="kicker" style="color: var(--ok)">Happy paths</div>
-        <ul class="tight">
-          <li><b>Ledger-resident clause sets</b>: v1 fails on a missing required phrase; a vote activates the predefined v2, which passes</li>
-          <li><b>Deterministic literal phrase matching</b> against the pinned PR #184 text — authoritative checks stay deterministic; opt-in real LLM assessments are supplemental</li>
-          <li>Recommendations <b>printed to the terminal and log only</b>; nothing is posted or published</li>
-          <li><b>Demo readers</b>: state-query-only wiring, no vote or submission path; provisioned <span class="mono">CanReadAs opener</span> only. The unauthenticated API does not enforce these user rights as a caller boundary.</li>
-          <li>Agenda, credentialed vote, quorum and tally → <b>ApprovedGrantProposal</b></li>
-          <li>Milestone vote → real sandbox <b>DevelopmentFundCoupon</b> allocation (not a payment, not a mint)</li>
-        </ul>
-      </div>
-      <div class="panel">
-        <div class="kicker" style="color: var(--stop)">Blocked paths — working today</div>
-        <ul class="tight">
-          <li><b>Not reviewable</b> — the milestone subject has no reviewed evidence (advisory only)</li>
-          <li><b>Invalid credential</b> on a vote attempt</li>
-          <li><b>No quorum</b> — fewer than 3 present</li>
-          <li><b>Stale rule change</b> — outdated base version</li>
-          <li><b>Double vote</b> from the same member</li>
-        </ul>
-      </div>
-      <div class="panel">
-        <div class="kicker" style="color: var(--gh)">Blocked paths — planned design</div>
-        <ul class="tight">
-          <li><b>Unratified rule change</b> present in the repository: ignored and flagged</li>
-          <li><b>Rule hash mismatch</b> against the attestation: review refuses to run (BLOCKED)</li>
-        </ul>
-        <div class="caption">Shown as design, not as a demo claim.</div>
-      </div>
+      <div class="panel"><div class="kicker">Discover and assess</div><b>Intake opens independent rounds.</b><p>Reviewer assesses pending evidence against the active rules, with immutable source proof.</p></div>
+      <div class="panel"><div class="kicker">Vote the requirements</div><b>Activate a new rule identity.</b><p>Reevaluate the same pending evidence. Explain the assessment change through the voted requirements.</p></div>
+      <div class="panel"><div class="kicker">Make the decision</div><b>Humans cast and resolve.</b><p>Three distinct valid primary YES votes permit immediate approval. Two never approve.</p></div>
     </div>
-    <aside class="notes">
-      <h4>Speaker notes</h4>
-      Demo the refusals, not just the approvals. Main all ends at step 5; independent
-      opt-step 2 credentials, 3 no quorum, 4 double vote, 5 outsider need only bootstrap
-      and leave the main anchor unchanged. Foreign credential invisibility is lookup privacy,
-      not proof of issuer authority. Outsider proposing with opener read authority separately
-      asserts the authorization guard. The blocked paths in the middle column run today
-      and are the most persuasive part of the session. Be scrupulous about the third column:
-      the unratified-change flag and the hash-mismatch block are planned design, not running code.
-      If asked, say exactly that — the credibility of the whole deck rests on not blurring this line.
-      The strongest moment in the happy-path column is the first bullet: the same pinned proposal text
-      fails under rule v1 and passes under v2, because the voted rule changed and nothing else did.
-      Be equally clear that the agent only prints to the terminal — there is no posting anywhere —
-      and that the matching is literal phrase matching, not comprehension.
+    <div class="panel" style="margin-top:14px"><b>Safe refusals matter.</b> Unknown milestone evidence, historical pins and invalid voting rights block the affected action.</div>
+    <aside class="notes"><h4>Speaker notes</h4>
+      Step 2 votes on and activates the new rule, then reevaluates the SAME pending evidence.
+      Manual step 3 casts and resolves the existing PR 184 round. Manual step 4 casts and resolves the
+      existing milestone issue 540 round. Neither manual step opens a round. A valid milestone pin and
+      approved PR 184 are preconditions for the milestone path; do not claim issue 540 currently has a
+      valid pin or is ready. Unknown milestone evidence and historical pins remain BLOCKED.
+      Resolution can execute immediately after three distinct valid primary YES votes; two never approve,
+      even at the deadline. The resolving participant must be valid. Delivery approval records a decision.
     </aside>
   </section>
 
   <!-- 11 -->
   <section class="slide" aria-label="Built today vs planned">
-    <header>
-      <div class="eyebrow">Honest status</div>
-      <h2>Built today vs planned design</h2>
-    </header>
+    <header><div class="eyebrow">Published foundation</div><h2>A coherent governance path, with explicit boundaries</h2></header>
     <div class="grid-2">
-      <div class="panel" style="border-color: rgba(63,221,138,0.45)">
-        <div class="kicker" style="color: var(--ok)">Today in the prototype</div>
-        <table class="cmp">
-          <tr><td class="mark" style="color: var(--ok)">✓</td><td>Rule clauses stored on the ledger in <span class="mono">EffectiveRule</span>: versioned, vote-governed, with a stale-version check</td></tr>
-          <tr><td class="mark" style="color: var(--ok)">✓</td><td>Reviewer reads the active <span class="mono">EffectiveRule</span>, checks package ID and version, and <b>fails closed with no authenticated ledger</b></td></tr>
-          <tr><td class="mark" style="color: var(--ok)">✓</td><td>Advisory agent pins GitHub evidence by <b>blob SHA</b></td></tr>
-          <tr><td class="mark" style="color: var(--ok)">✓</td><td>Deterministic Java services: Advisory, Reviewer, SandboxBallots; CouponAllocation is a deliberately blocked preview</td></tr>
-          <tr><td class="mark" style="color: var(--ok)">✓</td><td>Governance contracts migrated to the latest Concordia interfaces: VoteTopic, VoteRecord, VotingRights, Resolver</td></tr>
-          <tr><td class="mark" style="color: var(--ok)">✓</td><td>Local validation passes: <b>6 Daml scripts, 53 Java tests, 45 regressions</b>; migration passed independent code review</td></tr>
-          <tr><td class="mark" style="color: var(--warn)">!</td><td><b>Sandbox prototype; no production deployment or Foundation authority.</b> No real payment.</td></tr>
-          <tr><td class="mark" style="color: var(--warn)">!</td><td>Demo votes are cast by <b>scripted synthetic parties</b>; the design intends independent human members</td></tr>
-          <tr><td class="mark" style="color: var(--warn)">!</td><td>Reviewer <b>literally matches ledger-supplied phrases</b> against the pinned proposal; no semantic or LLM evaluation</td></tr>
-        </table>
-      </div>
-      <div class="panel" style="border-color: rgba(139,148,255,0.45)">
-        <div class="kicker" style="color: var(--gh)">Planned design <span class="pill plan">planned</span></div>
-        <table class="cmp">
-          <tr><td class="mark" style="color: var(--gh)">→</td><td><span class="mono">EffectiveRule</span> holds an <b>attestation</b> (repo, commit, blob hashes, version) instead of — or alongside — the clause text</td></tr>
-          <tr><td class="mark" style="color: var(--gh)">→</td><td>A rule-change agent watches the golden-copy repository</td></tr>
-          <tr><td class="mark" style="color: var(--gh)">→</td><td>Reviewer fetches and hash-verifies the rules at the attested commit</td></tr>
-          <tr><td class="mark" style="color: var(--gh)">→</td><td>An unratified-change flag</td></tr>
-          <tr><td class="mark" style="color: var(--gh)">→</td><td>Further semantic evaluation; opt-in real Java LLM supplemental assessments already run, without replacing deterministic evidence or ledger authority</td></tr>
-          <tr><td class="mark" style="color: var(--gh)">→</td><td>Immutable milestone evidence</td></tr>
-          <tr><td class="mark" style="color: var(--gh)">→</td><td>An authenticated ledger adapter</td></tr>
-        </table>
-      </div>
+      <div class="panel"><div class="kicker">Target capabilities</div><ul class="tight">
+        <li><b>Broader intake:</b> eligible proposals and milestones, registered source credentials and proof deduplication</li>
+        <li><b>Traceable review:</b> multiple pending rounds, exact pins, active registry and hashedRuleRef</li>
+        <li><b>Combined assessment:</b> rule checks plus supplemental concordia-cdf dynamic LLM assessment</li>
+        <li><b>Human control:</b> five primary seats and three distinct valid primary YES votes</li>
+      </ul></div>
+      <div class="panel"><div class="kicker">Boundaries that preserve trust</div><ul class="tight">
+        <li>Availability and cache evidence stay bounded by evidence and rule identity</li>
+        <li>Unknown milestone evidence and historical pins remain BLOCKED</li>
+        <li>Substitute assignment policy remains pending</li>
+        <li>Sandbox decisions carry no Foundation mandate or real-payment claim</li>
+      </ul></div>
     </div>
-    <aside class="notes">
-      <h4>Speaker notes</h4>
-      Read the left column as shipped behaviour and the right column as design intent, in those words.
-      Note the important nuance: today the clause text itself sits on the ledger in <span class="mono">EffectiveRule</span>,
-      vote-governed with a stale-version check. The GitHub-attestation model on the earlier slides is the
-      planned evolution of that same contract — the governance shape is already real, the storage location changes.
-      The validation numbers are local runs on 18 Nov 2026, not CI on a deployed system: 6 Daml scripts,
-      53 Java tests and 45 governance regressions. If someone asks about status, the exact words are
-      "sandbox prototype; no production deployment or Foundation authority".
-      Say plainly that the votes in the demo are cast by scripted synthetic parties — the design intends
-      independent human members, and conflating the two would be the easiest way to lose the room.
+    <aside class="notes"><h4>Speaker notes</h4>
+      Use the opening status banner as the acceptance statement. These target capabilities describe the
+      published protocol; they do not prove a completed current participant run. Avoid carrying old package
+      test counts forward as evidence for this target. Credential and round durations are configurable
+      factory defaults. Synthetic demo labels do not bind real accounts or prove independent human participation.
     </aside>
   </section>
 
   <!-- 12 -->
   <section class="slide" aria-label="Limitations, next steps and ask">
-    <header>
-      <div class="eyebrow">Limitations · next steps · ask</div>
-      <h2>What this prototype does not do — and what we want next</h2>
-    </header>
+    <header><div class="eyebrow">Value and next decisions</div><h2>Make every approval easier to explain</h2></header>
     <div class="grid-3">
-      <div class="panel">
-        <div class="kicker" style="color: var(--stop)">Limitations</div>
-        <ul class="tight">
-          <li><b>Credential uniqueness</b> and <b>attendance reconciliation</b> are handled externally, not by the contracts</li>
-          <li>The <b>milestone evidence is illustrative</b>: the agent recommends BLOCKED, but that is advisory and the scripted vote still approves the curated milestone</li>
-          <li>The <b>provenance of the local Splice DAR is incomplete</b></li>
-          <li><b>No production authority and no payment</b>: the coupon allocation is real but sandbox-only — neither a payment nor a mint; the separate Java <span class="mono">CouponAllocation</span> planner stays a blocked preview</li>
-          <li><b>Votes are cast by scripted synthetic parties</b>, not independent human members</li>
-        </ul>
-      </div>
-      <div class="panel">
-        <div class="kicker" style="color: var(--gh)">Next steps</div>
-        <ul class="tight">
-          <li>Move <span class="mono">EffectiveRule</span> to a GitHub attestation (repo, commit, hashes, version)</li>
-          <li>Ship the rule-change watcher and hash verification before every review</li>
-          <li>Add the unratified-change flag and immutable milestone evidence</li>
-          <li>Add an authenticated ledger adapter</li>
-          <li>Introduce LLM-assisted clause evaluation, advisory and pinned</li>
-        </ul>
-      </div>
-      <div class="panel" style="border-color: rgba(242,181,60,0.5); background: var(--member-bg)">
-        <div class="kicker" style="color: var(--member)">The ask</div>
-        <ul class="tight">
-          <li>Review the governance model: rules in GitHub, voted proof on the ledger</li>
-          <li>Confirm the rule-change and quorum parameters as a community</li>
-          <li>Agree a sanctioned golden-copy rules repository and its review process</li>
-          <li>Clear DAR provenance and an authenticated environment for the next milestone</li>
-        </ul>
-      </div>
+      <div class="panel"><div class="kicker">Business value</div><ul class="tight"><li>Broader eligible proposal and milestone discovery</li><li>Versioned requirements under human control</li><li>Immutable proof and deduplicated intake</li><li>Decision receipts for audit and accountability</li></ul></div>
+      <div class="panel"><div class="kicker">Clear boundaries</div><ul class="tight"><li>Reviewer remains read-only</li><li>Missing proof blocks the affected path</li><li>Primary members retain ballot authority</li><li>Delivery and payments need separate evidence and authority</li></ul></div>
+      <div class="panel" style="border-color: rgba(242,181,60,0.5); background: var(--member-bg)"><div class="kicker">The ask</div><ul class="tight"><li>Review the human-controlled requirements</li><li>Confirm credential and round parameters</li><li>Resolve substitute assignment policy</li><li>Agree the evidence needed for broader participant verification</li></ul></div>
     </div>
-    <div class="caption">
-      <span class="mono">Agents advise → humans decide → the ledger enforces.</span>
-      Every verdict cites its rule version and commit, or it is not a verdict.
-    </div>
-    <aside class="notes">
-      <h4>Speaker notes</h4>
-      Close with the limitations stated as deliberate boundaries rather than as excuses: external credential
-      uniqueness, illustrative milestone evidence, incomplete DAR provenance, no authority and no payment.
-      Then the ask is about decisions only a community can make — which repository is the golden copy,
-      what the quorum parameters are, and what an authenticated environment would look like.
-      Repeat the refrain and stop there.
+    <div class="caption"><span class="mono">Intake opens → Reviewer assesses → humans decide → ledger enforces.</span></div>
+    <aside class="notes"><h4>Speaker notes</h4>
+      Close on reconstructable decisions and human control. Substitute assignment is unsupported and
+      remains a policy question; no proxy workflow is implied. Factory durations are configurable defaults,
+      not universal requirements. The sandbox has no Foundation authority, real-payment claim or automatic
+      proof of delivery. The next decisions concern requirements, evidence and accountable human participation.
     </aside>
   </section>
-
 </main>
 
 <nav id="dots" aria-label="Slide navigation"></nav>
