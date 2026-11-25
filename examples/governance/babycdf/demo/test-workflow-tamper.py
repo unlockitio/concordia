@@ -18,6 +18,16 @@ live = 'daml/Cap/Examples/BabyCdf/Live.daml'
 rule = '../impl/daml/Cap/Examples/BabyCdf/RuleVote.daml'
 
 cases = [
+    ('manual-checkpoint-restored', live, 'manualExistingRound runId step milestone = do',
+     'manualExistingRound runId step milestone = do\n  checkpoints <- query @ManualRoundPending undefined'),
+    ('manual-public-topic-removed', live, '    publicTopics <- queryInterface @VoteTopic opener',
+     '    let publicTopics = []'),
+    ('manual-public-cid-unbound', live, '          topicCid == toInterfaceContractId @VoteTopic ref,',
+     '          True,'),
+    ('manual-rights-unchecked', live, '    forA_ rights $ \\(holder,right) -> do',
+     '    forA_ [] $ \\(holder,right) -> do'),
+    ('manual-vote-recast', live, '        (all (\\(_,b) -> b.vote == Count.Absent) existingRound)',
+     '        True'),
     ('second-agenda', live, '  initialState 2 witnesses', '  initialState 2 witnesses\n  extra <- propose (runId <> ":extra")'),
     ('missing-initial', live, '  initialState 2 witnesses', '  pure ()'),
     ('late-initial', live, '  initialState 2 witnesses', '  ignored <- submit state.opener $ createCmd DemoAnchor state\n  initialState 2 witnesses'),

@@ -5,6 +5,8 @@ import DA.Time
 import Cap.Examples.BabyCdf.Live
 import Cap.Examples.BabyCdf.RuleVote
 import Cap.Examples.BabyCdf.SourceAgendaFixtures
+import Cap.Examples.BabyCdf.ManualIdentityTest (manualRefuses)
+import Cap.Governance.VoteTopicV1 (VoteTopic)
 import qualified Cap.Examples.BabyCdf.SourceObservationCredential as Source
 import qualified DA.Text as Text
 
@@ -12,7 +14,6 @@ manualExistingProposalPending : Script ()
 manualExistingProposalPending = script do
   let runId = "manual-existing-proposal-early"
   state <- bootstrap (BootstrapInput runId 5 ruleRefV1 ruleRefV2)
-  _ <- ruleVoteWith setTime runId
   (source,subject) <- fixtureSource state.opener False
   now <- getTime
   proposal <- submit state.opener $ exerciseCmd state.governor ProposeAgenda with
@@ -20,6 +21,8 @@ manualExistingProposalPending = script do
     baseVersion = 0; closesAt = addRelTime now (hours 2); source = Some source
     primaryRights = presentedRights state.core state.credentials
   Some selected <- queryContractId state.opener proposal
+  topicsBefore <- queryInterface @VoteTopic state.opener
+  assert (any (\(ref,view) -> ref == toInterfaceContractId @VoteTopic proposal && (case view of Some _ -> True; None -> False)) topicsBefore)
   actionsBefore <- query @AgendaAction state.opener
   receiptsBefore <- query @AgendaRoundReceipt state.opener
   credentialsBefore <- query @Source.SourceObservationCredential state.opener
@@ -28,11 +31,12 @@ manualExistingProposalPending = script do
   afterVote <- getTime
   afterVote === now
   None <- queryContractId state.opener proposal
+  topicsAfter <- queryInterface @VoteTopic state.opener
+  assert (all (\(ref,_) -> ref /= toInterfaceContractId @VoteTopic proposal) topicsAfter)
   approvals <- query @ApprovedGrantProposal state.opener
   let [approved] = [a | (_,a) <- approvals, a.sourceSnapshot.roundId == selected.roundId]
   selected.sourceSnapshot === Some approved.sourceSnapshot
-  second <- proposalVote runId
-  assert (not (Text.isInfixOf "PENDING" second))
+  manualRefuses (proposalVote runId)
   approvalsAfter <- query @ApprovedGrantProposal state.opener
   approvalsAfter === approvals
   receiptsAfter <- query @AgendaRoundReceipt state.opener

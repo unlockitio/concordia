@@ -8,7 +8,9 @@ Before voting, the script verifies the proposal, action, copied source and round
 
 For a round with no ballots, invitation is allowed only before its deadline. Complete existing ballot sets are reused. Partial or duplicate sets fail closed. Only absent selected votes are cast; existing YES votes are verified and never recast. Conflicting votes refuse the operation.
 
-Three distinct valid primary YES votes resolve and execute the same existing proposal immediately, even before its deadline. Fewer than three YES votes before the deadline remain `PENDING`; a pending output file is not approval. Resume the same explicit command without opening another round or repeating an existing cast. At the deadline, fewer than three YES votes cannot approve. Keep attempt markers; do not reset or delete them to recover an uncertain operation. The ledger phase checkpoints, ballots and execution evidence govern safe resume. Resolution and recording its execution CID are atomic; execution and the completion marker are atomic.
+The command queries the existing public `VoteTopic` and binds its CID and view to exactly one verified `AgendaProposal`, receipt, source snapshot and executable pin. Before any invitation or cast, it checks the deadline, the complete existing ballot set, absent votes and the selected primary holders' rights through the deadline. It invites ballots only when none exist, casts three primary YES votes, resolves the existing proposal immediately and executes the CID returned by `ResolveAgenda`. Milestone #540 also requires an actual pinned approval of PR184.
+
+Each host command is one-shot. An existing attempt marker or result file refuses another submission. If submission is uncertain, stop and reconcile the ledger manually using read-only evidence; do not automatically retry, recast, reset the network or delete markers. There are no manual phase-checkpoint contracts or automatic resume. A successfully resolved topic is normally consumed. A missing or ambiguous existing target fails closed; the command never opens or reopens a round, fabricates source evidence, or extends a deadline.
 
 ## Credential expiry is not extended
 

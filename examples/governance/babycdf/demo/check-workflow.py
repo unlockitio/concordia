@@ -50,21 +50,25 @@ if 'run_step 2' not in all_block.group(0) or 'exit $?' not in all_block.group(0)
 for name, step, milestone in [('proposalVote', 3, 'False'), ('milestoneVote', 4, 'True')]:
     text = body(name)
     if f'manualExistingRound runId {step} {milestone}' not in text:
-        errors.append(name + ': must dispatch the existing-round manual phase machine')
-manual = '\n'.join(body(name) for name in ['manualExistingRound', 'manualIdentityValid', 'manualCanResume', 'manualProposalPin', 'manualRoundBallots', 'validateManualRoundBallots', 'castManualMissing', 'proposalVote', 'milestoneVote'])
-for forbidden in ['requestIntake', 'ProposeAgenda', 'IntakeRequest', 'fixtureSource', 'sourceForAgenda', 'waitUntilClosed', 'sleep (']:
+        errors.append(name + ': must dispatch the existing-round manual vote')
+manual = '\n'.join(body(name) for name in ['manualExistingRound', 'manualIdentityValid', 'manualProposalPin', 'validateManualRoundBallots', 'proposalVote', 'milestoneVote'])
+for forbidden in ['requestIntake', 'ProposeAgenda', 'IntakeRequest', 'fixtureSource', 'sourceForAgenda', 'waitUntilClosed', 'sleep (', 'createCmd']:
     if forbidden in manual:
         errors.append('manual existing-round path must not contain ' + forbidden)
-for required in ['query @AgendaProposal', 'query @AgendaAction', 'query @AgendaRoundReceipt', 'query @ManualRoundCompleted', 'query @ManualRoundResolved', 'query @ManualRoundPending', 'now < proposal.closesAt', 'PENDING:', 'coreQuorum quorumSize state.core', 'manualProposalPin s']:
+for removed in ['ManualRoundPending', 'ManualRoundResolved', 'ManualRoundCompleted', 'manualCanResume', 'castManualMissing']:
+    if removed in manual:
+        errors.append('manual existing-round path must not restore ' + removed)
+for required in ['query @AgendaProposal', 'queryInterface @VoteTopic', 'toInterfaceContractId @VoteTopic ref', 'query @AgendaAction', 'query @AgendaRoundReceipt', 'beforeMutation < proposal.closesAt', 'coreQuorum quorumSize state.core', 'manualProposalPin s', 'exerciseCmd state.governor ResolveAgenda', 'exerciseCmd execution Executable_Execute']:
     if required not in manual:
         errors.append('manual existing-round path missing ' + required)
 manual_phase = body('manualExistingRound')
-prevalidate = manual_phase.find('validateManualRoundBallots proposal existingRound')
-checkpoint_create = manual_phase.find('createCmd ManualRoundPending')
-if prevalidate < 0 or checkpoint_create < 0 or prevalidate >= checkpoint_create:
-    errors.append('manual existing ballots must be fully validated before checkpoint creation')
-if 'Existing votes conflict with this manual tally; no checkpoint or cast was created.' not in manual_phase[:checkpoint_create]:
-    errors.append('manual existing votes must be compatible before checkpoint creation')
+invitation = manual_phase.find('inviteBallotsFor step opener proposalCid')
+for check in ['validateManualRoundBallots proposal existingRound', 'b.vote == Count.Absent', 'forA_ rights', 'queryContractId opener ref', 'beforeMutation < proposal.closesAt']:
+    position = manual_phase.find(check)
+    if position < 0 or invitation < 0 or position >= invitation:
+        errors.append('manual existing-round preflight must precede invitation: ' + check)
+if manual_phase.find('castYesBy step opener voters ballots') <= invitation:
+    errors.append('manual casting must follow invitation and preflight')
 if 'awaitIntake state.opener roundId boundAgenda 120' not in body('requestIntake'):
     errors.append('Intake wait must remain bounded')
 catalogue = body('sourceCatalogueCounts')

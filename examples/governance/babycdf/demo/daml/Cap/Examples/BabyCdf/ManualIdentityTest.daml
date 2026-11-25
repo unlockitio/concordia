@@ -45,8 +45,6 @@ manualIdentityRejectsWrongSubjectAndPin = script do
   assert (not (accepts wrongStored snapshot))
   assert (not (accepts proposal (snapshot with pin = BlockedPin "missing evidence")))
   assert (not (manualIdentityValid state.opener electorate subject.url False proposal snapshot action []))
-  assert (manualCanResume now proposal state.core [])
-  assert (not (manualCanResume proposal.closesAt proposal state.core []))
   _ <- submit state.opener $ exerciseCmd state.governor ProposeAgenda with
     proposer = state.opener; roundId = runId <> ":ambiguous"; agenda = Grant subject
     baseVersion = 0; closesAt = addRelTime now (hours 2); source = Some source; primaryRights = presentedRights state.core state.credentials
@@ -73,8 +71,6 @@ manualIdentityRejectsWrongSubjectAndPin = script do
     baseVersion = 0; closesAt = addRelTime now (hours 3)
     source = Some (source with pin = BlockedPin "missing executable pin"); primaryRights = presentedRights state.core state.credentials
   manualRefuses (proposalVote runId)
-  checkpoints <- query @ManualRoundPending state.opener
-  assert (null checkpoints)
   ballots <- query @AgendaBallot state.opener
   assert (null [b | (_,b) <- ballots, b.roundId == proposal.roundId])
   pure ()

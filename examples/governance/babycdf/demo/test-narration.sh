@@ -139,10 +139,10 @@ REPO_REL="examples/governance/babycdf/demo/daml/Cap/Examples/BabyCdf/Live.daml"
 # v19 deliberately changes source casting: verified existing rounds, pending/resume,
 # and atomic opener phase checkpoints. RuleVote/Rights and step 2 are unchanged.
 # v20 validates existing ballot sets and vote compatibility before checkpoint creation.
-SPEC_VERSION='v21-three-primary-yes-through-close'
+SPEC_VERSION='v22-simple-existing-topic-vote'
 # Authorized v21 behavior change, not equivalence to v20: five primary seats,
 # three YES early approval, rights through close, configurable fresh bootstrap.
-SPEC_DIGEST='3fd8f9c759c0d9fb0143eddb23d5f357632d9629add21742efb4a04342d980cb'
+SPEC_DIGEST='27aec67be88b3d29c239b464e0e968e58d0bd31021c683c801b543ae2b71dff4'
 
 for required in "$LIVE" "$SELECTOR" "$RULE"; do
   if [ ! -f "$required" ]; then

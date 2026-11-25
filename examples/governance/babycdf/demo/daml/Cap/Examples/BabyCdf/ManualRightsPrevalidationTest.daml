@@ -1,0 +1,93 @@
+module Cap.Examples.BabyCdf.ManualRightsPrevalidationTest where
+
+import Daml.Script
+import DA.Assert
+import DA.Time
+import Cap.Examples.BabyCdf.Live
+import Cap.Examples.BabyCdf.RuleVote
+import Cap.Examples.BabyCdf.Rights
+import Cap.Examples.BabyCdf.LiveVote (coreQuorum)
+import Cap.Examples.BabyCdf.SourceAgenda
+import Cap.Examples.BabyCdf.SourceAgendaFixtures
+import Cap.Examples.BabyCdf.ManualIdentityTest (manualRefuses)
+import qualified Cap.Examples.BabyCdf.SourceObservationCredential as Source
+
+manualRightsReject : Bool -> Bool -> Script ()
+manualRightsReject milestone shortExpiry = script do
+  let runId = "manual-rights-" <> show milestone <> "-" <> show shortExpiry
+  state <- bootstrap (BootstrapInput runId 5 ruleRefV1 ruleRefV2)
+  now <- getTime
+  (grantSource,grantSubject) <- fixtureSource state.opener False
+  _ <- submit state.opener $ exerciseCmd state.governor ProposeAgenda with
+    proposer = state.opener; roundId = runId <> ":pr184"; agenda = Grant grantSubject
+    baseVersion = 0; closesAt = addRelTime now (hours 2); source = Some grantSource
+    primaryRights = presentedRights state.core state.credentials
+  if milestone then do
+    _ <- proposalVote runId
+    (blocked,subject) <- fixtureSource state.opener True
+    sources <- query @Source.SourceObservationCredential state.opener
+    let [stored] = [s | (_,s) <- sources, s.observation.number == 540]
+        source = blocked with
+          pin = DeliveryPin "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" stored.observation.bodySha256 123 now
+          previousRound = None
+    _ <- submit state.opener $ exerciseCmd state.governor ProposeAgenda with
+      proposer = state.opener; roundId = runId <> ":milestone540"; agenda = Milestone subject
+      baseVersion = 0; closesAt = addRelTime now (hours 2); source = Some source
+      primaryRights = presentedRights state.core state.credentials
+    pure ()
+  else pure ()
+  (anchorCid,anchor) <- findAnchorAtLeast runId 1
+  let voter :: _ = coreQuorum quorumSize anchor.core
+  badRight <- case shortExpiry of
+    True -> do
+      Some governor <- queryContractId state.opener state.governor
+      factories <- query @VotingRightFactory state.opener
+      let [(factoryCid,_)] = factories
+      invitation <- submit state.opener $ createCmd VotingRightInvitation with
+        cdf = state.opener; consortiumId = governor.consortiumId; member = voter
+        expiresAt = addRelTime now (seconds 30)
+      accepted <- submit voter $ exerciseCmd invitation AcceptRegistered with
+        factory = toInterfaceContractId factoryCid
+      pure (RegisteredRight accepted)
+    False -> do
+      let otherRights = [right | (member,right) <- anchor.credentials, member /= voter, member `elem` anchor.core]
+      case otherRights of
+        otherRight :: _ -> pure otherRight
+        [] -> abort "Fixture requires another primary credential."
+  let replacementCredentials = [(member, if member == voter then badRight else right) | (member,right) <- anchor.credentials]
+  submit state.opener $ archiveCmd anchorCid
+  _ <- submit state.opener $ createCmd (anchor with credentials = replacementCredentials)
+  proposalsBefore <- query @AgendaProposal state.opener
+  ballotsBefore <- query @AgendaBallot state.opener
+  grantsBefore <- query @ApprovedGrantProposal state.opener
+  milestonesBefore <- query @ApprovedMilestone state.opener
+  actionsBefore <- query @AgendaAction state.opener
+  receiptsBefore <- query @AgendaRoundReceipt state.opener
+  sourcesBefore <- query @Source.SourceObservationCredential state.opener
+  manualRefuses (if milestone then milestoneVote runId else proposalVote runId)
+  proposalsAfter <- query @AgendaProposal state.opener
+  ballotsAfter <- query @AgendaBallot state.opener
+  grantsAfter <- query @ApprovedGrantProposal state.opener
+  milestonesAfter <- query @ApprovedMilestone state.opener
+  actionsAfter <- query @AgendaAction state.opener
+  receiptsAfter <- query @AgendaRoundReceipt state.opener
+  sourcesAfter <- query @Source.SourceObservationCredential state.opener
+  proposalsAfter === proposalsBefore
+  ballotsAfter === ballotsBefore
+  grantsAfter === grantsBefore
+  milestonesAfter === milestonesBefore
+  actionsAfter === actionsBefore
+  receiptsAfter === receiptsBefore
+  sourcesAfter === sourcesBefore
+
+proposalWrongHolder : Script ()
+proposalWrongHolder = manualRightsReject False False
+
+proposalShortExpiry : Script ()
+proposalShortExpiry = manualRightsReject False True
+
+milestoneWrongHolder : Script ()
+milestoneWrongHolder = manualRightsReject True False
+
+milestoneShortExpiry : Script ()
+milestoneShortExpiry = manualRightsReject True True

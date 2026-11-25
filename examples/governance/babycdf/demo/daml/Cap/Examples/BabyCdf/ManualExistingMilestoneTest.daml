@@ -7,13 +7,14 @@ import Cap.Examples.BabyCdf.Live
 import Cap.Examples.BabyCdf.RuleVote
 import Cap.Examples.BabyCdf.SourceAgenda
 import Cap.Examples.BabyCdf.SourceAgendaFixtures
+import Cap.Examples.BabyCdf.ManualIdentityTest (manualRefuses)
+import Cap.Governance.VoteTopicV1 (VoteTopic)
 import qualified Cap.Examples.BabyCdf.SourceObservationCredential as Source
 
 manualExistingMilestonePending : Script ()
 manualExistingMilestonePending = script do
   let runId = "manual-existing-milestone"
   state <- bootstrap (BootstrapInput runId 5 ruleRefV1 ruleRefV2)
-  _ <- ruleVoteWith setTime runId
   (grantSource,grantSubject) <- fixtureSource state.opener False
   now <- getTime
   grant <- submit state.opener $ exerciseCmd state.governor ProposeAgenda with
@@ -34,6 +35,8 @@ manualExistingMilestonePending = script do
     baseVersion = 0; closesAt = addRelTime now (hours 2); source = Some source
     primaryRights = presentedRights state.core state.credentials
   Some selected <- queryContractId state.opener milestone
+  topicsBefore <- queryInterface @VoteTopic state.opener
+  assert (any (\(ref,view) -> ref == toInterfaceContractId @VoteTopic milestone && (case view of Some _ -> True; None -> False)) topicsBefore)
   actionsBefore <- query @AgendaAction state.opener
   receiptsBefore <- query @AgendaRoundReceipt state.opener
   sourcesBefore <- query @Source.SourceObservationCredential state.opener
@@ -42,11 +45,12 @@ manualExistingMilestonePending = script do
   afterVote <- getTime
   afterVote === now
   None <- queryContractId state.opener milestone
+  topicsAfter <- queryInterface @VoteTopic state.opener
+  assert (all (\(ref,_) -> ref /= toInterfaceContractId @VoteTopic milestone) topicsAfter)
   approvals <- query @ApprovedMilestone state.opener
   let [approved] = [a | (_,a) <- approvals, a.sourceSnapshot.roundId == selected.roundId]
   selected.sourceSnapshot === Some approved.sourceSnapshot
-  second <- milestoneVote runId
-  assert (not (Text.isInfixOf "PENDING" second))
+  manualRefuses (milestoneVote runId)
   approvalsAfter <- query @ApprovedMilestone state.opener
   approvalsAfter === approvals
   receiptsAfter <- query @AgendaRoundReceipt state.opener

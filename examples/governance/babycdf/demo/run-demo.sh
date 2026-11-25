@@ -173,12 +173,8 @@ run_step() {
     *) echo 'Steps 2-5 are implemented; pass a step number in that range.' >&2; return 2 ;;
   esac
   echo "EXPERIMENTAL step $NUMBER: host submits as synthetic opener/voters, not agent user." >&2
-  if [ ! -f "$INPUT" ] || { [ "$NUMBER" != 3 ] && [ "$NUMBER" != 4 ] && { [ -e "$STATE/step-$NUMBER.json" ] || [ -e "$STATE/step-$NUMBER.attempted" ]; }; }; then
-    if [ "$NUMBER" = 3 ] || [ "$NUMBER" = 4 ]; then
-      echo "Refused manual step $NUMBER: bootstrap prerequisite $INPUT must exist. Existing markers are retained; do not reset the network to resume a round." >&2
-    else
-      echo "Refused step $NUMBER: prerequisite $INPUT must exist; step-$NUMBER.json and step-$NUMBER.attempted must not exist. After an attempt, run down/up." >&2
-    fi
+  if [ ! -f "$INPUT" ] || [ -e "$STATE/step-$NUMBER.json" ] || [ -e "$STATE/step-$NUMBER.attempted" ]; then
+    echo "Refused step $NUMBER: prerequisite $INPUT must exist; step-$NUMBER.json and step-$NUMBER.attempted must not exist. After an uncertain attempt, reconcile read-only manually; do not automatically retry, recast, or reset the network." >&2
     return 2
   fi
   if [ "$NUMBER" = 3 ] || [ "$NUMBER" = 4 ]; then

@@ -25,7 +25,6 @@ manualBallotPrevalidation milestone invalid = script do
   proposal <- if milestone then do
     _ <- proposalVote runId
     setTime (addRelTime now (seconds 60))
-    _ <- proposalVote runId
     (blocked,subject) <- fixtureSource state.opener True
     sources <- query @Source.SourceObservationCredential state.opener
     let [stored] = [s | (_,s) <- sources, s.observation.number == 540]
@@ -51,7 +50,6 @@ manualBallotPrevalidation milestone invalid = script do
   else do
     _ <- submit ballot.voter $ exerciseCmd first CastAgendaVote with option = Count.Voted No
     pure ()
-  checkpointsBefore <- query @ManualRoundPending state.opener
   ballotsBefore <- query @AgendaBallot state.opener
   grantsBefore <- query @ApprovedGrantProposal state.opener
   milestonesBefore <- query @ApprovedMilestone state.opener
@@ -60,7 +58,6 @@ manualBallotPrevalidation milestone invalid = script do
   actionsBefore <- query @AgendaAction state.opener
   sourcesBefore <- query @Source.SourceObservationCredential state.opener
   manualRefuses (if milestone then milestoneVote runId else proposalVote runId)
-  checkpointsAfter <- query @ManualRoundPending state.opener
   ballotsAfter <- query @AgendaBallot state.opener
   grantsAfter <- query @ApprovedGrantProposal state.opener
   milestonesAfter <- query @ApprovedMilestone state.opener
@@ -68,7 +65,6 @@ manualBallotPrevalidation milestone invalid = script do
   receiptsAfter <- query @AgendaRoundReceipt state.opener
   actionsAfter <- query @AgendaAction state.opener
   sourcesAfter <- query @Source.SourceObservationCredential state.opener
-  assert (length checkpointsBefore == length checkpointsAfter && all (\r -> r `elem` checkpointsAfter) checkpointsBefore)
   assert (length ballotsBefore == length ballotsAfter && all (\r -> r `elem` ballotsAfter) ballotsBefore)
   assert (length grantsBefore == length grantsAfter && all (\r -> r `elem` grantsAfter) grantsBefore)
   assert (length milestonesBefore == length milestonesAfter && all (\r -> r `elem` milestonesAfter) milestonesBefore)
