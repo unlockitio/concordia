@@ -18,12 +18,19 @@ live = 'daml/Cap/Examples/BabyCdf/Live.daml'
 rule = '../impl/daml/Cap/Examples/BabyCdf/RuleVote.daml'
 
 cases = [
-    ('manual-checkpoint-restored', live, 'manualExistingRound runId step milestone = do',
-     'manualExistingRound runId step milestone = do\n  checkpoints <- query @ManualRoundPending undefined'),
+    # The manual vote now enters through the explicit round selector, so the
+    # body to tamper with is manualExistingRoundFor; manualExistingRound is a
+    # one-line delegation with no body of its own.
+    ('manual-checkpoint-restored', live, 'manualExistingRoundFor runId step milestone selector = do',
+     'manualExistingRoundFor runId step milestone selector = do\n  checkpoints <- query @ManualRoundPending undefined'),
     ('manual-public-topic-removed', live, '    publicTopics <- queryInterface @VoteTopic opener',
      '    let publicTopics = []'),
-    ('manual-public-cid-unbound', live, '          topicCid == toInterfaceContractId @VoteTopic ref,',
-     '          True,'),
+    # Anchored with its preceding line, because the refusal reporter rebinds the
+    # same topic identity in its own comprehension and the bare line is no
+    # longer unique. The eligibility binding is still the one mutated here.
+    ('manual-public-cid-unbound', live,
+     '          (topicCid,Some topic) <- publicTopics,\n          topicCid == toInterfaceContractId @VoteTopic ref,',
+     '          (topicCid,Some topic) <- publicTopics,\n          True,'),
     ('manual-rights-unchecked', live, '    forA_ rights $ \\(holder,right) -> do',
      '    forA_ [] $ \\(holder,right) -> do'),
     ('manual-vote-recast', live, '        (all (\\(_,b) -> b.vote == Count.Absent) existingRound)',

@@ -1,0 +1,188 @@
+-- SPDX-License-Identifier: Apache-2.0
+-- Step 4 explicit round selection, and the pre-submission refusal that keeps a
+-- retry possible. These run entirely on fixtures: no running network, no
+-- marker is read or written here, and nothing clears an operator's marker.
+module Cap.Examples.BabyCdf.Step4SelectorTest where
+
+import Daml.Script
+import DA.Assert
+import DA.Time
+import qualified DA.Text as Text
+import qualified DA.Set as Set
+import qualified Cap.Governance.Utils.Count as Count
+import Cap.Examples.BabyCdf.Live
+import Cap.Examples.BabyCdf.RuleVote
+import Cap.Examples.BabyCdf.SourceAgendaFixtures
+import Cap.Examples.BabyCdf.ManualIdentityTest (manualRefuses)
+import qualified Cap.Examples.BabyCdf.SourceObservationCredential as Source
+
+-- The two rounds observed on the live network for milestone 540: one per
+-- observed trigger comment, the second linking the first.
+firstRound : Text
+firstRound = "canton-foundation/canton-dev-fund/issues/540/comments/6038684918"
+
+secondRound : Text
+secondRound = "canton-foundation/canton-dev-fund/issues/540/comments/6606684361"
+
+-- An approved PR184 plus two eligible milestone 540 rounds, which is the
+-- state that made the old single generic refusal unactionable.
+twoRoundSetup : Text -> Script LiveState
+twoRoundSetup runId = do
+  state <- bootstrap (BootstrapInput runId 5 ruleRefV1 ruleRefV2)
+  (grantSource,grantSubject) <- fixtureSource state.opener False
+  now <- getTime
+  _ <- submit state.opener $ exerciseCmd state.governor ProposeAgenda with
+    proposer = state.opener; roundId = "canton-foundation/canton-dev-fund/pull/184"
+    agenda = Grant grantSubject; baseVersion = 0
+    closesAt = addRelTime now (seconds 60); source = Some grantSource
+    primaryRights = presentedRights state.core state.credentials
+  _ <- proposalVote runId
+  grants <- query @ApprovedGrantProposal state.opener
+  length grants === 1
+  (blocked,subject) <- fixtureSource state.opener True
+  _ <- submit state.opener $ exerciseCmd state.governor ProposeAgenda with
+    proposer = state.opener; roundId = firstRound; agenda = Milestone subject
+    baseVersion = 0; closesAt = addRelTime now (days 21); source = Some blocked
+    primaryRights = presentedRights state.core state.credentials
+  _ <- submit state.opener $ exerciseCmd state.governor ProposeAgenda with
+    proposer = state.opener; roundId = secondRound; agenda = Milestone subject
+    baseVersion = 0; closesAt = addRelTime now (days 21)
+    source = Some (blocked with previousRound = Some firstRound)
+    primaryRights = presentedRights state.core state.credentials
+  pure state
+
+-- Two eligible rounds and no selector: refuse, change nothing, and leave the
+-- state in which a corrected selector can still succeed.
+step4RefusalLeavesRetryPossible : Script ()
+step4RefusalLeavesRetryPossible = script do
+  let runId = "step4-selector-ambiguous"
+  state <- twoRoundSetup runId
+  proposalsBefore <- query @AgendaProposal state.opener
+  receiptsBefore <- query @AgendaRoundReceipt state.opener
+  sourcesBefore <- query @Source.SourceObservationCredential state.opener
+  ballotsBefore <- query @AgendaBallot state.opener
+  approvalsBefore <- query @ApprovedMilestone state.opener
+
+  -- No selector is ambiguous here, so step 4 must refuse.
+  manualRefuses (milestoneVote runId)
+
+  -- Nothing moved: no ballot invited, no cast, no resolution, no approval.
+  proposalsAfter <- query @AgendaProposal state.opener
+  proposalsAfter === proposalsBefore
+  receiptsAfter <- query @AgendaRoundReceipt state.opener
+  receiptsAfter === receiptsBefore
+  sourcesAfter <- query @Source.SourceObservationCredential state.opener
+  sourcesAfter === sourcesBefore
+  ballotsAfter <- query @AgendaBallot state.opener
+  ballotsAfter === ballotsBefore
+  approvalsAfter <- query @ApprovedMilestone state.opener
+  approvalsAfter === approvalsBefore
+  length approvalsAfter === 0
+
+  -- The retry is still possible, and it is the selector that unblocks it.
+  outcome <- milestoneVoteFor (ManualRoundInput runId firstRound)
+  assert (Text.isInfixOf "votes recorded" outcome)
+
+-- The selector narrows; it never promotes an ineligible round. A round that
+-- does not exist is refused even though the subject has eligible rounds.
+step4SelectorRejectsWrongRound : Script ()
+step4SelectorRejectsWrongRound = script do
+  let runId = "step4-selector-wrong"
+  state <- twoRoundSetup runId
+  ballotsBefore <- query @AgendaBallot state.opener
+  manualRefuses (milestoneVoteFor (ManualRoundInput runId
+    "canton-foundation/canton-dev-fund/issues/540/comments/9999999999"))
+  ballotsAfter <- query @AgendaBallot state.opener
+  ballotsAfter === ballotsBefore
+  approvals <- query @ApprovedMilestone state.opener
+  length approvals === 0
+  -- An eligible round still works afterwards, so the refusal was not fatal.
+  outcome <- milestoneVoteFor (ManualRoundInput runId secondRound)
+  assert (Text.isInfixOf "votes recorded" outcome)
+
+-- The bare trigger comment id is accepted, because that is what the refusal
+-- prints and what an operator will paste.
+step4SelectorAcceptsCommentId : Script ()
+step4SelectorAcceptsCommentId = script do
+  let runId = "step4-selector-comment"
+  _ <- twoRoundSetup runId
+  outcome <- milestoneVoteFor (ManualRoundInput runId "6606684361")
+  assert (Text.isInfixOf "votes recorded" outcome)
+
+-- Selecting one round and voting it must not make the other round votable
+-- implicitly, and must not be silently repeatable.
+step4SelectorIsPerRound : Script ()
+step4SelectorIsPerRound = script do
+  let runId = "step4-selector-per-round"
+  state <- twoRoundSetup runId
+  first <- milestoneVoteFor (ManualRoundInput runId firstRound)
+  assert (Text.isInfixOf "votes recorded" first)
+  -- The voted round is resolved, so repeating it refuses rather than recasting.
+  manualRefuses (milestoneVoteFor (ManualRoundInput runId firstRound))
+  -- The other round was untouched and is now the only eligible one, so it
+  -- proceeds even without a selector.
+  second <- milestoneVote runId
+  assert (Text.isInfixOf "votes recorded" second)
+
+-- An existing round whose ballots are already cast must block, not recast,
+-- and the selector must not bypass that.
+step4SelectorDoesNotRecastExistingBallots : Script ()
+step4SelectorDoesNotRecastExistingBallots = script do
+  let runId = "step4-selector-existing-ballots"
+  state <- twoRoundSetup runId
+  proposals <- query @AgendaProposal state.opener
+  let [(ref,_)] = [(r,p) | (r,p) <- proposals, p.roundId == firstRound]
+  ballots <- submit state.opener $ exerciseCmd ref InviteBallots
+  loaded <- forA ballots $ \cid -> do
+    Some b <- queryContractId state.opener cid
+    pure (cid,b)
+  -- One genuine cast already exists for this round.
+  let [(castCid,castBallot)] = take 1 [(c,b) | (c,b) <- loaded,
+        b.voter `Set.member` Set.fromList state.core]
+  _ <- submit castBallot.voter $ exerciseCmd castCid CastAgendaVote with
+    option = Count.Voted Yes
+  approvalsBefore <- query @ApprovedMilestone state.opener
+  manualRefuses (milestoneVoteFor (ManualRoundInput runId firstRound))
+  approvalsAfter <- query @ApprovedMilestone state.opener
+  approvalsAfter === approvalsBefore
+  length approvalsAfter === 0
+
+-- A single eligible round keeps working with no selector, so the change is
+-- backward compatible for the ordinary one-round case.
+step4SingleRoundNeedsNoSelector : Script ()
+step4SingleRoundNeedsNoSelector = script do
+  let runId = "step4-selector-single"
+  state <- bootstrap (BootstrapInput runId 5 ruleRefV1 ruleRefV2)
+  (grantSource,grantSubject) <- fixtureSource state.opener False
+  now <- getTime
+  _ <- submit state.opener $ exerciseCmd state.governor ProposeAgenda with
+    proposer = state.opener; roundId = "canton-foundation/canton-dev-fund/pull/184"
+    agenda = Grant grantSubject; baseVersion = 0
+    closesAt = addRelTime now (seconds 60); source = Some grantSource
+    primaryRights = presentedRights state.core state.credentials
+  _ <- proposalVote runId
+  (blocked,subject) <- fixtureSource state.opener True
+  _ <- submit state.opener $ exerciseCmd state.governor ProposeAgenda with
+    proposer = state.opener; roundId = firstRound; agenda = Milestone subject
+    baseVersion = 0; closesAt = addRelTime now (days 21); source = Some blocked
+    primaryRights = presentedRights state.core state.credentials
+  outcome <- milestoneVote runId
+  assert (Text.isInfixOf "votes recorded" outcome)
+
+-- The PR184 prerequisite is unchanged: without the approval, step 4 refuses
+-- regardless of how precisely a round is selected.
+step4SelectorDoesNotBypassApproval : Script ()
+step4SelectorDoesNotBypassApproval = script do
+  let runId = "step4-selector-no-approval"
+  state <- bootstrap (BootstrapInput runId 5 ruleRefV1 ruleRefV2)
+  (blocked,subject) <- fixtureSource state.opener True
+  now <- getTime
+  _ <- submit state.opener $ exerciseCmd state.governor ProposeAgenda with
+    proposer = state.opener; roundId = firstRound; agenda = Milestone subject
+    baseVersion = 0; closesAt = addRelTime now (days 21); source = Some blocked
+    primaryRights = presentedRights state.core state.credentials
+  grants <- query @ApprovedGrantProposal state.opener
+  length grants === 0
+  manualRefuses (milestoneVoteFor (ManualRoundInput runId firstRound))
+  approvals <- query @ApprovedMilestone state.opener
+  length approvals === 0

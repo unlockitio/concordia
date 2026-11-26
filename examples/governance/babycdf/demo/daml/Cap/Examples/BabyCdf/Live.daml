@@ -1064,6 +1064,167 @@ manualProposalPin snapshot = case snapshot.pin of
     _ -> False
   _ -> False
 
+-- An explicit round selector for an existing manual round.
+--
+-- Two rounds can legitimately exist for one milestone: the catalogue opens a
+-- new round per observed trigger comment, and SourceRoundHead links them. The
+-- earlier code then refused with one generic message and no way to say WHICH
+-- round was meant. Picking the head, the earliest or the latest silently would
+-- be the demo deciding a governance question on the operator's behalf, so the
+-- selector is an explicit input and absence of a selector is only accepted
+-- when exactly one round is eligible.
+--
+-- No eligibility check is relaxed here. The selector narrows an already fully
+-- validated set; it can never make an ineligible round eligible.
+manualPinKindOk : Bool -> SourceAgendaSnapshot -> Bool
+manualPinKindOk milestone snapshot = if milestone
+  then case snapshot.pin of DeliveryPin _ _ _ _ -> True; BlockedPin _ -> True; _ -> False
+  else manualProposalPin snapshot
+
+manualMatchingActions : Party -> AgendaProposal -> SourceAgendaSnapshot
+  -> [(ContractId AgendaAction, AgendaAction)] -> [AgendaAction]
+manualMatchingActions opener proposal snapshot actions =
+  [a | (actionRef,a) <- actions, toInterfaceContractId actionRef == proposal.actionCid,
+    a.opener == opener, a.members == proposal.members, a.sourceSnapshot == Some snapshot]
+
+manualReceiptCount : Party -> AgendaProposal -> SourceAgendaSnapshot -> AgendaAction
+  -> [AgendaRoundReceipt] -> Int
+manualReceiptCount opener proposal snapshot action receipts =
+  length [r | r <- receipts, r.opener == opener, r.proposer == proposal.proposer,
+    r.roundId == proposal.roundId, r.actionCid == proposal.actionCid,
+    r.sourceSnapshot == Some snapshot, r.agenda == action.agenda,
+    r.baseVersion == action.baseVersion]
+
+-- The GitHub comment that triggered the round, read from the round id rather
+-- than from a pin, so a BlockedPin round is still identifiable to the operator.
+manualCommentId : Text -> Text
+manualCommentId roundId =
+  let segments = Text.splitOn "/" roundId
+  in if length segments < 2 then "none" else DA.List.last segments
+
+manualTriggerText : Optional SourceAgendaSnapshot -> Text
+manualTriggerText None = "no source snapshot"
+manualTriggerText (Some snapshot) = case snapshot.pin of
+  DeliveryPin _ _ _ at -> "trigger voteCommentAt " <> show at
+  _ -> "no pinned trigger; observedAt " <> show snapshot.observation.observedAt
+
+data ManualRoundCandidate = ManualRoundCandidate with
+    candidateRound : Text
+    candidateComment : Text
+    candidateTrigger : Text
+    candidateCid : Text
+    candidateReason : Text
+  deriving (Eq, Show)
+
+-- The first failing check for one candidate round, in the same order the
+-- eligibility comprehension applies them, so a refusal names a specific
+-- defect instead of reporting "missing, invalid or ambiguous".
+manualCandidateReason : Party -> Set.Set Party -> Text -> Bool
+  -> (ContractId AgendaProposal -> AgendaProposal -> Bool)
+  -> [(ContractId AgendaAction, AgendaAction)] -> [AgendaRoundReceipt]
+  -> (ContractId AgendaProposal, AgendaProposal) -> Text
+manualCandidateReason opener electorate expectedUrl milestone topicPublished actions receipts (ref,p) =
+  if p.opener /= opener then "opener mismatch"
+  else if p.proposer /= opener then "proposer is not the opener"
+  else if p.members /= electorate then "electorate differs from the governor's permanents"
+  else if p.subject.url /= expectedUrl then "subject url mismatch"
+  else if not (topicPublished ref p) then "public VoteTopic missing or mismatched"
+  else case p.sourceSnapshot of
+    None -> "no source snapshot"
+    Some s ->
+      if s.originalProposal /= 184 then "original proposal is not 184"
+      else if s.observation.sourceUrl /= expectedUrl then "observation url mismatch"
+      else if not (validSnapshot s) then "validSnapshot failed"
+      else if not milestone && not (executablePin s.pin) then "pin is not executable"
+      else if p.subject.body /= s.fingerprint then "subject body is not the snapshot fingerprint"
+      else if s.roundId /= p.roundId then "snapshot round id differs from the proposal round id"
+      else if not (manualPinKindOk milestone s) then "pin kind not allowed for this step"
+      else case manualMatchingActions opener p s actions of
+        [] -> "AgendaAction missing or mismatched"
+        [a] ->
+          if not (manualIdentityValid opener electorate expectedUrl milestone p s a receipts)
+            then "manualIdentityValid failed"
+          else if not (agendaSnapshotConsistent opener a.agenda (Some s))
+            then "agendaSnapshotConsistent failed"
+          else if manualReceiptCount opener p s a receipts /= 1
+            then "AgendaRoundReceipt is not unique for this round"
+          else if not (case a.agenda of
+              Milestone subject -> milestone && subject.url == expectedUrl
+              Grant subject -> not milestone && subject.url == expectedUrl
+              _ -> False)
+            then "agenda kind does not match this step"
+          else "ELIGIBLE"
+        _ -> "more than one AgendaAction matches this proposal"
+
+manualCandidateOf : Party -> Set.Set Party -> Text -> Bool
+  -> (ContractId AgendaProposal -> AgendaProposal -> Bool)
+  -> [(ContractId AgendaAction, AgendaAction)] -> [AgendaRoundReceipt]
+  -> (ContractId AgendaProposal, AgendaProposal) -> ManualRoundCandidate
+manualCandidateOf opener electorate expectedUrl milestone topicPublished actions receipts (ref,p) =
+  ManualRoundCandidate with
+    candidateRound = p.roundId
+    candidateComment = manualCommentId p.roundId
+    candidateTrigger = manualTriggerText p.sourceSnapshot
+    candidateCid = cid ref
+    candidateReason = manualCandidateReason opener electorate expectedUrl milestone
+      topicPublished actions receipts (ref,p)
+
+manualCandidateLine : ManualRoundCandidate -> Text
+manualCandidateLine c = "  round " <> c.candidateRound
+  <> "; comment " <> c.candidateComment
+  <> "; " <> c.candidateTrigger
+  <> "; proposal " <> c.candidateCid
+  <> "; " <> c.candidateReason
+
+-- Two phase signals that together prove whether this run reached the ledger.
+--
+-- A refusal message cannot carry this proof on its own, because the first
+-- actual submission is NOT the visible `submit` in this function: both
+-- inviteBallotsFor and castYesBy submit internally, and they run earlier. So
+-- the proof is positional instead of textual.
+--
+-- `manualEnteredSignal` is emitted once, before any ledger-mutating call is
+-- reachable. `manualSubmittingSignal` is emitted immediately before the first
+-- such call, and is therefore present whenever a submission may have been
+-- attempted, including when the outcome of that attempt is unknown.
+--
+-- The runner may clear only its own attempt marker, and only when the bytes
+-- THIS invocation appended to the raw log contain the entered signal and do
+-- NOT contain the submitting signal. Any other combination, including a
+-- crash, a timeout or a truncated log, keeps the marker. Fail closed.
+manualEnteredSignal : Text
+manualEnteredSignal = "[BABYCDF-STEP-PHASE] prevalidation_entered"
+
+manualSubmittingSignal : Text
+manualSubmittingSignal = "[BABYCDF-STEP-PHASE] submission_attempted"
+
+-- A refusal that an operator can act on without reading the ledger: every
+-- candidate round for this subject, the first check each one fails, and the
+-- exact command for each round that is actually eligible.
+manualRoundRefusal : Bool -> Optional Text -> Int -> [ManualRoundCandidate] -> Text
+manualRoundRefusal milestone selector matched candidates =
+  let stepName = if milestone then "4" else "3"
+      headline = case (selector, matched) of
+        (None, 0) -> "No eligible existing verified pinned round for this subject."
+        (None, _) -> "Several eligible existing verified pinned rounds for this subject: an explicit round selector is required."
+        (Some wanted, 0) -> "The requested round is not an eligible existing verified pinned round: " <> wanted
+        (Some wanted, _) -> "The requested round selects more than one proposal, which must never happen: " <> wanted
+      eligibleRounds = [c.candidateRound | c <- candidates, c.candidateReason == "ELIGIBLE"]
+      rerun = if null eligibleRounds
+        then "  (no eligible round; a selector cannot make an ineligible round eligible)"
+        else Text.intercalate "\n" ["  ./run-demo.sh step " <> stepName <> " " <> r | r <- eligibleRounds]
+      listing = if null candidates
+        then "  (no proposal exists for this subject)"
+        else Text.intercalate "\n" (map manualCandidateLine candidates)
+  in headline
+    <> "\nCandidate rounds for this subject, each with its first failing check:\n" <> listing
+    <> "\nExact rerun command with an explicit round selector:\n" <> rerun
+    <> "\nNo fallback, no earliest-or-latest guess and no round opening is permitted."
+    <> "\nNothing was created or changed: no ballot, cast, round, approval, receipt or marker."
+    <> "\nThis refusal happened before any ledger submission, so step " <> stepName <> " remains retryable"
+    <> "\nwith a corrected selector. The runner clears only its own attempt marker, and only"
+    <> "\nwhen this run logged no submission phase at all."
+
 manualIdentityValid : Party -> Set.Set Party -> Text -> Bool -> AgendaProposal -> SourceAgendaSnapshot -> AgendaAction -> [AgendaRoundReceipt] -> Bool
 manualIdentityValid opener electorate expectedUrl milestone proposal snapshot action receipts =
   proposal.opener == opener && proposal.proposer == opener && proposal.members == electorate
@@ -1082,7 +1243,14 @@ manualIdentityValid opener electorate expectedUrl milestone proposal snapshot ac
                             _ -> False)
 
 manualExistingRound : Text -> Int -> Bool -> Script Text
-manualExistingRound runId step milestone = do
+manualExistingRound runId step milestone = manualExistingRoundFor runId step milestone None
+
+manualExistingRoundFor : Text -> Int -> Bool -> Optional Text -> Script Text
+manualExistingRoundFor runId step milestone selector = do
+  -- Emitted before any ledger-mutating call is reachable. Its presence
+  -- without the submission signal is what lets the runner clear its own
+  -- attempt marker; see manualEnteredSignal.
+  debug manualEnteredSignal
   (_,state) <- findAnchorAtLeast runId 1
   let opener = state.opener
       expectedUrl = "https://github.com/canton-foundation/canton-dev-fund/"
@@ -1125,8 +1293,29 @@ manualExistingRound runId step milestone = do
           (case a.agenda of Milestone subject -> milestone && subject.url == expectedUrl
                             Grant subject -> not milestone && subject.url == expectedUrl
                             _ -> False)]
-        selected = eligible
-    assertMsg "Expected exactly one existing verified pinned round; missing, invalid or ambiguous evidence. Supply an unambiguous existing round; no fallback or opening is permitted."
+        -- The explicit selector narrows an already fully validated set. It is
+        -- matched against the round id, and also accepted as a bare trigger
+        -- comment id so an operator can paste what the refusal printed.
+        requested (_,p,s) = case selector of
+          None -> True
+          Some wanted -> p.roundId == wanted || manualCommentId s.roundId == wanted
+        selected = filter requested eligible
+    -- Absence of a selector is accepted only when exactly one round is
+    -- eligible. Several eligible rounds refuse and list them; no earliest,
+    -- latest or SourceRoundHead pick is ever made on the operator's behalf.
+    --
+    -- assertMsg, not abort: every manual refusal in this demo raises
+    -- AssertionFailed, which is the only exception the tests' manualRefuses
+    -- helper catches. abort raises GeneralError and would escape it.
+    let topicPublished ref p = not (null
+          [() | (topicCid,Some topic) <- publicTopics,
+            topicCid == toInterfaceContractId @VoteTopic ref,
+            topic.subject == p.subject, topic.action == Some p.actionCid,
+            topic.voteBefore == Some p.closesAt])
+        subjectProposals = [(ref,p) | (ref,p) <- proposals, p.subject.url == expectedUrl]
+        candidates = map (manualCandidateOf opener electorate expectedUrl milestone
+          topicPublished actions (map snd receipts)) subjectProposals
+    assertMsg (manualRoundRefusal milestone selector (length selected) candidates)
       (length selected == 1)
     let [(proposalCid,proposal,snapshot)] = selected
         voters = coreQuorum quorumSize state.core
@@ -1183,6 +1372,11 @@ manualExistingRound runId step milestone = do
     business 4 (if not milestone then "" else ("Pinned topic, source action, round receipt, primary membership and " <> show quorumSize <> " selected voting credentials have passed validation. The voting window is open."))
     business 3 (if milestone then "" else (if null existingRound then "No ballots exist for this round: invite the primary electorate." else "Reuse the existing validated ballots: all are ABSENT; no retry or recast is permitted."))
     business 4 (if not milestone then "" else (if null existingRound then "No ballots exist for this round: invite the primary electorate." else "Reuse the existing validated ballots: all are ABSENT; no retry or recast is permitted."))
+    -- LAST LINE BEFORE THE LEDGER IS TOUCHED. inviteBallotsFor and castYesBy
+    -- both submit internally, so this signal must precede them, not the
+    -- visible ResolveAgenda submit further down. Once this is logged, the
+    -- attempt marker must never be cleared by any automated path.
+    debug manualSubmittingSignal
     ballots <- if null existingRound then inviteBallotsFor step opener proposalCid
       else pure (map fst existingRound)
     business 3 (if milestone then "" else ("########## " <> "CAST THE SELECTED PRIMARY VOTES" <> " ##########"))
@@ -1230,12 +1424,23 @@ proposalVote runId = do
   pure outcome
 
 milestoneVote : Text -> Script Text
-milestoneVote runId = do
+milestoneVote runId = milestoneVoteFor (ManualRoundInput runId "")
+
+-- Step 4 with an explicit round selector. An empty selector means "no
+-- selector", which succeeds only when exactly one round is eligible.
+data ManualRoundInput = ManualRoundInput with
+    runId : Text
+    round : Text
+  deriving (Eq, Show)
+
+milestoneVoteFor : ManualRoundInput -> Script Text
+milestoneVoteFor input = do
   stepHeading 4 "EXISTING MILESTONE MANUAL VOTE"
-  (_,state) <- findAnchorAtLeast runId 1
+  (_,state) <- findAnchorAtLeast input.runId 1
   initialState 4 [state.opener, state.member]
   sourceCatalogueEvidence state.opener
-  outcome <- manualExistingRound runId 4 True
+  let selector = if input.round == "" then None else Some input.round
+  outcome <- manualExistingRoundFor input.runId 4 True selector
   finalState 4 [state.opener, state.member] outcome
   pure outcome
 

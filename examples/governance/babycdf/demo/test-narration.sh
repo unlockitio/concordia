@@ -141,10 +141,23 @@ REPO_REL="examples/governance/babycdf/demo/daml/Cap/Examples/BabyCdf/Live.daml"
 # v20 validates existing ballot sets and vote compatibility before checkpoint creation.
 # v23 permits valid blocked milestone ballots and reports no executable approval.
 # Proposal pin requirements and on-ledger execution barriers remain unchanged.
-SPEC_VERSION='v23-trigger-only-milestone-voting'
+# v24 is a DELIBERATE step-4 selection change, NOT an equivalence claim: the
+# existing-round manual vote takes an explicit round selector (round id or bare
+# trigger comment id), reached as milestoneVote -> milestoneVoteFor ->
+# manualExistingRoundFor. Absence of a selector is accepted only when exactly
+# one round is eligible; several eligible rounds refuse and list every
+# candidate with its first failing check. No earliest, latest or
+# SourceRoundHead pick is ever made implicitly. Every eligibility check is
+# unchanged and the selector only narrows an already validated set, so no
+# round can become votable that was not votable before. Refusals now raise
+# AssertionFailed through assertMsg, and two phase signals record whether the
+# run reached the ledger, which is what lets a pre-submission refusal be
+# retried without destroying the network. Step 3, the PR184 approval
+# prerequisite, voting, resolution and execution barriers are unchanged.
+SPEC_VERSION='v24-step4-explicit-round-selector'
 # Authorized v21 behavior change, not equivalence to v20: five primary seats,
 # three YES early approval, rights through close, configurable fresh bootstrap.
-SPEC_DIGEST='5296cc8c8a4be56e09b733b5b218ed8a1f5df849b69115d69489839fc8304fcf'
+SPEC_DIGEST='d2c246a997887c460b3a08f1d1beb1a697bd155358f70ea8d3e3d2a541ee42ff'
 
 for required in "$LIVE" "$SELECTOR" "$RULE"; do
   if [ ! -f "$required" ]; then
@@ -441,9 +454,18 @@ def check_quorum_numbers(live_path, selector_path, rule_path):
     # the shared selector, never from ballot order.
     if "coreQuorum" not in selector or "coreQuorum : Int -> [Party] -> [Party]" not in selector:
         failures.append("LiveVote.daml must define the shared coreQuorum selector")
-    for step in ("ruleVoteWith closeWindow", "proposalVote", "milestoneVote"):
+    for step in ("ruleVoteWith closeWindow", "proposalVote"):
         if not re.search(r"(?s)^%s runId = do.*?coreQuorum quorumSize state\.core" % step, live, re.M):
             failures.append("%s must select its voters with coreQuorum quorumSize state.core" % step)
+    # Step 4 reaches its voter selection through the explicit round selector, so
+    # the chain is followed rather than assuming a `milestoneVote runId = do`
+    # block. The selection itself is unchanged and still has to be coreQuorum.
+    if not re.search(r"(?m)^milestoneVote runId = milestoneVoteFor \(ManualRoundInput runId \"\"\)$", live):
+        failures.append("milestoneVote must dispatch through milestoneVoteFor")
+    if not re.search(r"(?s)^milestoneVoteFor input = do.*?manualExistingRoundFor input\.runId 4 True selector", live, re.M):
+        failures.append("milestoneVoteFor must dispatch the step 4 existing-round vote")
+    if not re.search(r"(?s)^manualExistingRoundFor runId step milestone selector = do.*?coreQuorum quorumSize state\.core", live, re.M):
+        failures.append("milestoneVote must select its voters with coreQuorum quorumSize state.core")
     if "coreQuorum belowQuorumSize state.core" not in live:
         failures.append("the no-quorum case must select coreQuorum belowQuorumSize state.core")
     # A selection taken from ballot order would reintroduce the alternates bug.

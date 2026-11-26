@@ -47,10 +47,37 @@ for name in ('staleRuleChange', 'credentialRefusalsWith', 'noQuorumWith', 'doubl
         errors.append(name + ': optional round must not advance main anchor')
 if 'run_step 2' not in all_block.group(0) or 'exit $?' not in all_block.group(0):
     errors.append('integrated all must stop after Architecture step 2')
-for name, step, milestone in [('proposalVote', 3, 'False'), ('milestoneVote', 4, 'True')]:
-    text = body(name)
-    if f'manualExistingRound runId {step} {milestone}' not in text:
-        errors.append(name + ': must dispatch the existing-round manual vote')
+if 'manualExistingRound runId 3 False' not in body('proposalVote'):
+    errors.append('proposalVote: must dispatch the existing-round manual vote')
+# Step 4 dispatches through the explicit round selector. The entry point must
+# still reach the existing-round manual vote and nothing else, so the whole
+# chain is pinned: milestoneVote -> milestoneVoteFor -> manualExistingRoundFor,
+# with the step and milestone flag unchanged. Checking only the entry point
+# would let the selector wrapper quietly dispatch somewhere else.
+# body() only extracts `= do` blocks, so a one-line definition is invisible to
+# it and the search would run on into the next function. These two dispatches
+# are one-liners, so they are matched as whole definition lines instead.
+def defines(line):
+    return re.search(r'^' + re.escape(line) + r'\s*$', live, re.M)
+
+if not defines('milestoneVote runId = milestoneVoteFor (ManualRoundInput runId "")'):
+    errors.append('milestoneVote: must dispatch the existing-round manual vote')
+if 'manualExistingRoundFor input.runId 4 True selector' not in body('milestoneVoteFor'):
+    errors.append('milestoneVoteFor: must dispatch the existing-round manual vote')
+if not defines('manualExistingRound runId step milestone = manualExistingRoundFor runId step milestone None'):
+    errors.append('manualExistingRound: must delegate to the selector form with no selector')
+# The selector must narrow an already validated set, and absence of a selector
+# must not be resolved by guessing. A silent earliest/latest/head pick would
+# satisfy the dispatch checks above while deciding a governance question.
+selector_body = body('manualExistingRoundFor')
+if 'selected = filter requested eligible' not in selector_body:
+    errors.append('manualExistingRoundFor: selector must filter the eligible set')
+if 'length selected == 1' not in selector_body:
+    errors.append('manualExistingRoundFor: must require exactly one selected round')
+for guess in ('DA.List.head', 'DA.List.last eligible', 'DA.List.sortOn', 'SourceRoundHead',
+              'head eligible', 'take 1 eligible'):
+    if guess in selector_body:
+        errors.append('manualExistingRoundFor: must not pick a round implicitly: ' + guess)
 manual = '\n'.join(body(name) for name in ['manualExistingRound', 'manualIdentityValid', 'manualProposalPin', 'validateManualRoundBallots', 'proposalVote', 'milestoneVote'])
 for forbidden in ['requestIntake', 'ProposeAgenda', 'IntakeRequest', 'fixtureSource', 'sourceForAgenda', 'waitUntilClosed', 'sleep (', 'createCmd']:
     if forbidden in manual:

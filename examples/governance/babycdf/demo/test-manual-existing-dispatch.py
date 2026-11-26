@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Offline one-shot host-dispatch assertions for existing-round manual votes."""
+import re
 from pathlib import Path
 import subprocess
 import tempfile
@@ -13,6 +14,14 @@ class ManualDispatchTest(unittest.TestCase):
         runner = (HERE / 'run-demo.sh').read_text()
         start = runner.index('run_step() {')
         function = runner[start:runner.index('\n}', start) + 2]
+        # run_step takes an exclusive step-4 lock through these helpers, so
+        # they are part of the function's contract and must be in scope here.
+        for helper in ('step4_lock_acquire', 'step4_lock_release',
+                       'step4_cleanup'):
+            found = re.search(r'(?ms)^%s\(\) \{.*?^\}\n' % helper, runner)
+            self.assertIsNotNone(found, helper)
+            function = found.group(0) + function
+        function = "STEP4_LOCK=''\n" + function
         self.assertNotIn('INTAKE_RUNNING', function)
         for step, script in ((3, 'proposalVote'), (4, 'milestoneVote')):
             for scenario in ('attempted', 'result', 'success', 'uncertain', 'gate'):
