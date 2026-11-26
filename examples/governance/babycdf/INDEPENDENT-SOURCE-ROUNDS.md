@@ -2,7 +2,9 @@
 
 Automatic intake keeps the existing bounded static eligibility list: proposal PRs 184, 473, 474, 475 and 1028, and milestone issues 538 through 545 in `canton-foundation/canton-dev-fund`. The broader catalogue discovery scope is unchanged.
 
-A pending proposal does not prevent a different eligible subject from opening in a subsequent intake cycle. The opener remains a single locked queue writer and submits at most one new round per tick. Uncertain submissions are reconciled using exact receipt and linked-action proof, never replayed. A pending or uncertain round blocks subsequent rounds for the same repository, source kind and source number. Different milestone issues remain independent even when they share an original proposal.
+A pending proposal does not prevent a different eligible subject from opening in a subsequent intake cycle. The opener remains a single locked queue writer and submits at most one new round per tick. Uncertain submissions are reconciled using exact receipt and linked-action proof, never replayed. A pending or uncertain round blocks subsequent rounds for the same repository, source kind and source number. Intake opens at most one vote per milestone: additional comments do not request another vote, even after resolution. Comment identities remain catalogue evidence. Different milestone issues remain independent even when they share an original proposal.
+
+Before milestone submission, Intake checks durable milestone receipts by repository and issue URL, including receipts retained after resolution. Missing or conflicting ledger evidence fails closed; existing duplicate receipts require reconciliation and are never automatically archived or resolved. This is an application guard serialized by the opener journal lock, not an atomic ledger uniqueness constraint across independent writers or journal directories. Explicit issuer receipt archival/reset can remove the durable evidence and is outside this guarantee.
 
 ## Voting window
 

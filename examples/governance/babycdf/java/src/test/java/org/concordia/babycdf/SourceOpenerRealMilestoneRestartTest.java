@@ -4,8 +4,8 @@ import java.nio.file.*;import java.time.*;import java.util.*;import java.io.*;
 import static org.junit.jupiter.api.Assertions.*;import static org.concordia.babycdf.SourceCatalogueCodec.*;
 class SourceOpenerRealMilestoneRestartTest {
  @TempDir Path root;
- @Test void activeSameSubjectHeadRealAdapterTwoRoundsRestartAndForeignStaleMissingRefuse()throws Exception {exercise(false);}
- @Test void retained540CurrentCommandsUnknownHistoryOpenTwoPendingTopics()throws Exception {exercise(true);}
+ @Test void sameMilestoneRealAdapterSuppressesSecondVoteAfterRestart()throws Exception {exercise(false);}
+ @Test void retained540CurrentCommandsUnknownHistoryOpenOnlyOneTopic()throws Exception {exercise(true);}
  @Test void blockedUnsubmittedObservationRevalidatedOnceWithRetainedJournal()throws Exception {migrate=true;exercise(true);}
  @Test void unavailableEventHistoryDoesNotGateCurrentCommentOpening()throws Exception {partial=true;exercise(true);}
  boolean partial;
@@ -52,9 +52,12 @@ class SourceOpenerRealMilestoneRestartTest {
   if(crashMigration){try(var ledger=new SourceOpenerLedger("opener",pkg,"gov","user",rpc,proofs.get());var queue=new SourceOpenerQueue(root,ledger,Duration.ofDays(21),Clock.fixed(now,ZoneOffset.UTC))){assertEquals(SourceOpenerQueue.State.blocked,queue.snapshot().getFirst().state());for(var c:capabilities)queue.enqueue(c,ledger.bind(c));assertEquals("opened",queue.tick());}}
   assertEquals(1,rows.get("AgendaProposal").size());
   if(migrate){try(var files=Files.list(root)){var retained=files.filter(p->p.getFileName().toString().startsWith("opening-policy-v1-before-")).toList();assertEquals(1,retained.size());assertTrue(Files.readString(retained.getFirst()).contains("blocked_pin"));}}
-  try(var ledger=new SourceOpenerLedger("opener",pkg,"gov","user",rpc,proofs.get());var queue=new SourceOpenerQueue(root,ledger,Duration.ofDays(21),Clock.fixed(now,ZoneOffset.UTC))){for(var c:capabilities)queue.enqueue(c,ledger.bind(c));assertEquals("opened",queue.tick());assertEquals(2,sent.size());assertEquals(2,rows.get("AgendaProposal").size());var second=queue.snapshot().getLast().binding();assertEquals(capabilities.getFirst().roundId(),second.previousRound());
+  try(var ledger=new SourceOpenerLedger("opener",pkg,"gov","user",rpc,proofs.get());var queue=new SourceOpenerQueue(root,ledger,Duration.ofDays(21),Clock.fixed(now,ZoneOffset.UTC))){for(var c:capabilities)queue.enqueue(c,ledger.bind(c));assertEquals("proven-open",queue.tick());assertEquals(1,sent.size());assertEquals(1,rows.get("AgendaProposal").size());var second=queue.snapshot().getLast().binding();assertTrue(ledger.milestoneAlreadyOpened(second));
+   var receiptRows=rows.get("AgendaRoundReceipt");rows.put("AgendaRoundReceipt",List.of(receiptRows.getFirst(),receiptRows.getFirst()));assertThrows(IOException.class,()->ledger.milestoneAlreadyOpened(second));rows.put("AgendaRoundReceipt",receiptRows);
+   var other=new SourceOpenerQueue.Binding(second.repo(),541,second.kind(),second.credentialCid(),second.version(),second.fingerprint(),second.evidenceDigest(),second.roundId(),second.eventAt(),second.sourceId(),second.pinJson(),second.previousRound(),second.amendmentOriginal());assertFalse(ledger.milestoneAlreadyOpened(other));
+   rows.put("AgendaProposal",List.of());assertTrue(ledger.milestoneAlreadyOpened(second));
    assertThrows(IOException.class,()->ledger.validate(second));rows.put("SourceRoundHead",List.of(event("head",record("number",integer(540),"latest",text("missing")))));assertThrows(IOException.class,()->ledger.prepare(second));
-   var foreign=event("foreign",record("opener",party(),"roundId",text("foreign-round"),"sourceSnapshot",some(record("opener",party(),"observation",record("number",integer(541),"kind",constructor("SourceMilestone"))))));rows.put("AgendaRoundReceipt",List.of(foreign));rows.put("SourceRoundHead",List.of(event("head",record("number",integer(540),"latest",text("foreign-round")))));assertThrows(IOException.class,()->ledger.prepare(second));assertEquals(2,sent.size());}
+   var foreign=event("foreign",record("opener",party(),"roundId",text("foreign-round"),"sourceSnapshot",some(record("opener",party(),"observation",record("number",integer(541),"kind",constructor("SourceMilestone"))))));rows.put("AgendaRoundReceipt",List.of(foreign));rows.put("SourceRoundHead",List.of(event("head",record("number",integer(540),"latest",text("foreign-round")))));assertThrows(IOException.class,()->ledger.prepare(second));assertEquals(1,sent.size());}
  }
  static ValueOuterClass.Value party(){return ValueOuterClass.Value.newBuilder().setParty("opener").build();}static ValueOuterClass.Value cid(String s){return ValueOuterClass.Value.newBuilder().setContractId(s).build();}static ValueOuterClass.Value some(ValueOuterClass.Value v){return ValueOuterClass.Value.newBuilder().setOptional(ValueOuterClass.Optional.newBuilder().setValue(v)).build();}static EventOuterClass.CreatedEvent event(String id,ValueOuterClass.Value r){return EventOuterClass.CreatedEvent.newBuilder().setContractId(id).addSignatories("opener").setCreateArguments(r.getRecord()).build();}
 }

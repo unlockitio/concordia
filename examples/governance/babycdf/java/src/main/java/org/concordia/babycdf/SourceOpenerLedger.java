@@ -133,6 +133,26 @@ public final class SourceOpenerLedger implements SourceOpenerQueue.Ledger,AutoCl
   var b=v.toBuilder();if(v.hasRecord()){var r=v.getRecord().toBuilder().clearRecordId().clearFields();for(var f:v.getRecord().getFieldsList())r.addFields(f.toBuilder().setValue(normalized(f.getValue())));b.setRecord(r);}else if(v.hasVariant())b.setVariant(v.getVariant().toBuilder().clearVariantId().setValue(normalized(v.getVariant().getValue())));else if(v.hasList()){var l=v.getList().toBuilder().clearElements();for(var e:v.getList().getElementsList())l.addElements(normalized(e));b.setList(l);}return b.build();
  }
  private static String safe(EventOuterClass.CreatedEvent e,String label){try{return IntakeLedger.text(e.getCreateArguments(),label);}catch(IOException invalid){return "";}}
+ public boolean milestoneAlreadyOpened(SourceOpenerQueue.Binding b)throws IOException {
+  String url="https://github.com/"+b.repo()+"/issues/"+b.number();
+  int matches=0;
+  for(var receipt:rpc.active(RULE,"AgendaRoundReceipt")) {
+   var agenda=IntakeLedger.field(receipt.getCreateArguments(),"agenda");
+   if(!agenda.hasVariant())throw new IOException("receipt agenda unavailable");
+   if(!agenda.getVariant().getConstructor().equals("Milestone"))continue;
+   var subject=agenda.getVariant().getValue();
+   if(!subject.hasRecord())throw new IOException("milestone receipt subject unavailable");
+   if(url.equals(IntakeLedger.text(subject.getRecord(),"url")))matches++;
+  }
+  if(matches>1){System.err.println("[Intake] BLOCKED milestone="+url+" existingVotes="+matches+"; reconciliation required; no automatic changes");throw new IOException("multiple votes already exist for milestone; reconciliation required");}
+  if(matches>0)return true;
+  for(var proposal:rpc.active(RULE,"AgendaProposal")) {
+   var subject=IntakeLedger.field(proposal.getCreateArguments(),"subject");
+   if(!subject.hasRecord())throw new IOException("proposal subject unavailable");
+   if(url.equals(IntakeLedger.text(subject.getRecord(),"url")))throw new IOException("milestone proposal without receipt; reconciliation required");
+  }
+  return false;
+ }
  public boolean anyActiveRound()throws IOException {return !rpc.active(RULE,"AgendaProposal").isEmpty();}
  public SourceOpenerQueue.Binding bind(SourceEvidenceCollector.Ready ready)throws IOException {
   var candidates=rpc.active(CREDENTIAL,"SourceObservationCredential").stream().filter(e->{try{return IntakeLedger.number(IntakeLedger.field(e.getCreateArguments(),"observation").getRecord(),"number")==ready.number();}catch(IOException bad){return false;}}).toList();

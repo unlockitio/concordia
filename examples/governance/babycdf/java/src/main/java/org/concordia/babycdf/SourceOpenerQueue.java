@@ -30,6 +30,7 @@ public final class SourceOpenerQueue implements AutoCloseable {
   default Optional<Proof> proof(Binding binding,Optional<Instant> expectedDeadline)throws IOException{return proof(binding);}
   /** Coherent bounded active proposal scan, retained for diagnostic callers. */
   boolean anyActiveRound()throws IOException;
+  default boolean milestoneAlreadyOpened(Binding binding)throws IOException {throw new IOException("milestone receipt query unsupported");}
   /** Exact active registered credential and predecessor/head checks, never silently substitute. */
   void validate(Binding binding)throws IOException;
    default void validateWindow(Binding binding,Instant deadline)throws IOException {}
@@ -197,6 +198,10 @@ public final class SourceOpenerQueue implements AutoCloseable {
  public synchronized String tick()throws IOException {
   for(var row:ordered()) {
    if(row.state()==State.blocked)continue;
+   if(row.state()==State.queued&&row.binding().kind().equals("milestone")) {
+    try {if(ledger.milestoneAlreadyOpened(row.binding())) {rows.put(row.binding().roundId(),new Row(row.binding(),State.blocked,"milestone already has a vote; comment retained as evidence"));persist();continue;}}
+    catch(IOException unavailable) {rows.put(row.binding().roundId(),new Row(row.binding(),State.blocked,"milestone receipt reconciliation required"));persist();continue;}
+   }
    if(row.state()==State.completed){var completedProof=ledger.proof(row.binding(),Optional.ofNullable(deadlines.get(row.binding().roundId())));if(completedProof.isEmpty()||!completedProof.get().roundId().equals(row.binding().roundId())||!completedProof.get().bindingDigest().equals(digest(row.binding())))throw new IOException("completed receipt reset/dangling: reconciliation blocked");continue;}
    var proof=ledger.proof(row.binding(),Optional.ofNullable(deadlines.get(row.binding().roundId())));
    if(proof.isPresent()) {
@@ -209,8 +214,13 @@ public final class SourceOpenerQueue implements AutoCloseable {
   // Each submission remains serialized; pending independent subjects do not gate the queue.
   for(var row:ordered())if(row.state()==State.queued) {
     Binding candidate=row.binding();
-    if(rows.values().stream().anyMatch(other->!other.binding().roundId().equals(candidate.roundId())&&other.binding().repo().equals(candidate.repo())&&other.binding().number()==candidate.number()&&other.binding().kind().equals(candidate.kind())&&(other.state()==State.submission_uncertain||(!candidate.kind().equals("milestone")&&other.state()==State.proven_open))))continue;
+    if(rows.values().stream().anyMatch(other->!other.binding().roundId().equals(candidate.roundId())&&other.binding().repo().equals(candidate.repo())&&other.binding().number()==candidate.number()&&other.binding().kind().equals(candidate.kind())&&(other.state()==State.submission_uncertain||other.state()==State.proven_open||(candidate.kind().equals("milestone")&&other.state()==State.completed))))continue;
    if(!verifiedThisProcess.contains(row.binding().roundId()))throw new IOException("queued evidence needs collector revalidation, not deserialized ready trust");
+   if(candidate.kind().equals("milestone")) {
+    try {
+     if(ledger.milestoneAlreadyOpened(candidate)) {rows.put(candidate.roundId(),new Row(candidate,State.blocked,"milestone already has a vote; comment retained as evidence"));persist();continue;}
+    } catch(IOException unavailable) {rows.put(candidate.roundId(),new Row(candidate,State.blocked,"milestone receipt reconciliation required"));persist();continue;}
+   }
    Binding prepared=ledger.prepare(row.binding());
    if(!prepared.equals(row.binding())){if(!prepared.kind().equals("milestone")||!sameEvidence(prepared,row.binding()))throw new IOException("prepare altered immutable evidence");rows.put(prepared.roundId(),new Row(prepared,State.queued,""));persist();row=new Row(prepared,State.queued,"");}
    try{ledger.validate(row.binding());}catch(IOException invalid){rows.put(row.binding().roundId(),new Row(row.binding(),State.blocked,"exact credential/pin/head validation failed"));persist();return "blocked";}
