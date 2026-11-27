@@ -1,0 +1,123 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | The steps of resolving the vote records presented to a resolver: fetch
+-- them, require that they agree, consume them and turn their votes into casts
+-- for Count. The checks on records and votes are in Cap.Governance.Vote.
+module Cap.Governance.Resolution
+  ( -- * Fetching
+    fetchVoteRecords
+  , fetchSharedVoteRecord
+
+    -- * Agreement
+  , expectSameAction
+  , expectSameSnapshots
+
+    -- * Ledger
+  , consumeVoteRecords
+
+    -- * Casting
+  , casts
+  ) where
+
+import DA.Foldable (mapA_)
+import DA.Map (Map)
+import qualified DA.Map as Map
+import DA.Optional (fromOptional, fromSomeNote)
+
+import Cap.Core.AuthenticKeyV1 (AuthenticKey)
+import Cap.Core.IdentityV1 (Identity)
+import Cap.Core.ResolutionV1 (ResolutionInfo)
+import Cap.Governance.KeyedTargetV1 (Snapshot)
+import Cap.Core.Checks (Check)
+import Cap.Core.Fetch (HasCheckedFetch)
+import Cap.Core.Resolution (fetchGroup, validateContractSignedByResolverAuthorities)
+import Cap.Core.Optional (sameOptional)
+import Cap.Core.Identity (validateDistinctIdentitiesAmong)
+import Cap.Governance.VoteRecordV1 (Vote (..))
+import Cap.Governance.Vote (IsVoteRecord (..))
+import Cap.Governance.Count (Cast (..), Casts)
+
+
+-- A resolver MUST fetch presented records with fetchVoteRecords, so a
+-- resolution of another resolver, a duplicate, a record of another resolution
+-- or not signed by its resolver, or a voter on two records aborts. A resolver
+-- that keeps its own template's records out of its authorities' view checks
+-- them itself.
+
+
+------------------  FETCHING  ------------------
+
+-- | Checks that the resolution names this resolver (requireResolvedBy), then
+-- fetches the presented vote records with fetchGroup, and requires that the
+-- resolver's authorities signed each one, that no voter is on two contracts, and the
+-- given checks, such as validateContractSignedByActingParties.
+fetchVoteRecords
+  : (HasCheckedFetch res AuthenticKey, HasFetch r, HasSignatory r, IsVoteRecord r v act)
+  => res -> ContractId res -> [Check r] -> ResolutionInfo -> [ContractId r]
+  -> Update [(ContractId r, r)]
+fetchVoteRecords resolver self checks =
+  fetchGroup resolver self (validateContractSignedByResolverAuthorities :: checks) [validateDistinctIdentitiesAmong]
+
+
+-- | fetchVoteRecords for a decision whose votes are all on one record. 
+-- A failed check in this function aborts the whole transaction (see ignore vs require), 
+-- Since it is a sharedRecord the validVotes check should be done at recreation of the contract
+-- not at resolution.
+fetchSharedVoteRecord
+  : (HasCheckedFetch res AuthenticKey, HasFetch r, HasSignatory r, IsVoteRecord r v act)
+  => res -> ContractId res -> [Check r] -> ResolutionInfo -> ContractId r
+  -> Update r
+fetchSharedVoteRecord resolver self checks resolution cid = do
+  presented <- fetchVoteRecords resolver self checks resolution [cid]
+  case presented of
+    [(_, record)] -> pure record
+    _ -> abort "fetchVoteRecords returned other than the one presented record"
+
+
+------------------  AGREEMENT  ------------------
+-- For mechanisms that take the action and snapshots from the records. They
+-- abort on disagreement; a lenient resolution SHOULD instead check each record
+-- with validVoteRecordAction and validVoteRecordSnapshots (Cap.Governance.Vote).
+
+-- | The action every vote record asks for. Fails when they differ or there
+-- are none. Through the VoteRecord interface, the action is the records'
+-- options, sorted.
+expectSameAction : IsVoteRecord r v act => [r] -> act
+expectSameAction =
+  fromSomeNote "the presented vote records ask for different actions, or there are none"
+    . sameOptional . map actionOf
+
+-- | The snapshots every vote record carries. Fails when they differ or there
+-- are none.
+expectSameSnapshots : IsVoteRecord r v act => [r] -> Map AuthenticKey Snapshot
+expectSameSnapshots =
+  fromSomeNote "the presented vote records carry different snapshots, or there are none" . sameOptional . map snapshotsOf
+
+
+------------------  CONSUME  ------------------
+
+-- | Consumes the vote records so they cannot be counted again. Standing
+-- records are left as they are. Through the VoteRecord interface, a resolver
+-- SHOULD consume only the non-ignored records
+consumeVoteRecords : IsVoteRecord r v act => [ContractId r] -> Update ()
+consumeVoteRecords = mapA_ consume
+
+
+------------------  CAST  ------------------
+
+-- | The cast of every voter in weights; a voter with no counted vote is
+-- Absent. The records MUST have passed validVotes, fetchVoteRecords
+-- and validateDistinctIdentitiesAmong, and the weights validWeights: casts
+-- drops failures silently.
+casts : IsVoteRecord r v act => (Vote v -> Optional (Vote a)) -> Map Identity Decimal -> [r] -> Casts a
+casts decodeVote weights records = Map.fromList
+  [ (voter, Cast with weight; vote = fromOptional Absent (Map.lookup voter counted))
+  | (voter, weight) <- Map.toList weights
+  ]
+  where
+    counted = Map.fromList
+      [ (voter, vote)
+      | record <- records
+      , (voter, raw) <- Map.toList (votesOf record)
+      , Some vote <- [decodeVote raw]
+      ]

@@ -19,7 +19,8 @@ import qualified DA.Map as Map
 import DA.Set (Set)
 import qualified DA.Set as Set
 
-import Cap.Core.Types (AuthenticKey, Identity (..))
+import Cap.Core.AuthenticKeyV1 (AuthenticKey)
+import Cap.Core.IdentityV1 (Identity (..))
 
 import Cap.DecOperator.Types (Member (..), MemberStatus (..))
 import Cap.DecOperator.DecOperatorRulesV1

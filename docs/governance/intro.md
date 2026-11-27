@@ -143,7 +143,7 @@ classDiagram
     }
     class Executable {
       «interface»
-      executionCore : ExecutionCore
+      executionTerms : ExecutionTerms
       outcome
       Executable_Execute()
       Executable_Cancel()

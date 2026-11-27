@@ -17,7 +17,8 @@ import Splice.Api.Token.HoldingV2 (InstrumentId (..))
 import qualified Splice.Api.Token.AllocationV2 as Alloc
 import Splice.TokenStandard.Utils (basicAccount)
 
-import Cap.Core.Types (AuthenticKey (..), ResolutionInfo (..))
+import Cap.Core.AuthenticKeyV1 (AuthenticKey (..))
+import Cap.Core.ResolutionV1 (ResolutionInfo (..))
 import Cap.Auctions.Types
   ( AllocationTerms (..), AuctionSchedule (..), AuctionTerms (..), Direction (..), Funding (..)
   , HasSingleLotQuotes (..), LotTerms (..), Quote (..)

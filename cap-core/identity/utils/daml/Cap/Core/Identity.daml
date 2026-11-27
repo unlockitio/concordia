@@ -1,0 +1,70 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | The identities a contract acts for, the parties that may act for an
+-- identity, and checks that the right parties signed.
+module Cap.Core.Identity
+  ( HasActingParties (..)
+  , HasIdentities (..)
+  , actingPartiesFor
+
+    -- * Checks
+  , validateContractSignedByActingParties
+  , validateDistinctIdentitiesAmong
+  ) where
+
+import DA.Map (Map)
+import qualified DA.Map as Map
+import DA.Optional (fromOptional)
+import DA.Set (Set)
+import qualified DA.Set as Set
+
+import Cap.Core.Checks (AmongCheck, Check)
+import Cap.Core.IdentityV1 (Identity (..))
+
+
+------------------  ACTING PARTIES  ------------------
+
+-- | Maps identities to the parties that may act for them, besides a party
+-- identity's own party.
+class HasActingParties t where
+  actingPartiesOf : t -> Map Identity (Set Party)
+
+-- | The identities a contract acts for: the voters on a vote record, the
+-- owners of a bid's accounts.
+class HasIdentities t where
+  identitiesOf : t -> Set Identity
+
+-- | The parties that may act for the identity: the parties the mapping
+-- names, and for a party identity also the party itself, which cannot lose
+-- that right.
+actingPartiesFor : HasActingParties p => p -> Identity -> Set Party
+actingPartiesFor p identity =
+  own identity <> fromOptional Set.empty (Map.lookup identity (actingPartiesOf p))
+  where
+    own (PartyIdentity party) = Set.singleton party
+    own (ExternalIdentity _) = Set.empty
+
+
+------------------  CHECK IDENTITIES  ------------------
+
+-- | Validates that a party acting for each of the contract's identities signed it.
+validateContractSignedByActingParties : (HasActingParties p, HasIdentities t, HasSignatory t) => p -> Check t
+validateContractSignedByActingParties p contract =
+  [ "no party acting for the identity " <> show identity <> " signed the contract"
+  | identity <- Set.toList (identitiesOf contract)
+  , let acting = actingPartiesFor p identity
+  , not (any (`Set.member` acting) (signatory contract))
+  ]
+
+-- | Validates that no other contract carries one of its identities. Every
+-- contract of an identity on several contracts fails, so the result does not
+-- depend on presentation order.
+validateDistinctIdentitiesAmong : HasIdentities t => AmongCheck t
+validateDistinctIdentitiesAmong contracts contract =
+  [ "the identity " <> show identity <> " is on another contract"
+  | identity <- Set.toList (identitiesOf contract)
+  , fromOptional 0 (Map.lookup identity uses) > 1
+  ]
+  where
+    uses = Map.fromListWithR (+)
+      [(identity, 1) | other <- contracts, identity <- Set.toList (identitiesOf other)]

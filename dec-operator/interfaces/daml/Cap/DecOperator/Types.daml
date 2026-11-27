@@ -1,7 +1,7 @@
 -- SPDX-License-Identifier: Apache-2.0
 
--- | The types that more than one interface uses: the members and the
--- votes. The configuration and the decisions are in
+-- | The types that more than one interface uses: the members. Votes and
+-- vote records are the ones in cap-governance-vote-v1. The configuration and the decisions are in
 -- `Cap.DecOperator.DecOperatorRulesV1`.
 --
 -- These types are defined in the interface package, and a package that
@@ -14,16 +14,9 @@ module Cap.DecOperator.Types
   , MemberStatus (..)
   , Member (..)
   , FormerMember (..)
-    -- * Votes
-  , Vote (..)
-  , CastVote (..)
-  , Reason (..)
   ) where
 
 import DA.Set (Set)
-
-import Splice.Api.Token.MetadataV1
-
 
 
 ------------------  MEMBERS  ------------------
@@ -82,36 +75,4 @@ data FormerMember = FormerMember
   with
     actingParties : Set Party
     participantNode : ParticipantNode
-  deriving (Eq, Show)
-
-
-------------------  VOTES  ------------------
-
--- | One member's vote as a mechanism reads it. Every Active member has one:
--- a member without a cast vote is `Absent`.
-data Vote a
-  = Absent
-  -- ^ Did not vote.
-  | Abstained
-  -- ^ Voted, for no outcome.
-  | Voted a
-  deriving (Eq, Show)
-
--- | One member's vote as a shared vote record stores it.
-data CastVote = CastVote
-  with
-    voter : Party
-    -- ^ The acting party that cast the vote.
-    value : Optional AnyValue
-    -- ^ None: abstained. Some: a vote of the mechanism's vote type, in the mechanism's encoding.
-    reason : Reason
-    castAt : Time
-    -- ^ Read against `castCooldown`.
-  deriving (Eq, Show)
-
--- | A link to the full text, and a short body.
-data Reason = Reason
-  with
-    url : Text
-    body : Text
   deriving (Eq, Show)

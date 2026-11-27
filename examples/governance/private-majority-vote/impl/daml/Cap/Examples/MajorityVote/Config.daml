@@ -12,12 +12,16 @@ import qualified DA.Set as Set
 import Splice.Api.Token.MetadataV1
 import Splice.Util (HasCheckedFetch (..))
 
-import Cap.Core.Types (AuthenticKey (..), Snapshot (..), ExecutionCore)
-import Cap.Core.Utils (IsAnyValue (..), requireMet, signatoriesKey)
+import Cap.Core.AuthenticKeyV1 (AuthenticKey (..))
+import Cap.Governance.KeyedTargetV1 (Snapshot (..))
+import Cap.Core.AnyValue (IsAnyValue (..))
+import Cap.Core.Checks (requireMet)
+import Cap.Core.AuthenticKey (signatoriesKey)
 import Cap.Governance.ActionV1
 import Cap.Governance.ExecutableV1
-import Cap.Governance.Utils
-  ( HasState (..), TargetReader, fetchTargetMatchingSnapshot, mergeSnapshotsWithoutConflicts, readState, validTargetsForSnapshots )
+import Cap.Governance.Execution (validAuthorizers, validCancellation, validExecution, validExpiry)
+import Cap.Governance.Targets.Snapshots (HasState (..), mergeSnapshotsWithoutConflicts, readState)
+import Cap.Governance.Targets.Execution (fetchTargetMatchingSnapshot, validTargetsForSnapshots)
 
 
 configId : Text
@@ -60,22 +64,33 @@ template ConfigUpdate
   with
     dso : Party
     newSetting : Text
-    core : ExecutionCore
+    core : ExecutionTerms
     snapshots : Map AuthenticKey Snapshot
     outcome : Optional AnyValue
   where
     signatory dso
-    observer concat (concat (Map.values core.availableActions))
+    observer concat (core.executors <> core.cancellers)
 
     interface instance Executable for ConfigUpdate where
       view = ExecutableView with
-        executionCore = core
+        executionTerms = core
         snapshots
         outcome
 
-      executable_cancelImpl _ = abort "this execution cannot be cancelled"
+      executable_cancelImpl arg = do
+        now <- getTime
+        requireMet (validCancellation core arg.actors now)
+        abort "this execution cannot be cancelled"
 
-      executable_executeImpl targetCids _ = do
+      executable_expireImpl _ = do
+        now <- getTime
+        requireMet (validExpiry core now)
+        pure Executable_ExpireResult with meta = emptyMetadata
+
+      executable_executeImpl arg = do
+        now <- getTime
+        requireMet (validExecution core arg.actors now)
+        let targetCids = arg.targetCids
         requireMet (validTargetsForSnapshots snapshots targetCids)
         (configCid, _) <- fetchTargetMatchingSnapshot @Config (==) (configTargetKey dso) snapshots targetCids
         updated <- exercise configCid Config_Set with newSetting
@@ -96,6 +111,7 @@ template SetConfigAction
 
     interface instance Action for SetConfigAction where
       view = ActionView with
+        actionId = "Change the setting of " <> partyToText dso <> " from " <> show baseSetting <> " to " <> show newSetting
         authorizers = [[dso]]
         snapshots = setConfigTargets dso baseSetting
         meta = emptyMetadata
@@ -103,11 +119,12 @@ template SetConfigAction
       action_readStateImpl = readConfigTargets dso
 
       action_authorizeExecutionImpl _ arg = do
+        requireMet (validAuthorizers [[dso]] arg.actors)
         snapshots <- mergeSnapshotsWithoutConflicts (setConfigTargets dso baseSetting) arg.snapshots
         cid <- create ConfigUpdate with
           dso; newSetting
           snapshots
-          core = arg.executionCore
+          core = arg.executionTerms
           outcome = arg.outcome
         pure Action_AuthorizeExecutionResult with
           executionCids = [toInterfaceContractId cid]

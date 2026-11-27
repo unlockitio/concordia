@@ -1,0 +1,23 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | Which resolution an input belongs to: a vote record, a bid or a
+-- settlement names the resolver and the mechanism that decide it.
+module Cap.Core.ResolutionV1
+  ( ResolutionInfo (..)
+  ) where
+
+import Splice.Api.Token.MetadataV1 (AnyContractId)
+
+import Cap.Core.AuthenticKeyV1 (AuthenticKey)
+
+
+data ResolutionInfo = ResolutionInfo
+  with
+    resolver : AuthenticKey
+    resolverCid : Optional AnyContractId
+    -- ^ Some: the resolution is bound to this resolver contract.
+    mechanism : Text
+    id : Text
+    -- ^ The resolver keeps it unique among resolutions whose settlements can
+    -- share executors; it is the settlement id.
+  deriving (Eq, Show)

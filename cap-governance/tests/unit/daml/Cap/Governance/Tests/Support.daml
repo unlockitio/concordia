@@ -17,10 +17,12 @@ import Splice.Api.Token.MetadataV1 (AnyContractId)
 
 import Splice.Util (HasCheckedFetch (..))
 
-import Cap.Core.Types (AuthenticKey (..), Identity, ResolutionInfo)
-import Cap.Core.Utils (HasIdentities (..))
-import Cap.Governance.Types (Vote)
-import Cap.Governance.Utils.VoteRecords (IsVoteRecord (..))
+import Cap.Core.AuthenticKeyV1 (AuthenticKey (..))
+import Cap.Core.IdentityV1 (Identity)
+import Cap.Core.ResolutionV1 (ResolutionInfo)
+import Cap.Core.Identity (HasIdentities (..))
+import Cap.Governance.VoteRecordV1 (Vote)
+import Cap.Governance.Vote (IsVoteRecord (..))
 
 
 -- | A vote record carrying only votes. The tests that use it read nothing else, so

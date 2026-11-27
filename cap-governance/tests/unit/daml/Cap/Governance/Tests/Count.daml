@@ -6,7 +6,7 @@ import DA.Assert ((===))
 import qualified DA.Map as Map
 import Daml.Script
 
-import Cap.Governance.Utils.Count
+import Cap.Governance.Count
 
 
 data Voters = Voters with

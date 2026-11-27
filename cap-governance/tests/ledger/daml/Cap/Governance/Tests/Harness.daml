@@ -5,16 +5,18 @@
 module Cap.Governance.Tests.Harness where
 
 import DA.Map (Map)
-import qualified DA.Map as Map
-import DA.Set (Set)
 import qualified DA.Set as Set
 
 import Splice.Api.Token.MetadataV1
 import Splice.Util (HasCheckedFetch (..))
 
-import Cap.Core.Types (AuthenticKey (..), Snapshot (..))
-import Cap.Core.Utils (IsAnyValue (..), fetchCheckedAny, signatoriesKey)
-import Cap.Governance.Utils
+import Cap.Core.AuthenticKeyV1 (AuthenticKey (..))
+import Cap.Governance.KeyedTargetV1 (Snapshot (..))
+import Cap.Core.AnyValue (IsAnyValue (..))
+import Cap.Core.Fetch (fetchCheckedAny)
+import Cap.Core.AuthenticKey (signatoriesKey)
+import Cap.Governance.Targets.Snapshots (HasState (..), TargetReader, snapshotCidsWith, snapshotStatesWith)
+import Cap.Governance.Targets.Execution (fetchTargetMatchingSnapshot, unchanged)
 
 
 targetKey : Party -> Text -> AuthenticKey

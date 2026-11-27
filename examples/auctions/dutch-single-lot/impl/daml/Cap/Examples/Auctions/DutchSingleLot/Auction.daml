@@ -15,8 +15,10 @@ import qualified Splice.Api.Token.AllocationV2 as Alloc
 import Splice.Api.Token.HoldingV2 (Account (..))
 import Splice.Util (HasCheckedFetch (..), require)
 
-import Cap.Core.Types (AuthenticKey (..), ResolutionInfo)
-import Cap.Core.Utils (Ignored, fetchGroup)
+import Cap.Core.AuthenticKeyV1 (AuthenticKey (..))
+import Cap.Core.ResolutionV1 (ResolutionInfo)
+import Cap.Core.Checks (Ignored)
+import Cap.Core.Resolution (fetchGroup)
 import Cap.Auctions.Types (AuctionSchedule (..), AuctionTerms, Funding (..), HasSingleLotQuotes (..))
 import Cap.Auctions.Bid (Bid, Bid_Close (..))
 import Cap.Auctions.Funding (SettleBatchContext, cancelAllocations, ignoreConflictingBids, settlementOf)

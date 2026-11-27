@@ -10,10 +10,14 @@ import DA.Optional (isNone, isSome)
 
 import Splice.Util (HasCheckedFetch (..), require)
 
-import Cap.Core.Types (Identity (..), ResolutionInfo)
-import Cap.Core.Utils (HasIdentities (..), requireExpired, requireOpen)
+import Cap.Core.IdentityV1 (Identity (..))
+import Cap.Core.ResolutionV1 (ResolutionInfo)
+import Cap.Core.Identity (HasIdentities (..))
+import Cap.Core.Checks (requireMet)
+import Cap.Core.Time (validExpired, validOpen)
 import Cap.Governance.ActionV1 (Action)
-import Cap.Governance.Utils (IsVoteRecord (..), Vote (..))
+import Cap.Governance.Vote (IsVoteRecord (..))
+import Cap.Governance.Count (Vote (..))
 
 yay : Text
 yay = "yay"
@@ -42,7 +46,7 @@ template PrivateVoteRecord
       controller voter
       do
         now <- getTime
-        requireOpen "the voting window is open" now opensAt (Some closesAt)
+        requireMet (validOpen "the voting window" opensAt (Some closesAt) now)
         require "this vote record carries no vote yet" (isNone vote)
         create this with vote = Some option
 
@@ -50,7 +54,7 @@ template PrivateVoteRecord
       controller voter
       do
         now <- getTime
-        requireOpen "the voting window is open" now opensAt (Some closesAt)
+        requireMet (validOpen "the voting window" opensAt (Some closesAt) now)
         require "this vote record carries a vote to withdraw" (isSome vote)
         create this with vote = None
 
@@ -58,7 +62,7 @@ template PrivateVoteRecord
       controller operator
       do
         now <- getTime
-        requireExpired "the vote record has expired" now (Some expiresAt)
+        requireMet (validExpired "the vote record" (Some expiresAt) now)
 
     choice PrivateVoteRecord_Consume : ()
       controller operator

@@ -10,8 +10,13 @@ import Daml.Script hiding (AnyContractId)
 
 import Splice.Api.Token.MetadataV1 (AnyContractId)
 
-import Cap.Core.Types (AuthenticKey (..), ResolutionInfo (..))
-import Cap.Core.Utils
+import Cap.Core.AuthenticKeyV1 (AuthenticKey (..))
+import Cap.Core.ResolutionV1 (ResolutionInfo (..))
+import Cap.Core.AuthenticKey
+import Cap.Core.Checks
+import Cap.Core.Fetch
+import Cap.Core.Resolution
+import Cap.Core.Time
 
 import Cap.Core.Tests.Support
 
@@ -63,22 +68,22 @@ template Probe
       controller owner
       do requireResolvedBy this self resolution
 
-    nonconsuming choice Probe_RequireOpen : ()
+    nonconsuming choice Probe_ValidOpen : ()
       with
         opensAt : Time
         closesAt : Optional Time
       controller owner
       do
         now <- getTime
-        requireOpen "the window is open" now opensAt closesAt
+        requireMet (validOpen "the window" opensAt closesAt now)
 
-    nonconsuming choice Probe_RequireExpired : ()
+    nonconsuming choice Probe_ValidExpired : ()
       with
         expiresAt : Optional Time
       controller owner
       do
         now <- getTime
-        requireExpired "the contract has expired" now expiresAt
+        requireMet (validExpired "the contract" expiresAt now)
 
 
 t0 : Time
@@ -194,22 +199,22 @@ requireResolvedByRefusesAnotherRulesContract = do
     exerciseCmd probe Probe_RequireResolvedBy with
       resolution = resolutionOf owner (Some (coerceContractId otherProbe)) "vote"
 
-requireOpenChecksTheWindow : Script ()
-requireOpenChecksTheWindow = do
+validOpenChecksTheWindow : Script ()
+validOpenChecksTheWindow = do
   (owner, probe) <- setupProbe "window"
   setTime t0
-  submit owner $ exerciseCmd probe Probe_RequireOpen with opensAt = t0; closesAt = None
-  submitMustFailContaining "the window is open" owner $
-    exerciseCmd probe Probe_RequireOpen with opensAt = addRelTime t0 (days 1); closesAt = None
-  submitMustFailContaining "the window is open" owner $
-    exerciseCmd probe Probe_RequireOpen with opensAt = addRelTime t0 (days (-1)); closesAt = Some t0
+  submit owner $ exerciseCmd probe Probe_ValidOpen with opensAt = t0; closesAt = None
+  submitMustFailContaining "the window opens at" owner $
+    exerciseCmd probe Probe_ValidOpen with opensAt = addRelTime t0 (days 1); closesAt = None
+  submitMustFailContaining "the window closed at" owner $
+    exerciseCmd probe Probe_ValidOpen with opensAt = addRelTime t0 (days (-1)); closesAt = Some t0
 
-requireExpiredChecksTheExpiry : Script ()
-requireExpiredChecksTheExpiry = do
+validExpiredChecksTheExpiry : Script ()
+validExpiredChecksTheExpiry = do
   (owner, probe) <- setupProbe "expiry"
   setTime t0
-  submit owner $ exerciseCmd probe Probe_RequireExpired with expiresAt = Some t0
-  submitMustFailContaining "the contract has expired" owner $
-    exerciseCmd probe Probe_RequireExpired with expiresAt = Some (addRelTime t0 (days 1))
-  submitMustFailContaining "this contract has no expiry" owner $
-    exerciseCmd probe Probe_RequireExpired with expiresAt = None
+  submit owner $ exerciseCmd probe Probe_ValidExpired with expiresAt = Some t0
+  submitMustFailContaining "the contract expires at" owner $
+    exerciseCmd probe Probe_ValidExpired with expiresAt = Some (addRelTime t0 (days 1))
+  submitMustFailContaining "the contract has no expiry" owner $
+    exerciseCmd probe Probe_ValidExpired with expiresAt = None

@@ -5,11 +5,8 @@ module Cap.Auctions.TradeProposal where
 import DA.Map (Map)
 
 import Splice.Api.Token.MetadataV1
-import Splice.Util (require)
-import Cap.Core.Types (ResolutionInfo)
-import Cap.Core.Utils (entitled, requireBefore, requireExpired, requireMet)
+import Cap.Core.ResolutionV1 (ResolutionInfo)
 import Cap.Auctions.Types (AuctionSchedule, AuctionTerms, Funding)
-import Cap.Auctions.Terms (validAuctionSchedule, validAuctionTerms)
 
 data TradeProposalAction
   = SPA_Accept
@@ -61,47 +58,40 @@ interface TradeProposal where
 
   tradeProposal_withdrawImpl
     : ContractId TradeProposal -> TradeProposal_Withdraw -> Update TradeProposal_WithdrawResult
+  tradeProposal_expireImpl
+    : ContractId TradeProposal -> TradeProposal_Expire -> Update TradeProposal_ExpireResult
 
+  -- | Implementations MUST require that the actors are entitled to SPA_Accept,
+  -- that now is before acceptBefore, and that the terms and the schedule are
+  -- valid (validAuctionTerms, validAuctionSchedule).
   choice TradeProposal_Accept : TradeProposal_AcceptResult
     with
       actors : [Party]
       fundings : Map Party Funding -- if bid changes this changes as well
       extraArgs : ExtraArgs
     controller actors
-    do
-      let v = view this
-      require "the actors are entitled to accept"
-        (entitled v.availableActions SPA_Accept actors)
-      now <- getTime
-      requireBefore "the acceptance window is open" now v.acceptBefore
-      requireMet (validAuctionTerms v.terms <> validAuctionSchedule v.schedule)
-      tradeProposal_acceptImpl this self (TradeProposal_Accept with ..)
+    do tradeProposal_acceptImpl this self arg
 
+  -- | Implementations MUST require that the actors are entitled to SPA_Reject.
   choice TradeProposal_Reject : TradeProposal_RejectResult
     with
       actors : [Party]
       extraArgs : ExtraArgs
     controller actors
-    do
-      require "the actors are entitled to reject"
-        (entitled (view this).availableActions SPA_Reject actors)
-      tradeProposal_rejectImpl this self (TradeProposal_Reject with ..)
+    do tradeProposal_rejectImpl this self arg
 
+  -- | Implementations MUST require that the actors are entitled to
+  -- SPA_Withdraw.
   choice TradeProposal_Withdraw : TradeProposal_WithdrawResult
     with
       actors : [Party]
       extraArgs : ExtraArgs
     controller actors
-    do
-      require "the actors are entitled to withdraw"
-        (entitled (view this).availableActions SPA_Withdraw actors)
-      tradeProposal_withdrawImpl this self (TradeProposal_Withdraw with ..)
+    do tradeProposal_withdrawImpl this self arg
 
+  -- | Implementations MUST require that acceptBefore has passed.
   choice TradeProposal_Expire : TradeProposal_ExpireResult
     with
       actor : Party
     controller actor
-    do
-      now <- getTime
-      requireExpired "the proposal has expired" now (Some (view this).acceptBefore)
-      pure TradeProposal_ExpireResult with meta = emptyMetadata
+    do tradeProposal_expireImpl this self arg

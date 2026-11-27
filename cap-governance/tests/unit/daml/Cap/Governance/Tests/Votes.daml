@@ -9,10 +9,11 @@ import Daml.Script
 
 import Splice.Api.Token.MetadataV1 (AnyValue (..))
 
-import Cap.Core.Types (Identity (..))
-import Cap.Governance.Types (Vote (..))
-import Cap.Governance.Utils.Count (Cast (..))
-import Cap.Governance.Utils.Votes
+import Cap.Core.IdentityV1 (Identity (..))
+import Cap.Governance.VoteRecordV1 (Vote (..))
+import Cap.Governance.Count (Cast (..))
+import Cap.Governance.Vote
+import Cap.Governance.Resolution (casts)
 
 import Cap.Governance.Tests.Support
 
@@ -41,9 +42,9 @@ validVotesReportsEachFailureOnce = do
         , (wrongKind, Voted (AV_Int 1))
         , (abstains, Abstained)
         ]
-  validVotes decodeTextVote (validOption ["yes", "no"]) record
+  validVotes decodeTextVote (validOneOf ["yes", "no"]) record
     === [ "the vote of " <> show wrongKind <> " does not decode as the kind this mechanism counts"
-        , "the vote of " <> show maybe <> ": the option \"maybe\" is not among [\"yes\",\"no\"]"
+        , "the vote of " <> show maybe <> ": the value \"maybe\" is not among [\"yes\",\"no\"]"
         ]
 
 -- The voters come from the weights map: a voter without a record, or whose

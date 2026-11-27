@@ -11,8 +11,8 @@ import Daml.Script
 
 import Splice.Util (HasCheckedFetch (..))
 
-import Cap.Core.Types (Identity (..))
-import Cap.Governance.Utils.Weights
+import Cap.Core.IdentityV1 (Identity (..))
+import Cap.Governance.Rights
 
 
 -- | Weights a test sets directly.

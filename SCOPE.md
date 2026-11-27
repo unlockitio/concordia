@@ -22,15 +22,16 @@ broad set of use cases.
 
 ### cap-core
 
-The stored types (`AuthenticKey`, `ResolutionInfo`, `ExecutionCore`) and the opt-in
-toolkit (`cap-core-utils`: checked fetches, resolution checks, admission, time,
-value conversion). cap-core defines no interfaces, because nothing in it has to
+The stored types that both domains share (`Identity`, `AuthenticKey`,
+`ResolutionInfo`) and the opt-in toolkit (identity and resolution checks, and
+`cap-core-base`: checks, authorization, time, checked fetches, value
+conversion). cap-core defines no interfaces, because nothing in it has to
 work with a contract whose template it does not know.
 
 | Capability | First release contains | Proven by | Milestone |
 |---|---|---|---:|
-| Interfaces | Interface layer | [types](cap-core/types) | **M1** |
-| Toolkit | Opt-in toolkit | [cap-core-utils](cap-core/utils) | **M1** |
+| Interfaces | Interface layer | [identity](cap-core/identity/types) · [resolution](cap-core/resolution/types) | **M1** |
+| Toolkit | Opt-in toolkit | [cap-core-base](cap-core/base) · [identity](cap-core/identity/utils) · [resolution](cap-core/resolution/utils) | **M1** |
 | Interfaces | The same core carrying both domains | [governance slice](examples/governance/private-majority-vote) · [auction slice](examples/auctions/sealed-bid-first-price) | **M2** |
 
 The scope for cap-core is deliberately narrow. The stored types are shared by
@@ -42,16 +43,16 @@ patterns; a helper never constrains a format, it only saves work.
 
 | Capability | First release contains | Proven by | Milestone |
 |---|---|---|---:|
-| Interfaces | Interface layer | [interfaces](cap-governance/interfaces/) | **M1** |
-| Interfaces | Opt-in toolkit | [Toolkit](cap-governance/utils) | **M1** |
+| Interfaces | Interface layer | [interfaces](cap-governance/) | **M1** |
+| Interfaces | Opt-in toolkit | [Toolkit](cap-governance/) | **M1** |
 | Implementation | Splice-generalizable flow | [babydso](examples/governance/babydso) | **M1** |
 | Demo | Splice-generalizable flow demos | [babydso/demo](examples/governance/babydso/demo) | **M1** |
 | Implementation | Private votes reference flow | [private-majority-vote/impl](examples/governance/private-majority-vote/impl) | **M2** |
 | Demo | Private votes reference flow demo | [private-majority-vote/demo](examples/governance/private-majority-vote/demo) | **M2** |
 | Demo | Demo scripts and sandbox integration run | [demo package](examples/governance/private-majority-vote/demo) · [sandbox-test.sh](scripts/sandbox-test.sh) | **M2** |
-| Toolkit | Separable quorum and tally rules | [Count](cap-governance/utils/daml/Cap/Governance/Utils/Count.daml) | **M3** |
-| Toolkit | Default implementations for downstream execution hooks | [Targets](cap-governance/utils/daml/Cap/Governance/Utils/Targets.daml) · [tests](cap-governance/tests) | **M3** |
-| Interfaces | Generalized weighted ballots logic | [Ballots](cap-governance/utils/daml/Cap/Governance/Utils/Ballots.daml) · [Weights](cap-governance/utils/daml/Cap/Governance/Utils/Weights.daml) | **M3** |
+| Toolkit | Separable quorum and tally rules | [Count](cap-governance/vote/utils/daml/Cap/Governance/Count.daml) | **M3** |
+| Toolkit | Default implementations for downstream execution hooks | [Targets](cap-governance/execution/utils/daml/Cap/Governance/Targets) · [tests](cap-governance/tests) | **M3** |
+| Interfaces | Generalized weighted ballots logic | [Vote](cap-governance/vote/utils/daml/Cap/Governance/Vote.daml) · [Rights](cap-governance/rights/utils/daml/Cap/Governance/Rights.daml) | **M3** |
 | Implementation | Weighted voting flow | [babydso](examples/governance/babydso) | **M3** |
 | Demo | Weighted voting flow demo | [babydso/demo](examples/governance/babydso/demo) · [sandbox-test.sh](scripts/sandbox-test.sh) | **M3** |
 | Implementation | A prototype frontend + backend driving the governance flow | code | **M5** |

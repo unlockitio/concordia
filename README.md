@@ -24,9 +24,9 @@ voting flow built on them.
 
 | M3 deliverable | Where to look |
 | --- | --- |
-| Weighted-vote implementation | [`examples/governance/babydso/impl`](examples/governance/babydso/impl) — weights read by [`Weights.daml`](cap-governance/utils/daml/Cap/Governance/Utils/Weights.daml) and attached to votes by [`Votes.daml`](cap-governance/utils/daml/Cap/Governance/Utils/Votes.daml) · [sequence diagrams](examples/governance/DEMOS-happy.md#babydso) |
-| Quorum, threshold, and approval logic for supported governance formats | [`Count.daml`](cap-governance/utils/daml/Cap/Governance/Utils/Count.daml) — quorums (`atLeastPresent`, `atLeastVotes`, `atLeastVotedWeight`, `atLeastShareOfTotal`), thresholds and tallies (`shareOfVotes`, `plurality`, `unanimous`, `weightedMedian`) combined by `decide` |
-| Downstream execution hooks for approved proposals | [`ActionV1`](cap-governance/interfaces/action/daml/Cap/Governance/ActionV1.daml) and [`ExecutableV1`](cap-governance/interfaces/executable/daml/Cap/Governance/ExecutableV1.daml) · [`Targets`](cap-governance/utils/daml/Cap/Governance/Utils/Targets) · drift checks in the BabyDso flow: [`BabyDso/ExecutionDemo.daml`](examples/governance/babydso/demo/daml/Cap/Examples/BabyDso/ExecutionDemo.daml) |
+| Weighted-vote implementation | [`examples/governance/babydso/impl`](examples/governance/babydso/impl) — weights read by [`Rights.daml`](cap-governance/rights/utils/daml/Cap/Governance/Rights.daml) and attached to votes by [`Resolution.daml`](cap-governance/vote/utils/daml/Cap/Governance/Resolution.daml) · [sequence diagrams](examples/governance/DEMOS-happy.md#babydso) |
+| Quorum, threshold, and approval logic for supported governance formats | [`Count.daml`](cap-governance/vote/utils/daml/Cap/Governance/Count.daml) — quorums (`atLeastPresent`, `atLeastVotes`, `atLeastVotedWeight`, `atLeastShareOfTotal`), thresholds and tallies (`shareOfVotes`, `plurality`, `unanimous`, `weightedMedian`) combined by `decide` |
+| Downstream execution hooks for approved proposals | [`ActionV1`](cap-governance/execution/interfaces/daml/Cap/Governance/ActionV1.daml) and [`ExecutableV1`](cap-governance/execution/interfaces/daml/Cap/Governance/ExecutableV1.daml) · [`Targets`](cap-governance/execution/utils/daml/Cap/Governance/Targets) · drift checks in the BabyDso flow: [`BabyDso/ExecutionDemo.daml`](examples/governance/babydso/demo/daml/Cap/Examples/BabyDso/ExecutionDemo.daml) |
 | Daml Script and sandbox integration tests for supported governance formats | [`babydso/demo`](examples/governance/babydso/demo) and [`private-majority-vote/demo`](examples/governance/private-majority-vote/demo) — [how to run](#running-the-demos) · [`scripts/sandbox-test.sh`](scripts/sandbox-test.sh) — [how to run](#on-a-canton-sandbox) · library tests in [`cap-governance/tests`](cap-governance/tests) |
 
 M3 tracks as [issue #540](https://github.com/canton-foundation/canton-dev-fund/issues/540).
@@ -68,15 +68,27 @@ Concordia has three tiers: a domain-agnostic core and two domains built on it.
 CAP defines an interface only where code works with a contract whose template it
 does not know at compile time. Everything else is stored types and helpers.
 
-- **`cap-core`** — stored types (`AuthenticKey`, `ResolutionInfo`, `ExecutionCore`, `Snapshot`)
-  and `cap-core-utils` (checked fetches, resolution checks, admission, time,
-  value conversion). It defines no interfaces.
-- **`cap-governance`** — `cap-governance-types` (`Vote`, `Reason`, `ResolutionStatus`); the `Action`, `Executable`,
-  `VoteRecord`, `VoteTopic`, `VotingRights` and `Resolver` interfaces; and
-  `cap-governance-utils` with the modules `Targets` (taking snapshots of
-  targets, and checking them at execution under a `DriftPolicy` the action
-  supplies), `VoteRecords`, `Votes`, `VotingRights` and `Count` (quorums and
-  tallies).
+- **`cap-core`** — what both domains share. It defines no interfaces.
+  - **identity**: `Identity` and `AuthenticKey` (`cap-core-identity-v1`), and
+    the modules `Identity` (acting parties, identity checks) and
+    `AuthenticKey` (`signatoriesKey`).
+  - **resolution**: `ResolutionInfo` (`cap-core-resolution-v1`), and the module
+    `Resolution` (`requireResolvedBy`, `fetchGroup`).
+  - **base** (`cap-core-base`): `Checks`, `Authorization`, `Time`, `Fetch`,
+    `AnyValue` and `Optional`, which use no cap-core type.
+- **`cap-governance`** — four goals, each with an `interfaces` package and,
+  except resolution, a `utils` package:
+  - **vote**: the `VoteRecord` interface with `Vote`, `CastVote` and `Reason`,
+    and the modules `Vote` (`IsVoteRecord`, vote encoding, vote and record
+    checks), `Resolution` (fetching, consuming and casting vote records) and
+    `Count` (quorums and tallies).
+  - **rights**: the `VotingRights` interface, and the module `Rights`
+    (`HasWeights`, weight fetches).
+  - **resolution**: the `Resolver` interface with `ResolutionStatus`.
+  - **execution**: `ActionId` and the `Action`, `Executable` and `KeyedTarget`
+    interfaces, and the modules `Targets.Snapshots` and `Targets.Execution` (taking snapshots of
+    targets, and checking them at execution under a `DriftPolicy` the action
+    supplies).
 - **`cap-auctions`** — the `Bid`, `SingleLotQuotesBid`, `TradeProposal` and
   `Settlement` interfaces, the shared types, and `cap-auctions-utils` with the
   modules `Funding`, `Clearing` and `SingleLot`. Settlement composes with the
@@ -90,18 +102,20 @@ the helpers it needs. CAP sits above Canton's asset and settlement layer.
 ```
 concordia/
 ├── cap-core/                          # Tier 1: domain-agnostic
-│   ├── types/                         #   AuthenticKey, ResolutionInfo, ExecutionCore, Snapshot, TargetReader
-│   ├── utils/                         #   checked fetches, resolutions, admission, time, values
+│   ├── identity/{types,utils}         #   Identity, AuthenticKey; acting parties
+│   ├── resolution/{types,utils}       #   ResolutionInfo; requireResolvedBy, fetchGroup
+│   ├── base/                          #   Checks, Authorization, Time, Fetch, AnyValue, Optional
 │   └── tests/{unit,ledger}
 ├── cap-governance/                    # Tier 2: governance
-│   ├── types/                         #   Vote, Reason, ResolutionStatus
-│   ├── interfaces/{action,executable,vote-record,vote-topic,voting-rights,resolver}
-│   ├── utils/                         #   Targets, VoteRecords, Votes, Weights, Count
+│   ├── vote/{interfaces,utils}        #   VoteRecord, Vote, CastVote, Reason; Vote, Resolution, Count
+│   ├── rights/{interfaces,utils}      #   VotingRights; Rights
+│   ├── resolution/interfaces          #   Resolver, ResolutionStatus
+│   ├── execution/{interfaces,utils}   #   ActionId, Action, Executable, KeyedTarget, Snapshot; Execution, Targets
 │   └── tests/{unit,ledger}
 ├── cap-auctions/                      # Tier 2: auctions (Token Standard V2)
 │   ├── types/                         #   AuctionTerms, LotTerms, Quote, Funding
 │   ├── interfaces/{bid,trade-proposal,single-lot-quotes,settlement}
-│   └── utils/                         #   Funding, Clearing, SingleLot
+│   └── utils/                         #   Funding, Clearing, SingleLot, Checks
 ├── docs/governance/
 │   ├── intro.md                       # governance flows in Canton and the cap-governance architecture
 │   ├── rationale.md                   # cap-governance design decisions

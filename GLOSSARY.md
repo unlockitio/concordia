@@ -8,8 +8,8 @@ Each entry points at where the term is defined.
 
 **Authentic key** — names a contract by the set of parties that sign it and an
 id. A checked fetch compares the key a contract computes from its own
-signatories with the key the caller expects. `AuthenticKey` in `Cap.Core.Types`;
-`signatoriesKey` and `fetchCheckedAny` in `Cap.Core.Utils`.
+signatories with the key the caller expects. `AuthenticKey` in `Cap.Core.AuthenticKeyV1`;
+`signatoriesKey` in `Cap.Core.AuthenticKey`, `fetchCheckedAny` in `Cap.Core.Fetch`.
 
 **Mechanism** — the rule a resolver runs to turn ballots or bids into an
 outcome: a voting rule in cap-governance, an auction format in cap-auctions.
@@ -28,15 +28,16 @@ means the act of resolving, not the adopted outcome.
 **Resolution info** — names the resolver, the mechanism and the resolution a
 ballot or bid belongs to. The choice that runs the mechanism fetches its ballots
 or bids by the resolution info and checks that it names this resolver and this
-mechanism. `ResolutionInfo` in `Cap.Core.Types`; `fetchGroup` and
-`requireResolvedBy` in `Cap.Core.Utils`.
+mechanism. `ResolutionInfo` in `Cap.Core.ResolutionV1`; `fetchGroup` and
+`requireResolvedBy` in `Cap.Core.Resolution`.
 
-**Execution core** — who may execute or cancel an authorized execution or a
-settlement, and when. `ExecutionCore` in `Cap.Core.Types`.
+**Execution terms** — who may execute or cancel an authorized execution, and
+when. `ExecutionTerms` in `Cap.Governance.ExecutableV1`. A settlement holds the
+same fields in `SettlementView` (`Cap.Auctions.Settlement`).
 
 **Authority, admission** — `Set Party` is authority, every member signs;
 `[[Party]]` is admission, the caller must cover one listed group entirely.
-`admitActors` in `Cap.Core.Utils`.
+`validActors` and `validActorsForRights` in `Cap.Core.Authorization`.
 
 ## cap-governance
 
@@ -61,21 +62,21 @@ action (for example, reduce the fee by 2%) ·
 [Governance flows in Canton](docs/governance/intro.md#2-governance-flows-in-canton).
 
 **Target** — a contract a decision acts on, named by an `AuthenticKey`. Targets
-are presented as a `Map AuthenticKey AnyContractId`. `Cap.Governance.Utils.Targets`.
+are presented as a `Map AuthenticKey AnyContractId`. `Cap.Governance.Targets`.
 
 **Snapshot** — what must still be true of a target when the execution acts on
 it: a recorded state, a recorded contract id, or neither. `Snapshot` in
-`Cap.Core.Types`.
+`Cap.Governance.KeyedTargetV1`.
 
 **Taking a snapshot** — filling an open part of an action's target with the
 target's current state or contract id. `snapshotStates` and `snapshotCids` take
 snapshots for an action (`snapshotStatesWith` and `snapshotCidsWith` with a
 reader you supply); `mergeSnapshots` merges them into the action's targets.
-`Cap.Governance.Utils.Targets`.
+`Cap.Governance.Targets`.
 
 **Drift** — the change a target is allowed between its snapshot and being acted
 on, judged by a policy the action supplies. `DriftPolicy` and `fetchTargetMatchingSnapshot` in
-`Cap.Governance.Utils.Targets`.
+`Cap.Governance.Targets`.
 
 **Action** — implemented by the owner of a target to let a decentralized party authorize
 changes to it. It declares its targets and authorizers and reads its targets'
@@ -94,17 +95,17 @@ through `IsBallot`. `IsBallot` in `Cap.Governance.Utils.Ballots` ·
 **Voting right** — a contract the app registers that gives one or more holders
 the right to vote, each with a weight. A contract can carry one right or
 several. `HasWeights` and `fetchSummedWeights` in
-`Cap.Governance.Utils.Weights`.
+`Cap.Governance.Rights`.
 
 **Weight** — how much a voter's vote counts: the sum of the weights of the
 voting rights the voter holds. `fetchSummedWeights` sums them over one
 contract per key, `fetchWeightsOfContract` reads a single contract, and
 `fetchWeightsPerKey` returns them per key, unsummed. In
-`Cap.Governance.Utils.Weights`.
+`Cap.Governance.Rights`.
 
 ## Counting
 
-Exported from `Cap.Governance.Utils.Count`.
+Exported from `Cap.Governance.Count`.
 
 **Vote** — what a cast records for a voter: `Absent` when no vote was
 presented, `Abstained` when the voter took part without choosing an option, or
@@ -120,4 +121,4 @@ nothing about which outcome won.
 
 **Verdict** — what a count concluded: `Decided`, `Undecided` when the tally
 reached nothing, or `Lapsed` when the quorum failed. `decide` combines a quorum
-and a tally into one. `Verdict` in `Cap.Governance.Utils.Count`.
+and a tally into one. `Verdict` in `Cap.Governance.Count`.

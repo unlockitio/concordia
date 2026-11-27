@@ -55,10 +55,8 @@ import Splice.Api.Token.MetadataV1
 import qualified Splice.Api.Token.AllocationV2 as Alloc
 import Splice.TokenStandard.Utils (transferLegSidesWithAuthorizer)
 
-import Cap.Core.Types (ResolutionInfo (..))
-import Cap.Core.Utils
-  ( Check, ContractFilter, Unmet
-  , ignoreFailing, ignoreUnlessM, requireMet )
+import Cap.Core.ResolutionV1 (ResolutionInfo (..))
+import Cap.Core.Checks (Check, ContractFilter, Unmet, ignoreFailing, ignoreUnlessM, requireMet)
 import Cap.Auctions.Bid (Bid)
 import Cap.Auctions.Types (AuctionSchedule (..), AuctionTerms (..), Direction (..), Funding (..))
 

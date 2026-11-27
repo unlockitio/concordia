@@ -1,0 +1,14 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | Who votes, bids or holds a weight.
+module Cap.Core.IdentityV1
+  ( Identity (..)
+  ) where
+
+
+-- | A party acting for itself, or an identity off the ledger, such as an
+-- institution or a member, that parties act for.
+data Identity
+  = PartyIdentity Party
+  | ExternalIdentity Text
+  deriving (Eq, Ord, Show)

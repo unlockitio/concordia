@@ -7,8 +7,8 @@ import Daml.Script
 
 import Splice.Api.Token.MetadataV1 (AnyValue (..))
 
-import Cap.Core.Types (Snapshot (..))
-import Cap.Governance.Utils.Targets.Execution
+import Cap.Governance.KeyedTargetV1 (Snapshot (..))
+import Cap.Governance.Targets.Execution
 
 import Cap.Governance.Tests.Support
 

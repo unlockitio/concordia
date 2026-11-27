@@ -23,7 +23,7 @@ approveFees f = do
   result <- resolveVoteAs f f.sv1 recordCid
   [execution] <- pure result.executions
   Some pending <- queryInterfaceContractId f.sv2 execution
-  setTime pending.executionCore.opensAt
+  setTime pending.executionTerms.opensAt
   pure execution
 
 

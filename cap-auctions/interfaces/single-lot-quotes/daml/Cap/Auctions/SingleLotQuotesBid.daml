@@ -3,11 +3,10 @@
 module Cap.Auctions.SingleLotQuotesBid where
 
 import Splice.Api.Token.MetadataV1
-import Splice.Util (HasCheckedFetch (..), require)
-import Cap.Core.Types (ResolutionInfo)
-import Cap.Core.Utils (entitled, requireOpen)
+import Splice.Util (HasCheckedFetch (..))
+import Cap.Core.ResolutionV1 (ResolutionInfo)
 
-import Cap.Auctions.Bid (Bid, BidAction (..))
+import Cap.Auctions.Bid (Bid)
 import Cap.Auctions.Types (HasSingleLotQuotes (..), Quote)
 
 data SingleLotQuotesView = SingleLotQuotesView
@@ -23,20 +22,15 @@ interface SingleLotQuotesBid requires Bid where
 
 -- separate from fund choice because clock formats will want to change the quote several times 
 -- and will not want to allocate each time.
+  -- | Implementations MUST require that the actors are entitled to BA_Quote
+  -- and that the bidding window is open (validBidQuote).
   choice SingleLotQuotesBid_Quote : ContractId SingleLotQuotesBid
     with
       actors : [Party]
       quotes : [Quote]
       extraArgs : ExtraArgs
     controller actors
-    do
-      let bv = view (toInterface @Bid this)
-      require "the actors are entitled to quote"
-        (entitled bv.availableActions BA_Quote actors)
-      now <- getTime
-      requireOpen "the bidding window is open"
-        now bv.schedule.biddingOpensAt (Some bv.schedule.biddingClosesAt)
-      singleLotQuotesBid_quoteImpl this self (SingleLotQuotesBid_Quote with ..)
+    do singleLotQuotesBid_quoteImpl this self arg
 
 instance HasSingleLotQuotes SingleLotQuotesBid where
   singleLotQuotes bid = (view bid).quotes

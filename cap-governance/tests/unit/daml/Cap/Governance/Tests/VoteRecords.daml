@@ -6,9 +6,9 @@ import DA.Assert ((===))
 import qualified DA.Map as Map
 import Daml.Script
 
-import Cap.Core.Types (Identity (..))
-import Cap.Core.Utils (validateDistinctIdentitiesAmong)
-import Cap.Governance.Types (Vote (..))
+import Cap.Core.IdentityV1 (Identity (..))
+import Cap.Core.Identity (validateDistinctIdentitiesAmong)
+import Cap.Governance.VoteRecordV1 (Vote (..))
 
 import Cap.Governance.Tests.Support
 

@@ -1,0 +1,16 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | Helpers that may have no result, named with the Optional suffix.
+module Cap.Core.Optional
+  ( singleOptional
+  , sameOptional
+  ) where
+
+
+singleOptional : [a] -> Optional a
+singleOptional [a] = Some a
+singleOptional _ = None
+
+sameOptional : Eq a => [a] -> Optional a
+sameOptional (a :: rest) | all (== a) rest = Some a
+sameOptional _ = None

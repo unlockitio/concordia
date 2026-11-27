@@ -1,0 +1,77 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | The checks that the BidProposal, Bid and SingleLotQuotesBid interfaces
+-- require of their implementations, and the identities of a bid. An
+-- implementation passes the current time and calls requireMet on the check
+-- for its choice first.
+module Cap.Auctions.Checks
+  ( validBidProposalAccept
+  , validBidProposalWithdraw
+  , validBidFund
+  , validBidQuote
+  , validBidWithdraw
+  , validBidClose
+  , validBidExpiry
+  ) where
+
+import qualified DA.Map as Map
+import qualified DA.Set as Set
+
+import Cap.Core.Authorization (validActorsForRights)
+import Cap.Core.Checks (Unmet)
+import Cap.Core.Identity (HasIdentities (..))
+import Cap.Core.IdentityV1 (Identity (..))
+import Cap.Core.Time (validBefore, validExpired, validOpen)
+import Cap.Auctions.Bid
+
+
+-- | For BidProposal_Accept.
+validBidProposalAccept : BidProposalView -> [Party] -> Unmet
+validBidProposalAccept proposal = validActorsForRights proposal.availableActions BPA_Accept
+
+-- | For BidProposal_Withdraw.
+validBidProposalWithdraw : BidProposalView -> [Party] -> Unmet
+validBidProposalWithdraw proposal = validActorsForRights proposal.availableActions BPA_Withdraw
+
+-- | For Bid_Fund: the actors are entitled to fund, and the bidding window is
+-- open.
+validBidFund : BidView -> [Party] -> Time -> Unmet
+validBidFund bid actors now =
+  validActorsForRights bid.availableActions BA_Fund actors
+    <> biddingOpen bid now
+
+-- | For SingleLotQuotesBid_Quote: the actors are entitled to quote, and the
+-- bidding window is open.
+validBidQuote : BidView -> [Party] -> Time -> Unmet
+validBidQuote bid actors now =
+  validActorsForRights bid.availableActions BA_Quote actors
+    <> biddingOpen bid now
+
+-- | For Bid_Withdraw: the actors are entitled to withdraw, and bidding has
+-- not closed.
+validBidWithdraw : BidView -> [Party] -> Time -> Unmet
+validBidWithdraw bid actors now =
+  validActorsForRights bid.availableActions BA_Withdraw actors
+    <> validBefore "the close of bidding" bid.schedule.biddingClosesAt now
+
+-- | For Bid_Close.
+validBidClose : BidView -> [Party] -> Unmet
+validBidClose bid = validActorsForRights bid.availableActions BA_Close
+
+-- | For Bid_Expire: the bid has expired.
+validBidExpiry : BidView -> Time -> Unmet
+validBidExpiry bid = validExpired "the bid" (Some bid.schedule.expiresAt)
+
+biddingOpen : BidView -> Time -> Unmet
+biddingOpen bid =
+  validOpen "the bidding window" bid.schedule.biddingOpensAt (Some bid.schedule.biddingClosesAt)
+
+
+-- | The identities of a bid are the parties that hold its accounts: each
+-- account's owner, or its provider when it has no owner.
+instance HasIdentities Bid where
+  identitiesOf bid = Set.fromList
+    [ PartyIdentity holder
+    | funding <- Map.values (view bid).fundings
+    , Some holder <- [optional funding.account.provider Some funding.account.owner]
+    ]

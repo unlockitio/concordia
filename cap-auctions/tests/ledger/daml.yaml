@@ -27,8 +27,11 @@ data-dependencies:
 - ../lib/splice-test-token-v2-1.0.2.dar
 - ../lib/splice-amulet-0.1.25.dar
 - ../lib/splice-util-token-standard-wallet-1.1.2.dar
-- ../../../cap-core/types/.daml/dist/cap-core-types-0.1.0.dar
-- ../../../cap-core/utils/.daml/dist/cap-core-utils-0.1.0.dar
+- ../../../cap-core/identity/types/.daml/dist/cap-core-identity-v1-0.1.0.dar
+- ../../../cap-core/resolution/types/.daml/dist/cap-core-resolution-v1-0.1.0.dar
+- ../../../cap-core/base/.daml/dist/cap-core-base-0.1.0.dar
+- ../../../cap-core/identity/utils/.daml/dist/cap-core-identity-utils-0.1.0.dar
+- ../../../cap-core/resolution/utils/.daml/dist/cap-core-resolution-utils-0.1.0.dar
 - ../../types/.daml/dist/cap-auctions-types-0.1.0.dar
 - ../../interfaces/bid/.daml/dist/cap-auctions-bid-0.1.0.dar
 - ../../interfaces/single-lot-quotes/.daml/dist/cap-auctions-single-lot-quotes-0.1.0.dar

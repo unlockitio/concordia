@@ -14,13 +14,16 @@ import DA.Optional (fromSomeNote)
 import Splice.Api.Token.MetadataV1
 import Splice.Util (HasCheckedFetch (..))
 
-import Cap.Core.Types (AuthenticKey (..), Snapshot (..), ExecutionCore (..))
-import Cap.Core.Utils (IsAnyValue (..), requireMet, signatoriesKey)
+import Cap.Core.AuthenticKeyV1 (AuthenticKey (..))
+import Cap.Governance.KeyedTargetV1 (Snapshot (..))
+import Cap.Core.AnyValue (IsAnyValue (..))
+import Cap.Core.Checks (requireMet)
+import Cap.Core.AuthenticKey (signatoriesKey)
 import Cap.Governance.ActionV1
 import Cap.Governance.ExecutableV1
-import Cap.Governance.Utils
-  ( HasState (..), fetchTargetMatchingIdentity, fetchTargetMatchingSnapshot, mergeSnapshotsWithoutConflicts
-  , readIdentity, readState, validTargetsForSnapshots, unchanged )
+import Cap.Governance.Execution (validAuthorizers, validCancellation, validExecution, validExpiry)
+import Cap.Governance.Targets.Snapshots (HasState (..), mergeSnapshotsWithoutConflicts, readIdentity, readState)
+import Cap.Governance.Targets.Execution (fetchTargetMatchingIdentity, fetchTargetMatchingSnapshot, validTargetsForSnapshots, unchanged)
 
 import Cap.Examples.BabyDso.Ans
 import Cap.Examples.BabyDso.Config
@@ -63,6 +66,7 @@ template SetFeesAction
 
     interface instance Action for SetFeesAction where
       view = ActionView with
+        actionId = "Set the amulet fees of " <> partyToText amuletAuthority <> " to the voted values"
         authorizers = [[dso]]
         snapshots = setFeesTargets amuletAuthority dso
         meta = emptyMetadata
@@ -73,13 +77,14 @@ template SetFeesAction
         | otherwise = abort ("this action names no target " <> show tkey)
 
       action_authorizeExecutionImpl _ arg = do
+        requireMet (validAuthorizers [[dso]] arg.actors)
         let fees =
               fromSomeNote "the execution carries no fees this action can apply" (arg.outcome >>= fromAnyValue)
         snapshots <- mergeSnapshotsWithoutConflicts (setFeesTargets amuletAuthority dso) arg.snapshots
         cid <- create FeeUpdate with
           amuletAuthority; dso; fees
           snapshots
-          core = arg.executionCore
+          core = arg.executionTerms
           outcome = arg.outcome
         pure Action_AuthorizeExecutionResult with
           executionCids = [toInterfaceContractId cid]
@@ -122,22 +127,33 @@ template FeeUpdate
     amuletAuthority : Party
     dso : Party
     fees : Fees
-    core : ExecutionCore
+    core : ExecutionTerms
     snapshots : Map AuthenticKey Snapshot
     outcome : Optional AnyValue
   where
     signatory amuletAuthority, dso
-    observer concat (concat (Map.values core.availableActions))
+    observer concat (core.executors <> core.cancellers)
 
     interface instance Executable for FeeUpdate where
       view = ExecutableView with
-        executionCore = core
+        executionTerms = core
         snapshots
         outcome
 
-      executable_cancelImpl _ = abort "this execution cannot be cancelled"
+      executable_cancelImpl arg = do
+        now <- getTime
+        requireMet (validCancellation core arg.actors now)
+        abort "this execution cannot be cancelled"
 
-      executable_executeImpl targetCids _ = do
+      executable_expireImpl _ = do
+        now <- getTime
+        requireMet (validExpiry core now)
+        pure Executable_ExpireResult with meta = emptyMetadata
+
+      executable_executeImpl arg = do
+        now <- getTime
+        requireMet (validExecution core arg.actors now)
+        let targetCids = arg.targetCids
         requireMet (validTargetsForSnapshots snapshots targetCids)
         (configCid, _) <- fetchTargetMatchingSnapshot @AmuletConfig unchanged
           (configTargetKey amuletAuthority) snapshots targetCids

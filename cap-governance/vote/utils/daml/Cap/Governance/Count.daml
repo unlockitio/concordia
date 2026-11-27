@@ -1,0 +1,169 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Governance.Count
+  ( -- * Casts
+    Vote (..)
+  , Identity (..)
+  , Cast (..)
+  , Casts
+  , isPresent
+  , weightedVotes
+  , votedWeight
+  , presentWeight
+
+    -- * Verdicts
+  , Quorum
+  , Tally
+  , Verdict (..)
+  , decide
+
+    -- * Quorums
+  , anyTurnout
+  , allOf
+  , anyOf
+  , atLeastPresent
+  , atLeastVotes
+  , atLeastVotedWeight
+  , atLeastShareOfTotal
+
+    -- * Tallies
+  , firstOf
+  , unanimous
+  , plurality
+  , shareOfVotes
+  , median
+  , weightedMedian
+  ) where
+
+import DA.List (sort, sortOn)
+import DA.Map (Map)
+import qualified DA.Map as Map
+import DA.Optional (mapOptional)
+import Cap.Core.IdentityV1 (Identity (..))
+import Cap.Core.Optional (sameOptional)
+import Cap.Governance.VoteRecordV1 (Vote (..))
+
+
+data Cast a = Cast
+  with
+    weight : Decimal
+    vote : Vote a
+  deriving (Eq, Show)
+
+-- | One cast per eligible identity.
+type Casts a = Map Identity (Cast a)
+
+isPresent : Vote a -> Bool
+isPresent Absent = False
+isPresent _ = True
+
+-- | Drops absent voters, abstentions and voter identities.
+weightedVotes : Casts a -> [(a, Decimal)]
+weightedVotes casts = [(v, c.weight) | c <- Map.values casts, Voted v <- [c.vote]]
+
+-- | The weight of the votes, without abstentions.
+votedWeight : Casts a -> Decimal
+votedWeight casts = sum (map snd (weightedVotes casts))
+
+-- | The weight of the voters present, with abstentions.
+presentWeight : Casts a -> Decimal
+presentWeight casts = sum [c.weight | c <- Map.values casts, isPresent c.vote]
+
+-- | Whether the casts meet the quorum.
+type Quorum a = Casts a -> Bool
+
+-- | The outcome of the casts, or None when they decide nothing.
+type Tally a o = Casts a -> Optional o
+
+data Verdict o
+  = Decided o
+  | Undecided
+  | Lapsed
+  deriving (Eq, Show)
+
+decide : Quorum a -> Tally a o -> Casts a -> Verdict o
+decide quorum tally casts
+  | not (quorum casts) = Lapsed
+  | otherwise = optional Undecided Decided (tally casts)
+
+------------------------------- Quorums --------------------------------
+-- A quorum decides whether enough eligible voters took part for the tally to
+-- count.
+
+anyTurnout : Quorum a
+anyTurnout _ = True
+
+atLeastPresent : Int -> Quorum a
+atLeastPresent n casts = length (filter (isPresent . (.vote)) (Map.values casts)) >= n
+
+atLeastVotes : Int -> Quorum a
+atLeastVotes n casts = length (weightedVotes casts) >= n
+
+atLeastVotedWeight : Decimal -> Quorum a
+atLeastVotedWeight w casts = votedWeight casts >= w
+
+atLeastShareOfTotal : Int -> Int -> Quorum a
+atLeastShareOfTotal numerator denominator casts =
+  let total = sum (map (.weight) (Map.values casts))
+  in denominator > 0 && total > 0.0
+       && presentWeight casts * intToDecimal denominator >= intToDecimal numerator * total
+
+allOf : [Quorum a] -> Quorum a
+allOf quorums casts = all (\quorum -> quorum casts) quorums
+
+anyOf : [Quorum a] -> Quorum a
+anyOf quorums casts = any (\quorum -> quorum casts) quorums
+
+
+------------------------------- Tallies -------------------------------
+-- A tally decides the outcome, or None when the votes decide nothing (e.g.
+-- unanimity not reached). A tally MUST use only Voted casts.
+
+unanimous : Eq a => Tally a a
+unanimous casts = sameOptional (map fst (weightedVotes casts))
+
+plurality : Ord a => Tally a a
+plurality casts =
+  case sortOn (negate . snd) (Map.toList weightPerOption) of
+    (option, best) :: rest | all (\(_, w) -> w < best) rest -> Some option
+    _ -> None
+  where
+    weightPerOption = Map.fromListWithR (+) (weightedVotes casts)
+
+shareOfVotes : Ord a => Int -> Int -> Tally a a
+shareOfVotes numerator denominator casts
+  | denominator <= 0 = None
+  | otherwise =
+      case [ option | (option, w) <- Map.toList weightPerOption
+                    , w * intToDecimal denominator >= intToDecimal numerator * votedWeight casts ] of
+        [option] -> Some option
+        _ -> None
+  where
+    weightPerOption = Map.fromListWithR (+) (weightedVotes casts)
+
+median : Tally Decimal Decimal
+median casts = case sort (map fst (weightedVotes casts)) of
+  [] -> None
+  sorted ->
+    let n = length sorted
+    in case (drop ((n - 1) / 2) sorted, drop (n / 2) sorted) of
+      (lo :: _, hi :: _) -> Some ((lo + hi) / 2.0)
+      _ -> None
+
+
+weightedMedian : Tally Decimal Decimal
+weightedMedian casts =
+  crossingHalf (votedWeight casts / 2.0) 0.0
+    (sortOn fst (filter ((> 0.0) . snd) (weightedVotes casts)))
+
+crossingHalf : Decimal -> Decimal -> [(Decimal, Decimal)] -> Optional Decimal
+crossingHalf _ _ [] = None
+crossingHalf half below ((value, w) :: rest)
+  | below + w >= half = Some value
+  | otherwise = crossingHalf half (below + w) rest
+
+
+firstOf : [Tally a o] -> Tally a o
+firstOf tallies casts = case mapOptional (\tally -> tally casts) tallies of
+  result :: _ -> Some result
+  [] -> None

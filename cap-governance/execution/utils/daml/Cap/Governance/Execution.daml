@@ -1,0 +1,40 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | The checks that the Action and Executable interfaces require of their
+-- implementations. An implementation passes the current time and calls
+-- requireMet on the check for its choice first.
+module Cap.Governance.Execution
+  ( validAuthorizers
+  , validExecution
+  , validCancellation
+  , validExpiry
+  ) where
+
+import Cap.Core.Authorization (validActors)
+import Cap.Core.Checks (Check, Unmet)
+import Cap.Core.Time (validExpired, validOpen)
+import Cap.Governance.ExecutableV1 (ExecutionTerms (..))
+
+
+-- | For Action_AuthorizeExecution: the actors are one of the action's
+-- authorizer sets.
+validAuthorizers : [[Party]] -> Check [Party]
+validAuthorizers = validActors "authorize this action"
+
+-- | For Executable_Execute: the execution window is open and the actors are
+-- one of the executors.
+validExecution : ExecutionTerms -> [Party] -> Time -> Unmet
+validExecution terms actors now =
+  validOpen "the execution window" terms.opensAt terms.expiresAt now
+    <> validActors "execute" terms.executors actors
+
+-- | For Executable_Cancel: the cancellation window is open and the actors are
+-- one of the cancellers.
+validCancellation : ExecutionTerms -> [Party] -> Time -> Unmet
+validCancellation terms actors now =
+  validOpen "the cancellation window" terms.cancelAfter None now
+    <> validActors "cancel" terms.cancellers actors
+
+-- | For Executable_Expire: the execution has expired.
+validExpiry : ExecutionTerms -> Time -> Unmet
+validExpiry terms = validExpired "the execution" terms.expiresAt

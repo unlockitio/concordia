@@ -4,7 +4,7 @@
 -- members that operate a decentralized party together, as the super
 -- validators operate the DSO party. The rules contract holds the member list, thresholds and
 -- onboarding settings, and the choices that activate members and decide
--- shared vote records. The decentralized party signs the rules contract, so these
+-- vote records. The decentralized party signs the rules contract, so these
 -- choices run with its authority while an acting party controls them.
 --
 -- The DecOperator service reads every app's rules contract through this
@@ -18,11 +18,12 @@ import DA.Time (RelTime)
 
 import Splice.Api.Token.MetadataV1
 
-import Cap.Core.Types (AuthenticKey, Identity)
+import Cap.Core.AuthenticKeyV1 (AuthenticKey)
+import Cap.Core.IdentityV1 (Identity)
 
+import Cap.Governance.VoteRecordV1 (Reason, Vote, VoteRecord)
 import Cap.DecOperator.Types
-  (FormerMember, Member, ParticipantNode, Reason)
-import Cap.DecOperator.SharedVoteRecordV1 (SharedVoteRecord)
+  (FormerMember, Member, ParticipantNode)
 
 
 ------------------  CONFIGURATION  ------------------
@@ -47,11 +48,11 @@ data DecOperatorConfig = DecOperatorConfig
 data VotingConfig = VotingConfig
   with
     voteTimeout : RelTime
-    -- ^ A shared vote record's `voteBefore` is its creation time plus this.
+    -- ^ A vote record's `voteBefore` is its creation time plus this.
     castCooldown : RelTime
-    -- ^ Minimum time between two votes of one member on one shared vote record.
+    -- ^ Minimum time between two votes of one member on one vote record.
     maxOptions : Int
-    -- ^ Upper bound for the options of one shared vote record.
+    -- ^ Upper bound for the options of one vote record.
   deriving (Eq, Show)
 
 data OnboardingConfig = OnboardingConfig
@@ -251,8 +252,8 @@ data DecOperatorRules_ActivateMemberResult = DecOperatorRules_ActivateMemberResu
 
 data DecOperatorRules_CastVoteResult = DecOperatorRules_CastVoteResult
   with
-    record : ContractId SharedVoteRecord
-    -- ^ The re-created shared vote record, holding the new vote.
+    record : ContractId VoteRecord
+    -- ^ The re-created vote record, holding the new vote.
     meta : Metadata
   deriving (Eq, Show)
 
@@ -273,16 +274,16 @@ interface DecOperatorRules where
   -- MUST re-create the rules contract with that member Active.
   decOperatorRules_activateMemberImpl : DecOperatorRules_ActivateMember -> Update DecOperatorRules_ActivateMemberResult
 
-  -- | Implementations MUST fetch the shared vote record as the app's own template,
+  -- | Implementations MUST fetch the vote record as the app's own template,
   -- check that it belongs to this decentralized operator, check that actor acts for an
   -- Active member, store the vote only if the mechanism accepts it, and
-  -- archive and re-create the shared vote record.
+  -- archive and re-create the vote record.
   decOperatorRules_castVoteImpl : DecOperatorRules_CastVote -> Update DecOperatorRules_CastVoteResult
 
-  -- | Implementations MUST fetch the shared vote record as the app's own template,
+  -- | Implementations MUST fetch the vote record as the app's own template,
   -- check that it belongs to this decentralized operator, count the votes of the Active
   -- members with the library, fail while the result is pending, archive the
-  -- shared vote record, and execute an accepted action in the same transaction or
+  -- vote record, and execute an accepted action in the same transaction or
   -- at `effectiveAt`. The first argument is this rules contract, so that an
   -- accepted action can exercise a consuming choice on it.
   decOperatorRules_closeVoteImpl : ContractId DecOperatorRules -> DecOperatorRules_CloseVote -> Update DecOperatorRules_CloseVoteResult
@@ -297,26 +298,27 @@ interface DecOperatorRules where
     controller actor
     do decOperatorRules_activateMemberImpl this arg
 
-  -- | Casts, changes or withdraws a vote. Nonconsuming: the shared vote record is
+  -- | Casts, changes or withdraws a vote. Nonconsuming: the vote record is
   -- re-created, not the rules contract.
   nonconsuming choice DecOperatorRules_CastVote : DecOperatorRules_CastVoteResult
     with
       actor : Party
       -- ^ An acting party of an Active member.
-      voteRecordCid : ContractId SharedVoteRecord
-      value : Optional AnyValue
-      -- ^ None: abstain. Some: a vote of the mechanism's vote type.
+      voteRecordCid : ContractId VoteRecord
+      vote : Vote AnyValue
+      -- ^ Voted: a vote of the mechanism's vote type. Abstained: abstain.
+      -- Absent: withdraw the member's vote.
       reason : Reason
     controller actor
     do decOperatorRules_castVoteImpl this arg
 
-  -- | Decides a shared vote record. Any acting party may close; the choice fails
+  -- | Decides a vote record. Any acting party may close; the choice fails
   -- while the result is pending, so closing early has no effect.
   nonconsuming choice DecOperatorRules_CloseVote : DecOperatorRules_CloseVoteResult
     with
       actor : Party
-      voteRecordCid : ContractId SharedVoteRecord
+      voteRecordCid : ContractId VoteRecord
       targets : Map AuthenticKey AnyContractId
-      -- ^ The current contract ID of each target of the shared vote record.
+      -- ^ The current contract ID of each target of the vote record.
     controller actor
     do decOperatorRules_closeVoteImpl this self arg

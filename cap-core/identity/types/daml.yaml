@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: Apache-2.0
+
+sdk-version: 3.5.11
+name: cap-core-identity-v1
+version: 0.1.0
+source: daml
+dependencies:
+- daml-prim
+- daml-stdlib
+data-dependencies:
+build-options:
+  - --target=2.3

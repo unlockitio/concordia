@@ -27,7 +27,7 @@ import DA.Time (RelTime, addRelTime, convertRelTimeToMicroseconds, microseconds,
 
 import Splice.Api.Token.MetadataV1 (Metadata (..))
 
-import Cap.Core.Utils (Unmet)
+import Cap.Core.Checks (Unmet)
 import Cap.Auctions.Types (Direction (..), Quote (..))
 
 

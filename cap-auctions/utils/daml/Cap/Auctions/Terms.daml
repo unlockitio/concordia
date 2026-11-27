@@ -12,7 +12,7 @@ module Cap.Auctions.Terms
 import qualified DA.Map as Map
 import DA.Time (convertRelTimeToMicroseconds)
 
-import Cap.Core.Utils (Unmet)
+import Cap.Core.Checks (Unmet)
 import Cap.Auctions.Types (AuctionSchedule (..), AuctionTerms (..), LotTerms (..))
 
 

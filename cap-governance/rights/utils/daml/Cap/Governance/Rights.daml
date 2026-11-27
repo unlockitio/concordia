@@ -1,0 +1,100 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | Voting rights: how much each identity's vote counts, read from contracts
+-- a resolver trusts. casts counts only the identities with a weight.
+module Cap.Governance.Rights
+  ( HasWeights (..)
+
+    -- * Checks
+  , validWeights
+
+    -- * Fetching
+  , fetchWeightsPerKey
+  , fetchSummedWeights
+  , fetchWeightsOfContract
+  ) where
+
+import DA.Map (Map)
+import qualified DA.Map as Map
+import DA.Optional (fromSome)
+import DA.Set (Set)
+import qualified DA.Set as Set
+
+import Splice.Util (HasCheckedFetch, fetchChecked)
+
+import Cap.Core.IdentityV1 (Identity)
+import Cap.Core.Identity (HasActingParties (..))
+import Cap.Core.Checks (Unmet, requireMet)
+import Cap.Governance.VotingRightsV1 (VotingRights)
+
+
+------------------  WEIGHTS  ------------------
+-- Any template can carry weights: taken from a contract registered for them, or a
+-- resolver contract with fixed weights.
+
+class HasWeights t where
+  weightsOf : t -> Map Identity Decimal
+
+
+------------------  CHECKS  ------------------
+-- A resolver MUST NOT ignore failing weights; the fetches abort on any unmet
+-- check.
+
+-- | Validates that the weights are exactly the ones under rightKeys, every key
+-- is presented, and that no weight is negative.
+validWeights : (Ord k, Show k) => Set k -> Map k (Map Identity Decimal) -> Unmet
+validWeights rightKeys weights =
+  [ "the voting rights under " <> show key <> " were not presented"
+  | key <- Set.toList rightKeys
+  , not (Map.member key weights)
+  ]
+    <> [ "the presented voting rights under " <> show key <> " are not under a right key"
+       | key <- Map.keys weights
+       , not (Set.member key rightKeys)
+       ]
+    <> [ "the weight of " <> show identity <> " under " <> show key <> " is negative"
+       | (key, identities) <- Map.toList weights
+       , (identity, weight) <- Map.toList identities
+       , weight < 0.0
+       ]
+
+
+------------------  FETCHING  ------------------
+
+-- | Fetches and checks the contracts against rightKeys. Returns the weights
+-- per key, unsummed.
+fetchWeightsPerKey
+  : (HasFetch t, HasCheckedFetch t k, HasWeights t, Ord k, Show k)
+  => Set k -> Map k (ContractId t) -> Update (Map k (Map Identity Decimal))
+fetchWeightsPerKey rightKeys rightCids = do
+  weights <- Map.fromList <$> forA (Map.toList rightCids) (\(rightKey, rightCid) -> do
+    contract <- fetchChecked rightKey rightCid
+    pure (rightKey, weightsOf contract))
+  requireMet (validWeights rightKeys weights)
+  pure weights
+
+-- | The weights summed over the contracts: an identity named by several
+-- contracts gets the sum of their weights.
+fetchSummedWeights
+  : (HasFetch t, HasCheckedFetch t k, HasWeights t, Ord k, Show k)
+  => Set k -> Map k (ContractId t) -> Update (Map Identity Decimal)
+fetchSummedWeights rightKeys rightCids = do
+  weights <- fetchWeightsPerKey rightKeys rightCids
+  pure (Map.fromListWithR (+) (concatMap Map.toList (Map.values weights)))
+
+-- | The weights of a single contract.
+fetchWeightsOfContract
+  : (HasFetch t, HasCheckedFetch t k, HasWeights t, Ord k, Show k)
+  => k -> ContractId t -> Update (Map Identity Decimal)
+fetchWeightsOfContract rightKey rightCid = do
+  weights <- fetchWeightsPerKey (Set.singleton rightKey) (Map.singleton rightKey rightCid)
+  pure (fromSome (Map.lookup rightKey weights))
+
+
+------------------  THE VOTING RIGHTS INTERFACE  ------------------
+
+instance HasWeights VotingRights where
+  weightsOf rights = (view rights).weights
+
+instance HasActingParties VotingRights where
+  actingPartiesOf rights = (view rights).actingParties

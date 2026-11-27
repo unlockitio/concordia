@@ -14,11 +14,11 @@ import qualified DA.TextMap as TextMap
 
 import Splice.Api.Token.MetadataV1 (AnyValue (..), ChoiceContext (..), ExtraArgs (..), emptyMetadata)
 
-import Cap.Governance.VoteTopicV1 (VoteTopicView (..), VoteTopic_CastVote (..), VoteTopic_CastVoteResult (..))
-import qualified Cap.Governance.VoteTopicV1 as VoteTopicV1
-import Cap.Governance.Types (Vote (..))
-import Cap.Core.Types (Identity (..))
-import Cap.Governance.Utils (Verdict (..), encodeTextVote)
+import Cap.Governance.VoteRecordV1 (Vote (..), VoteRecord)
+import qualified Cap.Governance.ResolverV1 as ResolverV1
+import Cap.Core.IdentityV1 (Identity (..))
+import Cap.Governance.Count (Verdict (..))
+import Cap.Governance.Vote (encodeTextVote)
 
 import Cap.Examples.MajorityVote.VoteRecord
 import Cap.Examples.MajorityVote.Config
@@ -224,24 +224,29 @@ theOperatorCannotSkipTheCount = do
   setting === openingSetting
 
 
--- A wallet that knows only the VoteTopic interface reads the topic and
--- casts on the voter's private vote record, passed in the choice context. A voter
--- cannot cast on another voter's vote record.
-voterCastsThroughTheVoteTopicInterface : Script ()
-voterCastsThroughTheVoteTopicInterface = do
+-- A wallet that knows only the interfaces reads the decision through the
+-- VoteRecord interface and casts through the Resolver interface, on the voter's
+-- private vote record passed in the choice context. A voter cannot cast on
+-- another voter's vote record.
+voterCastsThroughTheResolverInterface : Script ()
+voterCastsThroughTheResolverInterface = do
   round <- openRound "proposal-interface"
   let f = round.fixture
-      proposalCid = toInterfaceContractId @VoteTopicV1.VoteTopic f.proposalCid
+      proposalCid = toInterfaceContractId @VoteRecord f.proposalCid
+      resolverCid = toInterfaceContractId @ResolverV1.Resolver f.resolverCid
 
   Some proposal <- queryInterfaceContractId f.alice proposalCid
   proposal.resolution.mechanism === majorityMechanismName
-  proposal.proposer === PartyIdentity f.alice
-  proposal.subject === configSubject
+  proposal.requester === PartyIdentity f.alice
+  proposal.reason === configSubject
+  proposal.voteBefore === Some f.terms.votingClosesAt
+  length proposal.options === 1
 
   setTime f.terms.entryClosesAt
-  let castOn voter recordCid = exerciseCmd proposalCid VoteTopic_CastVote with
+  let castOn voter recordCid = exerciseCmd resolverCid ResolverV1.Resolver_CastVote with
         caster = voter
         identity = PartyIdentity voter
+        resolution = proposal.resolution
         vote = encodeTextVote (Voted yay)
         reason = None
         extraArgs = ExtraArgs with

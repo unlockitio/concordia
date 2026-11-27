@@ -16,24 +16,37 @@ import DA.Time (RelTime, addRelTime)
 import Splice.Api.Token.MetadataV1
 import Splice.Util (HasCheckedFetch (..), fetchChecked, require)
 
-import Cap.Core.Types (AuthenticKey (..), ExecutionAction (..), ExecutionCore (..), Identity (..), ResolutionInfo (..))
-import Cap.Core.Utils
-  ( HasActingParties (..), IsAnyValue (..), validateDistinctIdentitiesAmong, requireClosed, requireMetFrom
-  , requireResolvedBy, validateContractSignedByActingParties, signatoriesKey )
+import Cap.Core.AuthenticKeyV1 (AuthenticKey (..))
+import Cap.Governance.ExecutableV1 (ExecutionTerms (..))
+import Cap.Core.IdentityV1 (Identity (..))
+import Cap.Core.ResolutionV1 (ResolutionInfo (..))
+import Cap.Core.Identity (HasActingParties (..), validateDistinctIdentitiesAmong, validateContractSignedByActingParties)
+import Cap.Core.AnyValue (IsAnyValue (..))
+import Cap.Core.Time (validClosed)
+import Cap.Core.Checks (requireMet, requireMetFrom)
+import Cap.Core.Resolution (requireResolvedBy)
+import Cap.Core.AuthenticKey (signatoriesKey)
+import Cap.Core.Optional (sameOptional)
 import Cap.Governance.ActionV1
-import Cap.Governance.VoteRecordV1 (VoteRecord)
+import Cap.Governance.VoteRecordV1 (Reason, VoteRecord)
 import Cap.Governance.ExecutableV1 (Executable)
-import Cap.Governance.Types (Reason)
-import Cap.Governance.Utils.Weights (HasWeights (..), fetchSummedWeights)
-import Cap.Governance.Utils
-  ( Cast (..), Tally, Verdict (..), Vote (..), atLeastShareOfTotal, atLeastVotes
-  , casts, consumeVoteRecords, decide, expectUniformAction, fetchVoteRecords
-  , expectUniformSnapshots, snapshotStates, unanimous
-  , validVotes, weightedMedian )
+import Cap.Governance.ResolverV1
+  ( Resolver, ResolverView (..), ResolutionStatus (..), Resolver_CastVoteResult (..), Resolver_ResolveResult (..) )
+import Cap.Governance.Rights (HasWeights (..), fetchSummedWeights)
+import Cap.Governance.Count (Cast (..), Tally, Verdict (..), Vote (..), atLeastShareOfTotal, atLeastVotes, decide, unanimous, weightedMedian)
+import Cap.Governance.Resolution
+  ( casts, consumeVoteRecords, expectSameAction, fetchSharedVoteRecord, fetchVoteRecords, expectSameSnapshots )
+import Cap.Governance.Vote (validVotes)
+import Cap.Governance.Targets.Snapshots (snapshotStates)
 
 import Cap.Examples.BabyDso.Rights
 import Cap.Examples.BabyDso.Submission
 
+
+-- | The ChoiceContext key under which a cast through Resolver_CastVote passes
+-- the SharedVoteRecord to cast on, as AV_ContractId.
+voteRecordContextKey : Text
+voteRecordContextKey = "babydso.vote-record"
 
 data ResolveResult r = ResolveResult
   with
@@ -75,10 +88,12 @@ template DsoResolver
           (PartyIdentity proposer `Map.member` openingWeights)
         action <- fetch actionCid
         snapshots <- snapshotStates action targetCids
+        now <- getTime
         create SharedVoteRecord with
           dso; svs; resolution; proposer; subject; actionCid; votingClosesAt; expiresAt; openingWeights
+          actionId = (view action).actionId
           snapshots = snapshots
-          votes = Map.singleton proposer vote
+          votes = Map.singleton proposer SvVote with parameters = vote; reason = None; castAt = now
 
     nonconsuming choice DsoResolver_ResolveVote : ResolveResult (TextMap Decimal)
       with
@@ -88,11 +103,7 @@ template DsoResolver
       controller sv
       do
         require "the resolving party is an sv" (sv `Set.member` svs)
-        requireResolvedBy this self resolution
-        require ("the resolution names the mechanism " <> weightedVoteMechanismName) (resolution.mechanism == weightedVoteMechanismName)
-        record <- fetchChecked resolution recordCid
-        consumeVoteRecords [toInterfaceContractId @VoteRecord recordCid]
-        resolveWeightedVote this record
+        resolveVote this self resolution recordCid
 
     nonconsuming choice DsoResolver_Confirm : ContractId SvConfirmation
       with
@@ -109,9 +120,12 @@ template DsoResolver
         require ("the resolution names the mechanism " <> confirmationMechanismName) (resolution.mechanism == confirmationMechanismName)
         action <- fetch actionCid
         snapshots <- snapshotStates action targetCids
+        now <- getTime
         create SvConfirmation with
           dso; confirmer; resolution; actionCid; vote; expiresAt
+          actionId = (view action).actionId
           snapshots = snapshots
+          confirmedAt = now
 
     nonconsuming choice DsoResolver_ResolveConfirmations : ResolveResult AnyValue
       with
@@ -121,15 +135,46 @@ template DsoResolver
       controller sv
       do
         require "the resolving party is an sv" (sv `Set.member` svs)
-        require ("the resolution names the mechanism " <> confirmationMechanismName) (resolution.mechanism == confirmationMechanismName)
-        presented <- fetchVoteRecords this self [validateContractSignedByActingParties this] resolution
-          (map (toInterfaceContractId @VoteRecord) confirmationCids)
-        let (cids, records) = unzip presented
-            confirmations = map
-              (fromSomeNote "a presented confirmation is not an SvConfirmation" . fromInterface @SvConfirmation)
-              records
-        consumeVoteRecords cids
-        resolveConfirmations this confirmations
+        resolveConfirmationsOf this self resolution confirmationCids
+
+    -- Lets a wallet that knows only the interfaces cast and resolve. A weighted
+    -- vote is cast on the SharedVoteRecord the choice context names; a
+    -- confirmation is made with DsoResolver_Confirm.
+    interface instance Resolver for DsoResolver where
+      view = ResolverView with
+        keyId = resolverId
+        mechanisms = [weightedVoteMechanismName, confirmationMechanismName]
+        meta = emptyMetadata
+
+      resolver_castVoteImpl resolverCid arg = do
+        requireResolvedBy this (fromInterfaceContractId @DsoResolver resolverCid) arg.resolution
+        require "the caster casts for its own identity" (arg.identity == PartyIdentity arg.caster)
+        require ("a cast through the interface is on the mechanism " <> weightedVoteMechanismName)
+          (arg.resolution.mechanism == weightedVoteMechanismName)
+        recordCid <- case TextMap.lookup voteRecordContextKey arg.extraArgs.context.values of
+          Some (AV_ContractId cid) -> pure (coerceContractId cid : ContractId SharedVoteRecord)
+          _ -> abort ("the choice context carries no vote record under " <> voteRecordContextKey)
+        _ <- fetchChecked arg.resolution recordCid
+        vote <- case decodeParametersVote arg.vote of
+          Some (Voted vote) -> pure vote
+          _ -> abort "a weighted vote is a map of named decimals, and cannot abstain"
+        cid <- exercise recordCid SharedVoteRecord_Cast with
+          voter = arg.caster; vote; reason = arg.reason
+        pure Resolver_CastVoteResult with
+          created = [coerceContractId cid]
+          meta = emptyMetadata
+
+      resolver_resolveImpl resolverCid arg = do
+        let self = fromInterfaceContractId @DsoResolver resolverCid
+        require "the resolving parties are svs" (not (null arg.actors) && all (`Set.member` svs) arg.actors)
+        if arg.resolution.mechanism == weightedVoteMechanismName
+          then do
+            recordCid <- case arg.voteRecordCids of
+              [cid] -> pure (fromInterfaceContractId @SharedVoteRecord cid)
+              _ -> abort "a weighted vote is resolved on its one shared vote record"
+            toResolveResult <$> resolveVote this self arg.resolution recordCid
+          else toResolveResult <$> resolveConfirmationsOf this self arg.resolution
+            (map (fromInterfaceContractId @SvConfirmation) arg.voteRecordCids)
 
 -- | Every sv has one vote, cast by itself.
 instance HasWeights DsoResolver where
@@ -161,11 +206,50 @@ instance HasWeights SvWeightSource where
   weightsOf source = Map.singleton (PartyIdentity source.sv) source.weight
 
 
+-- | Resolves a weighted vote on its shared vote record.
+resolveVote
+  : DsoResolver -> ContractId DsoResolver -> ResolutionInfo -> ContractId SharedVoteRecord
+  -> Update (ResolveResult (TextMap Decimal))
+resolveVote resolver self resolution recordCid = do
+  require ("the resolution names the mechanism " <> weightedVoteMechanismName) (resolution.mechanism == weightedVoteMechanismName)
+  let cid = toInterfaceContractId @VoteRecord recordCid
+  presented <- fetchSharedVoteRecord resolver self [] resolution cid
+  let record = fromSomeNote "the presented vote record is not a SharedVoteRecord" (fromInterface @SharedVoteRecord presented)
+  consumeVoteRecords [cid]
+  resolveWeightedVote resolver record
+
+-- | Resolves the confirmations of one action.
+resolveConfirmationsOf
+  : DsoResolver -> ContractId DsoResolver -> ResolutionInfo -> [ContractId SvConfirmation]
+  -> Update (ResolveResult AnyValue)
+resolveConfirmationsOf resolver self resolution confirmationCids = do
+  require ("the resolution names the mechanism " <> confirmationMechanismName) (resolution.mechanism == confirmationMechanismName)
+  presented <- fetchVoteRecords resolver self [validateContractSignedByActingParties resolver] resolution
+    (map (toInterfaceContractId @VoteRecord) confirmationCids)
+  let (cids, records) = unzip presented
+      confirmations = map
+        (fromSomeNote "a presented confirmation is not an SvConfirmation" . fromInterface @SvConfirmation)
+        records
+  consumeVoteRecords cids
+  resolveConfirmations resolver confirmations
+
+toResolveResult : IsAnyValue r => ResolveResult r -> Resolver_ResolveResult
+toResolveResult result = Resolver_ResolveResult with
+  status = case result.verdict of
+    Decided _ -> RS_Decided
+    Undecided -> RS_Undecided
+    Lapsed -> RS_Lapsed
+  outcome = case result.verdict of
+    Decided winner -> Some (toAnyValue winner)
+    _ -> None
+  executions = result.executions
+  meta = emptyMetadata
+
 resolveWeightedVote
   : DsoResolver -> SharedVoteRecord -> Update (ResolveResult (TextMap Decimal))
 resolveWeightedVote resolver record = do
   now <- getTime
-  requireClosed "the voting window has closed" now record.votingClosesAt
+  requireMet (validClosed "the voting window" record.votingClosesAt now)
   require "the proposal has not expired" (now < record.expiresAt)
 
   let actionCid = record.actionCid
@@ -180,12 +264,15 @@ resolveWeightedVote resolver record = do
       verdict = decide (atLeastShareOfTotal 2 3) weightedMedianByField counted
   executions <- case verdict of
     Decided winner -> do
+      action <- fetch actionCid
+      require "the executed action is the option the vote is on" ((view action).actionId == record.actionId)
       let opensAt = now `addRelTime` resolver.executionDelay
       result <- exercise actionCid Action_AuthorizeExecution with
         actors = [resolver.dso]
-        executionCore = ExecutionCore with
+        executionTerms = ExecutionTerms with
           authorities = Set.fromList [resolver.dso]
-          availableActions = Map.fromList [(EA_Execute, [[sv] | sv <- Set.toList resolver.svs])]
+          executors = [[sv] | sv <- Set.toList resolver.svs]
+          cancellers = []
           opensAt
           cancelAfter = opensAt
           expiresAt = Some (opensAt `addRelTime` resolver.executionWindow)
@@ -219,19 +306,26 @@ resolveConfirmations resolver confirmations = do
   now <- getTime
   require "no confirmation has expired" (all ((now <) . (.expiresAt)) confirmations)
   let records = map (toInterface @VoteRecord) confirmations
-      actionCid = fromSomeNote "the presented vote records name no action" (expectUniformAction records)
-      snapshots = expectUniformSnapshots records
+      actionCid = fromSomeNote "the confirmations name different actions, or there are none"
+        (sameOptional (map (.actionCid) confirmations))
+      snapshots = expectSameSnapshots records
+  option <- case expectSameAction records of
+    [option] -> pure option
+    _ -> abort "a confirmation has exactly one option"
   let counted = casts Some (weightsOf resolver) records
       verdict = decide (atLeastVotes (byzantineQuorum (Set.size resolver.svs))) unanimous counted
   outcome <- case verdict of
     Decided outcome -> pure outcome
     _ -> abort "too few svs confirmed one outcome"
+  action <- fetch actionCid
+  require "the executed action is the option the svs confirmed" ((view action).actionId == option)
 
   result <- exercise actionCid Action_AuthorizeExecution with
     actors = [resolver.dso]
-    executionCore = ExecutionCore with
+    executionTerms = ExecutionTerms with
       authorities = Set.fromList [resolver.dso]
-      availableActions = Map.fromList [(EA_Execute, [[sv] | sv <- Set.toList resolver.svs])]
+      executors = [[sv] | sv <- Set.toList resolver.svs]
+      cancellers = []
       opensAt = now
       cancelAfter = now
       expiresAt = Some (now `addRelTime` resolver.executionWindow)

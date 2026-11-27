@@ -9,16 +9,19 @@ import DA.Map (Map)
 
 import Splice.Api.Token.MetadataV1
 
-import Cap.Core.Types (AuthenticKey, Identity, Snapshot)
+import Cap.Core.AuthenticKeyV1 (AuthenticKey)
+import Cap.Core.IdentityV1 (Identity)
+import Cap.Governance.KeyedTargetV1 (Snapshot)
+import Cap.Governance.ActionV1 (ActionId)
 
 
 data ActionConfirmationView = ActionConfirmationView
   with
     governance : AuthenticKey
     confirmer : Identity
-    action : Text
-    -- ^ Rendered by the app. The same action MUST always give the same text 
-    -- and different actions MUST NOT, because the DecOperator service groups action confirmations by it.
+    action : ActionId
+    -- ^ Rendered by the app from the action it computed. The DecOperator
+    -- service groups action confirmations by it.
     expiresAt : Time
     targets : Map AuthenticKey Snapshot
     meta : Metadata

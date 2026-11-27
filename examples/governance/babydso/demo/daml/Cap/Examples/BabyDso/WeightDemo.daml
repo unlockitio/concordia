@@ -8,8 +8,8 @@ import DA.Optional (isSome)
 import qualified DA.Set as Set
 import Daml.Script hiding (AnyContractId)
 
-import Cap.Core.Types (Identity (..))
-import Cap.Governance.Utils (Verdict (..))
+import Cap.Core.IdentityV1 (Identity (..))
+import Cap.Governance.Count (Verdict (..))
 
 import Cap.Examples.BabyDso.Rights
 

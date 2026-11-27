@@ -10,7 +10,10 @@ import qualified DA.Set as Set
 import Splice.Api.Token.MetadataV1
 import Splice.Util (require)
 
-import Cap.Core.Types (ResolutionInfo)
+import Cap.Core.ResolutionV1 (ResolutionInfo)
+import Cap.Core.Authorization (validActorsForRights)
+import Cap.Core.Checks (requireMet)
+import Cap.Core.Time (validBefore, validExpired)
 import Cap.Auctions.Types (AuctionSchedule, AuctionTerms (..))
 import Cap.Auctions.TradeProposal
 import Cap.Auctions.Funding (requireValidPrincipalFunding, settlementOf)
@@ -50,6 +53,11 @@ template SingleLotTradeProposal
         meta = emptyMetadata
 
       tradeProposal_acceptImpl _ arg = do
+        let v = (view (toInterface @TradeProposal this))
+        now <- getTime
+        requireMet (validActorsForRights v.availableActions SPA_Accept arg.actors
+          <> validBefore "the acceptance deadline" v.acceptBefore now
+          <> validAuctionTerms v.terms <> validAuctionSchedule v.schedule)
         require "every principal account is the principal's"
           (all (\funding -> accountSigner funding.account == Some principal) (Map.values arg.fundings))
         requireValidPrincipalFunding (settlementOf resolutionInfo terms.allocationTerms.executors) terms schedule arg.fundings
@@ -60,8 +68,15 @@ template SingleLotTradeProposal
           trade = coerceContractId auctionCid
           meta = emptyMetadata
 
-      tradeProposal_rejectImpl _ _ =
+      tradeProposal_rejectImpl _ arg = do
+        requireMet (validActorsForRights (view (toInterface @TradeProposal this)).availableActions SPA_Reject arg.actors)
         pure TradeProposal_RejectResult with meta = emptyMetadata
 
-      tradeProposal_withdrawImpl _ _ =
+      tradeProposal_withdrawImpl _ arg = do
+        requireMet (validActorsForRights (view (toInterface @TradeProposal this)).availableActions SPA_Withdraw arg.actors)
         pure TradeProposal_WithdrawResult with meta = emptyMetadata
+
+      tradeProposal_expireImpl _ _ = do
+        now <- getTime
+        requireMet (validExpired "the proposal" (Some (view (toInterface @TradeProposal this)).acceptBefore) now)
+        pure TradeProposal_ExpireResult with meta = emptyMetadata

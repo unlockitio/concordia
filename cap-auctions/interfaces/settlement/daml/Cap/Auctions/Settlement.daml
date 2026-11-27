@@ -3,19 +3,26 @@
 module Cap.Auctions.Settlement where
 
 import DA.Map (Map)
+import DA.Set (Set)
 
 import Splice.Api.Token.MetadataV1
 import qualified Splice.Api.Token.AllocationV2 as Alloc
-import Splice.Util (require)
-import Cap.Core.Types (ExecutionAction (..), ExecutionCore, ResolutionInfo)
-import Cap.Core.Utils (entitled, requireExpired, requireOpen)
+import Cap.Core.ResolutionV1 (ResolutionInfo)
 import Cap.Auctions.Types (Funding)
 import Cap.Auctions.Funding (Batch, SettleBatchContext)
 
 data SettlementView = SettlementView
   with
-    executionCore : ExecutionCore
+    authorities : Set Party
     resolutionInfo : ResolutionInfo
+    settlers : [[Party]]
+    -- ^ The actors of Settlement_Settle include every party of one set.
+    cancellers : [[Party]]
+    -- ^ The actors of Settlement_Cancel include every party of one set.
+    opensAt : Time
+    cancelAfter : Time
+    -- ^ No earlier than opensAt.
+    expiresAt : Optional Time
     executors : Optional [Party]
     batches : [Batch]
     fundings : [Map Party Funding]
@@ -47,6 +54,10 @@ interface Settlement where
   settlement_settleImpl : Settlement_Settle -> Update Settlement_SettleResult
 
   settlement_cancelImpl : Settlement_Cancel -> Update Settlement_CancelResult
+  settlement_expireImpl : Settlement_Expire -> Update Settlement_ExpireResult
+
+  -- | Implementations MUST require that the settlement window is open
+  -- (opensAt <= now < expiresAt) and that the actors are one of the settlers.
 
   choice Settlement_Settle : Settlement_SettleResult
     with
@@ -54,34 +65,23 @@ interface Settlement where
       settleBatchContexts : Map Party SettleBatchContext
       cancelContexts : Map (ContractId Alloc.Allocation) ExtraArgs
     controller actors
-    do
-      let v = view this
-      now <- getTime
-      requireOpen "the settlement window is open" now v.executionCore.opensAt v.executionCore.expiresAt
-      require "the actors are entitled to settle"
-        (entitled v.executionCore.availableActions EA_Execute actors)
-      settlement_settleImpl this (Settlement_Settle with ..)
+    do settlement_settleImpl this arg
+
+  -- | Implementations MUST require that cancelAfter is no earlier than
+  -- opensAt, that now is at or after cancelAfter, and that the actors are one
+  -- of the cancellers.
 
   choice Settlement_Cancel : Settlement_CancelResult
     with
       actors : [Party]
       cancelExtraArgs : Map (ContractId Alloc.Allocation) ExtraArgs
     controller actors
-    do
-      let v = view this
-      now <- getTime
-      require "the cancellation window opens no earlier than the settlement window"
-        (v.executionCore.cancelAfter >= v.executionCore.opensAt)
-      requireOpen "the cancellation window is open" now v.executionCore.cancelAfter None
-      require "the actors are entitled to cancel"
-        (entitled v.executionCore.availableActions EA_Cancel actors)
-      settlement_cancelImpl this (Settlement_Cancel with actors; cancelExtraArgs)
+    do settlement_cancelImpl this arg
+
+  -- | Implementations MUST require that expiresAt has passed.
 
   choice Settlement_Expire : Settlement_ExpireResult
     with
       actor : Party
     controller actor
-    do
-      now <- getTime
-      requireExpired "the settlement has expired" now (view this).executionCore.expiresAt
-      pure Settlement_ExpireResult with meta = emptyMetadata
+    do settlement_expireImpl this arg

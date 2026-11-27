@@ -16,8 +16,11 @@ import Splice.Api.Token.HoldingV2 (Account (..))
 
 import Splice.Util (HasCheckedFetch (..))
 
-import Cap.Core.Types (AuthenticKey (..), ResolutionInfo)
-import Cap.Core.Utils (Ignored, fetchGroup, requireClosed)
+import Cap.Core.AuthenticKeyV1 (AuthenticKey (..))
+import Cap.Core.ResolutionV1 (ResolutionInfo)
+import Cap.Core.Checks (Ignored, requireMet)
+import Cap.Core.Resolution (fetchGroup)
+import Cap.Core.Time (validClosed)
 import Cap.Auctions.Types (AuctionSchedule (..), AuctionTerms, Funding (..))
 import Cap.Auctions.Bid (Bid, Bid_Close (..))
 import Cap.Auctions.Funding (SettleBatchContext, cancelAllocations, ignoreConflictingBids, settlementOf)
@@ -71,7 +74,7 @@ template SingleLotAuction
       controller Set.toList authorities
       do
         now <- getTime
-        requireClosed "the bidding window is closed" now schedule.biddingClosesAt
+        requireMet (validClosed "the bidding window" schedule.biddingClosesAt now)
         singleLotTerms <- expectSingleLot terms
         presented <- fetchGroup this self [] [] resolutionInfo bidCids
         (keptBids, ignoredBids) <- ignoreConflictingBids principalFundings presented

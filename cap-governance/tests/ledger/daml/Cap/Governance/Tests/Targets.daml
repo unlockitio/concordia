@@ -6,8 +6,9 @@ import DA.Assert ((===))
 import qualified DA.Map as Map
 import Daml.Script hiding (AnyContractId)
 
-import Cap.Core.Types (AuthenticKey, Snapshot (..))
-import Cap.Core.Utils (IsAnyValue (..))
+import Cap.Core.AuthenticKeyV1 (AuthenticKey)
+import Cap.Governance.KeyedTargetV1 (Snapshot (..))
+import Cap.Core.AnyValue (IsAnyValue (..))
 
 import Cap.Governance.Tests.Harness
 import Cap.Governance.Tests.Support

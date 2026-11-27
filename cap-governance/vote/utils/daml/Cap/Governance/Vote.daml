@@ -1,0 +1,179 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | Votes and vote records: what a vote record carries, encoding and decoding
+-- votes, and checking votes and records. The standard vote kinds are Text and
+-- Decimal; see "Vote encoding" in docs/governance/considerations.md. A
+-- resolver fetches, consumes and counts vote records with
+-- Cap.Governance.Resolution and Cap.Governance.Count.
+module Cap.Governance.Vote
+  ( IsVoteRecord (..)
+
+    -- * Encoding and decoding
+  , encodeTextVote
+  , decodeTextVote
+  , encodeDecimalVote
+  , decodeDecimalVote
+
+    -- * Value checks
+  , validOneOf
+  , validWithinBounds
+
+    -- * Vote checks
+  , validVotes
+
+    -- * Record checks
+  , validDistinctOptions
+  , validVoteRecordAction
+  , validVoteRecordSnapshots
+  ) where
+
+import Prelude hiding (Action)
+
+import DA.Action (unless)
+import DA.List (group, sort)
+import DA.Map (Map)
+import qualified DA.Map as Map
+import qualified DA.Set as Set
+import qualified DA.Traversable as Traversable
+
+import Splice.Api.Token.MetadataV1 (AnyValue)
+import Splice.Util (HasCheckedFetch (..))
+
+import Cap.Core.AuthenticKeyV1 (AuthenticKey)
+import Cap.Core.IdentityV1 (Identity)
+import Cap.Core.ResolutionV1 (ResolutionInfo)
+import Cap.Governance.KeyedTargetV1 (Snapshot)
+import Cap.Core.Checks (Check)
+import Cap.Core.Identity (HasIdentities (..))
+import Cap.Core.AnyValue (IsAnyValue (..))
+import Cap.Governance.ActionV1 (ActionId)
+import Cap.Governance.VoteRecordV1 (Vote (..), VoteRecord, VoteRecord_Consume (..))
+
+
+------------------  VOTE RECORDS  ------------------
+
+-- r is the record, v the type its votes carry and act the type of the action
+-- it asks for, such as an app-specific enum or a ContractId Action. The
+-- identities of a record are its voters, and it belongs to the resolution its
+-- HasCheckedFetch instance names.
+class (Eq act, HasIdentities r, HasCheckedFetch r ResolutionInfo) => IsVoteRecord r v act | r -> v, r -> act where
+  votesOf : r -> Map Identity (Vote v)
+  snapshotsOf : r -> Map AuthenticKey Snapshot
+  actionOf : r -> act
+  consume : ContractId r -> Update ()
+
+
+------------------  ENCODING AND DECODING VOTES ------------------
+-- The standard kinds, for vote records counted through the VoteRecord interface. A
+-- template SHOULD encode the votes of its view with the encoder, and a resolver
+-- SHOULD decode them with the decoder. A new vote kind gets its own pair here.
+
+-- | Encodes an option label as AV_Text.
+encodeTextVote : Vote Text -> Vote AnyValue
+encodeTextVote = fmap toAnyValue
+
+-- | Decodes an option label from AV_Text.
+decodeTextVote : Vote AnyValue -> Optional (Vote Text)
+decodeTextVote = Traversable.mapA fromAnyValue
+
+-- | Encodes a number as AV_Decimal.
+encodeDecimalVote : Vote Decimal -> Vote AnyValue
+encodeDecimalVote = fmap toAnyValue
+
+-- | Decodes a number from AV_Decimal.
+decodeDecimalVote : Vote AnyValue -> Optional (Vote Decimal)
+decodeDecimalVote = Traversable.mapA fromAnyValue
+
+
+
+
+------------------  VOTE CHECKS  ------------------
+-- Checks on the votes a vote record carries, for requireMetFrom or ignoreFailing.
+
+-- | Validates that every vote on the record decodes as the kind the mechanism
+-- counts, and that every decoded vote passes the value checks provided below (e.g. 
+-- validOneOf or validWithinBounds). Pass (const []) when the mechanism has no
+-- value check. Each vote fails at most once.
+validVotes : IsVoteRecord r v act => (Vote v -> Optional (Vote a)) -> Check a -> Check r
+validVotes decodeVote check record =
+  [ "the vote of " <> show voter <> problem
+  | (voter, raw) <- Map.toList (votesOf record)
+  , problem <- case decodeVote raw of
+      None -> [" does not decode as the kind this mechanism counts"]
+      Some (Voted decoded) -> map (": " <>) (check decoded)
+      Some _ -> []
+  ]
+
+-- value checks
+---------------
+
+-- Checks on a decoded vote. A resolver runs them through validVotes when it
+-- counts, and SHOULD run them when a vote is cast.
+
+-- | Validates that a Text vote is one of the values the mechanism accepts,
+-- such as yay and nay, or a vote record's options. Values compare exactly:
+-- case-sensitive and untrimmed.
+validOneOf : [Text] -> Check Text
+validOneOf allowed value =
+  [ "the value " <> show value <> " is not among " <> show allowed
+  | value `notElem` allowed
+  ]
+
+-- | Validates that the value is within the bounds, both inclusive. None leaves
+-- that side unbounded.
+validWithinBounds : Optional Decimal -> Optional Decimal -> Check Decimal
+validWithinBounds minimum maximum value =
+  [ "the value " <> show value <> " is below the minimum " <> show m
+  | Some m <- [minimum], value < m
+  ]
+    <> [ "the value " <> show value <> " is above the maximum " <> show m
+       | Some m <- [maximum], value > m
+       ]
+
+
+------------------  RECORD CHECKS  ------------------
+-- A resolver SHOULD pass its own errors to requireMetFrom (aborts) and a
+-- voter's errors to ignoreFailing (skips the record), so one bad record
+-- cannot block the resolution.
+
+-- | Validates that the vote record asks for the given action. Through the
+-- VoteRecord interface, the action is the record's options, sorted.
+validVoteRecordAction : IsVoteRecord r v act => act -> Check r
+validVoteRecordAction action record =
+  ["the vote record asks for another action" | actionOf record /= action]
+
+-- | Validates that the vote record carries exactly the given snapshots.
+validVoteRecordSnapshots : IsVoteRecord r v act => Map AuthenticKey Snapshot -> Check r
+validVoteRecordSnapshots snapshots record =
+  ["the vote record carries other snapshots" | snapshotsOf record /= snapshots]
+
+-- | Validates that no option of a vote record appears twice. Use it in the
+-- ensure clause of a vote record template.
+validDistinctOptions : Check [ActionId]
+validDistinctOptions options =
+  [ "the option " <> show option <> " appears more than once"
+  | option :: _ :: _ <- group (sort options)
+  ]
+
+
+------------------  THE VOTE RECORD INTERFACE  ------------------
+
+-- Consuming a record needs the authority of its consumers, so the ledger rejects the resolution when they
+-- are not among the resolving parties. A record with no consumers is not
+-- consumed.
+
+instance HasCheckedFetch VoteRecord ResolutionInfo where
+  contractGroupId record = (view record).resolution
+
+instance HasIdentities VoteRecord where
+  identitiesOf record = Set.fromList (Map.keys (view record).votes)
+
+-- | The action of a record is its options, sorted, so that the records of one
+-- decision agree whatever order they list them in.
+instance IsVoteRecord VoteRecord AnyValue [ActionId] where
+  votesOf record = fmap (.vote) (view record).votes
+  snapshotsOf record = (view record).targets
+  actionOf record = sort (view record).options
+  consume cid = do
+    record <- fetch cid
+    unless (null (view record).consumers) $ exercise cid VoteRecord_Consume

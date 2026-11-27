@@ -4,50 +4,77 @@ module Cap.Core.Tests.Unit where
 
 import DA.Assert ((===))
 import DA.Date (Month (..), date)
+import DA.Map (Map)
 import qualified DA.Map as Map
+import qualified DA.Set as Set
 import qualified DA.TextMap as TextMap
 import DA.Time (addRelTime, days, hours, time)
 import Daml.Script
 
 import Splice.Api.Token.MetadataV1
 
-import Cap.Core.Utils
+import Cap.Core.IdentityV1 (Identity (..))
+import Cap.Core.AnyValue
+import Cap.Core.Authorization
+import Cap.Core.Identity
+import Cap.Core.Optional
+import Cap.Core.Time
 
 
 t0 : Time
 t0 = time (date 2026 Jan 1) 0 0 0
 
-admitActorsAdmitsACoveredGroup : Script ()
-admitActorsAdmitsACoveredGroup = do
+validActorsAcceptsACoveredGroup : Script ()
+validActorsAcceptsACoveredGroup = do
   alice <- allocateParty "unit-admit-alice"
   bob <- allocateParty "unit-admit-bob"
-  admitActors [[alice]] [alice] === True
-  admitActors [[alice, bob]] [alice, bob] === True
-  admitActors [[alice], [bob]] [bob] === True
+  validActors "act" [[alice]] [alice] === []
+  validActors "act" [[alice, bob]] [alice, bob] === []
+  validActors "act" [[alice], [bob]] [bob] === []
 
-admitActorsRefusesAPartialGroup : Script ()
-admitActorsRefusesAPartialGroup = do
+validActorsRefusesAPartialGroup : Script ()
+validActorsRefusesAPartialGroup = do
   alice <- allocateParty "unit-partial-alice"
   bob <- allocateParty "unit-partial-bob"
-  admitActors [[alice, bob]] [alice] === False
-  admitActors [[bob]] [alice] === False
+  validActors "act" [[alice, bob]] [alice] === ["the actors " <> show [alice] <> " are not entitled to act"]
+  validActors "act" [[bob]] [alice] === ["the actors " <> show [alice] <> " are not entitled to act"]
 
-admitActorsIgnoresEmptyGroups : Script ()
-admitActorsIgnoresEmptyGroups = do
+validActorsIgnoresEmptyGroups : Script ()
+validActorsIgnoresEmptyGroups = do
   alice <- allocateParty "unit-empty-alice"
   bob <- allocateParty "unit-empty-bob"
-  admitActors [] [alice] === False
-  admitActors [[]] [alice] === False
-  admitActors [[], [bob]] [bob] === True
+  null (validActors "act" [] [alice]) === False
+  null (validActors "act" [[]] [alice]) === False
+  validActors "act" [[], [bob]] [bob] === []
 
-entitledLooksUpTheAction : Script ()
-entitledLooksUpTheAction = do
+-- | A fixed acting-party mapping, for the tests below.
+newtype ActingParties = ActingParties (Map Identity (Set.Set Party))
+
+instance HasActingParties ActingParties where
+  actingPartiesOf (ActingParties m) = m
+
+actingPartiesForReadsTheMappingForEveryIdentity : Script ()
+actingPartiesForReadsTheMappingForEveryIdentity = do
+  alice <- allocateParty "unit-acting-alice"
+  bob <- allocateParty "unit-acting-bob"
+  carol <- allocateParty "unit-acting-carol"
+  let mapping = ActingParties (Map.fromList
+        [ (ExternalIdentity "org-a", Set.fromList [alice, bob])
+        , (PartyIdentity carol, Set.singleton bob) ])
+  actingPartiesFor mapping (ExternalIdentity "org-a") === Set.fromList [alice, bob]
+  actingPartiesFor mapping (ExternalIdentity "org-b") === Set.empty
+  -- a delegate acts for a party identity, and the party keeps acting for itself
+  actingPartiesFor mapping (PartyIdentity carol) === Set.fromList [bob, carol]
+  actingPartiesFor mapping (PartyIdentity alice) === Set.singleton alice
+
+validActorsForRightsLooksUpTheRight : Script ()
+validActorsForRightsLooksUpTheRight = do
   alice <- allocateParty "unit-entitled-alice"
   bob <- allocateParty "unit-entitled-bob"
   let actions = Map.fromList [("execute", [[alice]])]
-  entitled actions "execute" [alice] === True
-  entitled actions "execute" [bob] === False
-  entitled actions "cancel" [alice] === False
+  validActorsForRights actions "execute" [alice] === []
+  validActorsForRights actions "execute" [bob] === ["the actors " <> show [bob] <> " are not entitled to \"execute\""]
+  validActorsForRights actions "cancel" [alice] === ["the actors " <> show [alice] <> " are not entitled to \"cancel\""]
 
 isOpenHasAnInclusiveFloorAndAnExclusiveCeiling : Script ()
 isOpenHasAnInclusiveFloorAndAnExclusiveCeiling = do
@@ -63,11 +90,11 @@ singleNeedsExactlyOneElement = do
   singleOptional [1 : Int] === Some 1
   singleOptional [1, 2 : Int] === None
 
-uniformValueNeedsANonEmptyUniformList : Script ()
-uniformValueNeedsANonEmptyUniformList = do
-  uniformOptional ([] : [Int]) === None
-  uniformOptional [1, 1 : Int] === Some 1
-  uniformOptional [1, 2 : Int] === None
+sameOptionalNeedsANonEmptyListOfEqualValues : Script ()
+sameOptionalNeedsANonEmptyListOfEqualValues = do
+  sameOptional ([] : [Int]) === None
+  sameOptional [1, 1 : Int] === Some 1
+  sameOptional [1, 2 : Int] === None
 
 isAnyValueRoundTrips : Script ()
 isAnyValueRoundTrips = do

@@ -16,10 +16,11 @@ import Daml.Script hiding (AnyContractId)
 
 import Splice.Api.Token.MetadataV1
 
-import Cap.Core.Types (AuthenticKey (..), ResolutionInfo (..))
+import Cap.Core.AuthenticKeyV1 (AuthenticKey (..))
+import Cap.Core.ResolutionV1 (ResolutionInfo (..))
 import Cap.Governance.ActionV1 (Action)
 import Cap.Governance.ExecutableV1
-import Cap.Governance.Types (Reason (..))
+import Cap.Governance.VoteRecordV1 (Reason (..))
 
 import Cap.Examples.BabyDso.Action
 import Cap.Examples.BabyDso.Ans
@@ -177,7 +178,7 @@ openVoteAs f proposer vote =
   submit (actAs proposer <> readAs f.dso) (openVoteCmd f proposer vote f.rightCids)
 
 castCmd : Party -> ContractId SharedVoteRecord -> TextMap Decimal -> Commands (ContractId SharedVoteRecord)
-castCmd voter recordCid vote = exerciseCmd recordCid SharedVoteRecord_Cast with voter; vote
+castCmd voter recordCid vote = exerciseCmd recordCid SharedVoteRecord_Cast with voter; vote; reason = None
 
 castAs : Fixture -> Party -> ContractId SharedVoteRecord -> TextMap Decimal -> Script (ContractId SharedVoteRecord)
 castAs f voter recordCid vote = submit (actAs voter <> readAs f.dso) (castCmd voter recordCid vote)

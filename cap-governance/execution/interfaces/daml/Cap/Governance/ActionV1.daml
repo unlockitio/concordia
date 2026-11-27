@@ -1,0 +1,61 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Governance.ActionV1 where
+
+import Prelude hiding (Action)
+
+import DA.Map (Map)
+
+import Splice.Api.Token.MetadataV1
+
+import Cap.Core.AuthenticKeyV1 (AuthenticKey)
+import Cap.Governance.ExecutableV1 (Executable, ExecutionTerms)
+import Cap.Governance.KeyedTargetV1 (Snapshot)
+
+
+-- | Reads a target named by a key: checks the contract is the one the key
+-- names and returns its state, or None when it has none to snapshot.
+type TargetReader = AuthenticKey -> AnyContractId -> Update (Optional AnyValue)
+
+-- | Identifies one action among the actions one resolver executes. The same
+-- action MUST always give the same id, and two different actions MUST NOT
+-- give the same id. Code renders it from the typed action, never from text a
+-- requester supplied, and in a form people can read: a vote record shows it
+-- as the option a voter votes on.
+type ActionId = Text
+
+data ActionView = ActionView
+  with
+    actionId : ActionId
+    authorizers : [[Party]]
+    snapshots : Map AuthenticKey Snapshot -- parts left open are filled by the resolution
+    meta : Metadata
+  deriving (Eq, Show)
+
+data Action_AuthorizeExecutionResult = Action_AuthorizeExecutionResult
+  with
+    executionCids : [ContractId Executable]
+    meta : Metadata
+  deriving (Eq, Show)
+
+
+interface Action where
+  viewtype ActionView
+
+  action_authorizeExecutionImpl : ContractId Action -> Action_AuthorizeExecution -> Update Action_AuthorizeExecutionResult
+
+  action_readStateImpl : TargetReader
+
+  -- | Creates the executions of a decided outcome. Implementations MUST
+  -- require that the actors are one of the action's authorizer sets
+  -- (validAuthorizers), and MUST NOT let the resolution's snapshots override
+  -- parts the action fixed (mergeSnapshotsWithoutConflicts).
+  nonconsuming choice Action_AuthorizeExecution : Action_AuthorizeExecutionResult
+    with
+      actors : [Party]
+      executionTerms : ExecutionTerms
+      outcome : Optional AnyValue
+      snapshots : Map AuthenticKey Snapshot
+      extraArgs : ExtraArgs
+    controller actors
+    do action_authorizeExecutionImpl this self arg

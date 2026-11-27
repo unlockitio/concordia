@@ -1,0 +1,159 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+{-# LANGUAGE AllowAmbiguousTypes #-}
+
+-- | Reading targets, taking snapshots and merging them into the action's.
+-- Every check aborts: targets are never ignored.
+module Cap.Governance.Targets.Snapshots
+  ( -- * State
+    HasState (..)
+  , TargetReader
+  , readState
+  , readIdentity
+
+    -- * Taking snapshots
+  , validTargetsForAction
+  , snapshotStates
+  , snapshotCids
+  , snapshotStatesWith
+  , snapshotCidsWith
+
+    -- * Merging snapshots
+  , validSnapshotsToMerge
+  , mergeSnapshots
+  , mergeSnapshotsWithoutConflicts
+  ) where
+
+import Prelude hiding (Action)
+
+import DA.Map (Map)
+import qualified DA.Map as Map
+import DA.Optional (catOptionals, fromOptional, fromSomeNote, isNone)
+
+import Splice.Api.Token.MetadataV1
+import Splice.Util (HasCheckedFetch)
+
+import Cap.Core.AuthenticKeyV1 (AuthenticKey)
+import Cap.Governance.KeyedTargetV1 (Snapshot (..))
+import Cap.Governance.ActionV1 (TargetReader)
+import Cap.Core.AnyValue (IsAnyValue (..))
+import Cap.Core.Checks (Unmet, requireMet)
+import Cap.Core.Fetch (fetchCheckedAny)
+import Cap.Governance.ActionV1 (Action, action_readStateImpl)
+
+
+------------------  STATE  ------------------
+
+-- | The state of a template that an action snapshots.
+class HasState t a | t -> a where
+  stateOf : t -> a
+
+readState
+  : forall t a. (HasFetch t, HasCheckedFetch t AuthenticKey, HasState t a, IsAnyValue a)
+  => TargetReader
+readState key cid = do
+  (_, contract) <- fetchCheckedAny @t key cid
+  pure (Some (toAnyValue (stateOf contract)))
+
+readIdentity
+  : forall t. (HasFetch t, HasCheckedFetch t AuthenticKey)
+  => TargetReader
+readIdentity key cid = do
+  _ <- fetchCheckedAny @t key cid
+  pure None
+
+
+------------------  TAKING SNAPSHOTS  ------------------
+-- A snapshot is a precondition: execution goes ahead only while the target
+-- satisfies it. Submitters MUST be able to see every target they present.
+
+-- | Validates that every presented target is one the action names.
+validTargetsForAction : Map AuthenticKey Snapshot -> Map AuthenticKey AnyContractId -> Unmet
+validTargetsForAction actionSnapshots targetCids =
+  [ "the action names no presented target " <> show key
+  | key <- Map.keys targetCids
+  , not (Map.member key actionSnapshots)
+  ]
+
+-- | Snapshots the state of every target the action left open; targets the
+-- reader returns no state for stay open.
+snapshotStatesWith
+  : TargetReader -> Map AuthenticKey Snapshot -> Map AuthenticKey AnyContractId
+  -> Update (Map AuthenticKey Snapshot)
+snapshotStatesWith targetReader actionSnapshots targetCids = do
+  requireMet (validTargetsForAction actionSnapshots targetCids)
+  Map.fromList . catOptionals <$> forA (Map.keys (Map.filter open actionSnapshots)) (\key -> do
+    let cid = fromSomeNote ("a target the action names was not presented: " <> show key)
+          (Map.lookup key targetCids)
+    state <- targetReader key cid
+    pure (fmap (\st -> (key, Snapshot with state = Some st; cid = None)) state))
+  where
+    open target = isNone target.state && isNone target.cid
+
+-- | Snapshots the presented cid of every target whose contract the action
+-- left open.
+snapshotCidsWith
+  : TargetReader -> Map AuthenticKey Snapshot -> Map AuthenticKey AnyContractId
+  -> Update (Map AuthenticKey Snapshot)
+snapshotCidsWith targetReader actionSnapshots targetCids = do
+  requireMet (validTargetsForAction actionSnapshots targetCids)
+  Map.fromList <$> forA (Map.keys (Map.filter (isNone . (.cid)) actionSnapshots)) (\key -> do
+    let cid = fromSomeNote ("a target the action names was not presented: " <> show key)
+          (Map.lookup key targetCids)
+    _ <- targetReader key cid
+    pure (key, Snapshot with state = None; cid = Some cid))
+
+snapshotStates : Action -> Map AuthenticKey AnyContractId -> Update (Map AuthenticKey Snapshot)
+snapshotStates action targetCids =
+  snapshotStatesWith (action_readStateImpl action) (view action).snapshots targetCids
+
+snapshotCids : Action -> Map AuthenticKey AnyContractId -> Update (Map AuthenticKey Snapshot)
+snapshotCids action targetCids =
+  snapshotCidsWith (action_readStateImpl action) (view action).snapshots targetCids
+
+
+------------------  MERGING SNAPSHOTS  ------------------
+
+-- | Validates that every snapshot the resolution took is of a target the
+-- action names, and fills only parts the action left open, that is, a state
+-- or contract the action did not fix, and no state of a target whose contract
+-- the action fixed.
+validSnapshotsToMerge : Map AuthenticKey Snapshot -> Map AuthenticKey Snapshot -> Unmet
+validSnapshotsToMerge actionSnapshots resolutionSnapshots =
+  [ "the action names no snapshot target " <> show key
+  | key <- Map.keys resolutionSnapshots
+  , not (Map.member key actionSnapshots)
+  ]
+    <> [ errorMsg
+       | (key, snapshot) <- Map.toList resolutionSnapshots
+       , Some target <- [Map.lookup key actionSnapshots]
+       , (False, errorMsg) <-
+           [ ( isNone target.state || isNone snapshot.state
+             , "the resolution takes a state snapshot of " <> show key <> " that the action fixed" )
+           , ( isNone target.cid || isNone snapshot.cid
+             , "the resolution takes a contract snapshot of " <> show key <> " that the action fixed" )
+           , ( isNone target.cid || isNone snapshot.state
+             , "the resolution takes a state snapshot of " <> show key <> ", whose contract the action fixed" )
+           ]
+       ]
+
+-- | The action's snapshots with open parts filled from the resolution's.
+-- Callers SHOULD check validSnapshotsToMerge first (or use
+-- mergeSnapshotsWithoutConflicts): otherwise unnamed targets are dropped and
+-- fixed parts win.
+mergeSnapshots : Map AuthenticKey Snapshot -> Map AuthenticKey Snapshot -> Map AuthenticKey Snapshot
+mergeSnapshots actionSnapshots resolutionSnapshots =
+  Map.fromList (map merge (Map.toList actionSnapshots))
+  where
+    merge (key, target) =
+      let snapshot = fromOptional (Snapshot with state = None; cid = None) (Map.lookup key resolutionSnapshots)
+      in (key, Snapshot with
+           state = optional snapshot.state Some target.state
+           cid = optional snapshot.cid Some target.cid)
+
+-- | mergeSnapshots, aborting unless validSnapshotsToMerge holds.
+mergeSnapshotsWithoutConflicts
+  : Map AuthenticKey Snapshot -> Map AuthenticKey Snapshot -> Update (Map AuthenticKey Snapshot)
+mergeSnapshotsWithoutConflicts actionSnapshots resolutionSnapshots = do
+  requireMet (validSnapshotsToMerge actionSnapshots resolutionSnapshots)
+  pure (mergeSnapshots actionSnapshots resolutionSnapshots)

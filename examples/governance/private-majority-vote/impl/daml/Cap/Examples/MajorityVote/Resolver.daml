@@ -14,15 +14,21 @@ import qualified DA.TextMap as TextMap
 import Splice.Api.Token.MetadataV1
 import Splice.Util (HasCheckedFetch (..), fetchChecked, require)
 
-import Cap.Core.Types (AuthenticKey (..), ExecutionAction (..), ExecutionCore (..), Identity (..), ResolutionInfo (..))
-import Cap.Core.Utils (IsAnyValue (..), requireClosed, requireResolvedBy)
+import Cap.Core.AuthenticKeyV1 (AuthenticKey (..))
+import Cap.Governance.ExecutableV1 (ExecutionTerms (..))
+import Cap.Core.IdentityV1 (Identity (..))
+import Cap.Core.ResolutionV1 (ResolutionInfo (..))
+import Cap.Core.AnyValue (IsAnyValue (..))
+import Cap.Core.Checks (requireMet)
+import Cap.Core.Time (validClosed)
+import Cap.Core.Resolution (requireResolvedBy)
 import Cap.Governance.ActionV1
-import qualified Cap.Governance.VoteTopicV1 as VoteTopicV1
-import Cap.Governance.Types (Reason, Vote (..))
-import Cap.Governance.Utils.Weights (HasWeights (..))
-import Cap.Governance.Utils
-  ( Tally, Verdict (..), atLeastVotes, casts, consumeVoteRecords, decide, decodeTextVote
-  , expectUniformAction, weightedVotes )
+import Cap.Governance.VoteRecordV1 (Reason, Vote (..), VoteRecord, VoteRecordView (..))
+import qualified Cap.Governance.ResolverV1 as ResolverV1
+import Cap.Governance.Rights (HasWeights (..))
+import Cap.Governance.Count (Tally, Verdict (..), atLeastVotes, decide, weightedVotes)
+import Cap.Governance.Vote (decodeTextVote)
+import Cap.Governance.Resolution (casts, consumeVoteRecords, expectSameAction)
 
 import Cap.Examples.MajorityVote.VoteRecord
 
@@ -37,7 +43,7 @@ data ProposalTerms = ProposalTerms
 majorityMechanismName : Text
 majorityMechanismName = "private-majority-vote.majority"
 
--- | The ChoiceContext key under which a cast through the VoteTopic interface
+-- | The ChoiceContext key under which a cast through Resolver_CastVote
 -- passes the voter's PrivateVoteRecord, as AV_ContractId.
 voteRecordContextKey : Text
 voteRecordContextKey = "private-majority-vote.vote-record"
@@ -58,36 +64,28 @@ template Proposal
     subject : Reason
     electorate : Set Party
     terms : ProposalTerms
+    actionId : ActionId -- the action's id, read from terms.actionCid when the proposal is raised
     roll : [Party]
   where
     signatory dso
     observer operator :: Set.toList electorate
 
-    -- Votes are private: each sits on the voter's own PrivateVoteRecord, which a
-    -- cast passes in the choice context. The proposal itself does not change.
-    interface instance VoteTopicV1.VoteTopic for Proposal where
-      view = VoteTopicV1.VoteTopicView with
-        resolution; subject
-        proposer = PartyIdentity proposer
-        action = Some terms.actionCid
+    -- The decision. Votes are private: each sits on the voter's own
+    -- PrivateVoteRecord, which the resolver counts as its own template, so the
+    -- proposal's record carries no votes. Voters vote yay or nay on its one
+    -- option.
+    interface instance VoteRecord for Proposal where
+      view = VoteRecordView with
+        resolution
+        requester = PartyIdentity proposer
+        reason = subject
+        options = [actionId]
         voteBefore = Some terms.votingClosesAt
         effectiveAt = None
+        votes = Map.empty
+        targets = Map.empty
+        consumers = [dso]
         meta = emptyMetadata
-      voteTopic_castVoteImpl _ arg = do
-        recordCid <- case TextMap.lookup voteRecordContextKey arg.extraArgs.context.values of
-          Some (AV_ContractId cid) -> pure (coerceContractId cid : ContractId PrivateVoteRecord)
-          _ -> abort ("the choice context carries no vote record under " <> voteRecordContextKey)
-        record <- fetch recordCid
-        require "the vote record is for this proposal" (record.resolution == resolution)
-        require "the caster casts on its own vote record" (record.voter == arg.caster)
-        require "the caster casts for its own identity" (arg.identity == PartyIdentity arg.caster)
-        option <- case decodeTextVote arg.vote of
-          Some (Voted option) -> pure option
-          _ -> abort "a majority vote is the option yay or nay"
-        cid <- exercise recordCid PrivateVoteRecord_Cast with option
-        pure VoteTopicV1.VoteTopic_CastVoteResult with
-          created = [coerceContractId cid]
-          meta = emptyMetadata
 
     nonconsuming choice Proposal_Invite : [ContractId VoteRecordInvitation]
       controller operator
@@ -161,8 +159,10 @@ template Resolver
       do
         require "a proposal is raised by a member of the electorate"
           (Set.member proposer electorate)
+        action <- fetch terms.actionCid
         create Proposal with
           dso; operator; electorate; terms; proposer; subject
+          actionId = (view action).actionId
           resolution = ResolutionInfo with
             resolver = contractGroupId this
             resolverCid = None
@@ -176,6 +176,35 @@ template Resolver
         recordCids : [ContractId PrivateVoteRecord]
       controller operator
       do resolveMajority this self proposalCid recordCids
+
+    -- Lets a wallet that knows only the interfaces cast on its own private
+    -- vote record, which the choice context names. The private records are
+    -- not VoteRecords, so a round is resolved with Resolver_ResolveMajority.
+    interface instance ResolverV1.Resolver for Resolver where
+      view = ResolverV1.ResolverView with
+        keyId = resolverId
+        mechanisms = [majorityMechanismName]
+        meta = emptyMetadata
+
+      resolver_castVoteImpl resolverCid arg = do
+        requireResolvedBy this (fromInterfaceContractId @Resolver resolverCid) arg.resolution
+        recordCid <- case TextMap.lookup voteRecordContextKey arg.extraArgs.context.values of
+          Some (AV_ContractId cid) -> pure (coerceContractId cid : ContractId PrivateVoteRecord)
+          _ -> abort ("the choice context carries no vote record under " <> voteRecordContextKey)
+        record <- fetch recordCid
+        require "the vote record is for this round" (record.resolution == arg.resolution)
+        require "the caster casts on its own vote record" (record.voter == arg.caster)
+        require "the caster casts for its own identity" (arg.identity == PartyIdentity arg.caster)
+        option <- case decodeTextVote arg.vote of
+          Some (Voted option) -> pure option
+          _ -> abort "a majority vote is the option yay or nay"
+        cid <- exercise recordCid PrivateVoteRecord_Cast with option
+        pure ResolverV1.Resolver_CastVoteResult with
+          created = [coerceContractId cid]
+          meta = emptyMetadata
+
+      resolver_resolveImpl _ _ =
+        abort "the private vote records are not VoteRecords: resolve with Resolver_ResolveMajority"
 
 
 instance HasWeights Resolver where
@@ -210,12 +239,12 @@ resolveMajority resolver self proposalCid recordCids = do
   require "the presented vote records are distinct" (unique recordCids)
   records <- forA recordCids (fetchChecked proposal.resolution)
   forA_ records $ \record -> do
-    requireClosed "every presented vote record is closed for voting" now record.closesAt
+    requireMet (validClosed "the voting window" record.closesAt now)
     require "every vote record votes in the proposal's window"
       (record.opensAt == terms.entryClosesAt
         && record.closesAt == terms.votingClosesAt
         && record.expiresAt == terms.expiresAt)
-  require "the vote records vote on the proposal's action" (expectUniformAction records == terms.actionCid)
+  require "the vote records vote on the proposal's action" (expectSameAction records == terms.actionCid)
 
   -- The roll holds each entitled voter once, so covering it exactly admits
   -- only voters with a right, each on one record.
@@ -226,12 +255,14 @@ resolveMajority resolver self proposalCid recordCids = do
   let verdict = decide (atLeastVotes 1) (majorityOf (intToDecimal (Set.size resolver.electorate))) counted
   created <- case verdict of
     Decided winner | winner == yay -> do
+      action <- fetch terms.actionCid
+      require "the executed action is the option the vote is on" ((view action).actionId == proposal.actionId)
       result <- exercise terms.actionCid Action_AuthorizeExecution with
         actors = [resolver.dso]
-        executionCore = ExecutionCore with
+        executionTerms = ExecutionTerms with
           authorities = Set.fromList [resolver.dso]
-          availableActions = Map.fromList
-            [(EA_Execute, map (:: []) (Set.toList resolver.electorate))]
+          executors = map (:: []) (Set.toList resolver.electorate)
+          cancellers = []
           opensAt = terms.votingClosesAt
           cancelAfter = terms.votingClosesAt
           expiresAt = Some terms.expiresAt

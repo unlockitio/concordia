@@ -3,15 +3,12 @@
 module Cap.Auctions.Bid where
 
 import DA.Map (Map)
-import qualified DA.Map as Map
 import DA.Set (Set)
-import qualified DA.Set as Set
 
 import Splice.Api.Token.MetadataV1
 import Splice.Api.Token.AllocationV2 (Allocation)
-import Splice.Util (HasCheckedFetch (..), require)
-import Cap.Core.Types (Identity (..), ResolutionInfo)
-import Cap.Core.Utils (HasIdentities (..), entitled, requireBefore, requireExpired, requireOpen)
+import Splice.Util (HasCheckedFetch (..))
+import Cap.Core.ResolutionV1 (ResolutionInfo)
 
 import Cap.Auctions.Types (AuctionSchedule, AuctionTerms, Funding)
 
@@ -53,26 +50,24 @@ interface BidProposal where
   bidProposal_withdrawImpl
     : ContractId BidProposal -> BidProposal_Withdraw -> Update BidProposal_WithdrawResult
 
+  -- | Implementations MUST require that the actors are entitled to BPA_Accept
+  -- (validBidProposalAccept).
   nonconsuming choice BidProposal_Accept : BidProposal_AcceptResult
     with
       actors : [Party]
       resolutionInfo : ResolutionInfo
       extraArgs : ExtraArgs
     controller actors
-    do
-      require "the actors are entitled to accept"
-        (entitled (view this).availableActions BPA_Accept actors)
-      bidProposal_acceptImpl this self (BidProposal_Accept with ..)
+    do bidProposal_acceptImpl this self arg
 
+  -- | Implementations MUST require that the actors are entitled to
+  -- BPA_Withdraw (validBidProposalWithdraw).
   choice BidProposal_Withdraw : BidProposal_WithdrawResult
     with
       actors : [Party]
       extraArgs : ExtraArgs
     controller actors
-    do
-      require "the actors are entitled to withdraw"
-        (entitled (view this).availableActions BPA_Withdraw actors)
-      bidProposal_withdrawImpl this self (BidProposal_Withdraw with ..)
+    do bidProposal_withdrawImpl this self arg
 
 
 
@@ -132,53 +127,41 @@ interface Bid where
   bid_expireImpl : ContractId Bid -> Bid_Expire -> Update Bid_ExpireResult
 
 
+  -- | Implementations MUST require that the actors are entitled to BA_Fund and
+  -- that the bidding window is open (validBidFund).
   choice Bid_Fund : Bid_FundResult 
     with
       actors : [Party]
       fundings : Map Party Funding
       extraArgs : ExtraArgs
     controller actors
-    do
-      let bv = view this
-      require "the actors are entitled to fund"
-        (entitled bv.availableActions BA_Fund actors)
-      now <- getTime
-      requireOpen "the bidding window is open"
-        now bv.schedule.biddingOpensAt (Some bv.schedule.biddingClosesAt)
-      bid_fundImpl this self (Bid_Fund with ..)
+    do bid_fundImpl this self arg
 
+  -- | Implementations MUST require that the actors are entitled to
+  -- BA_Withdraw and that bidding has not closed (validBidWithdraw).
   nonconsuming choice Bid_Withdraw : Bid_WithdrawResult
     with
       actors : [Party]
       extraArgs : ExtraArgs
     controller actors
-    do
-      let bv = view this
-      require "the actors are entitled to withdraw"
-        (entitled bv.availableActions BA_Withdraw actors)
-      now <- getTime
-      requireBefore "bidding has not closed" now bv.schedule.biddingClosesAt
-      bid_withdrawImpl this self (Bid_Withdraw with ..)
+    do bid_withdrawImpl this self arg
 
+  -- | Implementations MUST require that the actors are entitled to BA_Close
+  -- (validBidClose).
   nonconsuming choice Bid_Close : Bid_CloseResult
     with
       actors : [Party]
       extraArgs : ExtraArgs
     controller actors
-    do
-      require "the actors are entitled to close"
-        (entitled (view this).availableActions BA_Close actors)
-      bid_closeImpl this self (Bid_Close with ..)
+    do bid_closeImpl this self arg
 
+  -- | Implementations MUST require that the bid has expired (validBidExpiry).
   nonconsuming choice Bid_Expire : Bid_ExpireResult
     with
       actors : [Party]
       extraArgs : ExtraArgs
     controller actors
-    do
-      now <- getTime
-      requireExpired "the bid has expired" now (Some (view this).schedule.expiresAt)
-      bid_expireImpl this self (Bid_Expire with ..)
+    do bid_expireImpl this self arg
 
 
 instance Show Bid where
@@ -188,12 +171,3 @@ instance Show Bid where
 -- on a bid of another resolution.
 instance HasCheckedFetch Bid ResolutionInfo where
   contractGroupId bid = (view bid).resolutionInfo
-
--- | The identities of a bid are the parties that hold its accounts: each
--- account's owner, or its provider when it has no owner.
-instance HasIdentities Bid where
-  identitiesOf bid = Set.fromList
-    [ PartyIdentity holder
-    | funding <- Map.values (view bid).fundings
-    , Some holder <- [optional funding.account.provider Some funding.account.owner]
-    ]

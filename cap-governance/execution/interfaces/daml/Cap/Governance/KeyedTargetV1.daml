@@ -1,0 +1,33 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | A contract that an action changes, named by a key instead of a contract
+-- ID, and the snapshot of its state or contract id that a decision is made
+-- against. A client that executes an action reads the KeyedTarget view to
+-- find the current contract ID for each key in the action's snapshots.
+module Cap.Governance.KeyedTargetV1 where
+
+import Splice.Api.Token.MetadataV1
+
+import Cap.Core.AuthenticKeyV1 (AuthenticKey)
+
+
+-- | What a decision recorded of a target. Snapshot the state only when the
+-- target might change between decisions; a contract id fixes the exact
+-- contract that will change.
+data Snapshot = Snapshot
+  with
+    state : Optional AnyValue
+    cid : Optional AnyContractId
+  deriving (Eq, Show)
+
+
+data KeyedTargetView = KeyedTargetView
+  with
+    key : AuthenticKey
+    -- ^ MUST be the key the app's checked fetch computes.
+    -- Its authorities MUST keep its id unique among active contracts.
+    meta : Metadata
+  deriving (Eq, Show)
+
+interface KeyedTarget where
+  viewtype KeyedTargetView

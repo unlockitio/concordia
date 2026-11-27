@@ -41,7 +41,7 @@ these.
   action passes to `fetchTargetMatchingSnapshot`.
 - **A timing profile.** Voting windows are fields of the app's ballots.
   Execution windows are the `opensAt`, `cancelAfter` and `expiresAt` fields of the
-  `ExecutionCore` the resolver sets when it authorizes an execution.
+  `ExecutionTerms` the resolver sets when it authorizes an execution.
 
 ## New governance formats
 
@@ -100,7 +100,7 @@ cap-core itself, because a bid names its `ResolutionInfo` when it is created.
 
 `cap-core` is the foundation for further allocation-oriented modules. A new
 domain is a package beside `cap-governance` and `cap-auctions` that uses the
-core's stored types (`AuthenticKey`, `ResolutionInfo`, `ExecutionCore`) and its
+core's stored types (`Identity`, `AuthenticKey`, `ResolutionInfo`) and its
 checks, and defines interfaces only where code has to work with contracts from
 other packages. Each direction below is a further instantiation.
 
@@ -120,7 +120,7 @@ around them:
 - **Toolkit growth.** New opt-in helpers as adopters surface reusable patterns.
   Toolkit growth never constrains a format; it only saves work.
 - **Open result fields.** Outcomes travel as `AnyValue`, and the choice results
-  and `ExecutionCore` carry a `meta` field, so they can grow without a new
+  and `ExecutionTerms` carry a `meta` field, so they can grow without a new
   interface version.
 - **A resolve-and-execute path.** A dedicated atomic path for the common case
   where an outcome is authorized and executed in the resolving transaction.

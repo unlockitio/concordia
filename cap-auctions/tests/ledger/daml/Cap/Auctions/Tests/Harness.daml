@@ -10,10 +10,13 @@ import Splice.Api.Token.MetadataV1 (ExtraArgs, emptyMetadata)
 import qualified Splice.Api.Token.AllocationV2 as Alloc
 import Splice.Util (HasCheckedFetch (..))
 
-import Cap.Core.Types (AuthenticKey (..), ResolutionInfo)
-import Cap.Core.Utils (Contracts, Ignored, fetchGroup)
+import Cap.Core.AuthenticKeyV1 (AuthenticKey (..))
+import Cap.Core.ResolutionV1 (ResolutionInfo)
+import Cap.Core.Checks (Contracts, Ignored, requireMet)
+import Cap.Core.Resolution (fetchGroup)
 import Cap.Auctions.Types (AuctionSchedule, AuctionTerms (..), Funding, HasSingleLotQuotes (..), Quote)
 import Cap.Auctions.Bid
+import Cap.Auctions.Checks (validBidClose, validBidExpiry, validBidFund, validBidQuote, validBidWithdraw)
 import Cap.Auctions.SingleLotQuotesBid
 import Cap.Auctions.Funding
   ( Batch, SettleBatchContext, cancelAllocations, fetchFundingAllocations, ignoreConflictingBids
@@ -53,18 +56,25 @@ template TestBid
         meta = emptyMetadata
 
       bid_fundImpl _ arg = do
+        now <- getTime
+        requireMet (validBidFund (view (toInterface @Bid this)) arg.actors now)
         cid <- create this with fundings = arg.fundings
         pure Bid_FundResult with bid = toInterfaceContractId cid; meta = emptyMetadata
 
-      bid_withdrawImpl self _ = do
+      bid_withdrawImpl self arg = do
+        now <- getTime
+        requireMet (validBidWithdraw (view (toInterface @Bid this)) arg.actors now)
         archive (fromInterfaceContractId @TestBid self)
         pure Bid_WithdrawResult with bid = None; withdrawn = []; meta = emptyMetadata
 
-      bid_closeImpl self _ = do
+      bid_closeImpl self arg = do
+        requireMet (validBidClose (view (toInterface @Bid this)) arg.actors)
         archive (fromInterfaceContractId @TestBid self)
         pure Bid_CloseResult with meta = emptyMetadata
 
       bid_expireImpl self _ = do
+        now <- getTime
+        requireMet (validBidExpiry (view (toInterface @Bid this)) now)
         archive (fromInterfaceContractId @TestBid self)
         pure Bid_ExpireResult with meta = emptyMetadata
 
@@ -72,6 +82,8 @@ template TestBid
       view = SingleLotQuotesView with quotes
 
       singleLotQuotesBid_quoteImpl _ arg = do
+        now <- getTime
+        requireMet (validBidQuote (view (toInterface @Bid this)) arg.actors now)
         toInterfaceContractId <$> create this with quotes = arg.quotes
 
 instance HasSingleLotQuotes TestBid where

@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: Apache-2.0
+
+sdk-version: 3.5.11
+name: cap-governance-vote-v1
+version: 0.1.0
+source: daml
+dependencies:
+- daml-prim
+- daml-stdlib
+data-dependencies:
+- ../../../lib/splice-api-token-metadata-v1-1.0.0.dar
+- ../../../cap-core/identity/types/.daml/dist/cap-core-identity-v1-0.1.0.dar
+- ../../../cap-core/resolution/types/.daml/dist/cap-core-resolution-v1-0.1.0.dar
+- ../../../cap-governance/execution/interfaces/.daml/dist/cap-governance-execution-v1-0.1.0.dar
+build-options:
+  - --target=2.3

@@ -1,0 +1,30 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | Whether the actors of a choice hold a right: they include every party of
+-- at least one non-empty set of parties.
+module Cap.Core.Authorization
+  ( validActors
+  , validActorsForRights
+  ) where
+
+import DA.Map (Map)
+import qualified DA.Map as Map
+import DA.Optional (fromOptional)
+
+import Cap.Core.Checks (Check)
+
+
+-- | Validates that the actors include every party of at least one non-empty
+-- set. The actors may be a superset of the set: the set [alice] admits
+-- [alice, bob]. `what` names the right, such as "execute".
+validActors : Text -> [[Party]] -> Check [Party]
+validActors what sets actors =
+  [ "the actors " <> show actors <> " are not entitled to " <> what
+  | not (any (all (`elem` actors)) (filter (not . null) sets))
+  ]
+
+-- | Validates that the actors hold the right, by the sets the map holds for
+-- it. A right without an entry is held by no one.
+validActorsForRights : (Ord k, Show k) => Map k [[Party]] -> k -> Check [Party]
+validActorsForRights rights right =
+  validActors (show right) (fromOptional [] (Map.lookup right rights))

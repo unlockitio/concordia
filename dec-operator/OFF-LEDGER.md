@@ -70,7 +70,7 @@ The app backend is how members put decisions on the ledger. It is the app's own 
 | **Request a vote** | Puts a decision to the members: a library action such as `DOA_AddMember` or `DOA_SetConfig`, or an app action. It exercises the app's request-vote choice, which creates a shared vote record. |
 | **Cast a vote** | Records the member's vote with `DecOperatorRules_CastVote`, encoded for the record's mechanism |
 | **Confirm an action** | Records that the member's backend computed the same automated action from ledger state. |
-| **Show what a vote changes** | Displays the contracts an action refers to. The `SharedVoteRecord` view holds only the rendered options. |
+| **Show what a vote changes** | Displays the contracts an action refers to. The `VoteRecord` view holds only the options' `ActionId`s and the targets' snapshots. |
 | **Bootstrap** | Creates and signs the `FoundingAgreement`, which records the founders' consent to the first members and configuration |
 | **Run the app** | Everything specific to the app, such as registrations or transfers |
 

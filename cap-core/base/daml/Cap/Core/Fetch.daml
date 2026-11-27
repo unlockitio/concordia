@@ -1,0 +1,21 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | Checked fetches of contracts named by an AnyContractId.
+module Cap.Core.Fetch
+  ( HasCheckedFetch (..)
+  , fetchCheckedAny
+  ) where
+
+import Splice.Api.Token.MetadataV1 (AnyContractId)
+import Splice.Util (HasCheckedFetch (..), fetchChecked)
+
+
+-- | Fetches a contract named by an AnyContractId as its concrete template and
+-- checks its key, returning the typed contract id with the contract.
+fetchCheckedAny
+  : (HasFetch t, HasCheckedFetch t k)
+  => k -> AnyContractId -> Update (ContractId t, t)
+fetchCheckedAny key cid = do
+  let typed = coerceContractId cid
+  contract <- fetchChecked key typed
+  pure (typed, contract)

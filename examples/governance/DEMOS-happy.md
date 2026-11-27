@@ -114,7 +114,7 @@ sequenceDiagram
 
     Note over AA,ANS: Execute, after opensAt
     SV2->>X: Executable_Execute — actors [SV2], targetCids
-    X->>X: requireOpen, entitled EA_Execute, presentedTargetsMatchSnapshots
+    X->>X: validExecution, presentedTargetsMatchSnapshots
     X->>CFG: fetchTargetMatchingSnapshot unchanged — the snapshot transferFee is unchanged
     X->>ANS: fetchTargetMatchingIdentity — the contract id is unchanged
     X->>CFG: AmuletConfig_SetFee 0.05 — epoch 4
@@ -228,7 +228,7 @@ sequenceDiagram
 
     Note over DSO,CFG: Execute, after votingClosesAt
     A->>X: Executable_Execute — actors [Alice], targetCids {config}
-    X->>X: requireOpen, entitled EA_Execute, presentedTargetsMatchSnapshots
+    X->>X: validExecution, presentedTargetsMatchSnapshots
     X->>CFG: fetchTargetMatchingSnapshot (==) — setting is still "sync-a"
     X->>CFG: Config_Set "sync-b"
     Note over CFG: setting "sync-b"

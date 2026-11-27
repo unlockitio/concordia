@@ -10,7 +10,7 @@ import DA.Time (RelTime)
 
 import Splice.Api.Token.MetadataV1
 
-import Cap.Core.Types (AuthenticKey)
+import Cap.Core.AuthenticKeyV1 (AuthenticKey)
 
 import Cap.DecOperator.ActionConfirmationV1 (ActionConfirmation)
 import Cap.DecOperator.DecOperatorRulesV1 (DecOperatorRules, Fraction)

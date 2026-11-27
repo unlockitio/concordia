@@ -65,7 +65,7 @@ Every governance app decides two things: whether enough voters took part
 `Verdict`: `Lapsed` when the quorum fails, `Undecided` when the tally reaches
 nothing, and `Decided` otherwise. They are kept separate because low turnout
 and a split vote are different outcomes, and an app may handle them
-differently. `Cap.Governance.Utils.Count` provides common quorums
+differently. `Cap.Governance.Count` provides common quorums
 (`atLeastPresent`, `atLeastVotes`, `atLeastVotedWeight`, `atLeastShareOfTotal`)
 and tallies (`unanimous`, `plurality`, `shareOfVotes`, `median`,
 `weightedMedian`), so an app builds its rule from these parts.
@@ -172,48 +172,62 @@ flowchart LR
 
 ### Vote records
 
-`IsVoteRecord` in `Cap.Governance.Utils.VoteRecords` lets the library work with any
+`IsVoteRecord` in `Cap.Governance.Vote` lets the library work with any
 vote record template. It gives the library a vote record's casts,
 its snapshots, the action it asks to authorize, and how to consume it. An app writes
-one instance per vote record template.
+one instance per vote record template. The `VoteRecord` interface has one
+instance in the library, so a resolver can count records of templates it does
+not know.
 
 
 
-### Vote topic
+### The vote record view
 
-A `VoteTopic` interface lets software that does not know an app's templates find
-an open decision, read what it decides, and cast a vote on it. Its callers are
-wallets and dApps (an SV voting from a CIP-103 wallet, as in the SV governance
-dApp CIP), indexers, and a decentralized party that is itself a voter in
-another governance flow, whose resolver casts into the other flow's vote topic.
+The `VoteRecord` interface lets software that does not know an app's templates
+find an open decision, read what it decides and the votes cast on it. Its
+callers are wallets and dApps (an SV voting from a CIP-0103 wallet, as in the SV
+governance dApp CIP), indexers, and a decentralized party that is itself a
+voter in another governance flow.
 
 The two governance flows in Canton both have this shape. The DSO's
 `VoteRequest` and the DRO's `GovernanceProposal` (the `.canton` naming CIP)
-each have a proposer, what is decided, a voting window, an optional effective
-time, and votes by identities the governance knows. They differ in where the
-vote is cast (on the resolver, `DsoRules_CastVote`, or on the proposal,
-`GovVote`), in whether the proposer is a name or a party, in whether a vote can
-be changed, and in what each reads live when a vote is cast. `VoteTopicView`
-holds what they share, and `VoteTopic_CastVote` leaves the rest to the
-implementation:
+each have a requester, what is decided, a voting window, an optional effective
+time, and votes by identities the governance knows. `VoteRecordView` holds
+what they share:
 
-- It is nonconsuming and returns the contracts it creates, so a vote topic can
-  store the vote on itself (and recreate itself) or on a vote record per voter.
-- It takes a `caster` and an `identity`, so the implementation checks that the
-  caster may cast for that identity.
-- Its `extraArgs` carry what the implementation needs, such as the voter's
-  vote record or the live voter registry, the way the Token Standard passes a
-  choice context.
+- `resolution` names the resolver, the mechanism and the decision. The records
+  of one decision share it, whether one record holds every vote or each voter
+  has a record of its own.
+- `options` lists the `ActionId` of each action the voters choose among.
+- `voteBefore` and `effectiveAt` give the voting window and the execution time.
+  `voteBefore` is `None` for a standing record.
+- `votes` holds one `CastVote` per identity that voted: the vote, the acting
+  party that cast it, its reason and its time.
+- `targets` holds the snapshots of the contracts the options change.
+- `consumers` names who archives the record once it is counted. A standing
+  record has none.
 
-The view carries no votes. A vote topic that stores its votes can also implement
-`VoteRecord`, and one whose votes are private exposes none. It carries no vote
-format either: the mechanism name documents it (see "Vote encoding" in
-[considerations.md](considerations.md)), and the resolver checks every vote it
-counts. It names at most one action: a change to several targets is one action,
-and a choice among options is one action that takes the winning option as its
-outcome.
+The view carries no vote format: the mechanism name documents it (see "Vote
+encoding" in [considerations.md](considerations.md)), and the resolver checks
+every vote it counts.
 
-The cost is that the view is frozen, so every vote topic has to fit it, and that
-a choice taking `ContractId VoteTopic` reaches any template that implements it.
-A caller trusts a vote topic only as far as it trusts the resolver its
-`resolution` names.
+The cost is that the view is frozen, so every vote record has to fit it.
+
+### What a voter can trust
+
+A voter sees the options as `ActionId`s and needs to know that the option it
+votes for is the action that executes:
+
+1. **The voter's participant computes the view.** It runs the template's code,
+   and the Ledger API names the package in
+   `InterfaceView.implementation_package_id`. A client shows a record only if
+   that package is one the voter trusts and the record is signed by
+   `resolution.resolver.authorities`.
+2. **The view computes each `ActionId` from the action.** The template stores
+   the typed action, or the `Action` contract it read the id from when the
+   record was created. No id is text that the requester supplied.
+3. **The vote names an `ActionId`.** An `ActionId` is injective, so a vote for
+   one option is not a vote for another.
+4. **Execution checks the id again.** The resolver requires that the action it
+   executes has the id of the winning option, and checks the targets against
+   their snapshots.

@@ -1,0 +1,77 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | Casts votes on, and resolves, resolutions without knowing the resolver's
+-- template. Implementations MUST dispatch on resolution.mechanism and MUST
+-- reject a resolution that does not name this resolver.
+module Cap.Governance.ResolverV1 where
+
+import Splice.Api.Token.MetadataV1
+
+import Cap.Core.IdentityV1 (Identity)
+import Cap.Core.ResolutionV1 (ResolutionInfo)
+import Cap.Governance.ExecutableV1 (Executable)
+import Cap.Governance.VoteRecordV1 (Reason, Vote, VoteRecord)
+
+
+-- | How a resolution ended.
+data ResolutionStatus
+  = RS_Decided    -- an outcome was reached
+  | RS_Rejected   -- the voters decided against the action
+  | RS_Lapsed     -- too few voters took part, or the vote expired first
+  | RS_Undecided  -- enough voters took part, but the votes reached no outcome
+  deriving (Eq, Show)
+
+data ResolverView = ResolverView
+  with
+    keyId : Text           
+    mechanisms : [Text]    
+    meta : Metadata
+  deriving (Eq, Show)
+
+data Resolver_CastVoteResult = Resolver_CastVoteResult
+  with
+    created : [AnyContractId]  -- the vote record created or updated
+    meta : Metadata
+  deriving (Eq, Show)
+
+data Resolver_ResolveResult = Resolver_ResolveResult
+  with
+    status : ResolutionStatus
+    outcome : Optional AnyValue
+    executions : [ContractId Executable]
+    meta : Metadata
+  deriving (Eq, Show)
+
+
+interface Resolver where
+  viewtype ResolverView
+
+  resolver_castVoteImpl : ContractId Resolver -> Resolver_CastVote -> Update Resolver_CastVoteResult
+
+  resolver_resolveImpl : ContractId Resolver -> Resolver_Resolve -> Update Resolver_ResolveResult
+
+  -- | Implementations MUST check that caster may act for identity, that the
+  -- decision's voteBefore has not passed, and that a Voted vote for an option
+  -- is one of the record's options (validOneOf). The vote record of the
+  -- decision names what the vote is for.
+  nonconsuming choice Resolver_CastVote : Resolver_CastVoteResult
+    with
+      caster : Party
+      identity : Identity
+      resolution : ResolutionInfo
+      vote : Vote AnyValue
+      reason : Optional Reason
+      extraArgs : ExtraArgs
+    controller caster
+    do resolver_castVoteImpl this self (Resolver_CastVote with ..)
+
+  -- | Implementations MUST validate every vote they count, and SHOULD consume
+  -- each counted VoteRecord so it cannot be counted again.
+  nonconsuming choice Resolver_Resolve : Resolver_ResolveResult
+    with
+      actors : [Party]
+      resolution : ResolutionInfo
+      voteRecordCids : [ContractId VoteRecord]
+      extraArgs : ExtraArgs
+    controller actors
+    do resolver_resolveImpl this self (Resolver_Resolve with ..)

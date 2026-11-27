@@ -7,14 +7,17 @@ import DA.List (sort)
 import qualified DA.Map as Map
 import Daml.Script hiding (AnyContractId)
 
-import Splice.Api.Token.MetadataV1 (ExtraArgs (..), emptyChoiceContext, emptyMetadata)
+import qualified DA.TextMap as TextMap
 
-import Cap.Governance.VoteTopicV1
-import Cap.Governance.Types (Vote (..))
-import Cap.Core.Types (Identity (..))
-import Cap.Governance.Utils (Verdict (..))
+import Splice.Api.Token.MetadataV1 (AnyValue (..), ChoiceContext (..), ExtraArgs (..), emptyMetadata)
+
+import Cap.Governance.VoteRecordV1 (Vote (..), VoteRecord)
+import Cap.Governance.ResolverV1 (Resolver, Resolver_CastVote (..))
+import Cap.Core.IdentityV1 (Identity (..))
+import Cap.Governance.Count (Verdict (..))
 
 import Cap.Examples.BabyDso.Config
+import Cap.Examples.BabyDso.Resolver (voteRecordContextKey)
 import Cap.Examples.BabyDso.Submission (SharedVoteRecord, encodeParametersVote, weightedVoteMechanismName)
 
 import Cap.Examples.BabyDso.Demo.Fixture
@@ -40,7 +43,7 @@ svsSetBothFees = do
   queryContractId f.sv1 recordCid >>= (=== None)
 
   Some pending <- queryInterfaceContractId f.sv2 execution
-  setTime pending.executionCore.opensAt
+  setTime pending.executionTerms.opensAt
   executed <- executeAs f f.sv2 execution
   length executed.created === 2
   queryInterfaceContractId f.sv2 execution >>= (=== None)
@@ -72,26 +75,34 @@ svsConfirmBothFees = do
   config.epoch === openingEpoch + 1
 
 
--- A wallet that knows only the VoteTopic interface reads what is decided and
--- casts on it. An SV cannot cast for another SV's identity.
-svCastsThroughTheVoteTopicInterface : Script ()
-svCastsThroughTheVoteTopicInterface = do
+-- A wallet that knows only the interfaces reads the decision through the
+-- VoteRecord interface and casts through the Resolver interface, on the record
+-- passed in the choice context. An SV cannot cast for another SV's identity.
+svCastsThroughTheResolverInterface : Script ()
+svCastsThroughTheResolverInterface = do
   f <- setupAs "proposal-interface"
   opened <- openVoteAs f f.sv1 (feeVote 0.05 2.0)
-  let proposalCid = toInterfaceContractId @VoteTopic opened
+  let recordCid = toInterfaceContractId @VoteRecord opened
+      resolverCid = toInterfaceContractId @Resolver f.resolverCid
 
-  Some proposal <- queryInterfaceContractId f.sv2 proposalCid
+  Some proposal <- queryInterfaceContractId f.sv2 recordCid
   proposal.resolution.mechanism === weightedVoteMechanismName
-  proposal.proposer === PartyIdentity f.sv1
-  proposal.subject === feeSubject
+  proposal.requester === PartyIdentity f.sv1
+  proposal.reason === feeSubject
   proposal.voteBefore === Some f.terms.votingClosesAt
+  length proposal.options === 1
+  Map.keys proposal.votes === [PartyIdentity f.sv1]
 
-  let castFor identity = exerciseCmd proposalCid VoteTopic_CastVote with
+  let castFor identity = exerciseCmd resolverCid Resolver_CastVote with
         caster = f.sv2
         identity
+        resolution = proposal.resolution
         vote = encodeParametersVote (Voted (feeVote 0.06 2.5))
         reason = None
-        extraArgs = ExtraArgs with context = emptyChoiceContext; meta = emptyMetadata
+        extraArgs = ExtraArgs with
+          context = ChoiceContext with
+            values = TextMap.fromList [(voteRecordContextKey, AV_ContractId (coerceContractId opened))]
+          meta = emptyMetadata
   submitMustFail (actAs f.sv2 <> readAs f.dso) (castFor (PartyIdentity f.sv3))
   result <- submit (actAs f.sv2 <> readAs f.dso) (castFor (PartyIdentity f.sv2))
 

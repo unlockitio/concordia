@@ -1,0 +1,54 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | Checks on the current time: whether a window is open or closed, and
+-- deadlines. Each check takes the current time as the value it checks, and
+-- `what` names the window or the deadline in the message.
+module Cap.Core.Time
+  ( isOpen
+  , validOpen
+  , validClosed
+  , validBefore
+  , validExpired
+  ) where
+
+import Cap.Core.Checks (Check)
+
+
+-- | Whether now is in the window: from opensAt, and before closesAt if any.
+isOpen : Time -> Time -> Optional Time -> Bool
+isOpen now opensAt closesAt = now >= opensAt && optional True (now <) closesAt
+
+-- | Validates that now is in the window: from opensAt, and before closesAt
+-- if any.
+validOpen : Text -> Time -> Optional Time -> Check Time
+validOpen what opensAt closesAt now =
+  [ what <> " opens at " <> show opensAt <> ", after " <> show now
+  | now < opensAt
+  ]
+    <> [ what <> " closed at " <> show closesAt' <> ", at or before " <> show now
+       | Some closesAt' <- [closesAt], now >= closesAt'
+       ]
+
+-- | Validates that the window has closed: now is at or after closesAt.
+validClosed : Text -> Time -> Check Time
+validClosed what closesAt now =
+  [ what <> " closes at " <> show closesAt <> ", after " <> show now
+  | now < closesAt
+  ]
+
+-- | Validates that now is before the deadline.
+validBefore : Text -> Time -> Check Time
+validBefore what deadline now =
+  [ what <> " passed at " <> show deadline <> ", at or before " <> show now
+  | now >= deadline
+  ]
+
+-- | Validates that the contract has expired: now is at or after expiresAt.
+-- A contract without an expiry never expires.
+validExpired : Text -> Optional Time -> Check Time
+validExpired what expiresAt now = case expiresAt of
+  None -> [what <> " has no expiry"]
+  Some expiresAt' ->
+    [ what <> " expires at " <> show expiresAt' <> ", after " <> show now
+    | now < expiresAt'
+    ]

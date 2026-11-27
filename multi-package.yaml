@@ -1,18 +1,20 @@
 # SPDX-License-Identifier: Apache-2.0
 
 packages:
-- ./cap-core/types
-- ./cap-core/utils
+- ./cap-core/identity/types
+- ./cap-core/resolution/types
+- ./cap-core/base
+- ./cap-core/identity/utils
+- ./cap-core/resolution/utils
 - ./cap-core/tests/unit
 - ./cap-core/tests/ledger
-- ./cap-governance/types
-- ./cap-governance/interfaces/executable
-- ./cap-governance/interfaces/action
-- ./cap-governance/interfaces/vote-topic
-- ./cap-governance/utils
-- ./cap-governance/interfaces/vote-record
-- ./cap-governance/interfaces/voting-rights
-- ./cap-governance/interfaces/resolver
+- ./cap-governance/execution/interfaces
+- ./cap-governance/execution/utils
+- ./cap-governance/vote/interfaces
+- ./cap-governance/vote/utils
+- ./cap-governance/rights/interfaces
+- ./cap-governance/rights/utils
+- ./cap-governance/resolution/interfaces
 - ./cap-governance/tests/unit
 - ./cap-governance/tests/ledger
 - ./dec-operator/interfaces

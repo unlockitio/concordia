@@ -1,0 +1,88 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+module Cap.Governance.ExecutableV1 where
+
+import DA.Map (Map)
+
+import Splice.Api.Token.MetadataV1
+
+import DA.Set (Set)
+
+import Cap.Core.AuthenticKeyV1 (AuthenticKey)
+import Cap.Governance.KeyedTargetV1 (Snapshot)
+
+-- | When an outcome may be executed or cancelled, and by whom. The resolver
+-- sets it in Action_AuthorizeExecution, and the executable stores it.
+data ExecutionTerms = ExecutionTerms
+  with
+    authorities : Set Party
+    executors : [[Party]]
+    -- ^ The actors of Executable_Execute include every party of one set.
+    cancellers : [[Party]]
+    -- ^ The actors of Executable_Cancel include every party of one set.
+    opensAt : Time
+    cancelAfter : Time
+    expiresAt : Optional Time
+    meta : Metadata
+  deriving (Eq, Show)
+
+data ExecutableView = ExecutableView
+  with
+    executionTerms : ExecutionTerms
+    snapshots : Map AuthenticKey Snapshot
+    outcome : Optional AnyValue
+  deriving (Eq, Show)
+
+data Executable_ExecuteResult = Executable_ExecuteResult
+  with
+    created : [AnyContractId]
+    meta : Metadata
+  deriving (Eq, Show)
+
+data Executable_CancelResult = Executable_CancelResult
+  with
+    meta : Metadata
+  deriving (Eq, Show)
+
+data Executable_ExpireResult = Executable_ExpireResult
+  with
+    meta : Metadata
+  deriving (Eq, Show)
+
+interface Executable where
+  viewtype ExecutableView
+
+  executable_executeImpl : Executable_Execute -> Update Executable_ExecuteResult
+  executable_cancelImpl : Executable_Cancel -> Update Executable_CancelResult
+  executable_expireImpl : Executable_Expire -> Update Executable_ExpireResult
+
+  -- | Executes the outcome. Implementations MUST require that the execution
+  -- window is open (opensAt <= now < expiresAt) and that the actors are one of
+  -- the executors (validExecution), and MUST check every target
+  -- they act on against its snapshot (fetchTargetMatchingSnapshot,
+  -- fetchTargetMatchingIdentity).
+  choice Executable_Execute : Executable_ExecuteResult
+    with
+      actors : [Party]
+      targetCids : Map AuthenticKey AnyContractId
+      extraArgs : ExtraArgs
+    controller actors
+    do executable_executeImpl this arg
+
+  -- | Cancels the execution. Implementations MUST require that now is at or
+  -- after cancelAfter and that the actors are one of the cancellers
+  -- (validCancellation).
+  choice Executable_Cancel : Executable_CancelResult
+    with
+      actors : [Party]
+      extraArgs : ExtraArgs
+    controller actors
+    do executable_cancelImpl this arg
+
+  -- | Archives an execution that was not executed in time. Implementations
+  -- MUST require that expiresAt has passed (validExpiry).
+  choice Executable_Expire : Executable_ExpireResult
+    with
+      actor : Party
+    controller actor
+    do executable_expireImpl this arg

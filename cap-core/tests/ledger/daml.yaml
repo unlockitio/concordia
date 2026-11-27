@@ -11,7 +11,10 @@ dependencies:
 data-dependencies:
 - ../../../lib/splice-api-token-metadata-v1-1.0.0.dar
 - ../../../lib/splice-util-0.1.9.dar
-- ../../types/.daml/dist/cap-core-types-0.1.0.dar
-- ../../utils/.daml/dist/cap-core-utils-0.1.0.dar
+- ../../../cap-core/identity/types/.daml/dist/cap-core-identity-v1-0.1.0.dar
+- ../../../cap-core/resolution/types/.daml/dist/cap-core-resolution-v1-0.1.0.dar
+- ../../../cap-core/base/.daml/dist/cap-core-base-0.1.0.dar
+- ../../../cap-core/identity/utils/.daml/dist/cap-core-identity-utils-0.1.0.dar
+- ../../../cap-core/resolution/utils/.daml/dist/cap-core-resolution-utils-0.1.0.dar
 build-options:
   - --target=2.3

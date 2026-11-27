@@ -1,0 +1,62 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | Whether a resolver may resolve a resolution, and fetching the contracts
+-- of a resolution.
+module Cap.Core.Resolution
+  ( requireResolvedBy
+  , validateContractSignedByResolverAuthorities
+  , fetchGroup
+  ) where
+
+import DA.List (unique)
+import qualified DA.Set as Set
+
+import Splice.Util (HasCheckedFetch (..), fetchChecked, require)
+
+import Cap.Core.AuthenticKeyV1 (AuthenticKey)
+import Cap.Core.Checks (AmongCheck, Check, requireMetFrom)
+import Cap.Core.ResolutionV1 (ResolutionInfo (..))
+
+
+-- | Checks that a resolution names this resolver and is bound to no other
+-- resolver contract. The resolver passes itself and its own contract id; its
+-- key is the one its HasCheckedFetch instance names it by. It does not check
+-- the mechanism; the resolver checks that where it picks the rule the
+-- mechanism names.
+requireResolvedBy
+  : HasCheckedFetch t AuthenticKey => t -> ContractId t -> ResolutionInfo -> Update ()
+requireResolvedBy resolver self resolution = do
+  let authenticKey : AuthenticKey = contractGroupId resolver
+  require ("the resolution names the resolver " <> show authenticKey) (resolution.resolver == authenticKey)
+  require "the resolution is bound to no other resolver contract"
+    (optional True (== coerceContractId self) resolution.resolverCid)
+
+-- | Validates that the authorities of the contract's resolver are among its
+-- signatories; other signatories are allowed. Pass it to fetchGroup, which
+-- first checks that the resolution names the resolver fetching.
+validateContractSignedByResolverAuthorities : (HasSignatory t, HasCheckedFetch t ResolutionInfo) => Check t
+validateContractSignedByResolverAuthorities contract =
+  [ "the contract is not signed by its resolver's authority " <> show party
+  | party <- Set.toList resolution.resolver.authorities
+  , party `notElem` signatory contract
+  ]
+  where
+    resolution : ResolutionInfo = contractGroupId contract
+
+-- | Checks that the resolution names this resolver (requireResolvedBy), then
+-- fetches the presented contracts, and checks that each one belongs to the
+-- resolution and meets the checks. Aborts if the resolution names another
+-- resolver, or a contract is presented twice, belongs to another resolution,
+-- or fails a check. The resolver passes itself and its own contract id.
+fetchGroup
+  : (HasCheckedFetch res AuthenticKey, HasFetch t, HasCheckedFetch t ResolutionInfo)
+  => res -> ContractId res -> [Check t] -> [AmongCheck t] -> ResolutionInfo -> [ContractId t]
+  -> Update [(ContractId t, t)]
+fetchGroup resolver self checks amongChecks resolution cids = do
+  requireResolvedBy resolver self resolution
+  require "the presented contracts are distinct" (unique cids)
+  presented <- forA cids $ \cid -> do
+    contract <- fetchChecked resolution cid
+    pure (cid, contract)
+  requireMetFrom checks amongChecks (map snd presented)
+  pure presented

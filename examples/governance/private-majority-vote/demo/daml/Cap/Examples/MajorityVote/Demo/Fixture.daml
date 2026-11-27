@@ -16,11 +16,13 @@ import Daml.Script
 import Splice.Api.Token.MetadataV1
 import qualified Splice.Api.Token.MetadataV1 as Meta
 
-import Cap.Core.Types (AuthenticKey (..), Snapshot (..), ExecutionAction (..), ExecutionCore (..), ResolutionInfo (..))
-import Cap.Core.Utils (IsAnyValue (..))
+import Cap.Core.AuthenticKeyV1 (AuthenticKey (..))
+import Cap.Governance.KeyedTargetV1 (Snapshot (..))
+import Cap.Core.ResolutionV1 (ResolutionInfo (..))
+import Cap.Core.AnyValue (IsAnyValue (..))
 import Cap.Governance.ActionV1 (Action, Action_AuthorizeExecution (..))
 import Cap.Governance.ExecutableV1
-import Cap.Governance.Types (Reason (..))
+import Cap.Governance.VoteRecordV1 (Reason (..))
 
 import Cap.Examples.MajorityVote.VoteRecord
 import Cap.Examples.MajorityVote.Config
@@ -164,21 +166,22 @@ runExecute f configCid executionCid = do
       extraArgs = noArgs
   pure ()
 
-forgedCore : Fixture -> ExecutionCore
-forgedCore f = ExecutionCore with
+forgedCore : Fixture -> ExecutionTerms
+forgedCore f = ExecutionTerms with
   authorities = Set.fromList [f.dso]
-  availableActions = Map.fromList [(EA_Execute, [[f.operator]])]
+  executors = [[f.operator]]
+  cancellers = []
   opensAt = f.terms.votingClosesAt
   cancelAfter = f.terms.votingClosesAt
   expiresAt = Some f.terms.expiresAt
   meta = emptyMetadata
 
-runIssueMustFail : Fixture -> Party -> ExecutionCore -> Script ()
+runIssueMustFail : Fixture -> Party -> ExecutionTerms -> Script ()
 runIssueMustFail f actor core =
   submitMustFail actor $
     exerciseCmd (toInterfaceContractId @Action f.actionCid) Action_AuthorizeExecution with
       actors = [actor]
-      executionCore = core
+      executionTerms = core
       outcome = Some (toAnyValue yay)
       snapshots = configSnapshots f.dso openingSetting
       extraArgs = noArgs

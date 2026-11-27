@@ -1,0 +1,16 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | Building authentic keys.
+module Cap.Core.AuthenticKey
+  ( signatoriesKey
+  ) where
+
+import qualified DA.Set as Set
+
+import Cap.Core.AuthenticKeyV1 (AuthenticKey (..))
+
+
+-- | The key of a contract built from its signatories, for use in a
+-- HasCheckedFetch instance so that fetchChecked also checks who signed it.
+signatoriesKey : HasSignatory t => Text -> t -> AuthenticKey
+signatoriesKey id contract = AuthenticKey with authorities = Set.fromList (signatory contract); id
