@@ -540,7 +540,11 @@ def runner_cases():
     return [
         ("step 4 accepts a third argument",
          'step) run_step "${2:-}" "${3:-}" ;;' in text),
-        ("a selector routes to milestoneVoteFor", "SCRIPT=milestoneVoteFor" in text),
+        # The selector still routes to the selector-taking entry point. It is
+        # now the handoff form, which runs the same vote and additionally
+        # returns the approval identity step 5 must bind.
+        ("a selector routes to the selector-taking step-4 entry point",
+         "SCRIPT=milestoneVoteHandoffFor" in text),
         ("recovery is an explicit operator command",
          "recover-step4-marker) recover_step4_marker ;;" in text),
         ("recovery refuses unless the checker succeeds",
@@ -1005,21 +1009,21 @@ def runner_behaviour():
             'HERE="%s"\n'
             % (demo / "compose" / "state", demo)
             + '. ./helpers.sh\n'
-              'step4_lock_acquire >/dev/null 2>&1\n'
+              'step_lock_acquire 4 >/dev/null 2>&1\n'
               'sleep 120 &\n'
               'STEP4_CHILD=$!\n'
               'echo "$STEP4_CHILD" > "%s"\n' % (root / "probe-child.pid")
             +
-              'step4_cleanup signal >/dev/null 2>&1\n'
-              'step4_cleanup >/dev/null 2>&1\n'
-              'step4_cleanup >/dev/null 2>&1\n'
-              'step4_lock_release >/dev/null 2>&1\n'
+              'step_cleanup signal >/dev/null 2>&1\n'
+              'step_cleanup >/dev/null 2>&1\n'
+              'step_cleanup >/dev/null 2>&1\n'
+              'step_lock_release >/dev/null 2>&1\n'
               'if [ -d "$STATE/step-4.lock" ]; then echo RETAINED; else echo RELEASED; fi\n'
               'if [ -e "$STATE/step-4.lock/uncertain" ]; then echo STICKY; else echo CLEARED; fi\n')
         runner_text = RUNNER.read_text()
         helpers = []
-        for name in ("step4_mark_uncertain", "step4_cleanup",
-                     "step4_lock_acquire", "step4_lock_release"):
+        for name in ("step_mark_uncertain", "step_cleanup",
+                     "step_lock_acquire", "step_lock_release"):
             found = re.search(r'(?ms)^%s\(\) \{.*?^\}\n' % name, runner_text)
             if found:
                 helpers.append(found.group(0))
@@ -1141,6 +1145,275 @@ def runner_behaviour():
     return results
 
 
+def step5_lock_cases():
+    """Step 5 must allocate at most once per approval, even when two runner
+    invocations race.
+
+    The one-shot marker is written only after the prerequisite guard, so
+    without a lock two simultaneous `step 5` runs both pass the guard and both
+    reach couponAllocate, allocating two coupons from one approval. These
+    cases drive the real run_step with a stub dpm on private state: no ledger,
+    no container, nothing live. They assert the lock serializes the runs, the
+    loser refuses after the post-lock recheck, an interrupted allocation is
+    retained as uncertain, and a definite pre-submission refusal leaks neither
+    a marker nor a lock.
+    """
+    results = []
+    runner = RUNNER.read_text()
+
+    def build(work, dpm_body):
+        state = work / "state"
+        for d in (state, work / "bin", work / "raw"):
+            d.mkdir(parents=True, exist_ok=True)
+        (work / "bin" / "dpm").write_text(dpm_body)
+        (work / "bin" / "dpm").chmod(0o755)
+        (work / "package-gate.py").write_text("pass\n")
+        shutil.copy(DEMO / "step5-handoff.py", work / "step5-handoff.py")
+        (state / "run-id.json").write_text('"r"\n')
+        (state / "step-4.json").write_text(json.dumps({
+            "runId": "r", "opener": "o", "electorate": ["a"],
+            "outcome": "complete",
+            "approval": {"approvalCid": "00ab",
+                         "milestoneUrl": "https://x/issues/540",
+                         "contentVersion": "v",
+                         "roundId": "rr"}}))
+        parts = ["set -eu", "STATE=%s" % (state,), "HERE=%s" % (work,),
+                 "RAW_DIR=%s" % (work / "raw",), "LEDGER_PORT=0",
+                 "agent_log_summary() { :; }"]
+        for fn in ("raw_log_path", "render_step", "step_lock_acquire",
+                   "step_lock_release", "step_cleanup", "step_mark_uncertain"):
+            found = re.search(r"(?ms)^%s\(\) \{.*?^\}\n" % fn, runner)
+            assert found, fn
+            parts.append(found.group(0))
+        parts += ["STEP4_LOCK=''", "STEP_LOCK_NUMBER=''", "STEP4_CHILD=''",
+                  "STEP4_UNCERTAIN=''"]
+        found = re.search(r"(?ms)^run_step\(\) \{.*?^\}\n", runner)
+        assert found
+        parts.append(found.group(0))
+        parts.append('"$@"')
+        harness = work / "h.sh"
+        harness.write_text("\n".join(parts) + "\n")
+        return state, harness
+
+    slow_dpm = (
+        "#!/bin/sh\n"
+        'printf "%s\\n" "$*" >> "$STUBLOG"\n'
+        'case "$*" in *couponAllocatePrevalidate*) exit 0;; esac\n'
+        "sleep 2\n"
+        "PREV=''\n"
+        'for a in "$@"; do case "$PREV" in --output-file) printf \'"ok"\\n\' > "$a";; esac; PREV=$a; done\n'
+        "exit 0\n")
+
+    def allocations(stublog):
+        if not stublog.exists():
+            return 0
+        return sum(1 for line in stublog.read_text().splitlines()
+                   if "Live:couponAllocate " in line)
+
+    # 1. Two simultaneous step-5 runs: exactly one allocation.
+    with tempfile.TemporaryDirectory() as tmp:
+        work = Path(tmp)
+        state, harness = build(work, slow_dpm)
+        stublog = work / "calls.txt"
+        stublog.write_text("")
+        env = dict(os.environ, PATH=str(work / "bin") + os.pathsep + os.environ["PATH"],
+                   STUBLOG=str(stublog))
+        first = subprocess.Popen(["sh", str(harness), "run_step", "5"],
+                                 env=env, stdout=subprocess.PIPE,
+                                 stderr=subprocess.STDOUT, text=True)
+        time.sleep(0.4)
+        second = subprocess.run(["sh", str(harness), "run_step", "5"],
+                                env=env, capture_output=True, text=True)
+        first.communicate()
+        results.append(("concurrent step 5 allocates exactly once",
+                        allocations(stublog) == 1))
+        results.append(("concurrent step 5 loser refuses with exit 2",
+                        second.returncode == 2))
+        # The loser may lose at any of three points, depending on timing: the
+        # pre-lock marker guard, the lock itself, or the post-lock recheck.
+        # All three are correct refusals and all three name step 5, so the
+        # assertion accepts any of them rather than pinning one race outcome.
+        loser = second.stdout + second.stderr
+        results.append(("loser refuses with a step-5 reason, whichever gate caught it",
+                        ("Refused step 5" in loser or "holds" in loser
+                         or "already exists" in loser)))
+        results.append(("winner wrote the step-5 result",
+                        (state / "step-5.json").exists()))
+
+    # 2. Delayed second run, after the first released: still refuses, because
+    # the marker and result are one-shot. The lock is not a retry token.
+    with tempfile.TemporaryDirectory() as tmp:
+        work = Path(tmp)
+        state, harness = build(work, slow_dpm)
+        stublog = work / "calls.txt"
+        stublog.write_text("")
+        env = dict(os.environ, PATH=str(work / "bin") + os.pathsep + os.environ["PATH"],
+                   STUBLOG=str(stublog))
+        one = subprocess.run(["sh", str(harness), "run_step", "5"],
+                             env=env, capture_output=True, text=True)
+        released = not (state / "step-5.lock").exists()
+        two = subprocess.run(["sh", str(harness), "run_step", "5"],
+                             env=env, capture_output=True, text=True)
+        results.append(("first step 5 succeeds and releases its lock",
+                        one.returncode == 0 and released))
+        results.append(("delayed second step 5 refuses, one allocation total",
+                        two.returncode == 2 and allocations(stublog) == 1))
+
+    # 3. Interrupted allocation: uncertain, lock retained, marker retained,
+    # and no automatic clearing. Same retention rule as step 4.
+    with tempfile.TemporaryDirectory() as tmp:
+        work = Path(tmp)
+        hang = ("#!/bin/sh\n"
+                'printf "%s\\n" "$*" >> "$STUBLOG"\n'
+                'case "$*" in *couponAllocatePrevalidate*) exit 0;; esac\n'
+                "sleep 30\n")
+        state, harness = build(work, hang)
+        stublog = work / "calls.txt"
+        stublog.write_text("")
+        env = dict(os.environ, PATH=str(work / "bin") + os.pathsep + os.environ["PATH"],
+                   STUBLOG=str(stublog))
+        proc = subprocess.Popen(["sh", str(harness), "run_step", "5"],
+                                env=env, stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT, text=True)
+        time.sleep(1.5)
+        proc.terminate()
+        out = proc.communicate()[0]
+        results.append(("interrupted step 5 reports uncertainty",
+                        "may have been in flight" in out))
+        results.append(("interrupted step 5 retains its lock",
+                        (state / "step-5.lock").exists()))
+        results.append(("interrupted step 5 records uncertain on the lock",
+                        (state / "step-5.lock" / "uncertain").exists()))
+        results.append(("interrupted step 5 retains the marker",
+                        (state / "step-5.attempted").exists()))
+        results.append(("interrupted step 5 wrote no result",
+                        not (state / "step-5.json").exists()))
+        after = subprocess.run(["sh", str(harness), "run_step", "5"],
+                               env=env, capture_output=True, text=True)
+        results.append(("a later step 5 cannot take an uncertain lock",
+                        after.returncode == 2))
+
+    # 4. Definite pre-submission refusal: no marker, no lock, retry possible.
+    with tempfile.TemporaryDirectory() as tmp:
+        work = Path(tmp)
+        refuse = ("#!/bin/sh\n"
+                  'printf "%s\\n" "$*" >> "$STUBLOG"\n'
+                  'case "$*" in *couponAllocatePrevalidate*) exit 3;; esac\n'
+                  "exit 0\n")
+        state, harness = build(work, refuse)
+        stublog = work / "calls.txt"
+        stublog.write_text("")
+        env = dict(os.environ, PATH=str(work / "bin") + os.pathsep + os.environ["PATH"],
+                   STUBLOG=str(stublog))
+        out = subprocess.run(["sh", str(harness), "run_step", "5"],
+                             env=env, capture_output=True, text=True)
+        results.append(("prevalidation refusal exits 2",
+                        out.returncode == 2))
+        results.append(("prevalidation refusal never allocates",
+                        allocations(stublog) == 0))
+        results.append(("prevalidation refusal leaves no marker",
+                        not (state / "step-5.attempted").exists()))
+        results.append(("prevalidation refusal leaves no lock",
+                        not (state / "step-5.lock").exists()))
+
+    # 4b. Run binding. A handoff from a DIFFERENT but perfectly valid run,
+    # itself awaiting step 5, must be refused: findAnchorAtLeast selects the
+    # anchor by demoRunId alone, so without this the allocation would happen
+    # against the other run's approval. The fixture therefore carries TWO
+    # legitimate run ids and a complete, otherwise-valid handoff for the one
+    # this network did NOT bootstrap. A nonexistent run is a weaker case and
+    # is covered separately below.
+    with tempfile.TemporaryDirectory() as tmp:
+        work = Path(tmp)
+        state, harness = build(work, slow_dpm)
+        stublog = work / "calls.txt"
+        env = dict(os.environ, PATH=str(work / "bin") + os.pathsep + os.environ["PATH"],
+                   STUBLOG=str(stublog))
+
+        def handoff_for(run):
+            return json.dumps({
+                "runId": run, "opener": "o", "electorate": ["a"],
+                "outcome": "complete: existing round resolved and approval executed",
+                "approval": {"approvalCid": "00ab",
+                             "milestoneUrl": "https://x/issues/540",
+                             "contentVersion": "v", "roundId": "rr"}})
+
+        # This network bootstrapped "local-run"; "other-valid-run" is a real
+        # run elsewhere whose step 4 completed and which awaits its own step 5.
+        (state / "run-id.json").write_text(json.dumps("local-run"))
+        (state / "step-4.json").write_text(handoff_for("other-valid-run"))
+        stublog.write_text("")
+        foreign = subprocess.run(["sh", str(harness), "run_step", "5"],
+                                 env=env, capture_output=True, text=True)
+        text = foreign.stdout + foreign.stderr
+        results.append(("foreign valid run awaiting step 5 is refused",
+                        foreign.returncode == 2))
+        results.append(("foreign run refusal names both run ids",
+                        "other-valid-run" in text and "local-run" in text))
+        results.append(("foreign run never reaches prevalidation or allocation",
+                        allocations(stublog) == 0
+                        and "couponAllocatePrevalidate" not in stublog.read_text()))
+        results.append(("foreign run leaves no marker",
+                        not (state / "step-5.attempted").exists()))
+        results.append(("foreign run leaves no lock",
+                        not (state / "step-5.lock").exists()))
+
+        # The same network, given ITS own handoff, proceeds: the binding
+        # refuses a foreign run without blocking the legitimate one.
+        (state / "step-4.json").write_text(handoff_for("local-run"))
+        stublog.write_text("")
+        own = subprocess.run(["sh", str(harness), "run_step", "5"],
+                             env=env, capture_output=True, text=True)
+        results.append(("this network's own run still proceeds",
+                        own.returncode == 0 and allocations(stublog) == 1))
+
+    # 4c. A missing or malformed run-id.json fails closed rather than skipping
+    # the comparison, and a nonexistent run id is still refused.
+    with tempfile.TemporaryDirectory() as tmp:
+        work = Path(tmp)
+        state, harness = build(work, slow_dpm)
+        stublog = work / "calls.txt"
+        env = dict(os.environ, PATH=str(work / "bin") + os.pathsep + os.environ["PATH"],
+                   STUBLOG=str(stublog))
+        (state / "step-4.json").write_text(json.dumps({
+            "runId": "r", "opener": "o", "electorate": ["a"], "outcome": "complete",
+            "approval": {"approvalCid": "00ab", "milestoneUrl": "https://x/issues/540",
+                         "contentVersion": "v", "roundId": "rr"}}))
+        for label, writer in (("missing", None),
+                              ("malformed", lambda p: p.write_text("not json")),
+                              ("blank", lambda p: p.write_text(json.dumps("")))):
+            target = state / "run-id.json"
+            if target.exists():
+                target.unlink()
+            if writer is not None:
+                writer(target)
+            stublog.write_text("")
+            out = subprocess.run(["sh", str(harness), "run_step", "5"],
+                                 env=env, capture_output=True, text=True)
+            results.append(("%s run-id.json refuses before any submission" % label,
+                            out.returncode == 2 and allocations(stublog) == 0))
+            results.append(("%s run-id.json leaves no marker or lock" % label,
+                            not (state / "step-5.attempted").exists()
+                            and not (state / "step-5.lock").exists()))
+        results.append(("the runner passes run-id.json to the handoff gate",
+                        '"$HERE/step5-handoff.py" "$INPUT" "$STATE/run-id.json"' in runner))
+
+    # 5. The step-4 recovery helper stays step-4 only.
+    recovery = re.search(r"(?ms)^recover_step4_marker\(\) \{.*?^\}\n", runner)
+    body = recovery.group(0) if recovery else ""
+    results.append(("recovery takes the step-4 lock explicitly",
+                    "step_lock_acquire 4" in body))
+    results.append(("recovery never clears a step-5 marker",
+                    "step-5.attempted" not in body))
+    results.append(("recovery never touches a step-5 lock",
+                    "step-5.lock" not in body))
+    results.append(("down clears a leaked step-5 lock",
+                    'rmdir "$STATE/step-5.lock"' in runner))
+    results.append(("step 5 holds the shared per-step lock",
+                    '[ "$NUMBER" = 4 ] || [ "$NUMBER" = 5 ]' in runner))
+    return results
+
+
 def main():
     failures = []
     print("runner contract")
@@ -1181,6 +1454,14 @@ def main():
             failures.append(name)
 
     print("")
+    print("step 5 one-shot under concurrency (stub dpm, private state)")
+    step5 = step5_lock_cases()
+    for name, ok in step5:
+        print("  %-56s %s" % (name[:56], "ok" if ok else "FAIL"))
+        if not ok:
+            failures.append(name)
+
+    print("")
     print("real transport, end to end (no stub, private state only)")
     name, ok, note = real_transport_case()
     if ok is None:
@@ -1194,7 +1475,7 @@ def main():
 
     print("")
     total = (len(CASES) + len(PAGED_CASES) + len(runner_cases())
-             + len(behaviour) + real_counted)
+             + len(behaviour) + len(step5) + real_counted)
     print("%d checks, %d failures" % (total, len(failures)))
     for name in failures:
         print("  FAIL %s" % name)

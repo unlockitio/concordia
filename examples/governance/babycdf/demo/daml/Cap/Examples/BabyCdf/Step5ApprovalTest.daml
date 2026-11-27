@@ -1,0 +1,233 @@
+-- SPDX-License-Identifier: Apache-2.0
+-- Step 5 binds the approval that step 4 actually produced, and refuses before
+-- any submission or party allocation when it cannot. These scripts exercise
+-- the step-4 handoff -> step-5 prevalidation seam on fixtures only: no running
+-- network, no Splice allocation, no marker is read or written, and nothing
+-- clears an operator's marker. The allocating entry point re-runs exactly this
+-- binding, so a refusal proven here is a refusal before mutation there.
+module Cap.Examples.BabyCdf.Step5ApprovalTest where
+
+import Daml.Script
+import DA.Assert
+import DA.Time
+import qualified DA.Text as Text
+import Cap.Examples.BabyCdf.Live
+import Cap.Examples.BabyCdf.RuleVote
+import Cap.Examples.BabyCdf.SourceAgenda
+import Cap.Examples.BabyCdf.SourceAgendaFixtures
+import Cap.Examples.BabyCdf.ManualIdentityTest (manualRefuses)
+import qualified Cap.Examples.BabyCdf.SourceObservationCredential as Source
+
+milestoneRound : Text
+milestoneRound = "canton-foundation/canton-dev-fund/issues/540/comments/6038684918"
+
+-- An approved PR184 prerequisite, which step 4 requires in every case below.
+--
+-- The anchor is advanced to step 2 because that is the run state step 5
+-- requires on a real network: step 2 is what activates the voted rule the
+-- later decisions are judged against, and steps 3 and 4 deliberately leave
+-- the anchor where step 2 left it. Advancing here models the post-step-2 run
+-- rather than relaxing step 5's check.
+approvedPrerequisite : Text -> Script LiveState
+approvedPrerequisite runId = do
+  state <- bootstrap (BootstrapInput runId 5 ruleRefV1 ruleRefV2)
+  (bootstrapAnchor,bootstrapped) <- findAnchorAtLeast runId 1
+  advance bootstrapAnchor bootstrapped 2
+  (grantSource,grantSubject) <- fixtureSource state.opener False
+  now <- getTime
+  _ <- submit state.opener $ exerciseCmd state.governor ProposeAgenda with
+    proposer = state.opener; roundId = "canton-foundation/canton-dev-fund/pull/184"
+    agenda = Grant grantSubject; baseVersion = 0
+    closesAt = addRelTime now (seconds 60); source = Some grantSource
+    primaryRights = presentedRights state.core state.credentials
+  _ <- proposalVote runId
+  grants <- query @ApprovedGrantProposal state.opener
+  length grants === 1
+  pure state
+
+-- A milestone round carrying immutable delivery evidence, so step 4 returns an
+-- executable approval rather than recording votes only.
+deliveryRound : LiveState -> Text -> Script ()
+deliveryRound state roundId = do
+  (blocked,subject) <- fixtureSource state.opener True
+  now <- getTime
+  sources <- query @Source.SourceObservationCredential state.opener
+  let [stored] = [s | (_,s) <- sources, s.observation.number == 540]
+      pin = DeliveryPin "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        stored.observation.bodySha256 123 now
+      source = blocked with pin; previousRound = None
+  _ <- submit state.opener $ exerciseCmd state.governor ProposeAgenda with
+    proposer = state.opener; roundId; agenda = Milestone subject
+    baseVersion = 0; closesAt = addRelTime now (hours 2); source = Some source
+    primaryRights = presentedRights state.core state.credentials
+  pure ()
+
+-- A milestone round whose delivery evidence is incomplete. Step 4 records the
+-- votes and returns no executable approval.
+blockedRound : LiveState -> Text -> Script ()
+blockedRound state roundId = do
+  (source,subject) <- fixtureSource state.opener True
+  now <- getTime
+  _ <- submit state.opener $ exerciseCmd state.governor ProposeAgenda with
+    proposer = state.opener; roundId; agenda = Milestone subject
+    baseVersion = 0; closesAt = addRelTime now (hours 2); source = Some source
+    primaryRights = presentedRights state.core state.credentials
+  pure ()
+
+-- 1. The handoff carries the approval step 4 actually created, identified by
+-- contract id, subject URL, content version and source round id, and step 5
+-- binds exactly that one.
+step5BindsActualStep4Approval : Script ()
+step5BindsActualStep4Approval = script do
+  let runId = "step5-actual-approval"
+  state <- approvedPrerequisite runId
+  deliveryRound state milestoneRound
+  handoff <- milestoneVoteHandoff runId
+  -- The handoff is machine-produced by the step-4 run, not reconstructed.
+  handoff.runId === runId
+  handoff.opener === state.opener
+  Some approval <- pure handoff.approval
+  approval.roundId === milestoneRound
+  -- The identity matches the live approval, and it is the one step 4 made.
+  approvals <- query @ApprovedMilestone state.opener
+  let [(liveRef,live)] = approvals
+  approval.approvalCid === liveRef
+  approval.milestoneUrl === live.milestone.url
+  approval.contentVersion === live.milestone.contentVersion
+  approval.roundId === live.sourceSnapshot.roundId
+  -- The URL is the real approved source, read from the approval itself.
+  assert (Text.isInfixOf "issues/540" approval.milestoneUrl)
+  live.milestone.url === live.sourceSnapshot.observation.sourceUrl
+  assert (executablePin live.sourceSnapshot.pin)
+  -- Prevalidation succeeds and names the actual round.
+  outcome <- couponAllocatePrevalidate handoff
+  assert (Text.isInfixOf milestoneRound outcome)
+  -- Read-only: prevalidation created and archived nothing.
+  approvalsAfter <- query @ApprovedMilestone state.opener
+  approvalsAfter === approvals
+
+-- 2. A step 4 that recorded votes without an executable approval hands over no
+-- approval, and step 5 refuses instead of substituting an illustrative one.
+step5RefusesWhenStep4ProducedNoApproval : Script ()
+step5RefusesWhenStep4ProducedNoApproval = script do
+  let runId = "step5-no-approval"
+  state <- approvedPrerequisite runId
+  blockedRound state milestoneRound
+  handoff <- milestoneVoteHandoff runId
+  -- Step 4's own result says votes recorded, review incomplete.
+  assert (Text.isInfixOf "votes recorded" handoff.outcome)
+  handoff.approval === None
+  approvals <- query @ApprovedMilestone state.opener
+  length approvals === 0
+  ballotsBefore <- query @AgendaBallot state.opener
+  sourcesBefore <- query @Source.SourceObservationCredential state.opener
+  manualRefuses (couponAllocatePrevalidate handoff)
+  -- The refusal is definite and changed nothing: no approval was invented.
+  approvalsAfter <- query @ApprovedMilestone state.opener
+  length approvalsAfter === 0
+  ballotsAfter <- query @AgendaBallot state.opener
+  ballotsAfter === ballotsBefore
+  sourcesAfter <- query @Source.SourceObservationCredential state.opener
+  sourcesAfter === sourcesBefore
+
+-- 3. A BlockedPin round is refused for the same reason even when the operator
+-- selects it explicitly: the selector never promotes a blocked review.
+step5RefusesBlockedPinWithExplicitSelector : Script ()
+step5RefusesBlockedPinWithExplicitSelector = script do
+  let runId = "step5-blocked-pin"
+  state <- approvedPrerequisite runId
+  blockedRound state milestoneRound
+  handoff <- milestoneVoteHandoffFor (ManualRoundInput runId milestoneRound)
+  handoff.approval === None
+  manualRefuses (couponAllocatePrevalidate handoff)
+  approvals <- query @ApprovedMilestone state.opener
+  length approvals === 0
+
+-- 4. A handoff whose approval is no longer live is stale, and refuses rather
+-- than falling back to any other approval.
+step5RefusesStaleApproval : Script ()
+step5RefusesStaleApproval = script do
+  let runId = "step5-stale-approval"
+  state <- approvedPrerequisite runId
+  deliveryRound state milestoneRound
+  handoff <- milestoneVoteHandoff runId
+  Some approval <- pure handoff.approval
+  -- The approval the handoff names is archived out from under it.
+  _ <- submit state.opener $ archiveCmd approval.approvalCid
+  None <- queryContractId state.opener approval.approvalCid
+  manualRefuses (couponAllocatePrevalidate handoff)
+
+-- 5. A handoff naming a run that does not exist, and one naming the wrong
+-- opener, are both refused before anything is bound.
+step5RefusesWrongRun : Script ()
+step5RefusesWrongRun = script do
+  let runId = "step5-wrong-run"
+  state <- approvedPrerequisite runId
+  deliveryRound state milestoneRound
+  handoff <- milestoneVoteHandoff runId
+  -- A different run id: no anchor answers to it.
+  manualRefuses (couponAllocatePrevalidate (handoff with runId = "step5-not-this-run"))
+  -- An empty run id is refused outright.
+  manualRefuses (couponAllocatePrevalidate (handoff with runId = ""))
+  -- A foreign opener does not match this run's anchor.
+  outsider <- allocateParty "step5-outsider"
+  manualRefuses (couponAllocatePrevalidate (handoff with opener = outsider))
+  -- An electorate that is not the governor's primary seats is refused.
+  manualRefuses (couponAllocatePrevalidate (handoff with electorate = []))
+  -- The genuine handoff still works, so none of those refusals was fatal.
+  outcome <- couponAllocatePrevalidate handoff
+  assert (Text.isInfixOf milestoneRound outcome)
+
+-- 6. If more than one live approval answers to the handed-off round, the
+-- citation would be ambiguous, so step 5 refuses instead of picking one.
+step5RefusesAmbiguousApproval : Script ()
+step5RefusesAmbiguousApproval = script do
+  let runId = "step5-ambiguous-approval"
+  state <- approvedPrerequisite runId
+  deliveryRound state milestoneRound
+  handoff <- milestoneVoteHandoff runId
+  Some approval <- pure handoff.approval
+  Some live <- queryContractId state.opener approval.approvalCid
+  -- A second approval for the same round, which must not be silently chosen
+  -- between. The handed-off contract id itself is still live.
+  duplicate <- submit state.opener $ createCmd live
+  assert (duplicate /= approval.approvalCid)
+  approvals <- query @ApprovedMilestone state.opener
+  length approvals === 2
+  manualRefuses (couponAllocatePrevalidate handoff)
+  -- Nothing was consumed by the refusal.
+  approvalsAfter <- query @ApprovedMilestone state.opener
+  length approvalsAfter === 2
+
+-- 7. Step 5 is one-shot on the run state: once the anchor records step 5, the
+-- same handoff is refused rather than allocating a second coupon.
+step5RefusesWhenAlreadyRun : Script ()
+step5RefusesWhenAlreadyRun = script do
+  let runId = "step5-already-run"
+  state <- approvedPrerequisite runId
+  deliveryRound state milestoneRound
+  handoff <- milestoneVoteHandoff runId
+  outcome <- couponAllocatePrevalidate handoff
+  assert (Text.isInfixOf milestoneRound outcome)
+  -- Simulate a completed step 5 by advancing the anchor the way it does.
+  (anchorCid,anchor) <- findAnchorAtLeast runId 2
+  advance anchorCid anchor 5
+  manualRefuses (couponAllocatePrevalidate handoff)
+
+-- 8. The step-4 handoff entry points do not change step 4's own behaviour: the
+-- vote, the selector semantics and the outcome text are the existing ones.
+step5HandoffPreservesStep4Behaviour : Script ()
+step5HandoffPreservesStep4Behaviour = script do
+  let runId = "step5-handoff-compat"
+  state <- approvedPrerequisite runId
+  deliveryRound state milestoneRound
+  -- The selector form and the bare form agree, and the bare trigger comment
+  -- id is still accepted.
+  handoff <- milestoneVoteHandoffFor (ManualRoundInput runId "6038684918")
+  assert (Text.isInfixOf "complete" handoff.outcome)
+  Some approval <- pure handoff.approval
+  approval.roundId === milestoneRound
+  -- Repeating step 4 still refuses; the handoff did not make it repeatable.
+  manualRefuses (milestoneVote runId)
+  approvals <- query @ApprovedMilestone state.opener
+  length approvals === 1

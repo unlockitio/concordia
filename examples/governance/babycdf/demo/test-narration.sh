@@ -154,10 +154,31 @@ REPO_REL="examples/governance/babycdf/demo/daml/Cap/Examples/BabyCdf/Live.daml"
 # run reached the ledger, which is what lets a pre-submission refusal be
 # retried without destroying the network. Step 3, the PR184 approval
 # prerequisite, voting, resolution and execution barriers are unchanged.
-SPEC_VERSION='v24-step4-explicit-round-selector'
-# Authorized v21 behavior change, not equivalence to v20: five primary seats,
-# three YES early approval, rights through close, configurable fresh bootstrap.
-SPEC_DIGEST='d2c246a997887c460b3a08f1d1beb1a697bd155358f70ea8d3e3d2a541ee42ff'
+# Authorized v25 behavior change, not equivalence to v24: step 4 additionally
+# exposes the identity of the approval its own round produced (contract id,
+# subject URL, content version and source round id), and step 5 is restored as
+# an explicit manual command that acts ONLY on that approval.
+#
+# Reviewed normalized delta, and nothing else:
+#   * added Step4Approval/Step4Handoff records and the milestoneVoteHandoff /
+#     milestoneVoteHandoffFor entry points, which delegate to the unchanged
+#     milestoneVoteFor and only report what it produced;
+#   * added bindStep5Approval, which re-binds the handed-off approval to live
+#     state and refuses on a missing, stale, mismatched or ambiguous approval
+#     before any submission or party allocation;
+#   * added the read-only couponAllocatePrevalidate entry point;
+#   * couponAllocate now takes the handoff, selects the approval by the bound
+#     contract id instead of the illustrative-milestone constant, and builds
+#     its reason text from that approval's own URL instead of milestoneSubject.
+#
+# Deliberately unchanged: step 2, step 3, the PR184 approval prerequisite,
+# round eligibility and selection, the electorate, quorum and thresholds,
+# ballot reuse and absent-only casts, the wrong-manager and over-amount coupon
+# refusals, and the no-mint/no-payment caveats. The anchor requirement moved
+# from an exact step 4 (which no step ever set, so step 5 could not run) to
+# "step 2 or later and not yet 5", which is the real run state.
+SPEC_VERSION='v25-step5-actual-approved-milestone'
+SPEC_DIGEST='f44ac9fddbd1ef9c7f6318014d28345b54246c5726a1fed6516e29c2af6649da'
 
 for required in "$LIVE" "$SELECTOR" "$RULE"; do
   if [ ! -f "$required" ]; then

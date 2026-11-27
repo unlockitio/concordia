@@ -158,7 +158,6 @@ agent_log_summary() {
 }
 
 run_step() {
-  case "$1" in 5) echo 'Step 5 remains retired. Nothing was run.' >&2; return 2;; esac
   # Raw logs live under the gitignored build root, never in the repository.
   if [ -z "$RAW_DIR" ]; then
     babycdf_build_root "$HERE/.." || return 2
@@ -171,11 +170,16 @@ run_step() {
        # Step 4 takes an optional explicit round selector: a full round id or
        # the bare trigger comment id. Without it the script proceeds only when
        # exactly one round is eligible, and otherwise refuses with the list.
+       #
+       # The handoff entry points run exactly the same vote as milestoneVote
+       # and milestoneVoteFor; they differ only in returning the machine-read
+       # identity of the approval the round produced, so step 5 can act on
+       # that approval instead of re-deriving one from a subject constant.
        if [ -n "${2:-}" ]; then
-         SCRIPT=milestoneVoteFor
+         SCRIPT=milestoneVoteHandoffFor
          STEP4_ROUND=$2
        else
-         SCRIPT=milestoneVote
+         SCRIPT=milestoneVoteHandoff
        fi ;;
     5) NUMBER=5; INPUT="$STATE/step-4.json"; SCRIPT=couponAllocate ;;
     6) echo 'Step 6 was split into independent optional rounds; use opt-step 2, 3, 4 or 5. Nothing was run.' >&2; return 2 ;;
@@ -192,24 +196,73 @@ run_step() {
   if [ "$NUMBER" = 3 ] || [ "$NUMBER" = 4 ]; then
     agent_log_summary intake
   fi
+  if [ "$NUMBER" = 5 ]; then
+    echo 'Step 5 allocates a sandbox Development Fund coupon citing ONLY the approval step 4 actually produced. It is not a mint and not a payment, and it never substitutes an illustrative milestone.' >&2
+    # The step-4 result IS the step-5 input: it carries the approval identity
+    # that step 5 binds. A step 4 that recorded votes without an executable
+    # approval carries none, and step 5 refuses on it rather than choosing.
+    #
+    # run-id.json is passed so the handoff is bound to THIS network's run.
+    # The Daml side cannot do this: findAnchorAtLeast matches on demoRunId
+    # alone, so a handoff naming another valid run awaiting step 5 would bind
+    # to that run and allocate against its approval. This runs before the
+    # prevalidation script and before any marker or lock exists, so a
+    # mismatch, a missing run-id.json or a malformed one refuses without
+    # leaking a marker, a lock, or a submission.
+    if ! python3 "$HERE/step5-handoff.py" "$INPUT" "$STATE/run-id.json" >/dev/null; then
+      echo "Refused step 5: $INPUT is not a usable step-4 handoff for this network's run." >&2
+      echo 'Nothing was run and no marker was written.' >&2
+      return 2
+    fi
+  fi
   python3 "$HERE/package-gate.py" "$STATE" "$HERE/.daml/dist/cap-example-babycdf-demo-0.1.0.dar"
-  # Step 4 only: hold an exclusive lock for the whole attempt, so a recovery
-  # cannot run while a vote may be in flight and two step-4 runs cannot
-  # overlap. One helper, step4_lock_acquire, owns the atomic mkdir; the trap
-  # is installed IMMEDIATELY after acquiring, so no failure between here and
-  # the dpm invocation can leak the lock. Cooperative and process-scoped: it
-  # cannot exclude an external ledger client, as the help text states.
-  if [ "$NUMBER" = 4 ]; then
-    step4_lock_acquire || return 2
-    trap 'step4_cleanup' EXIT
-    trap 'step4_cleanup signal; exit 2' HUP INT TERM
+  # Step 5 only: prove the handoff still binds to live ledger state BEFORE the
+  # one-shot marker exists, so a definite pre-submission refusal cannot strand
+  # a permanent marker. This is a read-only script: it submits nothing and
+  # allocates no party. It cannot close the time-of-check/time-of-use window,
+  # so couponAllocate re-runs the identical binding internally and that second
+  # check is the authoritative one.
+  if [ "$NUMBER" = 5 ]; then
+    echo 'Prevalidating the step-4 handoff read-only before any marker is written.' >&2
+    if ! render_step "step-5-prevalidation" \
+      dpm script --dar "$HERE/.daml/dist/cap-example-babycdf-demo-0.1.0.dar" \
+      --script-name Cap.Examples.BabyCdf.Live:couponAllocatePrevalidate \
+      --input-file "$INPUT" \
+      --ledger-host 127.0.0.1 --ledger-port "$LEDGER_PORT" --wall-clock-time \
+      --upload-dar true; then
+      echo 'Refused step 5: the step-4 handoff does not bind to an active approval.' >&2
+      echo 'Nothing was submitted and no marker was written, so a corrected' >&2
+      echo 'step 4 or a read-only reconciliation can still proceed.' >&2
+      return 2
+    fi
+  fi
+  # Steps 4 and 5: hold an exclusive per-step lock for the whole attempt, so a
+  # recovery cannot run while a submission may be in flight and two runs of the
+  # SAME step cannot overlap. One helper, step_lock_acquire, owns the atomic
+  # mkdir; the trap is installed IMMEDIATELY after acquiring, so no failure
+  # between here and the dpm invocation can leak the lock.
+  #
+  # Step 5 needs this for the same reason step 4 does, and the one-shot
+  # requirement is why: the guard above runs before any lock exists, so two
+  # simultaneous `step 5` invocations could both pass it and both allocate a
+  # coupon from a single approval. The Daml side cannot serialize them either,
+  # because the allocation submit happens before the anchor advance. The anchor
+  # is deliberately NOT moved before the allocation: doing so would strand a
+  # retry after a failed allocation, which is worse than this lock. Scope is
+  # stated plainly: cooperative and process-scoped, so it excludes concurrent
+  # runner invocations, which is the supported case, and cannot exclude an
+  # external ledger client, which is explicitly unsupported.
+  if [ "$NUMBER" = 4 ] || [ "$NUMBER" = 5 ]; then
+    step_lock_acquire "$NUMBER" || return 2
+    trap 'step_cleanup' EXIT
+    trap 'step_cleanup signal; exit 2' HUP INT TERM
     # Close the time-of-check/time-of-use window. The one-shot guard above ran
-    # before the lock existed, so a concurrent step 4 may have completed in
-    # between and written the marker or the result. Both are rechecked here,
-    # now that the lock is held, and a late loser refuses instead of running a
-    # second vote.
+    # before the lock existed, so a concurrent run of this step may have
+    # completed in between and written the marker or the result. Both are
+    # rechecked here, now that the lock is held, and a late loser refuses
+    # instead of running a second vote or a second allocation.
     if [ -e "$STATE/step-$NUMBER.attempted" ] || [ -e "$STATE/step-$NUMBER.json" ]; then
-      echo "Refused step $NUMBER: another step-4 run completed while this one" >&2
+      echo "Refused step $NUMBER: another step-$NUMBER run completed while this one" >&2
       echo 'was starting, so an attempt marker or result already exists.' >&2
       echo 'Reconcile read-only; nothing was created or changed here.' >&2
       return 2
@@ -244,24 +297,35 @@ run_step() {
   mv "$STEP_META" "$STATE/step-$NUMBER.attempted.attempt"
   : > "$STATE/step-$NUMBER.attempted"
   export BABYCDF_STEP4_LOG="$STEP_LOG"
-  trap 'rm -f -- "${NEXT:-}"; step4_cleanup' EXIT
-  trap 'step4_cleanup signal; rm -f -- "${NEXT:-}"; exit 2' HUP INT TERM
+  trap 'rm -f -- "${NEXT:-}"; step_cleanup' EXIT
+  trap 'step_cleanup signal; rm -f -- "${NEXT:-}"; exit 2' HUP INT TERM
   # The selector variant takes a record, so it needs its own input file. It is
   # built next to the state it describes and is never a template expansion.
   STEP_INPUT="$STATE/run-id.json"
+  # Step 5's input is the step-4 handoff itself, not the bare run id: the
+  # approval identity it must bind is in that file and nowhere else.
+  if [ "$NUMBER" = 5 ]; then
+    STEP_INPUT=$INPUT
+  fi
+  # Step 4 now returns a record, so the bare form needs an input record too.
+  if [ "$NUMBER" = 4 ] && [ -z "${STEP4_ROUND:-}" ]; then
+    STEP_INPUT="$STATE/run-id.json"
+  fi
   if [ "$NUMBER" = 4 ] && [ -n "${STEP4_ROUND:-}" ]; then
     SEL_NEXT=$(mktemp "$STATE/step-4-selector-XXXXXXXX")
     python3 -c 'import json,sys; json.dump({"runId": json.load(open(sys.argv[1])), "round": sys.argv[2]}, open(sys.argv[3], "w"))' \
       "$STATE/run-id.json" "$STEP4_ROUND" "$SEL_NEXT"
     STEP_INPUT=$SEL_NEXT
-    trap 'rm -f -- "${NEXT:-}" "${SEL_NEXT:-}"; step4_cleanup' EXIT
-    trap 'step4_cleanup signal; rm -f -- "${NEXT:-}" "${SEL_NEXT:-}"; exit 2' HUP INT TERM
+    trap 'rm -f -- "${NEXT:-}" "${SEL_NEXT:-}"; step_cleanup' EXIT
+    trap 'step_cleanup signal; rm -f -- "${NEXT:-}" "${SEL_NEXT:-}"; exit 2' HUP INT TERM
     printf 'Explicit round selector: %s\n' "$STEP4_ROUND" >&2
   fi
-  if [ "$NUMBER" = 4 ]; then
+  if [ "$NUMBER" = 4 ] || [ "$NUMBER" = 5 ]; then
     # Run the whole render in a background subshell and record its pid, so the
-    # lock provably covers the child's entire lifetime: step4_cleanup waits for
+    # lock provably covers the child's entire lifetime: step_cleanup waits for
     # this pid before releasing, and retains the lock if it cannot reap it.
+    # Step 5 uses the identical pattern, so an interrupted allocation is
+    # retained as uncertain exactly like an interrupted vote.
     render_step "step-$NUMBER" \
       dpm script --dar "$HERE/.daml/dist/cap-example-babycdf-demo-0.1.0.dar" \
       --script-name "Cap.Examples.BabyCdf.Live:$SCRIPT" --input-file "$STEP_INPUT" \
@@ -282,7 +346,7 @@ run_step() {
       --upload-dar true --output-file "$NEXT"
   fi
   mv "$NEXT" "$STATE/step-$NUMBER.json"
-  step4_lock_release
+  step_lock_release
   trap - EXIT HUP INT TERM
   rm -f -- "${SEL_NEXT:-}"
 }
@@ -293,22 +357,30 @@ run_step() {
 # This is not a retry framework and not a reset. It deletes exactly one
 # fixed path, after proof, on an explicit operator command, and it refuses on
 # any uncertainty. `down` remains the only thing that clears markers wholesale.
-# Exclusive step-4 lock, the single implementation. mkdir is atomic, so the
-# directory IS the lock. The holder's pid is recorded so a lock left by a dead
-# process is distinguishable from a live one; a lock whose owner cannot be
-# determined is treated as held and never broken. Nothing here deletes a
-# marker. Cooperative and process-scoped: it cannot exclude an external
-# ledger client.
+# Exclusive per-step lock, the single implementation, shared by steps 4 and 5.
+# mkdir is atomic, so the directory IS the lock. The holder's pid is recorded
+# so a lock left by a dead process is distinguishable from a live one; a lock
+# whose owner cannot be determined is treated as held and never broken.
+# Nothing here deletes a marker. Cooperative and process-scoped: it serializes
+# concurrent runner invocations and cannot exclude an external ledger client.
+#
+# The lock path carries the step number, so a step-4 lock and a step-5 lock are
+# distinct files and neither blocks the other. Messages name the actual step,
+# so an operator reconciling a retained lock knows which submission is in
+# doubt.
 STEP4_LOCK=''
-step4_lock_acquire() {
-  _lock="$STATE/step-4.lock"
+STEP_LOCK_NUMBER=''
+step_lock_acquire() {
+  _step=$1
+  _lock="$STATE/step-$_step.lock"
   if mkdir "$_lock" 2>/dev/null; then
     printf '%s\n' "$$" > "$_lock/pid"
     STEP4_LOCK=$_lock
+    STEP_LOCK_NUMBER=$_step
     return 0
   fi
   if [ -e "$_lock/uncertain" ]; then
-    echo "Refused: $_lock records an interrupted step-4 attempt whose ledger" >&2
+    echo "Refused: $_lock records an interrupted step-$_step attempt whose ledger" >&2
     echo 'outcome is unknown, so it is retained permanently. Reconcile' >&2
     echo 'read-only; only down clears it, and that destroys the network.' >&2
     return 2
@@ -321,7 +393,7 @@ step4_lock_acquire() {
       return 2 ;;
   esac
   if kill -0 "$_owner" 2>/dev/null; then
-    echo "Refused: another step-4 run (pid $_owner) holds $_lock." >&2
+    echo "Refused: another step-$_step run (pid $_owner) holds $_lock." >&2
     return 2
   fi
   echo "Refused: a stale lock from pid $_owner remains at $_lock." >&2
@@ -332,7 +404,7 @@ step4_lock_acquire() {
 
 # Release only a lock THIS process took. The pid file is removed before the
 # directory, or the directory would never be empty enough to remove.
-step4_lock_release() {
+step_lock_release() {
   # An uncertain attempt never releases, regardless of caller.
   if [ -n "${STEP4_UNCERTAIN:-}" ]; then
     return 0
@@ -344,6 +416,7 @@ step4_lock_release() {
     rm -f -- "$STEP4_LOCK/pid"
     rmdir "$STEP4_LOCK" 2>/dev/null || :
     STEP4_LOCK=''
+    STEP_LOCK_NUMBER=''
   fi
 }
 
@@ -363,27 +436,27 @@ step4_lock_release() {
 STEP4_CHILD=''
 STEP4_UNCERTAIN=''
 
-step4_mark_uncertain() {
+step_mark_uncertain() {
   STEP4_UNCERTAIN=1
   if [ -n "${STEP4_LOCK:-}" ]; then
-    printf 'interrupted while a step-4 child was running\n' \
+    printf 'interrupted while a step-%s child was running\n' "${STEP_LOCK_NUMBER:-?}" \
       >> "$STEP4_LOCK/uncertain" 2>/dev/null || :
   fi
 }
 
-step4_cleanup() {
+step_cleanup() {
   _sig=${1:-}
   if [ -n "$_sig" ] && [ -n "${STEP4_CHILD:-}" ]; then
     # Interrupted with a child outstanding: sticky-uncertain, whatever
     # happens next. Signalling the subshell does not prove dpm stopped.
-    step4_mark_uncertain
+    step_mark_uncertain
     kill -TERM "$STEP4_CHILD" 2>/dev/null || :
     wait "$STEP4_CHILD" 2>/dev/null || :
   fi
   if [ -n "${STEP4_UNCERTAIN:-}" ] || \
      { [ -n "${STEP4_LOCK:-}" ] && [ -e "$STEP4_LOCK/uncertain" ]; }; then
     STEP4_UNCERTAIN=1
-    echo 'Step 4 was interrupted while a submission may have been in flight.' >&2
+    printf 'Step %s was interrupted while a submission may have been in flight.\n' "${STEP_LOCK_NUMBER:-4}" >&2
     echo 'The lock is RETAINED so a later run reports it as stale, because' >&2
     echo 'reaping the render shell does not prove the submitting process' >&2
     echo 'stopped. Reconcile read-only; nothing is cleared automatically.' >&2
@@ -392,12 +465,12 @@ step4_cleanup() {
   fi
   if [ -n "${STEP4_CHILD:-}" ] && kill -0 "$STEP4_CHILD" 2>/dev/null; then
     # A child is still alive with no signal recorded: still uncertain.
-    step4_mark_uncertain
+    step_mark_uncertain
     STEP4_CHILD=''
     return 0
   fi
   STEP4_CHILD=''
-  step4_lock_release
+  step_lock_release
 }
 
 recover_step4_marker() {
@@ -408,9 +481,16 @@ recover_step4_marker() {
   # Recovery must not run while a step-4 attempt may be in flight. The trap
   # is installed IMMEDIATELY after acquiring, so a signal cannot leak the
   # lock between here and the explicit releases below.
-  step4_lock_acquire || return 2
-  trap 'step4_cleanup' EXIT
-  trap 'step4_cleanup signal; exit 2' HUP INT TERM
+  #
+  # This helper is step 4 ONLY, deliberately: it takes the step-4 lock and it
+  # clears exactly the step-4 marker. It never touches a step-5 marker or a
+  # step-5 lock. A step 5 whose outcome is uncertain has no recovery command
+  # at all and stays blocked until `down`, because proving that a coupon
+  # allocation never reached the ledger is not what the step-4 log checker
+  # does.
+  step_lock_acquire 4 || return 2
+  trap 'step_cleanup' EXIT
+  trap 'step_cleanup signal; exit 2' HUP INT TERM
   echo 'Checking whether step 4 can be proven to have made no ledger submission.' >&2
   # The checker reads the exact log span this attempt recorded. Metadata that
   # is missing, stale or inconsistent is a refusal, never a fallback.
@@ -419,26 +499,26 @@ recover_step4_marker() {
     echo 'Refused: no attempt metadata beside the step-4 marker, so the log span' >&2
     echo 'cannot be established. This marker predates bounded recovery.' >&2
     echo 'The marker is retained. Reconcile read-only.' >&2
-    step4_lock_release
+    step_lock_release
     return 2
   fi
   STEP4_LOG=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["log_path"])' "$STEP4_META" 2>/dev/null) || {
     echo 'Refused: attempt metadata is unreadable; the marker is retained.' >&2
-    step4_lock_release
+    step_lock_release
     return 2
   }
   if ! BABYCDF_STEP4_LOG="$STEP4_LOG" python3 "$HERE/step4-marker-recovery.py"; then
     echo 'Refused: the attempt marker is retained. Reconcile read-only.' >&2
-    step4_lock_release
+    step_lock_release
     return 2
   fi
   if [ ! -e "$STATE/step-4.attempted" ]; then
     echo 'Nothing to clear.' >&2
-    step4_lock_release
+    step_lock_release
     return 0
   fi
   rm -f -- "$STATE/step-4.attempted" "$STEP4_META"
-  step4_lock_release
+  step_lock_release
   printf 'Cleared %s after proof of no submission.\n' "$STATE/step-4.attempted" >&2
   printf 'Rerun step 4 with an explicit round selector:\n' >&2
   printf '  ./run-demo.sh step 4 <round-id-or-comment-id>\n' >&2
@@ -550,7 +630,7 @@ case "${1:-help}" in
     rm -f -- "$HERE/compose/state/readback" "$STATE/readback-intake" "$STATE/intake-demo-package" "$STATE/impl-package.json" "$HERE/compose/state/bootstrap.json" "$STATE/step-2.json" "$STATE/step-3.json" "$STATE/step-4.json" "$STATE/step-5.json" "$STATE/step-6.json" "$STATE/step-2.attempted" "$STATE/step-3.attempted" "$STATE/step-4.attempted" "$STATE/step-5.attempted" "$STATE/step-6.attempted" "$STATE/demo-dar.json" "$STATE/demo-inspect.json" "$STATE/run-id.json" "$STATE/bootstrap-input.json" "$STATE/opt-step-1.json" "$STATE/opt-step-1.attempted" "$STATE/opt-step-2.json" "$STATE/opt-step-2.attempted" "$STATE/opt-step-3.json" "$STATE/opt-step-3.attempted" "$STATE/opt-step-4.json" "$STATE/opt-step-4.attempted" "$STATE/opt-step-5.json" "$STATE/opt-step-5.attempted"
     # Interrupted steps can leave their atomic temp file behind; these are exact
     # fixed-prefix demo paths, never a recursive delete.
-    rm -f -- "$STATE"/step-2-next-* "$STATE"/step-3-next-* "$STATE"/step-4-next-* "$STATE"/step-5-next-* "$STATE"/step-6-next-* "$STATE"/bootstrap-next-* "$STATE"/proposal-next-* "$STATE"/opt-step-1-next-* "$STATE"/opt-step-2-next-* "$STATE"/opt-step-3-next-* "$STATE"/opt-step-4-next-* "$STATE"/opt-step-5-next-* "$STATE"/step-4-selector-* "$STATE"/step-4.lock/pid "$STATE"/step-4.lock/uncertain "$STATE"/step-2.attempted.attempt "$STATE"/step-3.attempted.attempt "$STATE"/step-4.attempted.attempt "$STATE"/step-5.attempted.attempt "$STATE"/step-6.attempted.attempt
+    rm -f -- "$STATE"/step-2-next-* "$STATE"/step-3-next-* "$STATE"/step-4-next-* "$STATE"/step-5-next-* "$STATE"/step-6-next-* "$STATE"/bootstrap-next-* "$STATE"/proposal-next-* "$STATE"/opt-step-1-next-* "$STATE"/opt-step-2-next-* "$STATE"/opt-step-3-next-* "$STATE"/opt-step-4-next-* "$STATE"/opt-step-5-next-* "$STATE"/step-4-selector-* "$STATE"/step-4.lock/pid "$STATE"/step-4.lock/uncertain "$STATE"/step-5.lock/pid "$STATE"/step-5.lock/uncertain "$STATE"/step-2.attempted.attempt "$STATE"/step-3.attempted.attempt "$STATE"/step-4.attempted.attempt "$STATE"/step-5.attempted.attempt "$STATE"/step-6.attempted.attempt
     up_stage intake-packaging-tests 'Checking Intake packaging offline' python3 -B "$HERE/test-intake-packaging.py"
     up_stage readback-tests 'Checking readback' python3 -B "$HERE/test_readback.py"
     up_stage entrypoint-tests 'Checking entrypoint and locales' sh "$HERE/compose/agents/test-entrypoint.sh"
@@ -648,39 +728,32 @@ PY
     rm -f -- "$HERE/compose/state/readback" "$STATE/readback-intake" "$STATE/intake-demo-package" "$STATE/impl-package.json" "$HERE/compose/state/bootstrap.json" "$STATE/step-2.json" "$STATE/step-3.json" "$STATE/step-4.json" "$STATE/step-5.json" "$STATE/step-6.json" "$STATE/step-2.attempted" "$STATE/step-3.attempted" "$STATE/step-4.attempted" "$STATE/step-5.attempted" "$STATE/step-6.attempted" "$STATE/demo-dar.json" "$STATE/demo-inspect.json" "$STATE/run-id.json" "$STATE/bootstrap-input.json" "$STATE/opt-step-1.json" "$STATE/opt-step-1.attempted" "$STATE/opt-step-2.json" "$STATE/opt-step-2.attempted" "$STATE/opt-step-3.json" "$STATE/opt-step-3.attempted" "$STATE/opt-step-4.json" "$STATE/opt-step-4.attempted" "$STATE/opt-step-5.json" "$STATE/opt-step-5.attempted"
     # Interrupted steps can leave their atomic temp file behind; these are exact
     # fixed-prefix demo paths, never a recursive delete.
-    rm -f -- "$STATE"/step-2-next-* "$STATE"/step-3-next-* "$STATE"/step-4-next-* "$STATE"/step-5-next-* "$STATE"/step-6-next-* "$STATE"/bootstrap-next-* "$STATE"/proposal-next-* "$STATE"/opt-step-1-next-* "$STATE"/opt-step-2-next-* "$STATE"/opt-step-3-next-* "$STATE"/opt-step-4-next-* "$STATE"/opt-step-5-next-* "$STATE"/step-4-selector-* "$STATE"/step-4.lock/pid "$STATE"/step-4.lock/uncertain "$STATE"/step-2.attempted.attempt "$STATE"/step-3.attempted.attempt "$STATE"/step-4.attempted.attempt "$STATE"/step-5.attempted.attempt "$STATE"/step-6.attempted.attempt
+    rm -f -- "$STATE"/step-2-next-* "$STATE"/step-3-next-* "$STATE"/step-4-next-* "$STATE"/step-5-next-* "$STATE"/step-6-next-* "$STATE"/bootstrap-next-* "$STATE"/proposal-next-* "$STATE"/opt-step-1-next-* "$STATE"/opt-step-2-next-* "$STATE"/opt-step-3-next-* "$STATE"/opt-step-4-next-* "$STATE"/opt-step-5-next-* "$STATE"/step-4-selector-* "$STATE"/step-4.lock/pid "$STATE"/step-4.lock/uncertain "$STATE"/step-5.lock/pid "$STATE"/step-5.lock/uncertain "$STATE"/step-2.attempted.attempt "$STATE"/step-3.attempted.attempt "$STATE"/step-4.attempted.attempt "$STATE"/step-5.attempted.attempt "$STATE"/step-6.attempted.attempt
     rmdir "$STATE/step-4.lock" 2>/dev/null || :
+    rmdir "$STATE/step-5.lock" 2>/dev/null || :
     ;;
   step) run_step "${2:-}" "${3:-}" ;;
   opt-step) run_opt_step "${2:-}" ;;
   recover-step4-marker) recover_step4_marker ;;
   all)
+    # `all` deliberately stops after the Architecture rule vote. Steps 3, 4
+    # and 5 act on EXISTING source rounds and hand real money-side mechanics
+    # a cited approval, so they stay explicit operator commands rather than
+    # something an aggregate command casts on the operator's behalf. This is
+    # the automatic-vote policy, and restoring step 5 did not change it:
+    # step 5 is available through `step 5`, never through `all`.
+    #
+    # The former unreachable `for n in 2 3 4 5` loop below this point was
+    # removed: it could never run, and it advertised an aggregate journey the
+    # policy forbids. Optional rounds are not part of all either.
     echo 'Integrated demo: only the explicit Architecture rule vote runs; source agendas remain unvoted.' >&2
-    run_step 2
-    exit $?
-    # A fresh network is required: bootstrap must exist and no later step may
-    # have run or been attempted, so `all` can never resume a partial journey.
+    echo 'Steps 3, 4 and 5 remain explicit manual commands: all never casts source votes or allocates a coupon.' >&2
+    echo 'Optional rounds are not part of all; run them explicitly with opt-step N.' >&2
     if [ ! -f "$STATE/bootstrap.json" ]; then
       echo 'Refused all: no bootstrap.json; run up first.' >&2; exit 2
     fi
-    for n in 2 3 4 5; do
-      if [ -e "$STATE/step-$n.json" ] || [ -e "$STATE/step-$n.attempted" ]; then
-        echo "Refused all: step $n already ran or was attempted on this network; run down then up for a fresh network." >&2
-        exit 2
-      fi
-    done
-    printf 'Running steps 2-5 sequentially with %s seconds between steps.\n' "$PAUSE" >&2
-    printf 'Optional rounds are not part of all; run them explicitly with opt-step N.\n' >&2
-    for n in 2 3 4 5; do
-      printf -- '--- all: starting step %s ---\n' "$n" >&2
-      run_step "$n"
-      if [ "$n" != 5 ]; then
-        printf -- '--- all: step %s done; pausing %s seconds ---\n' "$n" "$PAUSE" >&2
-        sleep "$PAUSE"
-      else
-        printf -- '--- all: step %s done; steps 2-5 complete ---\n' "$n" >&2
-      fi
-    done
+    run_step 2
+    exit $?
     ;;
   help)
     printf 'Usage: sh %s {up|logs|down|step N|all|help}\n' "$0"
@@ -696,10 +769,16 @@ PY
     printf '            that step 4 refused before any ledger submission. Refuses on\n'
     printf '            any uncertainty. Not a reset and not an automatic retry.\n'
     printf '  opt-step N  run one OPTIONAL round, N in 1..5 (not part of all)\n'
-    printf '  all       run the Architecture rule-vote journey only; source votes require explicit step 3/4 commands\n'
+    printf '  all       run the Architecture rule-vote journey only; source votes and the coupon allocation require explicit step 3/4/5 commands\n'
     printf '  down      stop everything and clear demo state\n'
     printf 'Startup: quiet stage summaries plus visible step-1 setup; VERBOSE=1 shows full stage logs.\n'
-    printf 'Steps: 2 rule vote; 3 existing PR184 round; 4 existing milestone540 round; 5 retired.\n'
+    printf 'Steps: 2 rule vote; 3 existing PR184 round; 4 existing milestone540 round; 5 coupon allocation.\n'
+    printf 'Step 5 refuses a step-4 handoff from another run: its run id must equal the run id recorded by up.\n'
+    printf 'Step 5 needs step 4 to have produced an executable approval: it reads step-4.json, re-binds that\n'
+    printf '  exact approval on the ledger and refuses if it is absent, archived, mismatched or ambiguous.\n'
+    printf '  A blocked or incomplete step-4 review carries no approval, so step 5 refuses rather than citing\n'
+    printf '  an illustrative milestone. The refusal is prevalidated read-only before any marker is written.\n'
+    printf '  It allocates a sandbox Development Fund coupon: NOT a mint and NOT a payment.\n'
     printf 'Optionals 2-5 need only bootstrap, run independently in any order, and never advance the main anchor.\n'
     printf '  2 credentials (group mismatch vs lookup privacy), 3 no quorum (Lapsed),\n'
     printf '  4 double vote (consumed and already cast), 5 outsider (visibility and proposer authorization).\n'
@@ -709,8 +788,13 @@ PY
     printf '  agenda pinned registry v1 while the live registry is already v2. The vote is\n'
     printf '  not undone; only the application is refused. It does not advance the run,\n'
     printf '  so the main journey continues normally afterwards.\n'
-    printf 'Step 4 holds an exclusive process lock for its whole run, so a second step 4 or a recovery cannot overlap it.\n'
-    printf 'That lock is cooperative and process-scoped: it cannot prevent an external ledger client from submitting.\n'
+    printf 'Steps 4 and 5 each hold their own exclusive process lock for the whole run, so a second run of that step,\n'
+    printf '  or a recovery, cannot overlap it. Step 5 needs this to stay one-shot: without it two simultaneous step-5\n'
+    printf '  commands could both allocate a coupon from the same approval.\n'
+    printf 'Those locks are cooperative and process-scoped: they serialize runner commands, which is the supported case,\n'
+    printf '  and cannot prevent an external ledger client from submitting, which is not supported.\n'
+    printf 'recover-step4-marker is step 4 ONLY; it never clears a step-5 marker or lock. An uncertain step 5 stays\n'
+    printf '  blocked until down.\n'
     printf 'A lock left behind by a dead run is reported as stale and never broken automatically.\n'
     printf 'Every step stays one-shot: an attempt marker is written before the script runs and is never cleared automatically.\n'
     printf 'A step-4 refusal that happened before any ledger submission is recoverable with recover-step4-marker, which proves no submission first.\n'

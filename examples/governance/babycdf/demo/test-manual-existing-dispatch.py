@@ -16,8 +16,8 @@ class ManualDispatchTest(unittest.TestCase):
         function = runner[start:runner.index('\n}', start) + 2]
         # run_step takes an exclusive step-4 lock through these helpers, so
         # they are part of the function's contract and must be in scope here.
-        for helper in ('step4_lock_acquire', 'step4_lock_release',
-                       'step4_cleanup'):
+        for helper in ('step_lock_acquire', 'step_lock_release',
+                       'step_cleanup'):
             found = re.search(r'(?ms)^%s\(\) \{.*?^\}\n' % helper, runner)
             self.assertIsNotNone(found, helper)
             function = found.group(0) + function

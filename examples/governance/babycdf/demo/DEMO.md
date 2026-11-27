@@ -9,8 +9,9 @@ legacy ambient GITHUB_TOKEN is ignored. The same Intake validator is reused.
 
 Current runtime: two Java processes (Intake and Reviewer). Intake has CanActAs opener and submits one
 OpenAgenda bridge per step 3/4; Reviewer have CanReadAs opener only.
-The unauthenticated sandbox API is not an enforced security boundary. Main `all`
-ends at step 5; optional rounds 1–5 remain separate. Intake defaults to bounded
+The unauthenticated sandbox API is not an enforced security boundary. `all` runs
+only Architecture step 2; steps 3, 4 and 5 are explicit operator commands, and
+optional rounds 1–5 remain separate. Intake defaults to bounded
 token-authenticated GitHub pagination (first provision the explicit file secret:
 [GITHUB-TOKEN.md](GITHUB-TOKEN.md)) and SourceObservationCredential catalogue ingestion in a separate
 worker; agenda polling continues independently. Source attempts default to 30
@@ -29,7 +30,7 @@ opt-in supplemental assessments through the configured gateway (including
 Gertrudes when configured); returned-model metadata, not an alias, identifies the
 actual response. Offline tests do not establish live participant acceptance.
 
-Steps 1-5 and optional rounds 1-5 are implemented; `all` finishes at step 5. Retired step 6 refuses without submitting. The current behaviour — decisions carried
+Steps 1-5 and optional rounds 1-5 are implemented; `all` finishes at step 2, and steps 3, 4 and 5 are explicit operator commands. Step 5 allocates a sandbox coupon citing only the approval step 4 actually produced, and refuses when step 4 produced none. Retired step 6 refuses without submitting. The current behaviour — decisions carried
 by a quorum of three core members, and the presentation-first agent logs — is
 validated **offline only**: isolated Daml build and script suite, Java unit
 tests, the narration and quorum guard, the shell and entrypoint suites, and
@@ -162,9 +163,9 @@ sh examples/governance/babycdf/demo/run-demo.sh all    # or: step 2 .. step 5
 sh examples/governance/babycdf/demo/run-demo.sh down
 ```
 
-`all` runs steps 2-5 in order with `PAUSE` seconds between them, default 5. It
-refuses unless the network is fresh: `bootstrap.json` must exist and no step may
-have run or been attempted. `help` lists every command.
+`all` runs only the Architecture rule vote, step 2, and stops there; steps 3, 4
+and 5 are explicit operator commands and are never cast by an aggregate run. It
+refuses unless `bootstrap.json` exists. `help` lists every command.
 
 Prerequisites: Docker Compose >= 2.24, the existing dpm 1.0.22 / SDK 3.5.11,
 Python 3, the pinned CIPS object and the sibling `canton-dev-fund` proposal blob.
@@ -409,9 +410,9 @@ by the real clock and are left intact:
 
 The configuration sets `isDevNet = True`, which is what a throwaway sandbox is;
 it is not a production or MainNet configuration. The allocation's `reason` text
-is deliberately prefixed `sandbox` and cites the step-4 demo contract and issue
-#540 as narration provenance only. It is not a claim that issue #540 was
-approved or funded by anyone.
+is deliberately prefixed `sandbox` and cites the exact bound step-4 approval
+contract ID and that approval's own milestone URL as narration provenance only.
+It does not confer Foundation authority or establish that anyone funded that milestone.
 
 The source coupon is minted by Splice's own DSO-controlled round transition, not
 created by this demo. Two refusals are then exercised against the real choice
@@ -429,7 +430,8 @@ no entitlement.
 
 ### Independent optional security rounds (formerly step 6)
 
-The main journey ends at step 5; `all` runs only steps 2-5. `step 6` and the
+The main journey ends at step 5; `all` runs only step 2, and steps 3, 4 and 5
+are explicit operator commands. `step 6` and the
 legacy `blockedPaths` entry point refuse without ledger mutation. After `up`,
 run `./run-demo.sh opt-step 2`, `3`, `4`, or `5`, alone or in any order.
 Each needs only bootstrap, owns fresh round IDs, ballots, `opt-step-N` markers
@@ -1255,9 +1257,11 @@ casts are fewer, so the per-step totals have moved and have not been
 re-measured live.
 
 Contract IDs are from that run only; they are stale after `down` and are not
-operational state. Negative guards verified on a fresh network: `step 5` and
-`step 6` before their prerequisites both exit 2, an out-of-range step number
-exits 2, and `all` refuses once any step has run or been attempted.
+operational state. Historical negative guards verified on that fresh network:
+`step 5` and `step 6` before their prerequisites both exited 2, an out-of-range
+step number exited 2, and `all` refused once any step had run or been attempted.
+That last aggregate guard no longer describes the current runner: `all` invokes
+only step 2, which enforces its own prerequisite and one-shot marker checks.
 
 ## Pitch mapping
 

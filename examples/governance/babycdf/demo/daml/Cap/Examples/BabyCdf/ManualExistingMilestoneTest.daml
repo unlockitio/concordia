@@ -2,6 +2,7 @@ module Cap.Examples.BabyCdf.ManualExistingMilestoneTest where
 import Daml.Script
 import DA.Assert
 import DA.Time
+import qualified DA.List
 import qualified DA.Text as Text
 import Cap.Examples.BabyCdf.Live
 import Cap.Examples.BabyCdf.RuleVote
@@ -10,6 +11,12 @@ import Cap.Examples.BabyCdf.SourceAgendaFixtures
 import Cap.Examples.BabyCdf.ManualIdentityTest (manualRefuses)
 import Cap.Governance.VoteTopicV1 (VoteTopic)
 import qualified Cap.Examples.BabyCdf.SourceObservationCredential as Source
+
+-- `query` returns rows in no guaranteed order, and the order it happens to
+-- use depends on contract ids. Sorting by contract id makes an inventory
+-- comparison order-independent while still comparing every field.
+byCid : [(ContractId a, b)] -> [(ContractId a, b)]
+byCid = DA.List.sortOn (show . fst)
 
 manualExistingMilestonePending : Script ()
 manualExistingMilestonePending = script do
@@ -54,9 +61,13 @@ manualExistingMilestonePending = script do
   approvalsAfter <- query @ApprovedMilestone state.opener
   approvalsAfter === approvals
   receiptsAfter <- query @AgendaRoundReceipt state.opener
-  receiptsAfter === receiptsBefore
+  -- Compared as an inventory, not as an ordered list: `query` gives no
+  -- ordering guarantee, so sorting by contract id keeps this a strict
+  -- "nothing was created or archived" check without depending on the order
+  -- the participant happens to return rows in.
+  byCid receiptsAfter === byCid receiptsBefore
   sourcesAfter <- query @Source.SourceObservationCredential state.opener
-  sourcesAfter === sourcesBefore
+  byCid sourcesAfter === byCid sourcesBefore
   actionsAfter <- query @AgendaAction state.opener
   assert (all (\(ref,_) -> ref `elem` map fst actionsBefore) actionsAfter)
   proposalsAfter <- query @AgendaProposal state.opener

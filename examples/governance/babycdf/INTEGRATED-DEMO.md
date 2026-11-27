@@ -27,9 +27,13 @@ from ProposalPin and resolves only immutable commit-tree/blob evidence; blocked
 unknown delivery does not call a provider. Absence eligibility requires complete,
 verified text and excludes NUL/binary input.
 
-Public step3/4/5 and optional source-ballot fixtures2..5 now refuse before any
-mutation. `all` runs only the existing explicit Architecture step2; source topics
-remain unvoted. Legacy Daml source scripts remain test context, not launcher paths.
+Public steps 3 and 4 are explicit manual commands that vote on existing source
+rounds; they do not open replacement rounds. Step 5 is an explicit manual coupon
+allocation command requiring the actual executable approval produced by step 4
+for this network's run. Missing or invalid approval evidence refuses allocation.
+`all` runs only the existing explicit Architecture step 2 and never invokes steps
+3, 4 or 5, so it leaves source topics unvoted. Optional source-ballot fixtures
+2..5 remain retired in integrated mode.
 Strict snapshot decode requires source CID, lineage/version, original proposal and
 previous-round fields even when the fingerprint is valid. Malformed runtime ledger
 input is categorized without echoing contents and does not kill Intake polling.

@@ -1444,6 +1444,71 @@ milestoneVoteFor input = do
   finalState 4 [state.opener, state.member] outcome
   pure outcome
 
+-- Step 4 -> step 5 handoff.
+--
+-- Step 5 may act only on the approval THIS step-4 run produced, so the
+-- identity is machine-produced here instead of being reconstructed later from
+-- a subject constant: the approval is the one ApprovedMilestone that appeared
+-- across the step-4 call, carried with the exact contract id, subject URL,
+-- content version and source round id that step 5 has to re-check. A step 4
+-- that records votes without an executable approval (a BlockedPin round)
+-- carries no approval at all, which is what makes step 5 refuse rather than
+-- substitute an illustrative one.
+data Step4Approval = Step4Approval with
+    approvalCid : ContractId ApprovedMilestone
+    milestoneUrl : Text
+    contentVersion : Text
+    roundId : Text
+  deriving (Eq, Show)
+
+data Step4Handoff = Step4Handoff with
+    runId : Text
+    opener : Party
+    electorate : [Party]
+    outcome : Text
+    approval : Optional Step4Approval
+  deriving (Eq, Show)
+
+-- Step 4 entry points that return the handoff instead of the bare outcome
+-- text. The vote itself is unchanged: both delegate to milestoneVoteFor, so
+-- the step-3/4 behaviour, selector semantics and refusals are identical and
+-- the existing Text-returning entry points remain for compatibility.
+milestoneVoteHandoff : Text -> Script Step4Handoff
+milestoneVoteHandoff runId = milestoneVoteHandoffFor (ManualRoundInput runId "")
+
+milestoneVoteHandoffFor : ManualRoundInput -> Script Step4Handoff
+milestoneVoteHandoffFor input = do
+  (_,state) <- findAnchorAtLeast input.runId 1
+  Some governor <- queryContractId state.opener state.governor
+  before <- query @ApprovedMilestone state.opener
+  outcome <- milestoneVoteFor input
+  after <- query @ApprovedMilestone state.opener
+  let known = map fst before
+      fresh = [(ref,a) | (ref,a) <- after, not (ref `elem` known)]
+  approval <- case fresh of
+    [] -> pure None
+    [(ref,a)] -> do
+      assertMsg "Step 4 approval must carry a valid executable pinned source snapshot to hand to step 5."
+        (a.opener == state.opener && validSnapshot a.sourceSnapshot
+          && executablePin a.sourceSnapshot.pin
+          && a.milestone.url == a.sourceSnapshot.observation.sourceUrl
+          && a.milestone.contentVersion == a.sourceSnapshot.fingerprint
+          && a.members == governor.permanent)
+      pure (Some (Step4Approval with
+        approvalCid = ref
+        milestoneUrl = a.milestone.url
+        contentVersion = a.milestone.contentVersion
+        roundId = a.sourceSnapshot.roundId))
+    _ -> do
+      assertMsg "Step 4 produced more than one milestone approval; a step-5 handoff must name exactly one." False
+      pure None
+  pure Step4Handoff with
+    runId = input.runId
+    opener = state.opener
+    electorate = Set.toList governor.permanent
+    outcome
+    approval
+
 
 
 -- Step 5 runs the real Splice allocation choice on wall-clock time, with no
@@ -1485,9 +1550,82 @@ resolveWhenClosed attempt opener governor proposalCid ballotCids rights = do
           sleep (seconds 5)
           resolveWhenClosed (attempt + 1) opener governor proposalCid ballotCids rights
 
-couponAllocate : Text -> Script Text
-couponAllocate runId = do
-  (anchorCid,state) <- findAnchor runId 4
+-- Read-only binding of the step-4 handoff to live ledger state.
+--
+-- Every refusal here happens before any submission or party allocation, so a
+-- refusal is a definite pre-submission failure and a retry stays possible.
+-- It is deliberately a query-only function: the runner calls it through
+-- couponAllocatePrevalidate BEFORE writing a one-shot marker, and the
+-- allocating entry point calls it again, because the first call cannot bind
+-- the time of use. The second call is the authoritative one.
+bindStep5Approval : Step4Handoff
+  -> Script (ContractId DemoAnchor, DemoAnchor, Step4Approval, ApprovedMilestone)
+bindStep5Approval handoff = do
+  assertMsg "Step 5 needs a step-4 handoff carrying a run id." (handoff.runId /= "")
+  -- Steps 3 and 4 never advance the anchor, so the run state step 5 requires
+  -- is "step 2 or later", not an exact step 4. The upper bound is what keeps
+  -- step 5 one-shot: a completed step 5 advanced the anchor to 5 already.
+  (anchorCid,state) <- findAnchorAtLeast handoff.runId 2
+  assertMsg "Step 5 already ran for this run: the anchor is at step 5."
+    (state.step < 5)
+  assertMsg "Step 5 handoff opener does not match this run's anchor."
+    (handoff.opener == state.opener)
+  Some governor <- queryContractId state.opener state.governor
+  assertMsg "Step 5 handoff electorate does not match the current governor's primary seats."
+    (Set.fromList handoff.electorate == governor.permanent)
+  -- A step 4 that recorded votes without an executable approval carries no
+  -- approval. That refuses here; it is never replaced by a subject constant.
+  approval <- case handoff.approval of
+    None -> do
+      assertMsg ("Step 5 refuses: the step-4 handoff carries no executable milestone approval"
+        <> " (outcome: " <> handoff.outcome <> "). A blocked or incomplete review is not an"
+        <> " approval, and step 5 never substitutes an illustrative milestone.") False
+      abort "unreachable"
+    Some approval -> pure approval
+  -- The handoff names a contract id; it must still be the live approval, and
+  -- its own fields must agree with what the handoff recorded. A stale,
+  -- archived or altered approval refuses instead of being re-derived.
+  live <- queryContractId state.opener approval.approvalCid
+  milestone <- case live of
+    None -> do
+      assertMsg ("Step 5 refuses: the step-4 milestone approval named by the handoff is no"
+        <> " longer active (" <> cid approval.approvalCid <> "). Reconcile read-only;"
+        <> " step 5 never selects a different approval.") False
+      abort "unreachable"
+    Some milestone -> pure milestone
+  assertMsg "Step 5 refuses: the handed-off approval does not match the live approval contract."
+    (milestone.opener == state.opener && milestone.members == governor.permanent
+      && milestone.milestone.url == approval.milestoneUrl
+      && milestone.milestone.contentVersion == approval.contentVersion
+      && milestone.sourceSnapshot.roundId == approval.roundId)
+  assertMsg "Step 5 refuses: the handed-off approval's source snapshot is not a valid executable pin."
+    (validSnapshot milestone.sourceSnapshot
+      && executablePin milestone.sourceSnapshot.pin
+      && milestone.milestone.url == milestone.sourceSnapshot.observation.sourceUrl
+      && milestone.milestone.contentVersion == milestone.sourceSnapshot.fingerprint)
+  -- Exactly one live approval may answer to this identity, or the reason text
+  -- would be ambiguous about which decision it cites.
+  approvals <- query @ApprovedMilestone state.opener
+  assertMsg "Step 5 refuses: more than one live milestone approval matches the handed-off round."
+    (length [() | (_,a) <- approvals, a.opener == state.opener,
+      a.sourceSnapshot.roundId == approval.roundId] == 1)
+  pure (anchorCid, state, approval, milestone)
+
+-- Read-only prevalidation for the runner, before any one-shot marker exists.
+-- It submits nothing and allocates no party, so a refusal strands no marker.
+couponAllocatePrevalidate : Step4Handoff -> Script Text
+couponAllocatePrevalidate handoff = do
+  (_,_,approval,_) <- bindStep5Approval handoff
+  debug ("[STEP 5][PREVALIDATION] step-4 approval " <> cid approval.approvalCid
+    <> " for round " <> approval.roundId <> " is bound and allocatable")
+  pure ("prevalidated: " <> approval.roundId)
+
+couponAllocate : Step4Handoff -> Script Text
+couponAllocate handoff = do
+  -- Validated again here, inside the allocating entry point: the runner's
+  -- prevalidation proved the state at ITS time of check, not this one.
+  (anchorCid,state,approval,approvedMilestone) <- bindStep5Approval handoff
+  let runId = handoff.runId
   stepHeading 5 "COUPON ALLOCATION"
   let witnesses = [state.opener, state.member]
   initialState 5 witnesses
@@ -1499,9 +1637,13 @@ couponAllocate runId = do
   debug "[STEP 5] sandbox-local AmuletRules; the DSO, manager and beneficiary are synthetic demo parties"
   debug "[STEP 5] this allocates a DevelopmentFundCoupon only; it is NOT a payment and NOT a mint"
   -- The approved milestone from step 4 is the stated reason only. It carries no
-  -- Foundation authority and does not entitle anyone to funds.
-  approvals <- query @ApprovedMilestone state.member
-  let [(milestoneCid,_)] = [(cid,a) | (cid,a) <- approvals, a.milestone == illustrativeMilestone]
+  -- Foundation authority and does not entitle anyone to funds. It is the
+  -- approval the step-4 handoff named and bindStep5Approval re-checked against
+  -- live state: never a subject-constant lookup and never a fallback.
+  let milestoneCid = approval.approvalCid
+  business 5 ("Citing the step-4 approval for round " <> approval.roundId <> " only.")
+  debug ("[STEP 5] bound step-4 ApprovedMilestone " <> cid milestoneCid
+    <> " for round " <> approval.roundId <> " (" <> approval.milestoneUrl <> ")")
   dso <- allocateParty "babycdf-coupon-dso"
   manager <- allocateParty "babycdf-coupon-manager"
   wrongManager <- allocateParty "babycdf-coupon-wrong-manager"
@@ -1570,9 +1712,12 @@ couponAllocate runId = do
   let amount = 1.0
       expiresAt = now `addRelTime` hours 2
       -- The reason text is prefixed "sandbox" on purpose: it cites a demo
-      -- contract and issue #540 as provenance for the narration, and is not a
-      -- claim that issue #540 was approved or funded by anyone.
-      reason = "sandbox ApprovedMilestone " <> show milestoneCid <> " " <> milestoneSubject.url
+      -- contract and the approved source as provenance for the narration, and
+      -- is not a claim that the source was approved or funded by anyone. The
+      -- URL is read from the bound approval itself, not from a subject
+      -- constant, so the reason cannot cite a decision that was not made.
+      reason = "sandbox ApprovedMilestone " <> show milestoneCid <> " "
+        <> approvedMilestone.milestone.url
       allocate fundManager requestedAmount = exerciseCmd rules AmuletRules_AllocateDevelopmentFundCoupon with
         unclaimedDevelopmentFundCouponCids = [source]
         beneficiary; amount = requestedAmount; expiresAt; reason; fundManager

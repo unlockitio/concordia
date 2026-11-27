@@ -170,10 +170,20 @@ if awk '/^  all\)/,/^    ;;/' "$HERE/run-demo.sh" \
   no 'all must not invoke an optional round'
 else ok 'all does not invoke an optional round'
 fi
-# `all` loops only over the main steps.
-if awk '/^  all\)/,/^    ;;/' "$HERE/run-demo.sh" | grep -q 'for n in 2 3 4 5'; then
-  ok 'all iterates main steps 2-5 only'
-else no 'all iterates main steps 2-5 only'; fi
+# `all` runs the Architecture rule vote and stops there. It must not reach a
+# source vote or a coupon allocation, which are explicit operator commands.
+# This asserts the EFFECTIVE behaviour: the former `for n in 2 3 4 5` loop was
+# unreachable dead code after `run_step 2; exit $?` and advertised an
+# aggregate journey the automatic-vote policy forbids.
+ALL_BLOCK=$(awk '/^  all\)/,/^    ;;/' "$HERE/run-demo.sh")
+if printf '%s' "$ALL_BLOCK" | grep -q 'run_step 2' \
+   && printf '%s' "$ALL_BLOCK" | grep -q 'exit \$?'; then
+  ok 'all runs step 2 and stops there'
+else no 'all runs step 2 and stops there'; fi
+if printf '%s' "$ALL_BLOCK" | grep -vE "^\s*printf|^\s*echo|^\s*#" \
+     | grep -qE 'run_step [345]|for n in'; then
+  no 'all must not run a source vote or coupon allocation'
+else ok 'all runs no source vote or coupon allocation'; fi
 
 # --- 8. cleanup covers the optional markers ----------------------------
 for target in 'opt-step-1.json' 'opt-step-1.attempted' 'opt-step-1-next-' 'opt-step-2.json' 'opt-step-2.attempted' 'opt-step-2-next-' 'opt-step-3.json' 'opt-step-3.attempted' 'opt-step-3-next-' 'opt-step-4.json' 'opt-step-4.attempted' 'opt-step-4-next-' 'opt-step-5.json' 'opt-step-5.attempted' 'opt-step-5-next-'; do
