@@ -1,0 +1,67 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | Execution of automated actions that every member's app backend computes.
+-- It requires `DecOperatorRules`, so action confirmations are always
+-- counted against the member list of the same contract.
+module Cap.DecOperator.ActionConfirmationRulesV1 where
+
+import DA.Map (Map)
+import DA.Time (RelTime)
+
+import Splice.Api.Token.MetadataV1
+
+import Cap.Core.Types (AuthenticKey)
+
+import Cap.DecOperator.ActionConfirmationV1 (ActionConfirmation)
+import Cap.DecOperator.DecOperatorRulesV1 (DecOperatorRules, Fraction)
+
+
+-- | The app stores these settings in its rules contract and changes them
+-- with its own action.
+data ActionConfirmationRulesView = ActionConfirmationRulesView
+  with
+    threshold : Fraction
+    -- ^ The action confirmation threshold: the fraction of the Active
+    -- members whose live action confirmations an action needs. 
+    confirmationTimeout : RelTime
+    -- ^ An action confirmation expires this long after its creation.
+    meta : Metadata
+  deriving (Eq, Show)
+
+data ActionConfirmationRules_ExecuteResult = ActionConfirmationRules_ExecuteResult
+  with
+    meta : Metadata
+  deriving (Eq, Show)
+
+data ActionConfirmationRules_ExpireResult = ActionConfirmationRules_ExpireResult
+  with
+    meta : Metadata
+  deriving (Eq, Show)
+
+
+interface ActionConfirmationRules requires DecOperatorRules where
+  viewtype ActionConfirmationRulesView
+
+  -- | Implementations MUST fetch each action confirmation as the app's own
+  -- template, require that all hold the same action, count them with the
+  -- library, archive them, and execute the action in the same transaction.
+  actionConfirmationRules_executeImpl : ContractId ActionConfirmationRules -> ActionConfirmationRules_Execute -> Update ActionConfirmationRules_ExecuteResult
+
+  -- | Implementations MUST fail unless the action confirmation has expired.
+  actionConfirmationRules_expireImpl : ActionConfirmationRules_Expire -> Update ActionConfirmationRules_ExpireResult
+
+  nonconsuming choice ActionConfirmationRules_Execute : ActionConfirmationRules_ExecuteResult
+    with
+      actor : Party
+      confirmationCids : [ContractId ActionConfirmation]
+      targets : Map AuthenticKey AnyContractId
+      -- ^ The current contract ID of each target of the action.
+    controller actor
+    do actionConfirmationRules_executeImpl this self arg
+
+  nonconsuming choice ActionConfirmationRules_Expire : ActionConfirmationRules_ExpireResult
+    with
+      actor : Party
+      confirmationCid : ContractId ActionConfirmation
+    controller actor
+    do actionConfirmationRules_expireImpl this arg

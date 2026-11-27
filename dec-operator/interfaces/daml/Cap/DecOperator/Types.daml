@@ -1,0 +1,117 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | The types that more than one interface uses: the members and the
+-- votes. The configuration and the decisions are in
+-- `Cap.DecOperator.DecOperatorRulesV1`.
+--
+-- These types are defined in the interface package, and a package that
+-- defines interfaces cannot be upgraded. They therefore never change. New
+-- settings go in `DecOperatorConfig.meta`; anything else needs a new version
+-- of the interface package.
+module Cap.DecOperator.Types
+  ( -- * Members
+    ParticipantNode (..)
+  , MemberStatus (..)
+  , Member (..)
+  , FormerMember (..)
+    -- * Votes
+  , Vote (..)
+  , CastVote (..)
+  , Reason (..)
+  ) where
+
+import DA.Set (Set)
+
+import Splice.Api.Token.MetadataV1
+
+
+
+------------------  MEMBERS  ------------------
+
+-- Background:
+-- Canton configures the hosts (PartyToParticipant) and the owners of the
+-- decentralized namespace (DecentralizedNamespaceDefinition) independently:
+-- an owner need not host the party, and a host need not be an owner. An
+-- owner is a namespace key in the owner list; it signs topology changes with
+-- its own key, and a change counts as signed by the decentralized namespace
+-- once the namespace threshold of owners has signed it.
+--
+-- The DecOperator library enforces that: the confirming hosts are exactly the
+-- participant nodes of the Active members, and the owners are exactly their
+-- namespace keys.
+data ParticipantNode = ParticipantNode
+  with
+    participantId : Text
+    -- ^ Hosts the decentralized party once the member is Active.
+    namespace : Text
+    -- ^ The member's namespace key, an owner of the decentralized namespace once the member is Active.
+  deriving (Eq, Ord, Show)
+
+-- | Where a member is in its lifecycle, as the rules contract records it.
+-- Joining is recorded in the member's `MemberState` contract, not here, so
+-- a hosting request does not re-create the rules contract.
+data MemberStatus
+  = Admitted
+  -- ^ The AddMember vote passed. Does not vote and does not count towards
+  -- the thresholds, because its participant node cannot confirm transactions yet.
+  | Active
+  -- ^ Its participant node is Active in topology. Votes and counts towards the
+  -- thresholds.
+  deriving (Eq, Ord, Show)
+
+-- | A member of the decentralized operator. Members are keyed by `Identity`,
+-- so a member keeps its votes if it changes its acting parties.
+data Member = Member
+  with
+    actingParties : Set Party
+    -- ^ The parties that vote and act for the member.
+    participantNode : ParticipantNode
+    status : MemberStatus
+    payoutWeight : Decimal
+    -- ^ Weight in payouts and app rewards, not in votes. A member receives
+    -- its weight divided by the sum of the weights of the Active members, so
+    -- changing one member's weight, or adding or removing a member, changes
+    -- every member's share.
+  deriving (Eq, Show)
+
+-- | What the decentralized operator keeps of a removed member.
+--  While `enableReadmission` is off, admit
+-- rejects an application that names one of these acting parties or this
+-- participant node. While it is on, admit accepts it and deletes the entry.
+data FormerMember = FormerMember
+  with
+    actingParties : Set Party
+    participantNode : ParticipantNode
+  deriving (Eq, Show)
+
+
+------------------  VOTES  ------------------
+
+-- | One member's vote as a mechanism reads it. Every Active member has one:
+-- a member without a cast vote is `Absent`.
+data Vote a
+  = Absent
+  -- ^ Did not vote.
+  | Abstained
+  -- ^ Voted, for no outcome.
+  | Voted a
+  deriving (Eq, Show)
+
+-- | One member's vote as a shared vote record stores it.
+data CastVote = CastVote
+  with
+    voter : Party
+    -- ^ The acting party that cast the vote.
+    value : Optional AnyValue
+    -- ^ None: abstained. Some: a vote of the mechanism's vote type, in the mechanism's encoding.
+    reason : Reason
+    castAt : Time
+    -- ^ Read against `castCooldown`.
+  deriving (Eq, Show)
+
+-- | A link to the full text, and a short body.
+data Reason = Reason
+  with
+    url : Text
+    body : Text
+  deriving (Eq, Show)

@@ -1,0 +1,86 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | Checks that the templates of this package run against the rules
+-- contract of a decentralized operator. The rules contract is read through
+-- `DecOperatorRules`, so these checks work with every app's rules template.
+module Cap.DecOperator.Templates.Rules
+  ( fetchRulesView
+  , actingPartiesOf
+  , memberOf
+  , requireMember
+  , requireStatus
+  , requireActive
+  , requireValidBeneficiaries
+  , validBeneficiaries
+  ) where
+
+import DA.Foldable (forA_)
+import qualified DA.Map as Map
+import DA.Set (Set)
+import qualified DA.Set as Set
+
+import Cap.Core.Types (AuthenticKey, Identity (..))
+
+import Cap.DecOperator.Types (Member (..), MemberStatus (..))
+import Cap.DecOperator.DecOperatorRulesV1
+
+
+-- | Fetches the rules contract and returns its view. Fails unless the view
+-- has this governance key and the key's authorities sign the contract.
+fetchRulesView : AuthenticKey -> ContractId DecOperatorRules -> Update DecOperatorRulesView
+fetchRulesView governance rulesCid = do
+  rules <- fetch rulesCid
+  let v = view rules
+  assertMsg "Rules contract of another operator" (v.governance == governance)
+  assertMsg "Rules contract not signed by the decentralized party"
+    (governance.authorities `Set.isSubsetOf` Set.fromList (signatory rules))
+  pure v
+
+-- | The parties that act for an identity: the given acting parties, and for
+-- a party identity also the party itself.
+actingPartiesOf : Identity -> Set Party -> Set Party
+actingPartiesOf (PartyIdentity party) parties = Set.insert party parties
+actingPartiesOf (ExternalIdentity _) parties = parties
+
+-- | The member that a party acts for, if any.
+memberOf : DecOperatorRulesView -> Party -> Optional (Identity, Member)
+memberOf v party =
+  find (\(identity, m) -> party `Set.member` actingPartiesOf identity m.actingParties)
+    (Map.toList v.members)
+
+-- | Fails unless the party acts for this member, in any status.
+requireMember : DecOperatorRulesView -> Party -> Identity -> Update Member
+requireMember v party identity = case Map.lookup identity v.members of
+  None -> fail "Not a member"
+  Some m -> do
+    assertMsg "Not an acting party of the member"
+      (party `Set.member` actingPartiesOf identity m.actingParties)
+    pure m
+
+-- | Fails unless the party acts for this member and the member has this status.
+requireStatus : DecOperatorRulesView -> MemberStatus -> Party -> Identity -> Update Member
+requireStatus v status party identity = do
+  m <- requireMember v party identity
+  assertMsg ("Member is not " <> show status) (m.status == status)
+  pure m
+
+-- | Fails unless the party acts for an Active member, and returns that member.
+requireActive : DecOperatorRulesView -> Party -> Update (Identity, Member)
+requireActive v party = case memberOf v party of
+  Some (identity, m) | m.status == Active -> pure (identity, m)
+  _ -> fail "Not an acting party of an Active member"
+
+-- | True if there is at least one beneficiary, every share is positive and
+-- the shares sum to 1.0.
+validBeneficiaries : [(Party, Decimal)] -> Bool
+validBeneficiaries beneficiaries =
+  not (null beneficiaries)
+    && all (\(_, share) -> share > 0.0) beneficiaries
+    && sum (map snd beneficiaries) == 1.0
+
+-- | Fails unless every share is positive and the shares sum to 1.0.
+requireValidBeneficiaries : [(Party, Decimal)] -> Update ()
+requireValidBeneficiaries beneficiaries = do
+  assertMsg "No beneficiaries" (not (null beneficiaries))
+  forA_ beneficiaries $ \(_, share) -> assertMsg "Share not positive" (share > 0.0)
+  assertMsg "Shares do not sum to 1.0" (sum (map snd beneficiaries) == 1.0)

@@ -1,0 +1,22 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | A contract that an action changes, named by a key instead of a contract
+-- ID. The DecOperator service reads this view to find the current contract
+-- ID for each key in a shared vote record's targets.
+module Cap.DecOperator.KeyedTargetV1 where
+
+import Splice.Api.Token.MetadataV1
+
+import Cap.Core.Types (AuthenticKey)
+
+
+data KeyedTargetView = KeyedTargetView
+  with
+    key : AuthenticKey
+    -- ^ MUST be the key the app's checked fetch computes.
+    -- Its authorities MUST keep its id unique among active contracts.
+    meta : Metadata
+  deriving (Eq, Show)
+
+interface KeyedTarget where
+  viewtype KeyedTargetView

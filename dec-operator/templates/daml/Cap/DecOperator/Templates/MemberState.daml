@@ -1,0 +1,189 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | The data of one member that the member changes alone: its hosting
+-- requests, its beneficiaries and its DecOperator service. It is kept apart
+-- from the rules contract, so these changes need no vote and do not
+-- re-create the rules contract.
+module Cap.DecOperator.Templates.MemberState where
+
+import qualified DA.Map as Map
+import DA.Set (Set)
+import qualified DA.Set as Set
+import DA.Time (addRelTime)
+
+import Splice.Api.Token.MetadataV1 (emptyMetadata)
+
+import Cap.Core.Types (AuthenticKey (..), Identity (..))
+
+import Cap.DecOperator.Types (MemberStatus (..))
+import Cap.DecOperator.DecOperatorRulesV1
+import Cap.DecOperator.KeyedTargetV1
+
+import Cap.DecOperator.Templates.Rules
+
+
+-- | Used by other members to reach a member's DecOperator service. A new member
+-- connects to its sponsor's service to copy the decentralized party's
+-- contracts.
+data DecOperatorService = DecOperatorService
+  with
+    url : Text
+    -- ^ Where the service accepts connections.
+    publicKey : Text
+    -- ^ The service's public key. A sponsor exports the decentralized
+    -- party's contracts only over a channel authenticated with this key,
+    -- and only while the member is Joining.
+  deriving (Eq, Show)
+
+
+
+-- | `admitMember` or `FoundingAgreement_Complete` creates it, and only its
+-- own choices re-create it.
+template MemberState
+  with
+    governance : AuthenticKey
+    -- ^ The operator's governance key; authorities = {decentralized party}.
+    member : Identity
+    actingParties : Set Party
+    -- ^ The member's acting parties at admission. They observe the contract.
+    joining : Optional Time
+    -- ^ Some: the member requested hosting at this time, and the
+    -- reconcilers nominate its participant node once for it.
+    beneficiaries : Optional [(Party, Decimal)]
+    -- ^ Who receives the member's payouts; the shares sum to 1.0. None
+    -- until the member sets them.
+    service : Optional DecOperatorService
+    -- ^ How other members reach the member's DecOperator service. None until
+    -- the member sets it.
+  where
+    signatory governance.authorities
+    observer actingParties
+
+    ensure optional True validBeneficiaries beneficiaries
+
+    -- | A `DOA_RemoveMember` vote names the member's `MemberState` by this key,
+    -- because the member's own choices change its contract ID during the vote.
+    interface instance KeyedTarget for MemberState where
+      view = KeyedTargetView with
+        key = memberStateKey governance member
+        meta = emptyMetadata
+
+    -- | Asks the reconcilers to nominate the member's participant node as a host.
+    -- It might be possible for an admited memebr to abuse HostingRequests, 
+    -- a limit could maybe be useful
+    choice MemberState_RequestHosting : ContractId MemberState
+      with
+        actor : Party
+        -- ^ An acting party of this member, which must be Admitted.
+        rulesCid : ContractId DecOperatorRules
+      controller actor
+      do
+        v <- fetchRulesView governance rulesCid
+        _ <- requireStatus v Admitted actor member
+        assertMsg "Already Joining" (joining == None)
+        assertMsg "Beneficiaries not set" (beneficiaries /= None)
+        assertMsg "Service not set" (service /= None)
+        now <- getTime
+        create this with joining = Some now
+
+    -- | Ends a hosting request that took longer than `onboardingTimeout`.
+    -- The member can then request hosting again. Members remove a member
+    -- that keeps failing to onboard with a `DOA_RemoveMember` vote.
+    choice MemberState_ExpireJoining : ContractId MemberState
+      with
+        actor : Party
+        -- ^ An acting party of any Active member.
+        rulesCid : ContractId DecOperatorRules
+      controller actor
+      do
+        v <- fetchRulesView governance rulesCid
+        _ <- requireActive v actor
+        now <- getTime
+        case joining of
+          None -> fail "Not Joining"
+          Some requestedAt -> assertMsg "Joining for less than onboardingTimeout"
+            (now > requestedAt `addRelTime` v.config.onboarding.onboardingTimeout)
+        create this with joining = None
+
+    -- | Ends the hosting request when the member becomes Active. The app's
+    -- activate choice calls it with the authority of the decentralized party.
+    choice MemberState_CompleteJoining : ContractId MemberState
+      controller governance.authorities
+      do
+        assertMsg "Not Joining" (joining /= None)
+        create this with joining = None
+
+    choice MemberState_SetBeneficiaries : ContractId MemberState
+      with
+        actor : Party
+        -- ^ An acting party of this member, Admitted or Active.
+        rulesCid : ContractId DecOperatorRules
+        newBeneficiaries : [(Party, Decimal)]
+      controller actor
+      do
+        v <- fetchRulesView governance rulesCid
+        _ <- requireMember v actor member
+        requireValidBeneficiaries newBeneficiaries
+        create this with beneficiaries = Some newBeneficiaries
+
+    choice MemberState_SetService : ContractId MemberState
+      with
+        actor : Party
+        -- ^ An acting party of this member, Admitted or Active.
+        rulesCid : ContractId DecOperatorRules
+        newService : DecOperatorService
+      controller actor
+      do
+        v <- fetchRulesView governance rulesCid
+        _ <- requireMember v actor member
+        create this with service = Some newService
+
+    -- | Removes the contract of a former member.
+    choice MemberState_Archive : ()
+      with
+        actor : Party
+        -- ^ An acting party of any Active member.
+        rulesCid : ContractId DecOperatorRules
+      controller actor
+      do
+        v <- fetchRulesView governance rulesCid
+        _ <- requireActive v actor
+        assertMsg "Still a member" (not (Map.member member v.members))
+
+
+-- | The key of a member's `MemberState`. `admitMember` creates at most one
+-- `MemberState` per member, so the key is unique among active contracts.
+memberStateKey : AuthenticKey -> Identity -> AuthenticKey
+memberStateKey governance member = AuthenticKey with
+  authorities = governance.authorities
+  id = governance.id <> "/member-state/" <> identityText member
+
+identityText : Identity -> Text
+identityText (PartyIdentity p) = "party:" <> partyToText p
+identityText (ExternalIdentity t) = "external:" <> t
+
+-- | Called by the app's code when it executes `DOA_AddMember`, with the
+-- authority of the decentralized party. `rules` is the view of the rules
+-- contract before the member is added. Creates the member's `MemberState`;
+-- the member then sets its beneficiaries and service and requests hosting.
+-- The app re-creates its rules contract with the member Admitted in the same
+-- transaction.
+admitMember : AuthenticKey -> DecOperatorRulesView -> AddMember -> Update (ContractId MemberState)
+admitMember governance rules addMember = do
+  assertMsg "Rules of another operator" (rules.governance == governance)
+  assertMsg "Payout weight not positive" (addMember.payoutWeight > 0.0)
+  assertMsg "Already a member" (not (Map.member addMember.applicant rules.members))
+  let parties = actingPartiesOf addMember.applicant addMember.actingParties
+      overlaps ps v = not (Set.null (Set.intersection parties ps)) || v == addMember.participantNode
+  assertMsg "Acting party or participant node used by a member"
+    (not (any (\m -> overlaps m.actingParties m.participantNode) (Map.values rules.members)))
+  assertMsg "Acting party or participant node of a former member"
+    (rules.config.onboarding.enableReadmission
+      || not (any (\f -> overlaps f.actingParties f.participantNode) (Map.values rules.formerMembers)))
+  create MemberState with
+    governance
+    member = addMember.applicant
+    actingParties = addMember.actingParties
+    joining = None
+    beneficiaries = None
+    service = None

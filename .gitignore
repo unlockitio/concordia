@@ -30,6 +30,7 @@ WRITING.md
 CLAUDE.md
 
 NAMING.md
+DAML_STYLE.md
 
 # Example walkthroughs / notes — private working drafts
 
@@ -42,3 +43,6 @@ M3-DELIVERY-COMMENT.md
 M4-DELIVERY-COMMENT.md
 DESIGN_old.md
 
+
+# DecOperator pre-draft, sent privately for feedback
+dec-operator/PRE-DRAFT.md

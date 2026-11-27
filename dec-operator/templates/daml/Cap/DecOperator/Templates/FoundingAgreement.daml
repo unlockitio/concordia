@@ -1,0 +1,122 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | The founders' consent to the first members and configuration of a
+-- decentralized operator. One founder proposes it, and every founder signs
+-- it with its own beneficiaries and DecOperator service. The app's bootstrap
+-- then exercises `FoundingAgreement_Complete` with the authority of the
+-- decentralized party, which creates each founder's `MemberState`, and
+-- creates the first rules contract from the result in the same transaction.
+module Cap.DecOperator.Templates.FoundingAgreement where
+
+import DA.Map (Map)
+import DA.Optional (fromSome)
+import qualified DA.Map as Map
+import qualified DA.Set as Set
+
+import Cap.Core.Types (AuthenticKey, Identity)
+
+import Cap.DecOperator.Types (Member (..), MemberStatus (..))
+import Cap.DecOperator.DecOperatorRulesV1
+
+import Cap.DecOperator.Templates.MemberState
+import Cap.DecOperator.Templates.Rules (actingPartiesOf, validBeneficiaries)
+
+
+template FoundingAgreement
+  with
+    governance : AuthenticKey
+    -- ^ The governance key of the rules contract to create.
+    synchronizerId : Text
+    -- ^ The logical synchronizer the operator starts on.
+    members : Map Identity Member
+    -- ^ The founders. All are Active: their participant nodes host the
+    -- decentralized party from the start.
+    config : DecOperatorConfig
+    signatures : Map Identity FounderSignature
+    -- ^ The founders that have signed.
+  where
+    signatory map (.signer) (Map.values signatures)
+    observer
+      Set.toList governance.authorities
+        <> concatMap (\(i, m) -> Set.toList (actingPartiesOf i m.actingParties)) (Map.toList members)
+
+    ensure
+      not (Map.null members)
+        && not (Map.null signatures)
+        && all (\m -> m.status == Active) (Map.values members)
+        && all (signedByActingParty members) (Map.toList signatures)
+        && all (\sig -> validBeneficiaries sig.beneficiaries) (Map.values signatures)
+
+    choice FoundingAgreement_Sign : ContractId FoundingAgreement
+      with
+        signature : FounderSignature
+        -- ^ Signed by an acting party of a founder that has not signed yet.
+      controller signature.signer
+      do
+        case founderOf members signature.signer of
+          None -> fail "Not an acting party of a founder"
+          Some identity -> do
+            assertMsg "Founder already signed" (not (Map.member identity signatures))
+            create this with signatures = Map.insert identity signature signatures
+
+    -- | Any founder can reject the agreement. It is archived.
+    choice FoundingAgreement_Reject : ()
+      with
+        actor : Party
+        -- ^ An acting party of a founder.
+      controller actor
+      do assertMsg "Not an acting party of a founder" (founderOf members actor /= None)
+
+    -- | Called by the app's bootstrap with the authority of the decentralized
+    -- party, once every founder has signed. Creates each founder's
+    -- `MemberState` and returns what the founders agreed on, to create the
+    -- first rules contract from.
+    choice FoundingAgreement_Complete : FoundingAgreement_CompleteResult
+      controller governance.authorities
+      do
+        assertMsg "Not every founder has signed"
+          (Map.keys signatures == Map.keys members)
+        memberStates <- Map.fromList <$> forA (Map.toList signatures) \(identity, sig) -> do
+          let m = fromSome (Map.lookup identity members)
+          cid <- create MemberState with
+            governance
+            member = identity
+            actingParties = m.actingParties
+            joining = None
+            beneficiaries = Some sig.beneficiaries
+            service = Some sig.service
+          pure (identity, cid)
+        pure FoundingAgreement_CompleteResult with
+          governance; synchronizerId; members; config; memberStates
+
+-- | The founder that a party acts for, if any.
+founderOf : Map Identity Member -> Party -> Optional Identity
+founderOf members party =
+  fst <$> find (\(i, m) -> party `Set.member` actingPartiesOf i m.actingParties) (Map.toList members)
+
+signedByActingParty : Map Identity Member -> (Identity, FounderSignature) -> Bool
+signedByActingParty members (identity, sig) = case Map.lookup identity members of
+  None -> False
+  Some m -> sig.signer `Set.member` actingPartiesOf identity m.actingParties
+
+-- | A founder's signature, with the data that goes into its `MemberState`.
+data FounderSignature = FounderSignature
+  with
+    signer : Party
+    -- ^ The acting party that signs for the founder.
+    beneficiaries : [(Party, Decimal)]
+    -- ^ Who receives the founder's payouts; the shares sum to 1.0.
+    service : DecOperatorService
+    -- ^ How other members reach the founder's DecOperator service.
+  deriving (Eq, Show)
+
+-- | What the founders agreed on, to create the first rules contract from.
+data FoundingAgreement_CompleteResult = FoundingAgreement_CompleteResult
+  with
+    governance : AuthenticKey
+    synchronizerId : Text
+    members : Map Identity Member
+    config : DecOperatorConfig
+    memberStates : Map Identity (ContractId MemberState)
+    -- ^ The `MemberState` created for each founder.
+  deriving (Eq, Show)

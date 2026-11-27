@@ -1,0 +1,28 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | An action confirmation states that one member's app backend computed a
+-- given action. When enough members confirm the same action, any member's
+-- DecOperator service executes it through `ActionConfirmationRules`.
+module Cap.DecOperator.ActionConfirmationV1 where
+
+import DA.Map (Map)
+
+import Splice.Api.Token.MetadataV1
+
+import Cap.Core.Types (AuthenticKey, Identity, Snapshot)
+
+
+data ActionConfirmationView = ActionConfirmationView
+  with
+    governance : AuthenticKey
+    confirmer : Identity
+    action : Text
+    -- ^ Rendered by the app. The same action MUST always give the same text 
+    -- and different actions MUST NOT, because the DecOperator service groups action confirmations by it.
+    expiresAt : Time
+    targets : Map AuthenticKey Snapshot
+    meta : Metadata
+  deriving (Eq, Show)
+
+interface ActionConfirmation where
+  viewtype ActionConfirmationView

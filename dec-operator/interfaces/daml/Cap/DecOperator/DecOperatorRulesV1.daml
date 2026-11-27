@@ -1,0 +1,322 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | The rules of a decentralized operator ("Dec" = decentralized): the
+-- members that operate a decentralized party together, as the super
+-- validators operate the DSO party. The rules contract holds the member list, thresholds and
+-- onboarding settings, and the choices that activate members and decide
+-- shared vote records. The decentralized party signs the rules contract, so these
+-- choices run with its authority while an acting party controls them.
+--
+-- The DecOperator service reads every app's rules contract through this
+-- interface. It reconciles topology from the view and only triggers the
+-- choices; the app's code decides.
+module Cap.DecOperator.DecOperatorRulesV1 where
+
+import DA.Map (Map)
+import DA.Set (Set)
+import DA.Time (RelTime)
+
+import Splice.Api.Token.MetadataV1
+
+import Cap.Core.Types (AuthenticKey, Identity)
+
+import Cap.DecOperator.Types
+  (FormerMember, Member, ParticipantNode, Reason)
+import Cap.DecOperator.SharedVoteRecordV1 (SharedVoteRecord)
+
+
+------------------  CONFIGURATION  ------------------
+
+-- | Settings that members change by vote.
+data DecOperatorConfig = DecOperatorConfig
+  with
+    thresholds : ThresholdConfig
+    voting : VotingConfig
+    -- ^ Voting is mandatory in DecOperator to add/remove members
+    -- and change settings
+    onboarding : OnboardingConfig
+    maxTextLength : Int
+    -- ^ Upper bound for the free-text fields that members submit.
+    packages : Map Text PackageVersions
+    -- ^ Package name to the versions every member's participant node vets.
+    meta : Metadata
+    -- ^ Settings that later versions of the library add. An app keeps its
+    -- own settings in its own templates.
+  deriving (Eq, Show)
+
+data VotingConfig = VotingConfig
+  with
+    voteTimeout : RelTime
+    -- ^ A shared vote record's `voteBefore` is its creation time plus this.
+    castCooldown : RelTime
+    -- ^ Minimum time between two votes of one member on one shared vote record.
+    maxOptions : Int
+    -- ^ Upper bound for the options of one shared vote record.
+  deriving (Eq, Show)
+
+data OnboardingConfig = OnboardingConfig
+  with
+    enableFreezing : Bool
+    -- ^ False: offline party replication only.
+    freezeTimeout : RelTime
+    -- ^ The reconcilers remove a Freezing entry older than this.
+    onboardingTimeout : RelTime
+    -- ^ How long a member may stay Joining.
+    enableReadmission : Bool
+    -- ^ False: a former member's acting parties and participant node cannot be admitted again.
+  deriving (Eq, Show)
+
+
+------------------  THRESHOLDS  ------------------
+
+-- The operator has three thresholds: the vote threshold and the two
+-- topology thresholds (the confirmation threshold in PartyToParticipant and
+-- the namespace threshold in DecentralizedNamespaceDefinition). Members set a
+-- fraction for each by vote, and the library turns each fraction into a
+-- number of Active members; Admitted members are not counted. An app that
+-- implements `ActionConfirmationRules` has a fourth, the action confirmation
+-- threshold, in that interface's view.
+
+-- | A fraction of the number of Active members. The library turns it into a
+-- threshold by multiplying it by the number of Active members and rounding up.
+-- A fraction keeps the threshold when members join or leave.
+data Fraction = Fraction
+  with
+    numerator : Int
+    denominator : Int
+  deriving (Eq, Ord, Show)
+
+-- | The fractions from which the library computes the thresholds. Members
+-- change them by vote; the thresholds themselves change whenever a member
+-- becomes Active or is removed.
+--
+-- Background:
+-- A decentralized party is only as protected as its lowest threshold:
+-- enough confirming hosts can approve any transaction, and enough namespace
+-- owners can change who hosts the party.
+-- 
+-- The library rejects a configuration, at bootstrap and in `DOA_SetConfig`,
+-- unless all of the following hold:
+--
+-- * Every denominator is positive, and no fraction is above 1. Otherwise a
+--   threshold could be above the number of Active members, and the
+--   decentralized party could not confirm transactions or change its
+--   topology.
+-- * `vote` is above 1/2, so two sets of members that each reach the vote
+--   threshold share at least one member.
+-- * `confirmation` and `namespace` are at least `vote`, so fewer members
+--   than a vote needs cannot act through topology.
+--
+-- The library's default is 2/3 for all three, the same quorum that Splice
+-- uses.
+data ThresholdConfig = ThresholdConfig
+  with
+    vote : Fraction
+    -- ^ The vote threshold: Active members whose consent an action needs.
+    confirmation : Fraction
+    -- ^ The confirmation threshold in PartyToParticipant: confirming hosts
+    -- that must approve each transaction of the decentralized party.
+    namespace : Fraction
+    -- ^ The namespace threshold in DecentralizedNamespaceDefinition:
+    -- namespace owners that must sign each topology change of the
+    -- decentralized party.
+  deriving (Eq, Show)
+
+
+------------------  SYNCHRONIZERS  ------------------
+
+-- | Where the decentralized party is on one synchronizer. A logical
+-- synchronizer upgrade keeps the logical ID, so it does not change the state.
+data SynchronizerState
+  = SS_Joining
+  -- ^ The reconcilers set up the party's topology on this synchronizer.
+  -- Workflows do not use it yet.
+  | SS_Active
+  -- ^ The party's topology is in place. Workflows use this synchronizer.
+  | SS_Leaving
+  -- ^ Workflows no longer use this synchronizer. Its contracts are
+  -- reassigned to an Active synchronizer, then the entry is removed.
+  deriving (Eq, Ord, Show)
+
+
+------------------  PACKAGE VETTING  ------------------
+
+data PackageVersions = PackageVersions
+  with
+    current : Text
+    next : Optional NextPackageVersion
+  deriving (Eq, Show)
+
+-- | A version that members vet before it becomes current.
+data NextPackageVersion = NextPackageVersion
+  with
+    version : Text
+    validFrom : Time
+    -- ^ The version becomes current the next time the rules contract is re-created from this time.
+  deriving (Eq, Show)
+
+
+------------------  DECISIONS  ------------------
+
+-- | The decentralized operator's own decisions. Each app SHOULD have these variants in its
+-- action type, and the library executes it.
+data DecOperatorAction
+  = DOA_AddMember AddMember
+  | DOA_RemoveMember Identity
+  | DOA_SetConfig DecOperatorConfig
+  | DOA_SetPayoutWeight SetPayoutWeight
+  | DOA_SetSynchronizerState SetSynchronizerState
+  deriving (Eq, Show)
+
+-- | Admits a member. The proposer fills it with the data the applicant gives
+-- off the ledger. The applicant consents when it requests hosting with one of
+-- these acting parties; until then the member stays Admitted. The member sets
+-- its beneficiaries and its DecOperator service in its `MemberState` after
+-- admission, without a vote.
+data AddMember = AddMember
+  with
+    applicant : Identity
+    actingParties : Set Party
+    participantNode : ParticipantNode
+    payoutWeight : Decimal
+  deriving (Eq, Show)
+
+data SetPayoutWeight = SetPayoutWeight
+  with
+    member : Identity
+    payoutWeight : Decimal
+  deriving (Eq, Show)
+
+-- | Adds a synchronizer, moves it to its next state or removes it. The
+-- library accepts only these changes:
+--
+-- * absent to `SS_Joining`;
+-- * `SS_Joining` to `SS_Active`, after the reconcilers set up the party's
+--   topology on it;
+-- * `SS_Active` to `SS_Leaving`, while another synchronizer stays `SS_Active`;
+-- * `SS_Joining` or `SS_Leaving` to absent.
+data SetSynchronizerState = SetSynchronizerState
+  with
+    synchronizerId : Text
+    -- ^ The logical synchronizer ID.
+    state : Optional SynchronizerState
+    -- ^ None: remove the entry.
+  deriving (Eq, Show)
+
+
+------------------  VIEW  ------------------
+
+-- | The reconcilers read the synchronizers, members, former members and
+-- onboarding settings, and package vetting reads `config.packages`. Readers
+-- compute the thresholds from `config.thresholds` and the number of Active
+-- members with the library.
+--
+-- The DecOperator service refuses to reconcile a view whose
+-- `config.thresholds` does not meet the conditions in `ThresholdConfig`.
+data DecOperatorRulesView = DecOperatorRulesView
+  with
+    governance : AuthenticKey
+    -- ^ authorities = {decentralized party}; id distinguishes decentralized operators that
+    -- share a decentralized party.
+    synchronizers : Map Text SynchronizerState
+    -- ^ Logical synchronizer ID to its state. The reconcilers keep the
+    -- topology of the decentralized party in line on every synchronizer
+    -- listed here. Bootstrap sets one synchronizer to `SS_Active`.
+    members : Map Identity Member
+    -- ^ Admitted and Active members.
+    formerMembers : Map Identity FormerMember
+    config : DecOperatorConfig
+    meta : Metadata
+  deriving (Eq, Show)
+
+
+------------------  CHOICE RESULTS  ------------------
+
+data VoteOutcome
+  = VO_Accepted
+  -- ^ The selected action executed, or is scheduled at `effectiveAt`.
+  | VO_Rejected
+  -- ^ Decided before `voteBefore`, with no outcome that reached the vote
+  -- threshold.
+  | VO_Expired
+  -- ^ `voteBefore` passed with no outcome that reached the vote threshold.
+  deriving (Eq, Show)
+
+data DecOperatorRules_ActivateMemberResult = DecOperatorRules_ActivateMemberResult
+  with
+    rules : ContractId DecOperatorRules
+    -- ^ The re-created rules contract.
+    meta : Metadata
+  deriving (Eq, Show)
+
+data DecOperatorRules_CastVoteResult = DecOperatorRules_CastVoteResult
+  with
+    record : ContractId SharedVoteRecord
+    -- ^ The re-created shared vote record, holding the new vote.
+    meta : Metadata
+  deriving (Eq, Show)
+
+data DecOperatorRules_CloseVoteResult = DecOperatorRules_CloseVoteResult
+  with
+    outcome : VoteOutcome
+    meta : Metadata
+  deriving (Eq, Show)
+
+
+------------------  INTERFACE  ------------------
+
+interface DecOperatorRules where
+  viewtype DecOperatorRulesView
+
+
+  -- Implementations MUST check that actor acts for an Admitted member, and
+  -- MUST re-create the rules contract with that member Active.
+  decOperatorRules_activateMemberImpl : DecOperatorRules_ActivateMember -> Update DecOperatorRules_ActivateMemberResult
+
+  -- | Implementations MUST fetch the shared vote record as the app's own template,
+  -- check that it belongs to this decentralized operator, check that actor acts for an
+  -- Active member, store the vote only if the mechanism accepts it, and
+  -- archive and re-create the shared vote record.
+  decOperatorRules_castVoteImpl : DecOperatorRules_CastVote -> Update DecOperatorRules_CastVoteResult
+
+  -- | Implementations MUST fetch the shared vote record as the app's own template,
+  -- check that it belongs to this decentralized operator, count the votes of the Active
+  -- members with the library, fail while the result is pending, archive the
+  -- shared vote record, and execute an accepted action in the same transaction or
+  -- at `effectiveAt`. The first argument is this rules contract, so that an
+  -- accepted action can exercise a consuming choice on it.
+  decOperatorRules_closeVoteImpl : ContractId DecOperatorRules -> DecOperatorRules_CloseVote -> Update DecOperatorRules_CloseVoteResult
+
+  -- | Ends the onboarding of a member. Called by the new member's DecOperator
+  -- service once its participant node's hosting state is Active. 
+  -- Consuming: the member list changes.
+  choice DecOperatorRules_ActivateMember : DecOperatorRules_ActivateMemberResult
+    with
+      actor : Party
+      -- ^ An acting party of an Admitted member.
+    controller actor
+    do decOperatorRules_activateMemberImpl this arg
+
+  -- | Casts, changes or withdraws a vote. Nonconsuming: the shared vote record is
+  -- re-created, not the rules contract.
+  nonconsuming choice DecOperatorRules_CastVote : DecOperatorRules_CastVoteResult
+    with
+      actor : Party
+      -- ^ An acting party of an Active member.
+      voteRecordCid : ContractId SharedVoteRecord
+      value : Optional AnyValue
+      -- ^ None: abstain. Some: a vote of the mechanism's vote type.
+      reason : Reason
+    controller actor
+    do decOperatorRules_castVoteImpl this arg
+
+  -- | Decides a shared vote record. Any acting party may close; the choice fails
+  -- while the result is pending, so closing early has no effect.
+  nonconsuming choice DecOperatorRules_CloseVote : DecOperatorRules_CloseVoteResult
+    with
+      actor : Party
+      voteRecordCid : ContractId SharedVoteRecord
+      targets : Map AuthenticKey AnyContractId
+      -- ^ The current contract ID of each target of the shared vote record.
+    controller actor
+    do decOperatorRules_closeVoteImpl this self arg
